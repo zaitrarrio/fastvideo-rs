@@ -1,14 +1,13 @@
 // Model-first serverless endpoints (docs/control/serverless.md §1a): a preset
 // → the spec and Runpod payloads (queue and load balancer, the inline config
 // delivered in both), the checks before create (GPU memory, weights on the
-// volume, the volume's data centre, a config the image carries), what an
-// endpoint serves, and the test invokes generated from it.
+// volume, the volume's data centre, a config fv-control can send: the images
+// bake none), what an endpoint serves, and the test invokes generated from it.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { IMAGE_CONFIGS } from "../../src/cluster/image-configs";
 import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
 import { POOL_PRESETS } from "../../src/cluster/spec";
-import { RUNPOD_GPU_TYPES, SLS_PRESET_IDS } from "../../src/enums";
+import { LEGACY_VARIANT_CONFIGS, RUNPOD_GPU_TYPES, SLS_PRESET_IDS } from "../../src/enums";
 import { GPU_MEMORY_GB } from "../../src/gpus";
 import { examplesFor, fillExample } from "../../src/serverless/examples";
 import { SLS_BOOT, templateCreatePayload, templateUpdatePayload, v2CreatePayload, v2TemplateBoot, workerEnv } from "../../src/serverless/payloads";
@@ -33,7 +32,8 @@ describe("presets: one catalog", () => {
     for (const p of SLS_PRESETS) {
       for (const mode of p.compute === "CPU" ? (["queue"] as const) : (["queue", "lb"] as const)) {
         const s = normalizeEndpointSpec({ name: "t", preset: p.id, mode });
-        expect(s, `${p.id} ${mode}`).toMatchObject({ preset: p.id, variant: p.variant, compute: p.compute, mode });
+        expect(s, `${p.id} ${mode}`).toMatchObject({ preset: p.id, compute: p.compute, mode });
+        expect("variant" in s, p.id).toBe(false);
         expect(servingIssues(s).issues, `${p.id} ${mode}`).toEqual([]);
         // The 500 GB EU volume holds H3 + LTX only (2026-10-13): other presets default to the R2 weights store.
         if (p.compute === "GPU" && missingTrees(EU, p.weights)!.length) expect(s, p.id).toMatchObject({ weights_source: "r2", network_volume: null });
@@ -41,26 +41,29 @@ describe("presets: one catalog", () => {
       }
     }
   });
-  it("an image-default config stays unset (the image's entrypoint runs it); a config the image lacks rides inline", () => {
+  it("every preset sends its config inline: the standard ones too (the one image bakes none)", () => {
     const max = normalizeEndpointSpec({ name: "m", preset: "h3-max" });
-    expect(max.config).toBeUndefined();
+    // Owned by name, sent as its text (the one image bakes none).
+    expect(max.config).toBe("runpod-h3-max.toml");
     expect(max.config_toml).toBeUndefined();
-    expect(v2TemplateBoot(max)).toBeNull();
-    expect(templateCreatePayload(max, IMG, "t").dockerEntrypoint).toBeUndefined();
+    expect(v2TemplateBoot(max).dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
+    expect(templateCreatePayload(max, IMG, "t").dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
+    expect(b64(templateCreatePayload(max, IMG, "t").env.FV_WORKER_TOML_B64!)).toBe(WORKER_CONFIGS["runpod-h3-max.toml"]);
     const r = normalizeEndpointSpec({ name: "r", preset: "h3-ref2v" });
-    expect(r).toMatchObject({ variant: "h3-max", config_toml: WORKER_CONFIGS["runpod-h3-ref2v.toml"], execution_timeout_s: 3600 });
+    expect(r).toMatchObject({ compute: "GPU", config: "runpod-h3-ref2v.toml", execution_timeout_s: 3600 });
     expect(normalizeEndpointSpec({ name: "a", preset: "ltx-a2v" }).container_disk_gb).toBe(60);
   });
-  it("the preset owns variant, compute and config: repeating them is fine, changing them is refused", () => {
+  it("the preset owns compute and config: repeating them is fine, changing them is refused; an old variant is ignored", () => {
     expect(normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", variant: "h3-max", compute: "GPU" }).preset).toBe("h3-ref2v");
-    expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", variant: "ltx" })).toThrow(/variant: set by preset h3-ref2v/);
+    expect(normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", variant: "ltx" }).preset).toBe("h3-ref2v");
+    expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", compute: "CPU" })).toThrow(/compute: set by preset h3-ref2v/);
     expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-max", config: "/etc/fv/runpod-fake.toml" })).toThrow(/config: set by preset h3-max/);
     expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", config_toml: "[engine]\n" })).toThrow(/config_toml: set by preset/);
     expect(() => normalizeEndpointSpec({ name: "r", preset: "nope" })).toThrow(/preset/);
   });
   it("defaults for a preset (GET /api/v1/serverless/defaults?preset=)", () => {
-    expect(defaultEndpointSpec("x", "cpu", "cpu")).toMatchObject({ preset: "cpu", variant: "cpu", compute: "CPU", network_volume: null });
-    expect(defaultEndpointSpec("x", "cpu", "h3-ref2v")).toMatchObject({ preset: "h3-ref2v", variant: "h3-max", compute: "GPU", network_volume: EU });
+    expect(defaultEndpointSpec("x", "CPU", "cpu")).toMatchObject({ preset: "cpu", compute: "CPU", config: "runpod-fake.toml", network_volume: null });
+    expect(defaultEndpointSpec("x", "CPU", "h3-ref2v")).toMatchObject({ preset: "h3-ref2v", compute: "GPU", network_volume: EU });
   });
 });
 
@@ -93,6 +96,14 @@ describe("payloads: the inline config in both modes", () => {
     const out = execFileSync("sh", ["-c", boot], { env: { PATH: process.env.PATH!, FV_WORKER_TOML_B64: Buffer.from(REF2V).toString("base64") } }).toString();
     expect(out.trim()).toBe("fv-serve --config /tmp/fvc-sls-test.toml");
     expect(readFileSync("/tmp/fvc-sls-test.toml", "utf8")).toBe(REF2V);
+    // Without a config the boot stops (the images bake none): never fv-serve's default.
+    let failed = "";
+    try {
+      execFileSync("sh", ["-c", boot], { env: { PATH: process.env.PATH! }, stdio: "pipe" });
+    } catch (e) {
+      failed = String((e as { stderr?: Buffer }).stderr ?? "");
+    }
+    expect(failed).toContain("FAILED: no worker config");
   });
 });
 
@@ -119,14 +130,16 @@ describe("validation before create", () => {
   it("data centre: a worker with the EU volume runs in EU-RO-1 only", () => {
     expect(() => normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", data_centers: ["US-CA-2"] })).toThrow(/must run in EU-RO-1/);
   });
-  it("a config path must be in the variant's image (the incident's companion config is not in h3-max)", () => {
-    const r = servingIssues(normalizeEndpointSpec({ name: "c", variant: "h3-max", config: "/etc/fv/runpod-h3-ref2v.toml" }));
-    expect(paths(r)).toContain("config");
-    expect(r.issues.find((i) => i.path[0] === "config")!.message).toMatch(/carries \/etc\/fv\/runpod-h3-max\.toml, \/etc\/fv\/runpod-fake\.toml; .* not in it \(preset h3-ref2v sends that config inline\)/);
-    expect(paths(servingIssues(normalizeEndpointSpec({ name: "c", variant: "wan5b", config: "/etc/fv/runpod-wan14b.toml", weights_source: "r2" })))).toEqual([]);
-    // An image ref: not checkable, a warning.
-    const ref = servingIssues(normalizeEndpointSpec({ name: "c", variant: "h3-max", config: "/etc/fv/x.toml", image: { ref: IMG } }));
-    expect(ref.warnings.map((w) => w.path.join("."))).toContain("config");
+  it("a named config is any configs/serve file fv-control carries (the incident's companion config works on the one image)", () => {
+    const companion = normalizeEndpointSpec({ name: "c", compute: "GPU", config: "/etc/fv/runpod-h3-ref2v.toml" });
+    expect(paths(servingIssues(companion))).toEqual([]);
+    expect(inferPreset(companion)).toBe("h3-ref2v");
+    expect(b64(workerEnv(companion, IMG).FV_WORKER_TOML_B64!)).toBe(REF2V);
+    expect(paths(servingIssues(normalizeEndpointSpec({ name: "c", compute: "GPU", config: "runpod-wan14b.toml", weights_source: "r2" })))).toEqual([]);
+    // A name fv-control does not carry: refused before create, with an image ref too (no image carries configs now).
+    expect(() => normalizeEndpointSpec({ name: "c", compute: "GPU", config: "/etc/fv/x.toml", image: { ref: IMG } })).toThrow(/config: not a worker config fv-control carries/);
+    expect(paths(servingIssues({ mode: "queue", compute: "GPU", config: "x.toml", image: { channel: "stable" }, network_volume: EU }))).toContain("config");
+    expect(paths(servingIssues({ mode: "queue", compute: "GPU", image: { channel: "stable" }, network_volume: EU }))).toContain("config");
   });
   it("licence: the LongLive preset warns", () => {
     expect(servingIssues(normalizeEndpointSpec({ name: "l", preset: "longlive" })).warnings[0]!.message).toMatch(/non-commercial/i);
@@ -134,12 +147,16 @@ describe("validation before create", () => {
   it("an update merges: a preset switch drops the old preset's config; a variant or config without a preset is custom", () => {
     const prev = normalizeEndpointSpec({ name: "r", preset: "h3-ref2v" });
     const sw = normalizeEndpointSpec(mergeSpec(prev, { preset: "h3-max" }));
-    expect(sw).toMatchObject({ preset: "h3-max", variant: "h3-max" });
+    expect(sw).toMatchObject({ preset: "h3-max", compute: "GPU", config: "runpod-h3-max.toml" });
     expect(sw.config_toml).toBeUndefined();
     const custom = mergeSpec(prev, { config_toml: "[engine]\nbackend = \"fake\"\n" });
     expect(custom.preset).toBeUndefined();
-    expect(mergeSpec(prev, { workers_max: 2 })).toMatchObject({ preset: "h3-ref2v", config_toml: prev.config_toml, workers_max: 2 });
+    expect(mergeSpec(prev, { workers_max: 2 })).toMatchObject({ preset: "h3-ref2v", config: prev.config, workers_max: 2 });
     expect(mergeSpec(prev, { preset: null }).preset).toBeUndefined();
+    // A stored spec from before the one image (a variant, no config): the merge reads it as its compute and config.
+    const old = mergeSpec({ name: "o", mode: "queue", variant: "ltx", compute: "GPU", image: { channel: "stable" } }, { workers_max: 2 });
+    expect(old).toMatchObject({ compute: "GPU", config: "runpod-ltx.toml", workers_max: 2 });
+    expect("variant" in old).toBe(false);
   });
 });
 
@@ -157,7 +174,7 @@ describe("what an endpoint serves", () => {
     ]);
     // The variants' public names (families/h3.toml), as fv-serve maps them (CapabilityTable::public_aliases).
     expect(v.serves.aliases).toEqual(expect.arrayContaining([{ name: "MiniMax-H3-Turbo", model: "h3-ref2v-turbo", via: "manifest" }, { name: "MiniMax-H3-Max", model: "h3-ref2v-max", via: "manifest" }]));
-    expect(v.serves).toMatchObject({ swap: true, engine: "cuda", source: { kind: "inline" }, weights: ["h3-base", "h3-ref2va"] });
+    expect(v.serves).toMatchObject({ swap: true, engine: "cuda", source: { kind: "named" }, weights: ["h3-base", "h3-ref2va"] });
     expect(v.serves.protocols).toEqual(expect.arrayContaining(["native", "minimax", "fal", "openai_videos"]));
     expect(v.serves.protocols).not.toContain("ltx");
     expect(v.serves.fal_apps).toContain("minimax/h3-turbo");
@@ -188,21 +205,23 @@ describe("what an endpoint serves", () => {
       ["fastwan-1.3b", "fake-wan"],
     ]);
   });
-  it("the incident: h3-max with no config is preset h3-max (inferred), serving sol-h3 only; MiniMax-H3-Turbo is not a name it answers", () => {
+  it("the incident: a stored h3-max endpoint with no config is preset h3-max (inferred), serving sol-h3 only; MiniMax-H3-Turbo is not a name it answers", () => {
+    // As stored before the one image: the variant, and the config its image baked; it now names that config.
     const spec = normalizeEndpointSpec({ name: "ref2va", variant: "h3-max", mode: "lb" });
     const v = servingView(spec);
     expect(v).toMatchObject({ preset: "h3-max", preset_inferred: true });
-    expect(v.serves.source).toMatchObject({ kind: "image-default", config: "/etc/fv/runpod-h3-max.toml" });
+    expect(v.serves.source).toMatchObject({ kind: "named", config: "runpod-h3-max.toml" });
     expect(v.serves.models.map((m) => m.id)).toEqual(["sol-h3"]);
     expect(v.serves.tasks).not.toContain("ref2v");
     expect(v.serves.aliases.map((a) => a.name).sort()).toEqual(["MiniMax-H3", "MiniMax-H3-Max"]);
   });
   it("every preset derives models (a custom spec with an unknown config derives none, and says so)", () => {
     for (const p of SLS_PRESETS) expect(servesOf(normalizeEndpointSpec({ name: "t", preset: p.id })).models.length, p.id).toBeGreaterThan(0);
-    expect(servesOf({ variant: "wan", config: "/etc/fv/nope.toml" }).source).toMatchObject({ kind: "unknown" });
-    expect(inferPreset({ variant: "wan", compute: "GPU", config: "/etc/fv/nope.toml" })).toBeNull();
-    expect(inferPreset({ variant: "wan", compute: "GPU" })).toBe("fastwan21");
-    expect(inferPreset({ variant: "cpu", compute: "CPU" })).toBe("cpu");
+    expect(servesOf({ config: "/etc/fv/nope.toml" }).source).toMatchObject({ kind: "unknown" });
+    expect(servesOf({}).source).toMatchObject({ kind: "unknown", note: expect.stringMatching(/no worker config/) });
+    expect(inferPreset({ compute: "GPU", config: "/etc/fv/nope.toml" })).toBeNull();
+    expect(inferPreset({ compute: "GPU", config: "runpod-wan.toml" })).toBe("fastwan21");
+    expect(inferPreset({ compute: "CPU", config: "runpod-fake.toml" })).toBe("cpu");
   });
   it("a worker's capabilities against the derived view: a match, and the incident's mismatch", () => {
     const s = servesOf(normalizeEndpointSpec({ name: "r", preset: "h3-ref2v" }));
@@ -211,12 +230,8 @@ describe("what an endpoint serves", () => {
     expect(compareCapabilities(s, JSON.stringify(caps(["sol-h3"])))).toMatchObject({ ok: false, missing: ["h3-ref2v-turbo", "h3-ref2v-max"], extra: ["sol-h3"] });
     expect(compareCapabilities(s, { nothing: 1 }).ok).toBe(false);
   });
-  it("the generated image map agrees with scripts/serve/variants.sh", () => {
-    const sh = readFileSync(`${ROOT}scripts/serve/variants.sh`, "utf8");
-    for (const [v, img] of Object.entries(IMAGE_CONFIGS)) {
-      const m = new RegExp(`^    ${v.replace("-", "\\-")}\\) echo (\\S+) ;;$`, "m").exec(sh);
-      expect(m?.[1], v).toBe(img.default.replace("/etc/fv/", ""));
-    }
+  it("the configs the old variant images baked (stored specs' read-compat) are configs fv-control carries", () => {
+    for (const [v, cfg] of Object.entries(LEGACY_VARIANT_CONFIGS)) expect(WORKER_CONFIGS[cfg], `${v}: ${cfg}`).toBeTruthy();
   });
 });
 

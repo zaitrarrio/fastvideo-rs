@@ -15,7 +15,7 @@ import "./fields.css";
 export type Api = (path: string, opts?: { method?: string; body?: unknown; signal?: AbortSignal }) => Promise<any>;
 export type ControlKind = "select" | "segmented" | "toggle" | "number" | "text" | "combo" | "textarea" | "secret" | "chips" | "list" | "table" | "record" | "object";
 /** Live lists that are the whole choice (a select); the others only suggest (a text input with a datalist). */
-export const CLOSED_SOURCES = new Set(["channels", "pool_presets", "pools", "clusters", "data_centers", "volumes", "releases", "regions", "variants", "gpu_types", "cpu_flavors", "model_ids", "families", "recipes", "fake_models"]);
+export const CLOSED_SOURCES = new Set(["channels", "pool_presets", "pools", "clusters", "data_centers", "volumes", "releases", "regions", "gpu_types", "cpu_flavors", "model_ids", "families", "recipes", "fake_models"]);
 
 const typeOf = (u: Schema | undefined): string | undefined => (Array.isArray(u?.type) ? u!.type.find((t: string) => t !== "null") : u?.type);
 /** The closed set of values a schema allows (enum, const, or an anyOf of consts), or null. */

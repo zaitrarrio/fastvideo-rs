@@ -234,6 +234,8 @@ fn boot(
         .0;
     let vars: Vec<(&str, String)> = vec![
         ("FV_SKIP_DRIVER_CHECK", "1".into()),
+        // The image bakes no config (ADR-0011): the boot is sent one.
+        ("FV_WORKER_CONFIG", "/etc/fv/runpod-fake.toml".into()),
         ("RUNPOD_ENDPOINT_ID", "ep".into()),
         ("RUNPOD_POD_ID", "wkr-it".into()),
         ("FV_WEIGHTS_SOURCE", "r2".into()),

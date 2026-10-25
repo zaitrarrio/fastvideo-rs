@@ -1,17 +1,21 @@
 //! Config materialization: which TOML fv-serve runs, and the arguments it
-//! gets. The three forms (ADR-0014 §3.2), in precedence order:
+//! gets. Since the one-image decision (ADR-0011, owner decision 2026-10-25)
+//! the serve images bake no config: every launch sends one, in precedence
+//! order (ADR-0014 §3.2):
 //!
-//! 1. **inline**: `FV_WORKER_TOML_B64` (base64 TOML from fv-control) is
-//!    decoded into `/fv-worker.toml`;
-//! 2. **named**: an explicit `--config <path>` argument (the image entrypoint's
-//!    arguments: GCP, CloudRift, Vast, a v2 load balancer's `args`), or, for a
-//!    controller worker (cluster / GMI / Brev), `FV_WORKER_CONFIG`: a file in
-//!    the image, copied to `/fv-worker.toml` (a controller worker with neither
-//!    an inline config nor this fails, as the shell boots did);
-//! 3. **baked**: the image's `FV_CONFIG`.
+//! 1. **inline**: `FV_WORKER_TOML_B64` (base64 TOML from fv-control,
+//!    fv-deploy, the scripts) is decoded into `/fv-worker.toml`;
+//! 2. **named**: an explicit `--config <path>` argument (the image
+//!    entrypoint's arguments: GCP, CloudRift, Vast on the debug image), or
+//!    `FV_WORKER_CONFIG`, a file in the image (CI's no-GPU smoke check names
+//!    `/etc/fv/runpod-fake.toml`, the one config the serve images carry). A
+//!    controller worker (cluster / GMI / Brev) gets a copy in
+//!    `/fv-worker.toml`; any other kind runs the file as it is.
 //!
-//! A controller worker's config gets `register = false` in its `[gateway]`
-//! table (the gateway is retired; the shell boots did the same edit).
+//! Anything else **refuses to boot** ([`missing`]): no baked `FV_CONFIG`
+//! (no longer read), no fv-serve default. A controller worker's config gets
+//! `register = false` in its `[gateway]` table (the gateway is retired; the
+//! shell boots did the same edit).
 
 use std::path::{Path, PathBuf};
 
@@ -27,12 +31,8 @@ pub enum Source {
     Inline,
     /// `--config <path>` among the arguments.
     Args(String),
-    /// `FV_WORKER_CONFIG` (a controller worker).
+    /// `FV_WORKER_CONFIG` (a file in the image).
     WorkerConfig(String),
-    /// `FV_CONFIG` (baked into the image).
-    Baked(String),
-    /// No config at all: fv-serve's own default.
-    Default,
 }
 
 impl Source {
@@ -41,8 +41,6 @@ impl Source {
             Self::Inline => "inline FV_WORKER_TOML_B64".into(),
             Self::Args(p) => format!("--config {p}"),
             Self::WorkerConfig(p) => format!("FV_WORKER_CONFIG {p}"),
-            Self::Baked(p) => format!("FV_CONFIG {p}"),
-            Self::Default => "fv-serve's default".into(),
         }
     }
 }
@@ -51,8 +49,8 @@ impl Source {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Materialized {
     pub source: Source,
-    /// The TOML file (`None`: fv-serve's default).
-    pub path: Option<PathBuf>,
+    /// The TOML file.
+    pub path: PathBuf,
     /// fv-serve's arguments.
     pub serve_args: Vec<String>,
 }
@@ -119,6 +117,26 @@ fn write(path: &Path, text: &str) -> Result<(), BootError> {
         .map_err(|e| BootError::Config(format!("cannot write {}: {e}", path.display())))
 }
 
+/// The refusal of a boot without a config (`None` when one is given). The
+/// boot checks it first, before the driver check, so an image started
+/// without a config says so at once and exits non-zero.
+pub fn missing(env: &BootEnv, args: &[String]) -> Option<BootError> {
+    if env.get("FV_WORKER_TOML_B64").is_some()
+        || config_arg(args).is_some()
+        || env.get("FV_WORKER_CONFIG").is_some()
+    {
+        return None;
+    }
+    let baked = if env.get("FV_CONFIG").is_some() {
+        " (FV_CONFIG, the old images' baked config, is no longer read)"
+    } else {
+        ""
+    };
+    Some(BootError::Config(format!(
+        "no worker config: the image serves no default; send FV_WORKER_TOML_B64 (inline) or FV_WORKER_CONFIG (a file in the image), or pass --config <path>{baked}"
+    )))
+}
+
 /// Decides the config and writes `/fv-worker.toml` when the form needs it.
 pub fn materialize(
     env: &BootEnv,
@@ -146,47 +164,38 @@ pub fn materialize(
         write(worker_toml, &text)?;
         return Ok(Materialized {
             source: Source::Inline,
-            path: Some(worker_toml.to_path_buf()),
+            path: worker_toml.to_path_buf(),
             serve_args: with(worker_toml),
         });
     }
     if let Some(p) = config_arg(args) {
         return Ok(Materialized {
             source: Source::Args(p.clone()),
-            path: Some(PathBuf::from(&p)),
+            path: PathBuf::from(&p),
             serve_args: args.to_vec(),
         });
     }
-    if kind.controller_worker() {
-        // fv-control always sends one of the two; the shell boots died on the
-        // unset variable (`set -u`) rather than serve a config without the edit.
-        let p = env.get("FV_WORKER_CONFIG").ok_or_else(|| {
-            BootError::Config(
-                "no worker config: neither FV_WORKER_TOML_B64 nor FV_WORKER_CONFIG is set".into(),
-            )
-        })?;
+    if let Some(p) = env.get("FV_WORKER_CONFIG") {
         let src = Path::new(p);
+        if !kind.controller_worker() {
+            // As a `--config` argument: fv-serve --print-config reads it (and
+            // names a missing file) before anything else runs.
+            return Ok(Materialized {
+                source: Source::WorkerConfig(p.to_owned()),
+                path: src.to_path_buf(),
+                serve_args: with(src),
+            });
+        }
         let text = std::fs::read_to_string(src)
             .map_err(|_| BootError::Config(format!("no worker config {p} in the image")))?;
         write(worker_toml, &gateway_off(&text))?;
         return Ok(Materialized {
             source: Source::WorkerConfig(p.to_owned()),
-            path: Some(worker_toml.to_path_buf()),
+            path: worker_toml.to_path_buf(),
             serve_args: with(worker_toml),
         });
     }
-    if let Some(p) = env.get("FV_CONFIG") {
-        return Ok(Materialized {
-            source: Source::Baked(p.to_owned()),
-            path: Some(PathBuf::from(p)),
-            serve_args: with(Path::new(p)),
-        });
-    }
-    Ok(Materialized {
-        source: Source::Default,
-        path: None,
-        serve_args: rest,
-    })
+    Err(missing(env, args).unwrap_or_else(|| BootError::Config("no worker config".into())))
 }
 
 /// The weight trees a config names as `weights = "${FV_WEIGHTS}/<tree>…"`
@@ -260,6 +269,81 @@ mod tests {
             without_config(&s(&["--config", "/a", "--x", "--config=/b", "y"])),
             s(&["--x", "y"])
         );
+    }
+
+    #[test]
+    fn no_config_refuses_to_boot() {
+        let env = |p: &[(&str, &str)]| BootEnv::from_pairs(p.iter().copied());
+        let why = |e: &BootEnv, a: &[&str]| missing(e, &s(a)).map(|e| e.to_string());
+        // Nothing, or only the old images' baked FV_CONFIG: refused, with the remedy.
+        let none = why(&env(&[]), &[]).unwrap_or_default();
+        assert!(
+            none.starts_with("no worker config: the image serves no default"),
+            "{none}"
+        );
+        assert!(
+            none.contains("FV_WORKER_TOML_B64") && none.contains("FV_WORKER_CONFIG"),
+            "{none}"
+        );
+        let baked = why(&env(&[("FV_CONFIG", "/etc/fv/runpod.toml")]), &[]).unwrap_or_default();
+        assert!(
+            baked.contains("FV_CONFIG, the old images' baked config, is no longer read"),
+            "{baked}"
+        );
+        // An empty variable is no config either.
+        assert!(why(&env(&[("FV_WORKER_TOML_B64", "")]), &[]).is_some());
+        // Any one of the three forms is a config.
+        assert_eq!(
+            why(&env(&[("FV_WORKER_TOML_B64", "W3NlcnZlcl0K")]), &[]),
+            None
+        );
+        assert_eq!(
+            why(
+                &env(&[("FV_WORKER_CONFIG", "/etc/fv/runpod-fake.toml")]),
+                &[]
+            ),
+            None
+        );
+        assert_eq!(
+            why(&env(&[]), &["--config", "/etc/fv-gcp/serve.toml"]),
+            None
+        );
+        assert_eq!(why(&env(&[]), &["--config=/a.toml"]), None);
+        // materialize refuses the same way.
+        let dir = std::env::temp_dir().join(format!("fv-boot-cfg-{}", std::process::id()));
+        let r = materialize(&env(&[]), &Kind::Image, &[], &dir.join("w.toml"));
+        assert!(matches!(r, Err(BootError::Config(m)) if m.starts_with("no worker config")));
+    }
+
+    #[test]
+    fn worker_config_outside_a_controller_runs_the_file_as_is() {
+        let dir = std::env::temp_dir().join(format!("fv-boot-wc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("runpod-fake.toml");
+        std::fs::write(&fake, "[server]\n").unwrap();
+        let wt = dir.join("w.toml");
+        let e = BootEnv::from_pairs([("FV_WORKER_CONFIG", fake.display().to_string())]);
+        let m = materialize(&e, &Kind::Image, &s(&["--x"]), &wt).unwrap();
+        assert_eq!(m.source, Source::WorkerConfig(fake.display().to_string()));
+        assert_eq!(m.path, fake);
+        assert_eq!(
+            m.serve_args,
+            s(&["--config", &fake.display().to_string(), "--x"])
+        );
+        assert!(!wt.exists());
+        // A controller worker copies it (gateway off); a file the image does not carry is refused.
+        let m = materialize(&e, &Kind::ClusterWorker, &[], &wt).unwrap();
+        assert_eq!(m.path, wt);
+        assert_eq!(
+            std::fs::read_to_string(&wt).unwrap(),
+            "[server]\n\n[gateway]\nregister = false\n"
+        );
+        let e = BootEnv::from_pairs([("FV_WORKER_CONFIG", "/etc/fv/runpod-ltx.toml")]);
+        let r = materialize(&e, &Kind::ClusterWorker, &[], &wt);
+        assert!(
+            matches!(r, Err(BootError::Config(m)) if m == "no worker config /etc/fv/runpod-ltx.toml in the image")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

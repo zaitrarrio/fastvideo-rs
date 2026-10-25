@@ -382,11 +382,11 @@ fn cluster_worker_on_the_volume_with_an_inline_config() {
 }
 
 #[test]
-fn the_three_config_forms_and_explicit_arguments() {
+fn the_config_forms_and_explicit_arguments() {
     let img = Image::new("forms");
-    let baked = img.root.join("etc/fv/runpod-ltx.toml");
-    std::fs::create_dir_all(baked.parent().unwrap()).unwrap();
-    std::fs::write(&baked, "[server]\n[gateway]\npool = \"ltx\"\n").unwrap();
+    let file = img.root.join("etc/fv/runpod-fake.toml");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "[server]\n[gateway]\npool = \"ltx\"\n").unwrap();
     let base = |extra: &[(&'static str, String)]| -> Vec<(&'static str, String)> {
         let mut v = vec![
             ("FV_SKIP_DRIVER_CHECK", s("1")),
@@ -403,12 +403,12 @@ fn the_three_config_forms_and_explicit_arguments() {
     };
     let wt = img.paths.worker_toml.display().to_string();
 
-    // 1. inline (serverless: no gateway edit)
+    // 1. inline (serverless: no gateway edit); an old baked FV_CONFIG is not read
     let p = go(
         base(&[
             ("RUNPOD_ENDPOINT_ID", s("ep1")),
             ("FV_WORKER_TOML_B64", b64("[server]\n")),
-            ("FV_CONFIG", baked.display().to_string()),
+            ("FV_CONFIG", file.display().to_string()),
         ]),
         &[],
     );
@@ -423,8 +423,7 @@ fn the_three_config_forms_and_explicit_arguments() {
         base(&[
             ("FV_SERVE_ROLE", s("worker")),
             ("RUNPOD_POD_ID", s("p1")),
-            ("FV_WORKER_CONFIG", baked.display().to_string()),
-            ("FV_CONFIG", s("/etc/fv/other.toml")),
+            ("FV_WORKER_CONFIG", file.display().to_string()),
         ]),
         &[],
     );
@@ -434,30 +433,19 @@ fn the_three_config_forms_and_explicit_arguments() {
         "[server]\n[gateway]\nregister = false\npool = \"ltx\"\n"
     );
 
-    //    ... and the entrypoint's own `--config` (GCP, CloudRift, Vast, a v2 load balancer's args): as given
+    //    ... and the entrypoint's own `--config` (GCP, CloudRift, Vast): as given
     let p = go(
-        base(&[
-            ("FV_SERVE_ROLE", s("worker")),
-            ("RUNPOD_POD_ID", s("p1")),
-            ("FV_CONFIG", s("/x.toml")),
-        ]),
+        base(&[("FV_SERVE_ROLE", s("worker")), ("RUNPOD_POD_ID", s("p1"))]),
         &["--config", "/etc/fv-gcp/serve.toml"],
     );
     assert_eq!(p.args, vec![s("--config"), s("/etc/fv-gcp/serve.toml")]);
 
-    //    ... a GCP / CloudRift worker (the role, no Runpod pod) is the image on its own: its baked config, no edit
+    //    ... the image on its own (CI's smoke check, the scripts): FV_WORKER_CONFIG as it is, no edit
     let p = go(
-        base(&[
-            ("FV_SERVE_ROLE", s("worker")),
-            ("FV_CONFIG", baked.display().to_string()),
-        ]),
+        base(&[("FV_WORKER_CONFIG", file.display().to_string())]),
         &[],
     );
-    assert_eq!(p.args, vec![s("--config"), baked.display().to_string()]);
-
-    // 3. baked FV_CONFIG
-    let p = go(base(&[("FV_CONFIG", baked.display().to_string())]), &[]);
-    assert_eq!(p.args, vec![s("--config"), baked.display().to_string()]);
+    assert_eq!(p.args, vec![s("--config"), file.display().to_string()]);
 
     // An inline config wins over the arguments' --config; other arguments stay.
     let p = go(
@@ -465,10 +453,39 @@ fn the_three_config_forms_and_explicit_arguments() {
         &["--config", "/a.toml", "--x"],
     );
     assert_eq!(p.args, vec![s("--config"), wt, s("--x")]);
+}
 
-    // Nothing: fv-serve's default.
-    let p = go(base(&[]), &[]);
-    assert!(p.args.is_empty());
+/// The one image bakes no config (ADR-0011, owner decision 2026-10-25): a
+/// boot without one fails at once, before the driver check and any weights,
+/// with the `FAILED:` line, the serverless `failed` report and a non-zero exit.
+#[test]
+fn an_image_started_without_a_config_refuses_to_boot() {
+    let img = Image::new("noconfig");
+    for env in [
+        vec![
+            ("RUNPOD_ENDPOINT_ID", s("ep1")),
+            ("FV_WEIGHTS_SOURCE", s("r2")),
+        ],
+        vec![("FV_CONFIG", s("/etc/fv/runpod.toml"))],
+        vec![("FV_SERVE_ROLE", s("worker")), ("RUNPOD_POD_ID", s("p1"))],
+        vec![],
+    ] {
+        let sp = FakeSpawner::new(default_handler);
+        let clock = FakeClock::new();
+        let r = boot(&img, &env, &[], &sp, &FakeHttp::new(), &clock);
+        match &r.result {
+            Err(BootError::Config(m)) => {
+                assert!(
+                    m.starts_with("no worker config: the image serves no default"),
+                    "{m}"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(r.log.has("FAILED: no worker config"));
+        // Nothing ran: not the driver check, not fv-serve, not a fetch.
+        assert!(sp.calls().is_empty(), "{:?}", sp.calls());
+    }
 }
 
 #[test]
@@ -489,7 +506,7 @@ fn config_failures_stop_the_boot_before_the_weights() {
         &img,
         &[
             ("FV_SKIP_DRIVER_CHECK", s("1")),
-            ("FV_CONFIG", s("/etc/fv/x.toml")),
+            ("FV_WORKER_CONFIG", s("/etc/fv/x.toml")),
             ("FV_WEIGHTS_SOURCE", s("r2")),
         ],
         &[],
@@ -542,7 +559,10 @@ fn config_failures_stop_the_boot_before_the_weights() {
     std::fs::remove_file(&img.paths.serve_bin).unwrap();
     let r = boot(
         &img,
-        &[("FV_SKIP_DRIVER_CHECK", s("1"))],
+        &[
+            ("FV_SKIP_DRIVER_CHECK", s("1")),
+            ("FV_WORKER_CONFIG", s("/etc/fv/runpod-fake.toml")),
+        ],
         &[],
         &FakeSpawner::new(default_handler),
         &FakeHttp::new(),
@@ -578,6 +598,7 @@ fn an_old_driver_fails_fast_and_is_reported() {
             ),
             ("FV_ENDPOINT_REPORT_TOKEN", s("ingest_tok")),
             ("FV_LIBCUDA", libcuda.display().to_string()),
+            ("FV_WORKER_TOML_B64", b64("[server]\n")),
         ],
         &[],
         &sp,
@@ -611,7 +632,10 @@ fn an_old_driver_fails_fast_and_is_reported() {
     });
     let r = boot(
         &img,
-        &[("FV_LIBCUDA", libcuda.display().to_string())],
+        &[
+            ("FV_LIBCUDA", libcuda.display().to_string()),
+            ("FV_WORKER_CONFIG", s("/etc/fv/runpod-fake.toml")),
+        ],
         &[],
         &sp,
         &FakeHttp::new(),
@@ -625,7 +649,10 @@ fn an_old_driver_fails_fast_and_is_reported() {
     std::fs::write(&libcuda, b"\x7fELF cuCtxGetDevice_v2").unwrap();
     let r = boot(
         &img,
-        &[("FV_LIBCUDA", libcuda.display().to_string())],
+        &[
+            ("FV_LIBCUDA", libcuda.display().to_string()),
+            ("FV_WORKER_CONFIG", s("/etc/fv/runpod-fake.toml")),
+        ],
         &[],
         &sp,
         &FakeHttp::new(),
@@ -647,8 +674,7 @@ fn serverless_volume_link_and_weights_default() {
         &[
             ("FV_SKIP_DRIVER_CHECK", s("1")),
             ("RUNPOD_ENDPOINT_ID", s("ep")),
-            ("FV_CONFIG", cfg.display().to_string()),
-            ("FV_VARIANT", s("h3-turbo")),
+            ("FV_WORKER_CONFIG", cfg.display().to_string()),
         ],
         &[],
         &sp,
@@ -669,7 +695,9 @@ fn serverless_volume_link_and_weights_default() {
         "[fv-boot] volume: {} (1 trees)",
         img.paths.runpod_volume_weights.display()
     )));
-    assert!(r.log.has("variant h3-turbo: weights tree"));
+    assert!(r
+        .log
+        .has(&format!("config {}: weights tree", cfg.display())));
     assert!(r.log.has("/missing-tree is missing"));
     assert!(!r.log.has("/h3-base is missing"));
 }
@@ -743,7 +771,7 @@ fn sls_r2_env(img: &Image, sha: &str) -> Vec<(&'static str, String)> {
                 aux_body.len()
             )),
         ),
-        ("FV_CONFIG", s("/etc/fv/runpod.toml")),
+        ("FV_WORKER_CONFIG", s("/etc/fv/runpod.toml")),
     ]
 }
 
@@ -1578,6 +1606,7 @@ fn upsampler_sidecar_start_wait_and_report() {
             ("FV_STATE_DIR", img.paths.state.display().to_string()),
             ("FV_SLS_REPORT_URL", s(SLS_URL)),
             ("RUNPOD_POD_ID", s("wkr-abc123")),
+            ("FV_WORKER_CONFIG", s("/etc/fv/runpod-fake.toml")),
         ],
         &[],
         &sp,
@@ -1606,6 +1635,7 @@ fn upsampler_sidecar_start_wait_and_report() {
         &[
             ("FV_SKIP_DRIVER_CHECK", s("1")),
             ("FV_UPSAMPLER_LOCAL", s("1")),
+            ("FV_WORKER_CONFIG", s("/etc/fv/runpod-fake.toml")),
         ],
         &[],
         &FakeSpawner::new(default_handler),
@@ -1626,6 +1656,7 @@ fn registry_and_unknown_sources_fail_loudly() {
         &[
             ("FV_SKIP_DRIVER_CHECK", s("1")),
             ("FV_WEIGHTS_SOURCE", s("registry")),
+            ("FV_WORKER_CONFIG", s("/etc/fv/runpod-fake.toml")),
         ],
         &[],
         &FakeSpawner::new(default_handler),
@@ -1645,6 +1676,7 @@ fn registry_and_unknown_sources_fail_loudly() {
         &[
             ("FV_SKIP_DRIVER_CHECK", s("1")),
             ("FV_WEIGHTS_SOURCE", s("s3")),
+            ("FV_WORKER_CONFIG", s("/etc/fv/runpod-fake.toml")),
         ],
         &[],
         &FakeSpawner::new(default_handler),
@@ -1657,6 +1689,7 @@ fn registry_and_unknown_sources_fail_loudly() {
         &[
             ("FV_SKIP_DRIVER_CHECK", s("1")),
             ("FV_WEIGHTS_SOURCE", s("none")),
+            ("FV_WORKER_CONFIG", s("/etc/fv/runpod-fake.toml")),
         ],
         &[],
         &FakeSpawner::new(default_handler),
@@ -1704,6 +1737,7 @@ fn hub_refuses_a_tree_that_is_not_the_recorded_one() {
             ("FV_WEIGHTS_TREES_B64", b64(rows)),
             ("FV_HUB_SHA256_B64", b64(sums)),
             ("FV_SCRIPTS_URL", s("https://s")),
+            ("FV_WORKER_CONFIG", s("/etc/fv/runpod-fake.toml")),
         ],
         &[],
         &sp,
@@ -1749,7 +1783,7 @@ fn a_controller_worker_without_a_config_fails_like_the_shell() {
         &FakeClock::new(),
     );
     assert!(
-        matches!(&r.result, Err(BootError::Config(m)) if m.starts_with("no worker config: neither FV_WORKER_TOML_B64 nor FV_WORKER_CONFIG"))
+        matches!(&r.result, Err(BootError::Config(m)) if m.starts_with("no worker config: the image serves no default"))
     );
     let r = boot(
         &img,
@@ -1793,7 +1827,7 @@ fn a_refused_config_logs_fv_serves_own_lines() {
         &img,
         &[
             ("FV_SKIP_DRIVER_CHECK", s("1")),
-            ("FV_CONFIG", s("/etc/fv/x.toml")),
+            ("FV_WORKER_CONFIG", s("/etc/fv/x.toml")),
         ],
         &[],
         &sp,
@@ -1871,7 +1905,7 @@ fn fv_boot_legacy_runs_only_fv_entrys_steps() {
         "0"
     )])));
     let mut c = Ctx::new(env, deps, img.paths.clone(), 1);
-    let plan = legacy(&mut c, &[s("--config"), s("/etc/fv/x.toml")]);
+    let plan = legacy(&mut c, &[s("--config"), s("/etc/fv/x.toml")]).unwrap();
     assert_eq!(plan.program, img.paths.serve_bin);
     assert_eq!(plan.args, vec![s("--config"), s("/etc/fv/x.toml")]);
     assert_eq!(

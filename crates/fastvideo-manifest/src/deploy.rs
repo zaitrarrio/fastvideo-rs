@@ -4,10 +4,12 @@
 //! `schema`, not a registry contract.
 //!
 //! The deployment unit is a **preset**: one pool, a set of variants served
-//! together by one fv-serve process, on one image variant, with one worker
-//! config (`configs/serve/<config>`), queue and timeouts. A **family preset**
-//! is one pool serving the models of several model presets of one family
-//! (owner decision 2026-10-18). Beside them: the image variants CI builds,
+//! together by one fv-serve process, with one worker config
+//! (`configs/serve/<config>`, sent at boot), queue and timeouts. A **family
+//! preset** is one pool serving the models of several model presets of one
+//! family (owner decision 2026-10-18). Beside them: the serve images CI
+//! builds (one CUDA image and the CPU image: no image bakes a config, every
+//! launch sends one; owner decision 2026-10-25),
 //! the GCP VM rows, the edge dispatch family of each model family, and the
 //! autoscaler's pools (an opaque table each: `fastvideo-autoscale` owns that
 //! format, the way the engine owns a variant's `engine` table).
@@ -43,6 +45,10 @@ pub const EU_DATA_CENTER: &str = "EU-RO-1";
 /// The EU weights volume (`fv-weights-h3-ltx-500`): the only volume a
 /// deployment may mount until the owner rebuilds another one.
 pub const EU_VOLUME_ID: &str = "bz0ofkfx45";
+/// The fake-engine config every serve image carries under `/etc/fv`: CI's
+/// no-GPU smoke check boots it with `FV_WORKER_CONFIG` (the one config a
+/// launch may name in the image instead of sending it).
+pub const SMOKE_CONFIG: &str = "runpod-fake.toml";
 /// Longest preset, image or GCP row id (fv-control's name rule: a DNS label
 /// of at most 31 characters).
 pub const DEPLOY_ID_MAX_LEN: usize = 31;
@@ -87,7 +93,7 @@ pub struct DeployManifest {
     pub schema: u32,
     /// Model family id -> its edge / dispatch family (`ltx2` -> `ltx`).
     pub dispatch: BTreeMap<String, String>,
-    /// The serve image variants (and documented legacy tag sets).
+    /// The serve images: one per compute (the CUDA image, the CPU image).
     pub images: Vec<Image>,
     /// The model presets, in the dashboard's order.
     pub presets: Vec<Preset>,
@@ -99,11 +105,11 @@ pub struct DeployManifest {
     pub autoscale: AutoscaleSection,
 }
 
-/// What an image variant's fv-serve is built for.
+/// What an image's fv-serve is built for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Compute {
-    /// The CUDA fv-serve (`serve-cuda-bin`).
+    /// The CUDA fv-serve (`serve-cuda`).
     #[default]
     Gpu,
     /// fv-serve without CUDA, the fake engine.
@@ -114,32 +120,29 @@ fn is_default<T: Default + PartialEq>(x: &T) -> bool {
     *x == T::default()
 }
 
-/// One `[[images]]` table: a serve image variant
-/// (`docker/gpucheck.Dockerfile` stage `serve-<id>`).
+/// One `[[images]]` table: a serve image (`docker/gpucheck.Dockerfile`
+/// stage `serve-<id>`, GHCR tags `<id>-<channel>`). It bakes no worker
+/// config: every launch sends one (`FV_WORKER_TOML_B64`, or
+/// `FV_WORKER_CONFIG` naming a file it carries), and an image started
+/// without one refuses to boot (fv-boot, ADR-0014).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Image {
     pub id: String,
-    /// The worker config baked as `FV_CONFIG` (a `configs/serve` file name).
-    pub config: String,
-    /// Further worker configs the image carries under `/etc/fv`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub also: Vec<String>,
+    /// The worker configs the image carries under `/etc/fv` (`configs/serve`
+    /// file names): [`SMOKE_CONFIG`] for CI's smoke check.
+    pub carries: Vec<String>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub compute: Compute,
-    /// A documented tag set that CI no longer builds as a variant.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub legacy: bool,
     /// A short note for the documentation tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
 impl Image {
-    /// Whether the image carries this worker config (else a preset sends it
-    /// inline, `FV_WORKER_TOML_B64`).
+    /// Whether the image carries this worker config under `/etc/fv`.
     pub fn carries(&self, config: &str) -> bool {
-        self.config == config || self.also.iter().any(|c| c == config)
+        self.carries.iter().any(|c| c == config)
     }
 }
 
@@ -178,9 +181,9 @@ pub struct Preset {
     /// One of the default cluster's pools.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub standard: bool,
-    /// The image variant ([`Image::id`]).
+    /// The serve image ([`Image::id`]): the CUDA image.
     pub image: String,
-    /// The worker config (a `configs/serve` file name).
+    /// The worker config (a `configs/serve` file name), sent at boot.
     pub config: String,
     /// Derived pre-quantized trees nested in a weight tree (a faster load).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -423,9 +426,9 @@ impl DeployManifest {
         self.family_presets.iter().find(|p| p.id == id)
     }
 
-    /// The image variants CI builds (not the legacy tag sets), in file order.
-    pub fn built_images(&self) -> impl Iterator<Item = &Image> {
-        self.images.iter().filter(|i| !i.legacy)
+    /// The CUDA serve image (validation guarantees exactly one).
+    pub fn gpu_image(&self) -> Option<&Image> {
+        self.images.iter().find(|i| i.compute == Compute::Gpu)
     }
 
     /// The rules that need nothing but the file.
@@ -443,19 +446,33 @@ impl DeployManifest {
             if !image_ids.insert(im.id.as_str()) {
                 return Err(DeployError::field(p("id"), format!("`{}` twice", im.id)));
             }
-            check_config(&im.config, &p("config"))?;
-            for (j, a) in im.also.iter().enumerate() {
-                check_config(a, &format!("{}[{j}]", p("also")))?;
-                if *a == im.config || im.also[..j].contains(a) {
-                    return Err(DeployError::field(p("also"), format!("`{a}` repeats")));
+            for (j, a) in im.carries.iter().enumerate() {
+                check_config(a, &format!("{}[{j}]", p("carries")))?;
+                if im.carries[..j].contains(a) {
+                    return Err(DeployError::field(p("carries"), format!("`{a}` repeats")));
                 }
+            }
+            if !im.carries(SMOKE_CONFIG) {
+                return Err(DeployError::field(
+                    p("carries"),
+                    format!("every serve image carries {SMOKE_CONFIG} (CI's no-GPU smoke check)"),
+                ));
             }
             if let Some(n) = &im.note {
                 check_text(n, &p("note"))?;
             }
         }
-        if !self.built_images().any(|i| i.compute == Compute::Gpu) {
-            return Err(DeployError::field("images", "no GPU image variant"));
+        // One image per compute: one CUDA image (every preset), at most one CPU
+        // image (owner decision 2026-10-25: no per-variant images).
+        for (compute, name, want_one) in [(Compute::Gpu, "GPU", true), (Compute::Cpu, "CPU", false)]
+        {
+            let n = self.images.iter().filter(|i| i.compute == compute).count();
+            if n > 1 || (want_one && n == 0) {
+                return Err(DeployError::field(
+                    "images",
+                    format!("{n} {name} images: one CUDA image (and at most one CPU image), configs are sent at boot"),
+                ));
+            }
         }
         let mut preset_ids = BTreeSet::new();
         let mut claim = |id: &str, path: String| -> Result<(), DeployError> {
@@ -597,10 +614,10 @@ impl DeployManifest {
 
     fn serving_image(&self, id: &str, path: &str) -> Result<&Image, DeployError> {
         match self.image(id) {
-            Some(im) if !im.legacy && im.compute == Compute::Gpu => Ok(im),
+            Some(im) if im.compute == Compute::Gpu => Ok(im),
             _ => Err(DeployError::field(
                 path,
-                format!("`{id}` is not a GPU image variant"),
+                format!("`{id}` is not the GPU image"),
             )),
         }
     }
@@ -839,13 +856,12 @@ schema = 1
 demo = "demo"
 
 [[images]]
-id = "demo"
-config = "runpod-demo.toml"
-also = ["runpod-demo-big.toml"]
+id = "cuda"
+carries = ["runpod-fake.toml"]
 
 [[images]]
 id = "cpu"
-config = "runpod-fake.toml"
+carries = ["runpod-fake.toml"]
 compute = "cpu"
 
 [[presets]]
@@ -853,7 +869,7 @@ id = "demo-turbo"
 title = "Demo turbo"
 description = "The turbo tier."
 standard = true
-image = "demo"
+image = "cuda"
 config = "runpod-demo.toml"
 prequant = ["demo-base/text_encoder_fp8"]
 models = [{ variant = "demo-turbo", id = "demo", recipe = "demo-turbo-alias" }]
@@ -865,7 +881,7 @@ stale_after_s = 120
 id = "demo-big"
 title = "Demo big"
 description = "The big one."
-image = "demo"
+image = "cuda"
 config = "runpod-demo-big.toml"
 models = [{ variant = "demo-big" }]
 max_queued = 8
@@ -876,7 +892,7 @@ stale_after_s = 180
 id = "demo-family"
 title = "Demo: {members}"
 description = "Every demo variant ({members})."
-image = "demo"
+image = "cuda"
 config = "runpod-family-demo.toml"
 min_vram_gb = 96
 members = ["demo-turbo", "demo-big"]
@@ -919,12 +935,13 @@ placements = [{ data_center = "EU-RO-1", volume_id = "bz0ofkfx45" }]
     fn parses_round_trips_and_resolves() {
         let set = families();
         let d = DeployManifest::parse_with(FILE, &set).unwrap();
-        assert_eq!(d.built_images().count(), 2);
+        assert_eq!(d.images.len(), 2);
+        assert_eq!(d.gpu_image().map(|i| i.id.as_str()), Some("cuda"));
         let turbo = d.preset("demo-turbo").unwrap();
         assert_eq!(turbo.models[0].model_id(), "demo");
         assert_eq!(turbo.models[0].recipe_name(), "demo-turbo-alias");
-        assert!(d.image("demo").unwrap().carries("runpod-demo-big.toml"));
-        assert!(!d.image("demo").unwrap().carries("runpod-family-demo.toml"));
+        assert!(d.image("cuda").unwrap().carries(SMOKE_CONFIG));
+        assert!(!d.image("cuda").unwrap().carries("runpod-demo-big.toml"));
         let big = d.preset("demo-big").unwrap();
         assert_eq!(big.models[0].model_id(), "demo-big");
         let floor = d.preset_floor(&set, big);
@@ -948,21 +965,48 @@ placements = [{ data_center = "EU-RO-1", volume_id = "bz0ofkfx45" }]
             with("title = \"Demo big\"", "titel = \"Demo big\"").unwrap_err(),
             DeployError::Syntax(_)
         ));
-        // Images: the preset's must exist, be built and serve on a GPU.
+        // Images: the preset's must exist and serve on a GPU.
         assert_eq!(
             path(with(
-                "image = \"demo\"\nconfig = \"runpod-demo-big.toml\"",
+                "image = \"cuda\"\nconfig = \"runpod-demo-big.toml\"",
                 "image = \"cpu\"\nconfig = \"runpod-demo-big.toml\""
             )),
             Some("presets[1].image".into())
         );
         assert_eq!(
             path(with(
-                "image = \"demo\"\nconfig = \"runpod-demo-big.toml\"",
+                "image = \"cuda\"\nconfig = \"runpod-demo-big.toml\"",
                 "image = \"nope\"\nconfig = \"runpod-demo-big.toml\""
             )),
             Some("presets[1].image".into())
         );
+        // One CUDA image, at most one CPU image, each carrying the smoke config; none bakes a config.
+        let images = |r: Result<DeployManifest, DeployError>| r.unwrap_err().to_string();
+        assert!(images(with(
+            "[[images]]\nid = \"cpu\"",
+            "[[images]]\nid = \"h3-max\"\ncarries = [\"runpod-fake.toml\"]\n\n[[images]]\nid = \"cpu\""
+        ))
+        .contains("2 GPU images"));
+        assert!(images(with(
+            "id = \"cuda\"\ncarries",
+            "id = \"cuda\"\ncompute = \"cpu\"\ncarries"
+        ))
+        .contains("0 GPU images"));
+        assert_eq!(
+            path(with(
+                "id = \"cuda\"\ncarries = [\"runpod-fake.toml\"]",
+                "id = \"cuda\"\ncarries = [\"runpod-demo.toml\"]"
+            )),
+            Some("images[0].carries".into())
+        );
+        assert!(matches!(
+            with(
+                "id = \"cuda\"\ncarries",
+                "id = \"cuda\"\nconfig = \"runpod-demo.toml\"\ncarries"
+            )
+            .unwrap_err(),
+            DeployError::Syntax(_)
+        ));
         assert_eq!(
             path(with(
                 "config = \"runpod-demo-big.toml\"\nmodels",

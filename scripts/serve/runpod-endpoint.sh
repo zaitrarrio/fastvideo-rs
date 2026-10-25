@@ -27,18 +27,19 @@
 # endpoint and template, a destroy-on-exit trap, and the ledger
 # (artifacts/runpod/serve/ledger.tsv).
 #
-# Image: an explicit [image] or FV_SERVE_IMAGE wins. Otherwise a config of a
-# published variant (FV_VARIANT, or derived from FV_SERVE_CONFIG:
-# scripts/serve/variants.sh) boots the image of the variant's Runpod
-# template fv-serve-<variant>-sls (docs/serve/images.md), and a queue
-# endpoint without FV_EXTRA_ENV_JSON uses that template itself (never
-# deleted by `down`); anything else (the fake config) boots the legacy
-# all-in-one image (:stable, or :latest before the first promotion;
-# docs/serve/releases.md). Endpoints are recorded in the D1 deployments
-# table (scripts/serve/lib/registry.sh; FV_DEPLOY_POOL names the gateway
-# pool, when there is one).
+# Image: an explicit [image] or FV_SERVE_IMAGE wins; otherwise the one CUDA
+# image, as its Runpod template fv-serve-cuda-sls names it, else its :cuda tag
+# (docs/serve/images.md). Every endpoint gets a template of its own: the
+# images bake no config (docs/adr/0011-deploy-section.md), so the config rides
+# in the template's env (variants.sh fv_config_env_json: FV_WORKER_CONFIG for
+# /etc/fv/runpod-fake.toml, the one config the images carry, else
+# FV_WORKER_TOML_B64 with configs/serve/<name> or a local file), and the
+# image's entrypoint (fv-boot) links the volume's weights and starts fv-serve.
+# Endpoints are recorded in the D1 deployments table
+# (scripts/serve/lib/registry.sh; FV_DEPLOY_POOL names the gateway pool, when
+# there is one).
 #
-# Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; FV_VARIANT; FV_SERVE_CONFIG (default
+# Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; FV_SERVE_CONFIG (default
 # /etc/fv/runpod-fake.toml); RUNPOD_VOLUME_ID (default bz0ofkfx45,
 # fv-weights-h3-ltx-500, EU-RO-1, H3 + LTX trees only; the US volume s2k01690bi was deleted
 # 2026-10 and is refused, scripts/gpu/volumes.sh) — its datacenter pins the endpoint; RUNPOD_GPU_TYPES
@@ -69,14 +70,13 @@ REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 REST2="${RUNPOD_API2_BASE:-https://api.runpod.io/v2}"
 QUEUE="${RUNPOD_QUEUE_API:-https://api.runpod.ai/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
-CONFIG="${FV_SERVE_CONFIG:-/etc/fv/runpod-fake.toml}"
-VARIANT="${FV_VARIANT:-$(fv_variant_for_config "$CONFIG")}"
+CONFIG="${FV_SERVE_CONFIG:-$FV_IMAGE_CONFIG}"
+CONFIG_ENV_JSON="$(fv_config_env_json "$CONFIG")" || die "FV_SERVE_CONFIG=$CONFIG: no such worker config"
 # pick_image [image] -> the image reference to boot (see the header).
 pick_image() {
   if [[ -n "${1:-}" ]]; then echo "$1"
   elif [[ -n "${FV_SERVE_IMAGE:-}" ]]; then echo "$FV_SERVE_IMAGE"
-  elif [[ -n "$VARIANT" ]]; then fv_variant_image "$VARIANT" sls
-  else fv_default_image
+  else fv_image_ref "$FV_CUDA_IMAGE" sls
   fi
 }
 VOLUME="${RUNPOD_VOLUME_ID:-$FV_EU_VOLUME_ID}"
@@ -156,17 +156,16 @@ gpu_json() { jq -cn --arg g "$GPUS" '$g | split(",") | map(gsub("^ +| +$"; ""))'
 
 # Serverless template (REST v1). The volume's HF-cache trees link
 # absolutely into /workspace/weights (where pods mount it); a serverless
-# worker mounts it at /runpod-volume, so the entrypoint links
-# /workspace/weights there before exec'ing fv-serve (newer fv-serve does the
-# same itself; this keeps older images working).
-LINK_WEIGHTS='if [ -d /runpod-volume/weights ] && [ ! -e /workspace/weights ]; then mkdir -p /workspace && ln -s /runpod-volume/weights /workspace/weights; fi; exec /opt/fastvideo-rs/bin/fv-serve "$@"'
+# worker mounts it at /runpod-volume, and fv-boot (the image's entrypoint)
+# links /workspace/weights there before it starts fv-serve with the config
+# the env sends.
 template_payload() {
   local image="$1" name="$2"
-  jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --arg link "$LINK_WEIGHTS" --argjson secrets "$SECRET_ENV_JSON" \
+  jq -n --arg name "$name" --arg image "$image" --argjson cfg "$CONFIG_ENV_JSON" --argjson secrets "$SECRET_ENV_JSON" \
     --argjson extra "${FV_EXTRA_ENV_JSON:-{\}}" --argjson ident "$(fv_image_env_json "$image")" '{
     name: $name, imageName: $image, isServerless: true, containerDiskInGb: 20, volumeInGb: 0,
-    dockerEntrypoint: ["/bin/sh", "-c", $link, "fv-serve"], dockerStartCmd: ["--config", $cfg],
-    env: ($secrets + $ident + {
+    dockerEntrypoint: ["/opt/fastvideo-rs/bin/fv-boot"],
+    env: ($secrets + $ident + $cfg + {
       FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_STATE_DIR: "/fvstate",
       FV_WEIGHTS: "/runpod-volume/weights", FV_CACHE_DIR: "/fvstate/cache", RUST_LOG: "info"
     } + $extra)
@@ -196,12 +195,12 @@ lb_payload() {
   pools="$(curl -sS -H "Authorization: Bearer $RUNPOD_API_KEY" "$REST2/catalog/gpus" 2>/dev/null \
     | jq -c --argjson want "$(gpu_json)" '[.gpus[] | select(.id as $i | $want | index($i)) | .pool | select(. != null)] | unique' 2>/dev/null || echo '[]')"
   [[ "$pools" != "[]" && -n "$pools" ]] || pools='["ADA_24"]'
-  jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --argjson pools "$pools" --arg vol "$VOLUME" \
+  jq -n --arg name "$name" --arg image "$image" --argjson cfg "$CONFIG_ENV_JSON" --argjson pools "$pools" --arg vol "$VOLUME" \
     --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" --argjson max "$LB_WORKERS_MAX" --argjson idle "$IDLE_S" --arg fb "$FLASHBOOT_LB" \
     --argjson ident "$(fv_image_env_json "$image")" '{
     name: $name, type: "LOAD_BALANCER", image: $image,
-    args: ("--config " + $cfg), ports: ["8000/http"], disk: 20,
-    env: ($secrets + $ident + {
+    ports: ["8000/http"], disk: 20,
+    env: ($secrets + $ident + $cfg + {
       FV_SERVE_MODE: "http", FV_AUTH_MODE: "trust-gateway", PORT: "8000", PORT_HEALTH: "8000",
       FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/runpod-volume/weights", RUST_LOG: "info",
       FV_WORKERS_MAX: ($max | tostring)
@@ -253,31 +252,21 @@ backstop() {
 
 # Sets EP and TPL.
 up_queue() {
-  local image="$1" name dc resp
-  local vt="" tpl_use
+  local image="$1" name dc resp tpl_use
   name="$PREFIX-q-$(date -u +%m%d%H%M%S)"
   dc="$(volume_dc)"
-  if [[ -n "$VARIANT" && -z "${FV_EXTRA_ENV_JSON:-}" ]]; then
-    vt="$(fv_template_get "$(fv_template_name "$VARIANT" sls)" || true)"
-    [[ -n "$vt" && "$(jq -r .imageName <<<"$vt")" == "$image" ]] || vt=""
-  fi
-  if [[ -n "$vt" ]]; then
-    tpl_use="$(jq -r .id <<<"$vt")"; TPL="-"
-    log "variant $VARIANT: the published template $tpl_use ($image)"
-  else
-    resp="$(rest POST /templates "$(template_payload "$image" "$name")")" || die "template create failed: $(head -c 300 <<<"$resp")"
-    TPL="$(jq -r '.id // empty' <<<"$resp")"
-    [[ -n "$TPL" ]] || die "template create returned no id"
-    ledger "template-created $TPL $name $image"
-    tpl_use="$TPL"
-  fi
+  # A template of its own: the config rides in its env (the published fv-serve-cuda-sls carries none).
+  resp="$(rest POST /templates "$(template_payload "$image" "$name")")" || die "template create failed: $(head -c 300 <<<"$resp")"
+  TPL="$(jq -r '.id // empty' <<<"$resp")"
+  [[ -n "$TPL" ]] || die "template create returned no id"
+  ledger "template-created $TPL $name $image"
+  tpl_use="$TPL"
   resp="$(rest POST /endpoints "$(endpoint_payload "$tpl_use" "$name" "$dc")")" || die "endpoint create failed: $(head -c 300 <<<"$resp")"
   EP="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$EP" ]] || die "endpoint create returned no id"
   ledger "endpoint-created $EP $name volume=$VOLUME dc=$dc gpus=$GPUS template=$tpl_use flashboot=$FLASHBOOT_Q"
-  fv_deploy_created endpoint "$EP" name="$name" image="$image" variant="$VARIANT" pool="${FV_DEPLOY_POOL:-}" dc="$dc" gpu="$GPUS" \
-    meta="$(jq -nc --arg t "$tpl_use" --arg v "$VOLUME" --arg c "$CONFIG" --argjson shared "$([[ "$TPL" == - ]] && echo true || echo false)" \
-      '{type: "queue", template: $t, shared_template: $shared, volume: $v, config: $c}')"
+  fv_deploy_created endpoint "$EP" name="$name" image="$image" variant="$FV_CUDA_IMAGE" pool="${FV_DEPLOY_POOL:-}" dc="$dc" gpu="$GPUS" \
+    meta="$(jq -nc --arg t "$tpl_use" --arg v "$VOLUME" --arg c "$CONFIG" '{type: "queue", template: $t, shared_template: false, volume: $v, config: $c}')"
   backstop "$EP" "$TPL"
   log "queue endpoint $EP (template $tpl_use, volume $VOLUME in $dc, cap ${CAP_S}s)"
 }
@@ -291,7 +280,7 @@ up_lb() {
   [[ -n "$EP" ]] || die "LB endpoint create returned no id: $(head -c 300 <<<"$resp")"
   TPL="$(jq -r '.templateId // .template.id // "-"' <<<"$resp")"
   ledger "endpoint-created $EP $name type=LOAD_BALANCER volume=$VOLUME dc=$dc template=$TPL"
-  fv_deploy_created endpoint "$EP" name="$name" image="$image" variant="$VARIANT" pool="${FV_DEPLOY_POOL:-}" dc="$dc" gpu="$GPUS" \
+  fv_deploy_created endpoint "$EP" name="$name" image="$image" variant="$FV_CUDA_IMAGE" pool="${FV_DEPLOY_POOL:-}" dc="$dc" gpu="$GPUS" \
     meta="$(jq -nc --arg t "$TPL" --arg v "$VOLUME" --arg c "$CONFIG" '{type: "load-balancer", template: $t, volume: $v, config: $c}')"
   backstop "$EP" "$TPL"
   log "LB endpoint $EP (https://$EP.api.runpod.ai, cap ${CAP_S}s)"

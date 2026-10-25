@@ -162,7 +162,8 @@ RUN --mount=type=cache,id=fv-lab-cargo-registry,target=/usr/local/cargo/registry
 #      and passes them back as named build contexts, so every image below,
 #      from any workflow, sits on the SAME layer digests and a host that
 #      pulled one image already has ~95 % of the next.
-#   serve-cuda-bin: fv-serve (one layer) -> serve-<variant>: config (KBs)
+#   serve-cuda: fv-serve (one layer): THE CUDA image, every preset (no baked
+#            config: every launch sends one; owner decision 2026-10-25)
 #   serve-cpu: base-os + fv-serve without CUDA
 #   runtime (fv-gpucheck, benchmarks): base-cuda + debug tools (sshd, rsync,
 #            curl) + CUPTI + hf-fm + scripts/gpu + oxide + fv-gpucheck
@@ -429,14 +430,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # serve: the `debug` flavour (ghcr.io/zaitrarrio/fastvideo-rs-serve:latest /
 # :sha-…; the legacy all-in-one tags): the runtime image (ssh, rsync,
 # fv-gpucheck, scripts, CUPTI) + fv-serve + every config + the Vast worker.
-# What Vast instances, CloudRift/GCP workers and profiling pods run; Runpod
-# pods and serverless workers run the per-variant images below. It adds only
+# What Vast instances, CloudRift/GCP workers and profiling pods run, always
+# with an explicit `--config /etc/fv/<file>` (fv-boot refuses a boot without a
+# config; no FV_CONFIG default); Runpod pods and serverless workers run the
+# serve-cuda image below. It adds only
 # its top layers to the shared stack (docs/serve/images.md).
 # Ports: 8000/http. The ICE ports of design §6.1 (70000/tcp, 70010/udp) are
 # symmetric platform requests above 65535, so they are published by the
 # deploy scripts, not EXPOSEd.
 FROM runtime AS serve
-ENV FV_CONFIG=/etc/fv/runpod.toml
 COPY configs/serve /etc/fv
 COPY deploy/vast/worker.py /opt/fastvideo-rs/deploy/vast/worker.py
 COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
@@ -511,8 +513,12 @@ FROM scratch AS llama-server
 COPY --from=llama-build /out/ /
 # <<< llama-server
 
-# ---- serve-cuda-bin: the CUDA fv-serve (serve-build above) on base-cuda.
-FROM base-cuda AS serve-cuda-bin
+# ---- serve-cuda: THE CUDA serve image (one image for every preset; owner decision 2026-10-25,
+# docs/adr/0011-deploy-section.md): the CUDA fv-serve (serve-build above) on base-cuda. It bakes no worker config:
+# every launch sends one (FV_WORKER_TOML_B64, or FV_WORKER_CONFIG naming /etc/fv/runpod-fake.toml, the fake-engine
+# config CI's no-GPU smoke check boots), and fv-boot refuses to boot without one. deploy/deploy.toml [[images]] cuda;
+# control/gen-configs.mjs --check holds this stage to it.
+FROM base-cuda AS serve-cuda
 # weights_source r2 (docs/ops/r2-weights.md §4): python3 + curl and the fetcher in the image, so a boot neither runs
 # apt-get (up to ~70 s on a slow mirror, docs/ops/r2-bench-2026-10-12.md finding 3) nor downloads r2-fetch.py; the
 # boot uses this copy only when its SHA-256 is the one fv-control pins (R2_FETCH_SHA256), else fetches fv-control's.
@@ -529,45 +535,13 @@ RUN if ldd /opt/fastvideo-rs/bin/llama-server | grep 'not found'; then echo "lla
  && cat /opt/fastvideo-rs/bin/llama-server.version
 COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
 COPY --from=boot-build /out/fv-boot /opt/fastvideo-rs/bin/
+COPY configs/serve/runpod-fake.toml /etc/fv/
+ENV FV_VARIANT=cuda
+LABEL org.opencontainers.image.description="fv-serve cuda: every preset, the worker config sent at boot (FV_WORKER_TOML_B64 / FV_WORKER_CONFIG)"
 EXPOSE 8000
 # fv-boot (docs/adr/0014-fv-boot.md; it replaced deploy/runpod/fv-entry.sh): driver check, config, weights plan,
 # the upsampler sidecar, then exec fv-serve with the entrypoint's arguments.
 ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-boot"]
-
-# ---- one thin stage per variant: its config (plus the fake config for the
-# CI smoke check) and the variant's identity for the entrypoint.
-# BEGIN GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit
-FROM serve-cuda-bin AS serve-h3-turbo
-COPY configs/serve/runpod.toml configs/serve/runpod-fake.toml /etc/fv/
-ENV FV_VARIANT=h3-turbo FV_CONFIG=/etc/fv/runpod.toml
-LABEL org.opencontainers.image.description="fv-serve h3-turbo (configs/serve/runpod.toml)"
-
-FROM serve-cuda-bin AS serve-h3-max
-COPY configs/serve/runpod-h3-max.toml configs/serve/runpod-fake.toml /etc/fv/
-ENV FV_VARIANT=h3-max FV_CONFIG=/etc/fv/runpod-h3-max.toml
-LABEL org.opencontainers.image.description="fv-serve h3-max (configs/serve/runpod-h3-max.toml)"
-
-FROM serve-cuda-bin AS serve-ltx
-COPY configs/serve/runpod-ltx.toml configs/serve/runpod-fake.toml /etc/fv/
-ENV FV_VARIANT=ltx FV_CONFIG=/etc/fv/runpod-ltx.toml
-LABEL org.opencontainers.image.description="fv-serve ltx (configs/serve/runpod-ltx.toml)"
-
-FROM serve-cuda-bin AS serve-wan
-COPY configs/serve/runpod-wan.toml configs/serve/runpod-fake.toml /etc/fv/
-ENV FV_VARIANT=wan FV_CONFIG=/etc/fv/runpod-wan.toml
-LABEL org.opencontainers.image.description="fv-serve wan (configs/serve/runpod-wan.toml)"
-
-# Also carries runpod-wan14b.toml: FV_CONFIG=/etc/fv/runpod-wan14b.toml selects it.
-FROM serve-cuda-bin AS serve-wan5b
-COPY configs/serve/runpod-wan5b.toml configs/serve/runpod-wan14b.toml configs/serve/runpod-fake.toml /etc/fv/
-ENV FV_VARIANT=wan5b FV_CONFIG=/etc/fv/runpod-wan5b.toml
-LABEL org.opencontainers.image.description="fv-serve wan5b (configs/serve/runpod-wan5b.toml)"
-
-FROM serve-cuda-bin AS serve-sfwan
-COPY configs/serve/runpod-sfwan.toml configs/serve/runpod-fake.toml /etc/fv/
-ENV FV_VARIANT=sfwan FV_CONFIG=/etc/fv/runpod-sfwan.toml
-LABEL org.opencontainers.image.description="fv-serve sfwan (configs/serve/runpod-sfwan.toml)"
-# END GENERATED
 
 
 # ---- cpu: CPU only. fv-serve without `cuda` (no CUDA libraries at all) on
@@ -593,8 +567,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM base-os AS serve-cpu
 COPY --from=cpu-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
 COPY --from=boot-build /out/fv-boot /opt/fastvideo-rs/bin/
+# No baked config either: fv-control's fake-engine workers send theirs; CI's smoke check names the fake one.
 COPY configs/serve/runpod-fake.toml /etc/fv/
-ENV FV_VARIANT=cpu FV_CONFIG=/etc/fv/runpod-fake.toml
-LABEL org.opencontainers.image.description="fv-serve cpu: fake engine, CPU only (configs/serve/runpod-fake.toml)"
+ENV FV_VARIANT=cpu
+LABEL org.opencontainers.image.description="fv-serve cpu: fake engine, CPU only (worker config sent at boot)"
 EXPOSE 8000
 ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-boot"]

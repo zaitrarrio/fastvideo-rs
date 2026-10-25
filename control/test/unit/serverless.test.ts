@@ -14,6 +14,7 @@ import {
   resolveImage,
   scaleEndpoint,
   serverlessTick,
+  specOf,
   updateEndpoint,
   type SlsRow,
 } from "../../src/serverless/ops";
@@ -34,6 +35,8 @@ import {
 import { checkEndpointSpec, defaultEndpointSpec, normalizeEndpointSpec, specDiff } from "../../src/serverless/spec";
 import { CUDA_VERSIONS } from "../../src/enums";
 import { d1 } from "./d1shim";
+import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
+import { mergeSpec, SLS_PRESETS } from "../../src/serverless/presets";
 
 const IMG = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:" + "a".repeat(64);
 const KEY = "rpa_TESTKEY_0123456789";
@@ -41,7 +44,7 @@ const KEY = "rpa_TESTKEY_0123456789";
 describe("serverless spec", () => {
   it("cpu defaults: CPU queue workers, no volume, 0..1 workers, a 2 h delete backstop", () => {
     const s = normalizeEndpointSpec({ name: "fake" });
-    expect(s).toMatchObject({ mode: "queue", variant: "cpu", compute: "CPU", cpu_flavors: ["cpu3c", "cpu5c"], vcpu: 2, network_volume: null, workers_min: 0, workers_max: 1, deadline_min: 120, deadline_action: "delete", image: { channel: "stable" } });
+    expect(s).toMatchObject({ mode: "queue", compute: "CPU", config: "runpod-fake.toml", cpu_flavors: ["cpu3c", "cpu5c"], vcpu: 2, network_volume: null, workers_min: 0, workers_max: 1, deadline_min: 120, deadline_action: "delete", image: { channel: "stable" } });
     expect(s.gpu_types).toBeUndefined();
     expect(s.data_centers).toBeUndefined();
   });
@@ -62,8 +65,10 @@ describe("serverless spec", () => {
   it("workers, modes, compute and env", () => {
     expect(() => normalizeEndpointSpec({ name: "x", workers_min: 2, workers_max: 1 })).toThrow(/workers_min is above workers_max/);
     expect(() => normalizeEndpointSpec({ name: "x", mode: "lb" })).toThrow(/GPU only/);
-    expect(() => normalizeEndpointSpec({ name: "x", variant: "cpu", compute: "GPU" })).toThrow(/cpu variant runs on CPU/);
-    expect(() => normalizeEndpointSpec({ name: "x", variant: "h3-turbo", compute: "CPU" })).toThrow(/CPU workers run the cpu variant/);
+    // One image (2026-10-25): the compute picks it; a custom GPU endpoint names its config (the images bake none).
+    expect(() => normalizeEndpointSpec({ name: "x", compute: "GPU" })).toThrow(/a custom endpoint names its worker config/);
+    expect(normalizeEndpointSpec({ name: "x", compute: "GPU", config: "runpod-ltx.toml" })).toMatchObject({ compute: "GPU", config: "runpod-ltx.toml", network_volume: "bz0ofkfx45" });
+    expect(() => normalizeEndpointSpec({ name: "x", compute: "GPU", config: "/etc/fv/nope.toml" })).toThrow(/not a worker config fv-control carries/);
     expect(() => normalizeEndpointSpec({ name: "x", env: { FV_SERVE_MODE: "http" } })).toThrow(/set by fv-control/);
     expect(() => normalizeEndpointSpec({ name: "x", env: { FV_R2_SECRET_ACCESS_KEY: "s" } })).toThrow(/set by fv-control/);
     expect(() => normalizeEndpointSpec({ name: "x", image: { channel: "stable", sha: "abcdef0" } })).toThrow(/exactly one/);
@@ -98,22 +103,29 @@ describe("serverless payloads", () => {
     expect(t).toMatchObject({ name: "fvc-fake-261006210507", imageName: IMG, isServerless: true, category: "CPU", containerDiskInGb: 20, volumeInGb: 0 });
     expect(t.env).toMatchObject({ FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_IMAGE_REF: IMG, FV_IMAGE_DIGEST: "sha256:" + "a".repeat(64), FV_RELEASE_CHANNEL: "stable", FV_R2_SECRET_ACCESS_KEY: "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}", FV_LOG: "x" });
     expect(t.env.FV_WEIGHTS).toBeUndefined();
-    // No config: the image's own entrypoint (fv-boot; fv-entry on older images) and baked FV_CONFIG.
-    expect("dockerEntrypoint" in t).toBe(false);
+    // Every endpoint sends its config (the images bake none): the CPU default's fake config, inline, and its boot.
+    expect(atob(t.env.FV_WORKER_TOML_B64!)).toContain('backend = "fake"');
+    expect(t.env.FV_CONFIG).toBeUndefined();
+    expect(t.dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
   });
   it("GPU template with a config: the boot links the weights and runs fv-serve with it", () => {
     const t = templateCreatePayload(gpu, IMG, "n");
     expect(t.category).toBe("NVIDIA");
-    expect(t.env).toMatchObject({ FV_WEIGHTS: "/runpod-volume/weights", FV_CONFIG: "/etc/fv/runpod.toml" });
+    expect(t.env).toMatchObject({ FV_WEIGHTS: "/runpod-volume/weights" });
+    // The named config's text rides inline (the image bakes none); no FV_CONFIG.
+    expect(Buffer.from(t.env.FV_WORKER_TOML_B64!, "base64").toString("utf8")).toBe(WORKER_CONFIGS["runpod.toml"]);
+    expect(t.env.FV_CONFIG).toBeUndefined();
     expect(t.dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
     expect(SLS_BOOT).toContain("ln -s /runpod-volume/weights /workspace/weights");
+    expect(SLS_BOOT).toContain("FAILED: no worker config");
+    expect(SLS_BOOT).not.toContain("FV_CONFIG");
     const inline = workerEnv(normalizeEndpointSpec({ name: "i", config_toml: "[engine]\nbackend = \"fake\"\n" }), IMG);
     expect(atob(inline.FV_WORKER_TOML_B64!)).toContain('backend = "fake"');
-    // The update drops create-only fields and resets the entrypoint when no config is named.
+    // The update drops create-only fields and keeps the boot of its config.
     const u = templateUpdatePayload(cpu, IMG) as any;
     expect(u.name).toBeUndefined();
     expect(u.isServerless).toBeUndefined();
-    expect(u.dockerEntrypoint).toEqual([]);
+    expect(u.dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
   });
   it("queue endpoint: CPU flavors / GPU types in order, volume, data centers, scaler, timeouts", () => {
     expect(endpointCreatePayload(cpu, "tpl1")).toEqual({
@@ -142,7 +154,10 @@ describe("serverless payloads", () => {
     const pools = lbPools(lb.gpu_types!, [{ id: "NVIDIA GeForce RTX 5090", pool: "ADA_32_PRO" }, { id: "NVIDIA RTX PRO 6000 Blackwell Server Edition", pool: "BLACKWELL_96" }]);
     expect(pools).toEqual(["BLACKWELL_96", "ADA_32_PRO"]);
     const p = v2CreatePayload(lb, IMG, pools) as any;
-    expect(p).toMatchObject({ name: "fvc-lb", type: "LOAD_BALANCER", image: IMG, args: "--config /etc/fv/runpod-wan.toml", ports: ["8000/http"], networkVolumes: ["bz0ofkfx45"], dataCenterIds: ["EU-RO-1"], flashboot: "OFF", workers: { min: 0, max: 1, idleTimeout: 5 }, scaling: { type: "REQUEST_COUNT", requestCount: 1 } });
+    expect(p.args).toBeUndefined();
+    expect(Buffer.from(p.env.FV_WORKER_TOML_B64, "base64").toString("utf8")).toBe(WORKER_CONFIGS["runpod-wan.toml"]);
+    expect(v2TemplateBoot(lb).dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
+    expect(p).toMatchObject({ name: "fvc-lb", type: "LOAD_BALANCER", image: IMG, ports: ["8000/http"], networkVolumes: ["bz0ofkfx45"], dataCenterIds: ["EU-RO-1"], flashboot: "OFF", workers: { min: 0, max: 1, idleTimeout: 5 }, scaling: { type: "REQUEST_COUNT", requestCount: 1 } });
     expect(p.env).toMatchObject({ FV_SERVE_MODE: "http", PORT: "8000", PORT_HEALTH: "8000", FV_WORKERS_MAX: "1" });
   });
   it("CPU queue: REST v2 with the cpu flavors (REST v1 ignores computeType CPU); a config goes into its template", () => {
@@ -151,7 +166,8 @@ describe("serverless payloads", () => {
     expect(p.gpu).toBeUndefined();
     expect(p.ports).toBeUndefined();
     expect(p.env.FV_SERVE_MODE).toBe("runpod-queue");
-    expect(v2TemplateBoot(cpu)).toBeNull();
+    // Every v2-made template gets the boot of its config (the images bake none).
+    expect(v2TemplateBoot(cpu).dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
     expect(v2TemplateBoot(normalizeEndpointSpec({ name: "c", config: "/etc/fv/runpod-fake.toml" }))!.dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
   });
   it("update payload: only EndpointUpdateInput keys (Runpod refuses extra keys); CPU flavors are not updatable", () => {
@@ -290,7 +306,7 @@ describe("serverless operations", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("resolves the image like clusters do (<variant>-<channel> to a digest)", async () => {
+  it("resolves the image like clusters do (<image>-<channel> to a digest: cpu for CPU workers)", async () => {
     expect(await resolveImage(env, normalizeEndpointSpec({ name: "fake" }))).toBe("ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:" + "b".repeat(64));
   });
 
@@ -301,7 +317,8 @@ describe("serverless operations", () => {
     expect(row.template_id).toBe("tpl2");
     expect(row.deadline! - row.created_at).toBe(120 * 60_000);
     const writes = mock.m.calls.filter((c) => c.method !== "GET" && !c.url.includes("graphql")).map((c) => `${c.method} ${new URL(c.url).host}${new URL(c.url).pathname}`);
-    expect(writes).toEqual(["POST api.runpod.io/v2/serverless", `PATCH rest.runpod.io/v1/endpoints/${row.endpoint_id}`]);
+    // The v2-made template gets the boot of its config (every endpoint sends one), then the reconcile PATCH.
+    expect(writes).toEqual(["POST api.runpod.io/v2/serverless", "PATCH rest.runpod.io/v1/templates/tpl2", `PATCH rest.runpod.io/v1/endpoints/${row.endpoint_id}`]);
     // The reconcile PATCH set flashboot back to false (Runpod's create had dropped it).
     expect(mock.m.endpoints.get(row.endpoint_id!)!.flashboot).toBe(false);
     const a = await env.DB.prepare("SELECT action, ok FROM audit WHERE action = 'serverless.create'").all();
@@ -363,6 +380,73 @@ describe("serverless operations", () => {
     expect(u.image).toBe(IMG2);
     expect(mock.m.templates.get(up.template_id!)!.imageName).toBe(IMG2);
     await expect(updateEndpoint(env, who, u, { ...JSON.parse(u.spec), network_volume: "bz0ofkfx45" })).rejects.toThrow(/network_volume: cannot change in place/);
+  });
+
+  it("a stored preset endpoint from before the one image: specOf carries the preset's config; a scale or a workers-only update never touches the template", async () => {
+    // The three shapes an older fv-control stored for a preset endpoint: the variant image's baked config (no config at
+    // all), a path in the variant image, or an inline snapshot of the config text.
+    const legacyShapes = (p: (typeof SLS_PRESETS)[number], n: any) => {
+      const base: any = { ...n };
+      delete base.config;
+      delete base.config_toml;
+      const variant = p.compute === "CPU" ? "cpu" : "h3-turbo";
+      return [
+        { ...base, variant },
+        { ...base, variant, config: `/etc/fv/${p.config ?? "runpod.toml"}` },
+        { ...base, variant, config_toml: "# an older snapshot of the preset's config\n[engine]\nbackend = \"cuda\"\n" },
+      ];
+    };
+    for (const p of SLS_PRESETS) {
+      mock = mockRunpod();
+      vi.stubGlobal("fetch", mock.fetchMock);
+      env = { DB: d1(), RUNPOD_API_KEY: KEY, BALANCE_FLOOR: "8" };
+      const name = `l-${p.id}`.slice(0, 31);
+      const row0 = await createEndpoint(env, who, { name, preset: p.id }, { image: IMG });
+      const n = specOf(row0);
+      for (const [i, stored] of legacyShapes(p, n).entries()) {
+        await env.DB.prepare("UPDATE serverless_endpoints SET spec = ?, status = 'active' WHERE id = ?").bind(JSON.stringify(stored), row0.id).run();
+        const row = await getRow(env, row0.id);
+        // What GET /:id, /serves and /outlook read: the preset's compute and config by name, never "no config".
+        const so = specOf(row);
+        expect([so.preset, so.compute, so.config, so.config_toml, (so as any).variant], `${p.id} #${i}`).toEqual([p.id, p.compute, p.config, undefined, undefined]);
+        const before = mock.m.calls.length;
+        const down = await scaleEndpoint(env, who, row, { workers_max: 0 });
+        expect(down.status, `${p.id} #${i}`).toBe("scaled-down");
+        expect(down.image, `${p.id} #${i}: the image never rolls on a scale`).toBe(row0.image);
+        const writes = mock.m.calls.slice(before).filter((c) => c.method !== "GET" && !c.url.includes("graphql")).map((c) => `${c.method} ${new URL(c.url).pathname}`);
+        expect(writes, `${p.id} #${i}`).toEqual([`PATCH /v1/endpoints/${row0.endpoint_id}`]);
+        // A whole-document update that changes only the worker counts (the PUT route merges over the stored spec) is a scale too.
+        await env.DB.prepare("UPDATE serverless_endpoints SET spec = ?, status = 'active' WHERE id = ?").bind(JSON.stringify(stored), row0.id).run();
+        const before2 = mock.m.calls.length;
+        const u = await updateEndpoint(env, who, await getRow(env, row0.id), mergeSpec(stored, { workers_max: 0 }));
+        expect(u.image, `${p.id} #${i}`).toBe(row0.image);
+        expect(mock.m.calls.slice(before2).some((c) => c.method !== "GET" && c.url.includes("/templates")), `${p.id} #${i}: no template write`).toBe(false);
+      }
+    }
+  });
+
+  it("presets own their config by name: after a configs/serve file changes, preset endpoints still scale and update", async () => {
+    const row = await createEndpoint(env, who, { name: "ref", preset: "h3-ref2v" }, { image: IMG });
+    const prev = specOf(row);
+    expect([prev.config, prev.config_toml]).toEqual(["runpod-h3-ref2v.toml", undefined]);
+    const file = "runpod-h3-ref2v.toml";
+    const orig = WORKER_CONFIGS[file]!;
+    try {
+      // The file was edited and fv-control redeployed (the generated table carries the new text).
+      WORKER_CONFIGS[file] = orig + "\n# edited after the endpoint was created\n";
+      expect(() => normalizeEndpointSpec(mergeSpec(prev, { workers_max: 0 }))).not.toThrow();
+      expect(() => normalizeEndpointSpec(mergeSpec(prev, { execution_timeout_s: 900 }))).not.toThrow();
+      const down = await scaleEndpoint(env, who, row, { workers_max: 0 });
+      expect(down.status).toBe("scaled-down");
+      // The next template update sends the edited text.
+      mock.m.balance = 30;
+      const IMG2 = IMG.replace(/a{64}/, "c".repeat(64));
+      const u = await updateEndpoint(env, who, down, { ...specOf(down), image: { ref: IMG2 } }, { image: IMG2 });
+      const tpl = mock.m.templates.get(u.template_id!)!;
+      expect(Buffer.from(tpl.env.FV_WORKER_TOML_B64, "base64").toString("utf8")).toBe(WORKER_CONFIGS[file]);
+    } finally {
+      WORKER_CONFIGS[file] = orig;
+    }
   });
 
   it("invoke: /runsync, timings, cold start flag, output scrubbed of secrets", async () => {
@@ -441,7 +525,17 @@ describe("serverless operations", () => {
 });
 
 describe("defaults", () => {
-  it("defaultEndpointSpec validates for every variant", () => {
-    for (const v of ["cpu", "h3-turbo", "h3-max", "ltx", "wan", "wan5b", "sfwan"]) expect(checkEndpointSpec(defaultEndpointSpec("x", v)).ok).toBe(true);
+  it("defaultEndpointSpec validates for CPU and every preset; a stored spec from before the one image reads as its compute", () => {
+    expect(checkEndpointSpec(defaultEndpointSpec("x", "CPU")).ok).toBe(true);
+    for (const p of SLS_PRESETS) expect(checkEndpointSpec(defaultEndpointSpec("x", p.compute, p.id)).ok, p.id).toBe(true);
+    // As stored with per-variant images: a variant and no config (the image's baked one). It normalizes to its compute
+    // and that config by name, which fv-control now sends at boot; for every old variant.
+    for (const [v, cfg] of [["h3-turbo", "runpod.toml"], ["h3-max", "runpod-h3-max.toml"], ["ltx", "runpod-ltx.toml"], ["wan", "runpod-wan.toml"], ["wan5b", "runpod-wan5b.toml"], ["sfwan", "runpod-sfwan.toml"]] as const) {
+      const n = normalizeEndpointSpec({ name: "old", variant: v });
+      expect([(n as any).variant, n.compute, n.config], v).toEqual([undefined, "GPU", cfg]);
+      expect(Buffer.from(workerEnv(n, IMG).FV_WORKER_TOML_B64!, "base64").toString("utf8"), v).toBe(WORKER_CONFIGS[cfg]);
+    }
+    const cpuOld = normalizeEndpointSpec({ name: "old", variant: "cpu", compute: "CPU" });
+    expect([(cpuOld as any).variant, cpuOld.compute, cpuOld.config]).toEqual([undefined, "CPU", "runpod-fake.toml"]);
   });
 });

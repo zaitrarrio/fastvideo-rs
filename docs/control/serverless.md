@@ -28,10 +28,10 @@ custom endpoint the variant's (`?variant=`). §1a says what a preset is and what
 |---|---|---|
 | `name` | | `[a-z][a-z0-9-]{0,30}`; the Runpod endpoint is `fvc-<name>` |
 | `mode` | `queue` | `queue` or `lb` (GPU, `scaler_type: REQUEST_COUNT`, the default for `lb`) |
-| `preset` | none (custom) | what it serves (§1a): sets `variant`, `compute`, `config` / `config_toml`, disk and timeout; `cpu` is the fake engine |
-| `image` | `{channel: stable}` | one of `channel`, `sha`, `ref`; resolved to a digest like cluster images (`<variant>-<channel>`, `:stable` → `:latest` before the first promotion) |
-| `variant`, `compute` | the preset's; custom: `cpu` → `CPU` | `cpu` (fake engine) runs on CPU workers; the CUDA variants on GPU |
-| `config` / `config_toml` | the preset's; custom: the variant's baked config | a config file the image carries (`FV_CONFIG`) or inline (`FV_WORKER_TOML_B64`), in both modes |
+| `preset` | none (custom) | what it serves (§1a): sets `compute`, `config` / `config_toml`, disk and timeout |
+| `image` | `{channel: stable}` | one of `channel`, `sha`, `ref`; resolved to a digest like cluster images (`cuda-<channel>` or `cpu-<channel>`, `:stable` → `:latest` before the first promotion) |
+| `compute` | the preset's; custom: `CPU` | `CPU` runs the CPU image (fake engine), `GPU` the CUDA image. A stored spec's `variant` is read and dropped (`cpu` → `CPU`; its baked config when the spec names none) |
+| `config` / `config_toml` | the preset's; custom CPU: `runpod-fake.toml`; custom GPU: required | a `configs/serve` name or the text, always sent inline (`FV_WORKER_TOML_B64`) in both modes; what the endpoint serves derives from it |
 | `env` | | plain extra env; keys fv-control sets (serve mode, image identity, the `{{ RUNPOD_SECRET_fv_* }}` references, …) are refused |
 | `gpu_types`, `gpu_count`, `allowed_cuda` | RTX PRO 6000 Server, 1; `allowed_cuda` `[]` | GPU types in priority order; `allowed_cuda` is an exact list for Runpod's host filter. Leave it empty: every GPU endpoint gets `minCudaVersion: "13.0"`, and a list hides the 13.1 / 13.2 hosts (§1b) |
 | `cpu_flavors`, `vcpu` | `cpu3c, cpu5c`, 2 | CPU workers |
@@ -307,9 +307,9 @@ so the image's own entrypoint runs it; otherwise inline), the container disk
 (`ltx-a2v`: 60 GB) and the execution timeout (the pool's job timeout). An input
 may repeat those fields but not change them (`variant: set by preset
 h3-ref2v …`). An update that names another preset drops the old preset's
-config; one that names a variant or config without a preset becomes custom
+config; one that names a config without a preset becomes custom
 (`preset: null` too). `GET /api/serverless/presets` lists each preset with
-what it serves, its weight trees and least GPU memory. Raw `variant` /
+what it serves, its weight trees and least GPU memory. Raw `compute` /
 `config` / `config_toml` remain the custom path ("Advanced / custom" in the
 form), checked the same way.
 

@@ -7,8 +7,9 @@
 //!   `families/*.toml` and the EU volume's tree list
 //!   (`scripts/gpu/volumes.sh` `FV_EU_VOLUME_TREES`).
 //! - [`from_preset`] builds the launch fv-deploy creates: fv-boot as the
-//!   entrypoint (ADR-0014), the preset's config baked (`--config /etc/fv/…`)
-//!   or inline (`FV_WORKER_TOML_B64`), volume weights on the EU volume.
+//!   entrypoint (ADR-0014) on the one CUDA image, the preset's config inline
+//!   (`FV_WORKER_TOML_B64`: the image bakes none, ADR-0011), volume weights
+//!   on the EU volume.
 //! - [`script_pod`] / [`script_endpoint`] build what `runpod-pod.sh` /
 //!   `runpod-endpoint.sh` send, so the payload goldens pin the provider code
 //!   to the scripts it replaces.
@@ -36,10 +37,12 @@ use crate::provider::{
 pub const SERVE_REPO: &str = "ghcr.io/zaitrarrio/fastvideo-rs-serve";
 /// fv-boot in the serve images (ADR-0014; `fixtures/boot-protocol.json`).
 pub const FV_BOOT_BIN: &str = "/opt/fastvideo-rs/bin/fv-boot";
-/// fv-serve in the serve images.
-pub const FV_SERVE_BIN: &str = "/opt/fastvideo-rs/bin/fv-serve";
-/// Where the images carry their worker configs.
-pub const IMAGE_CONFIG_DIR: &str = "/etc/fv";
+/// The largest `FV_WORKER_TOML_B64` a launch sends (bytes of base64). Runpod
+/// documents no limit on one env value (only 50 variables per pod, and a
+/// 1 MiB body on the v2 API); this is a conservative guard, about three
+/// times the largest committed config (`runpod-family-h3.toml`, 5600 bytes
+/// encoded), and fv-control's `MAX_WORKER_TOML_B64` is the same.
+pub const MAX_WORKER_TOML_B64: usize = 16 * 1024;
 /// The EU region's GPU types (`scripts/gpu/volumes.sh` `FV_EU_GPUS`; plan §1:
 /// RTX PRO 6000 by default).
 pub const EU_GPUS: [&str; 1] = ["NVIDIA RTX PRO 6000 Blackwell Server Edition"];
@@ -232,9 +235,9 @@ pub struct PresetRequest {
     pub key_hash: String,
 }
 
-/// The resolved preset: image variant, config, trees, disk.
+/// The resolved preset: image, config, trees, disk.
 struct Resolved {
-    image_variant: String,
+    image: String,
     config: String,
     trees: Vec<String>,
     container_disk_gb: Option<u32>,
@@ -242,7 +245,7 @@ struct Resolved {
 
 fn resolve_preset(repo: &Repo, family: &str, preset: &str) -> Result<Resolved, LaunchError> {
     let d = &repo.deploy;
-    let (image_variant, config, variants, disk) = if let Some(p) = d.preset(preset) {
+    let (image, config, variants, disk) = if let Some(p) = d.preset(preset) {
         (
             p.image.clone(),
             p.config.clone(),
@@ -299,7 +302,7 @@ fn resolve_preset(repo: &Repo, family: &str, preset: &str) -> Result<Resolved, L
     trees.sort();
     trees.dedup();
     Ok(Resolved {
-        image_variant,
+        image,
         config,
         trees,
         container_disk_gb: disk,
@@ -326,36 +329,28 @@ pub fn from_preset(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Laun
             missing.join(", ")
         )));
     }
-    let image_def = repo.deploy.image(&r.image_variant).ok_or_else(|| {
-        LaunchError::Deploy(format!(
+    if repo.deploy.image(&r.image).is_none() {
+        return Err(LaunchError::Deploy(format!(
             "no image {} in deploy/deploy.toml",
-            r.image_variant
-        ))
-    })?;
-    let baked = image_def.carries(&r.config);
+            r.image
+        )));
+    }
     let (image, channel) = match &req.image {
         Some(i) => (i.clone(), None),
         None => (
-            format!("{SERVE_REPO}:{}-{}", r.image_variant, req.channel),
+            format!("{SERVE_REPO}:{}-{}", r.image, req.channel),
             Some(req.channel.as_str()),
         ),
     };
     let mut env = secret_env_refs();
     env.extend(image_ident_env(&image, channel));
-    let mut args = Vec::new();
-    if baked {
-        args = vec![
-            "--config".to_owned(),
-            format!("{IMAGE_CONFIG_DIR}/{}", r.config),
-        ];
-    } else {
-        let p = repo.root.join("configs/serve").join(&r.config);
-        let text = read(&p)?;
-        env.insert(
-            "FV_WORKER_TOML_B64".into(),
-            base64::engine::general_purpose::STANDARD.encode(text.as_bytes()),
-        );
-    }
+    // The image bakes no config: the preset's rides inline (fv-boot refuses
+    // a boot without one).
+    let p = repo.root.join("configs/serve").join(&r.config);
+    let (k, v) = inline_config(&read(&p)?)
+        .map_err(|why| LaunchError::Preset(format!("{}: {why}", r.config)))?;
+    env.insert(k, v);
+    let args = Vec::new();
     env.insert(
         "FV_WEIGHTS_SOURCE".into(),
         WeightsSource::Volume.as_str().into(),
@@ -371,9 +366,8 @@ pub fn from_preset(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Laun
     let source = Some(LaunchSource {
         family: req.family.clone(),
         preset: req.preset.clone(),
-        image_variant: r.image_variant.clone(),
+        image: r.image.clone(),
         config: r.config.clone(),
-        config_baked: baked,
     });
     let placement = Placement {
         region: Some(region.region.clone()),
@@ -450,15 +444,46 @@ pub fn from_preset(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Laun
     })
 }
 
+/// `FV_WORKER_TOML_B64` for a worker config's text, or why it is too large
+/// for a launch's env ([`MAX_WORKER_TOML_B64`]).
+pub fn inline_config(toml: &str) -> Result<(String, String), String> {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(toml.as_bytes());
+    if b64.len() > MAX_WORKER_TOML_B64 {
+        return Err(format!(
+            "the worker config is {} bytes as FV_WORKER_TOML_B64, over the {MAX_WORKER_TOML_B64}-byte guard",
+            b64.len()
+        ));
+    }
+    Ok(("FV_WORKER_TOML_B64".to_owned(), b64))
+}
+
+/// The env a script launch sends its config in (`variants.sh
+/// fv_config_env_json`): the TOML inline when the script read it from
+/// `configs/serve`, else `FV_WORKER_CONFIG` naming the file the image
+/// carries (`/etc/fv/runpod-fake.toml`).
+fn script_config_env(config: &str, inline: Option<&str>) -> (String, String) {
+    match inline {
+        Some(t) => (
+            "FV_WORKER_TOML_B64".to_owned(),
+            base64::engine::general_purpose::STANDARD.encode(t.as_bytes()),
+        ),
+        None => ("FV_WORKER_CONFIG".to_owned(), config.to_owned()),
+    }
+}
+
 /// What `scripts/serve/runpod-pod.sh` creates (its `payload()` inputs):
-/// fv-serve as the entrypoint with `--config <config>`, the run key's hash,
-/// a volume at `/workspace` in its data centre, no CUDA filter.
+/// fv-boot (the image's entrypoint) with the config in the env, the run
+/// key's hash, a volume at `/workspace` in its data centre, no CUDA filter.
 pub struct ScriptPod<'a> {
     pub name: &'a str,
     pub image: &'a str,
     pub gpu: &'a str,
     pub key_hash: &'a str,
+    /// `FV_SERVE_CONFIG` as the script names it.
     pub config: &'a str,
+    /// The config's text when the image does not carry it (the script sends
+    /// it inline); `None`: `FV_WORKER_CONFIG` names `config` in the image.
+    pub inline: Option<&'a str>,
     /// `(volume id, its data centre)`.
     pub volume: Option<(&'a str, &'a str)>,
     pub guards: Guards,
@@ -477,14 +502,16 @@ pub fn script_pod(p: &ScriptPod<'_>) -> Launch {
     ] {
         env.insert(k.into(), v.into());
     }
+    let (k, v) = script_config_env(p.config, p.inline);
+    env.insert(k, v);
     Launch {
         schema: LAUNCH_SCHEMA,
         name: p.name.into(),
         provider: ProviderKind::RunpodPod,
         source: None,
         image: p.image.into(),
-        entrypoint: vec![FV_SERVE_BIN.into()],
-        args: vec!["--config".into(), p.config.into()],
+        entrypoint: vec![FV_BOOT_BIN.into()],
+        args: Vec::new(),
         env,
         ports: vec!["8000/http".into(), "70000/tcp".into()],
         gpu: GpuSpec {
@@ -512,17 +539,17 @@ pub fn script_pod(p: &ScriptPod<'_>) -> Launch {
     }
 }
 
-/// The serverless entrypoint `runpod-endpoint.sh` sends (links the volume's
-/// weights where a pod sees them, then fv-serve; fv-boot does the same).
-pub const SCRIPT_LINK_WEIGHTS: &str = "if [ -d /runpod-volume/weights ] && [ ! -e /workspace/weights ]; then mkdir -p /workspace && ln -s /runpod-volume/weights /workspace/weights; fi; exec /opt/fastvideo-rs/bin/fv-serve \"$@\"";
-
 /// What `scripts/serve/runpod-endpoint.sh` creates for a queue endpoint
-/// (`template_payload` + `endpoint_payload` inputs).
+/// (`template_payload` + `endpoint_payload` inputs): fv-boot (it links the
+/// volume's weights where a pod sees them) with the config in the env.
 pub struct ScriptEndpoint<'a> {
     pub name: &'a str,
     pub image: &'a str,
     pub gpus: &'a [&'a str],
+    /// `FV_SERVE_CONFIG` as the script names it.
     pub config: &'a str,
+    /// The config's text when the image does not carry it (see [`ScriptPod::inline`]).
+    pub inline: Option<&'a str>,
     pub volume: &'a str,
     pub data_center: &'a str,
     pub guards: Guards,
@@ -541,19 +568,16 @@ pub fn script_endpoint(p: &ScriptEndpoint<'_>) -> Launch {
     ] {
         env.insert(k.into(), v.into());
     }
+    let (k, v) = script_config_env(p.config, p.inline);
+    env.insert(k, v);
     Launch {
         schema: LAUNCH_SCHEMA,
         name: p.name.into(),
         provider: ProviderKind::RunpodServerless,
         source: None,
         image: p.image.into(),
-        entrypoint: vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            SCRIPT_LINK_WEIGHTS.into(),
-            "fv-serve".into(),
-        ],
-        args: vec!["--config".into(), p.config.into()],
+        entrypoint: vec![FV_BOOT_BIN.into()],
+        args: Vec::new(),
         env,
         ports: Vec::new(),
         gpu: GpuSpec {

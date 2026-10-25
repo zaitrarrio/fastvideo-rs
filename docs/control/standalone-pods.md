@@ -5,7 +5,7 @@ Code: `control/src/standalone.ts`, the routes in `control/src/index.ts`,
 `control/public/standalone.js`, `scripts/serve/fv-control.sh pod …`.
 
 A standalone pod is one fv-serve pod launched on its own, not as part of a
-cluster: one GPU (or CPU) worker from a variant and an image, in a region,
+cluster: one GPU (or CPU) worker from a preset or a worker config, in a region,
 with a deadline, which the owner can stop, start and delete.
 
 ## Design: a one-pool direct cluster
@@ -61,7 +61,7 @@ The launch request:
 ```json
 {
   "name": "h3-solo",
-  "preset": "h3-turbo",              // or "variant" + "config" / "config_toml" + "models" / "fake_models"
+  "preset": "h3-turbo",              // or "config" (a configs/serve name) / "config_toml" + "models" / "fake_models"
   "channel": "latest",               // or "sha", or "image" (a ref or a digest); default: stable
   "compute": "GPU",                  // or "CPU" (+ "cpu_flavors", "vcpu")
   "gpu_types": ["NVIDIA RTX PRO 6000 Blackwell Server Edition"],   // in order: the fallbacks after the first
@@ -80,7 +80,7 @@ The launch request:
 
 ```bash
 fv-control.sh pod launch h3-solo --preset h3-turbo --channel latest --deadline-min 45 --wait
-fv-control.sh pod launch fake1 --variant cpu --cpu cpu3c --config /etc/fv/runpod-fake.toml --json extra.json
+fv-control.sh pod launch fake1 --cpu --config runpod-fake.toml --json extra.json
 fv-control.sh pod list | status <name> | stop <name> | start <name> | extend <name> 30 | delete <name> | wait <name>
 fv-control.sh pod logs <name | pod id> [--source runpod|serve] [--follow]
 fv-control.sh boot <pod id | name>            # the boot timeline

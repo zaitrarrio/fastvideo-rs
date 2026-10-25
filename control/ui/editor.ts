@@ -1,6 +1,6 @@
 // The smart JSON editor: CodeMirror 6 with schema validation (inline
 // diagnostics), hover docs, completion of keys, enum values and live values
-// (GPU types with price and stock, channels, variants, env keys, …),
+// (GPU types with price and stock, channels, worker configs, env keys, …),
 // folding, search, format, and light / dark through the page's CSS tokens.
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type Completion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";

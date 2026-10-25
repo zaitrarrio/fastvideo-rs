@@ -151,6 +151,13 @@ A controller worker's (cluster or provider) inline or `FV_WORKER_CONFIG` copy ge
 `[gateway]` (idempotent). A controller worker with neither (and no `--config` argument) fails, as the shell boots did
 (`set -u` on the unset `FV_WORKER_CONFIG`); it never falls back to the baked `FV_CONFIG` without the edit.
 
+**Amended 2026-10-25** (ADR-0011 "One image with boot-time config", owner decision): the images bake no
+config and fv-boot no longer reads `FV_CONFIG`. The order is inline `FV_WORKER_TOML_B64`, then `--config`, then
+`FV_WORKER_CONFIG` (outside a controller worker: the file as is); with none of them every boot kind **refuses to
+boot** (`boot::config::missing`, non-zero exit, before the driver check), naming the remedy. fv-control sends
+every config inline; `FV_WORKER_CONFIG` is set by the Runpod scripts and CI's smoke check
+(`/etc/fv/runpod-fake.toml`, the one config the images carry).
+
 #### 3.3 Weights
 
 | Variable | Read for | Set by today |

@@ -2,14 +2,11 @@
 // configs/serve (the source of truth), and the control-plane and script
 // tables that derive from the family manifests families/*.toml (plan A4,
 // docs/adr/0008-family-manifest-layer-2.md):
-//   src/cluster/worker-configs.ts   the worker configs the pool presets send
-//                                   inline (FV_WORKER_TOML_B64), so they run on
-//                                   images whose variant does not carry them
-//   src/cluster/image-configs.ts    which configs each per-variant image carries
-//                                   (docker/gpucheck.Dockerfile serve-<variant>
-//                                   stages), its baked FV_CONFIG, and their TOML
-//                                   (what a serverless endpoint serves before a
-//                                   worker boots, docs/control/serverless.md)
+//   src/cluster/worker-configs.ts   every Runpod worker config (configs/serve/runpod*.toml, the
+//                                   presets' first): fv-control sends each one inline
+//                                   (FV_WORKER_TOML_B64) at boot, since no serve image bakes
+//                                   a config (docs/adr/0011-deploy-section.md, one image), and
+//                                   derives from it what an endpoint serves before a worker boots
 //   src/r2-trees.ts, src/r2-fetch-script.ts  the R2 weights store's published trees
 //                                   (scripts/gpu/weights-r2.tsv) and the pod fetcher r2-fetch.py
 //   src/serverless/console-assets.ts fv-serve's console pages and assets
@@ -22,22 +19,20 @@
 //   src/volumes.ts                  region EU_TREES from scripts/gpu/volumes.sh FV_EU_VOLUME_TREES
 //   ../scripts/gpu/verify-weights.sh region variant_trees (the `variant:<id>` cells)
 // and the deployment tables that derive from deploy/deploy.toml (plan C1, docs/adr/0011-deploy-section.md):
-//   src/deploy-gen.ts               the image variants, pool presets and family presets (src/presets.ts reads them)
-//   src/enums.ts                    regions VARIANTS and POOL_PRESET_IDS
-//   ../scripts/serve/variants.sh    region: the variant / preset tables, FV_VARIANTS, FV_POOL_PRESETS, fv_variant_config
-//   ../docker/gpucheck.Dockerfile   region: the thin serve-<variant> stages of the CUDA image variants
+//   src/deploy-gen.ts               the serve images, pool presets and family presets (src/presets.ts reads them)
+//   src/enums.ts                    regions SERVE_IMAGES and POOL_PRESET_IDS
+//   ../scripts/serve/variants.sh    region: the image table and FV_IMAGES
 //   ../configs/autoscale.toml       region: the [[autoscale.pools]] (copied with their comments)
 //   ../docs/serve/images.md         region: the image table
 //   ../scripts/gcp/families.tsv     the whole file, from the [[gcp]] rows (weight_trees / served from the twin config)
-//   src/cluster/worker-configs.ts   which configs ride inline: the presets' configs their image does not carry
 //   node gen-configs.mjs            rewrite them (after the cross-checks below pass)
 //   node gen-configs.mjs --check    exit 1 when they are stale or a cross-check fails
 //                                   (test/unit/payloads.test.ts and families-gen.test.ts run the same)
 // Cross-checks (crossChecks): every family tree is a dest of weights-manifest.tsv / weights-r2.tsv,
 // src/cluster/catalog.json names only families, models and recipes the manifests know, volumes.sh's trees are
-// published trees; deployChecks: deploy/deploy.toml's configs exist, the hand-written cpu stage and
-// serve-image.yml's build lists name its image variants, its GCP cells are verify-weights.sh cells, the autoscale
-// prices cover its pools. Still hand-written: the component cells of verify-weights.sh, catalog.json's descriptions.
+// published trees; deployChecks: deploy/deploy.toml's configs exist, the hand-written serve-cuda and serve-cpu
+// stages carry what the data says and bake no config, serve-image.yml's build lists name its images, its GCP cells
+// are verify-weights.sh cells, the autoscale prices cover its pools. Still hand-written: the component cells of verify-weights.sh, catalog.json's descriptions.
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -48,56 +43,20 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVE = join(HERE, "../configs/serve");
 const CONSOLE = join(HERE, "../crates/fastvideo-serve/console");
 
-/** The worker configs fv-control's presets send inline (FV_WORKER_TOML_B64): every preset's config its image
- * variant does not carry (deploy/deploy.toml, inlineWorkerConfigs below), in the presets' order. */
-export const INLINE_WORKER_CONFIGS = () => inlineWorkerConfigs();
+/** The worker configs fv-control sends inline (FV_WORKER_TOML_B64): every configs/serve/runpod*.toml, the presets'
+ * configs first in the presets' order (deploy/deploy.toml), then the others by name (runpod-fake.toml, configs no
+ * preset names). No serve image bakes a config since the one-image decision, so every launch sends one of these. */
+export const WORKER_CONFIG_NAMES = () => workerConfigNames();
 
 const lit = (s) => "`" + s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${") + "`";
 
 export function workerConfigsTs() {
-  const entries = INLINE_WORKER_CONFIGS().map((n) => `  ${JSON.stringify(n)}: ${lit(readFileSync(join(SERVE, n), "utf8"))},`);
+  const entries = WORKER_CONFIG_NAMES().map((n) => `  ${JSON.stringify(n)}: ${lit(readFileSync(join(SERVE, n), "utf8"))},`);
   return `// Generated by control/gen-configs.mjs from configs/serve: do not edit; edit
-// the TOML and run \`node gen-configs.mjs\`. The pool presets
-// (src/presets.ts, deploy/deploy.toml) send these inline (FV_WORKER_TOML_B64).
+// the TOML and run \`node gen-configs.mjs\`. Every Runpod worker config: no serve
+// image bakes one (docs/adr/0011-deploy-section.md, one image), so fv-control
+// sends the pool's or endpoint's config inline (FV_WORKER_TOML_B64) at boot.
 export const WORKER_CONFIGS: Record<string, string> = {
-${entries.join("\n")}
-};
-`;
-}
-
-/** The per-variant serve images' configs, read from the Dockerfile's serve-<variant> stages: by default the Dockerfile
- * as this run generates it (dockerfile(): the hand-written stages from disk, the CUDA variant stages from
- * deploy/deploy.toml), so an image change regenerates image-configs.ts in the same run. */
-export function imageConfigs(df = dockerfile()) {
-  const out = {};
-  let cur = null;
-  for (const line of df.split("\n")) {
-    const from = /^FROM\s+\S+\s+AS\s+serve-([a-z0-9-]+)\s*$/i.exec(line);
-    if (from) {
-      cur = ["build", "cuda-bin"].includes(from[1]) ? null : (out[from[1]] = { default: "", files: [] });
-      continue;
-    }
-    if (/^FROM\s/i.test(line)) cur = null;
-    if (!cur) continue;
-    const cp = /^COPY\s+(.+)\s+\/etc\/fv\/\s*$/.exec(line);
-    if (cp) for (const f of cp[1].split(/\s+/)) if (f.startsWith("configs/serve/")) cur.files.push(f.slice("configs/serve/".length));
-    const env = /\bFV_CONFIG=(\S+)/.exec(line);
-    if (/^ENV\s/.test(line) && env) cur.default = env[1];
-  }
-  return out;
-}
-
-export function imageConfigsTs() {
-  const imgs = imageConfigs();
-  const files = [...new Set(Object.values(imgs).flatMap((i) => i.files))].sort();
-  const entries = files.map((n) => `  ${JSON.stringify(n)}: ${lit(readFileSync(join(SERVE, n), "utf8"))},`);
-  return `// Generated by control/gen-configs.mjs from docker/gpucheck.Dockerfile and
-// configs/serve: do not edit; run \`node gen-configs.mjs\`. Which worker configs
-// each per-variant serve image carries under /etc/fv, its baked FV_CONFIG, and
-// their TOML (what an endpoint serves, derived before a worker boots).
-export const IMAGE_CONFIGS: Record<string, { default: string; files: string[] }> = ${JSON.stringify(imgs, null, 2)};
-
-export const BAKED_CONFIGS: Record<string, string> = {
 ${entries.join("\n")}
 };
 `;
@@ -482,7 +441,7 @@ const CONFIG_RE = /^[A-Za-z0-9._-]+\.toml$/;
 const strs = (x) => Array.isArray(x) && x.every((s) => typeof s === "string" && s.length > 0);
 const KEYS = {
   top: ["schema", "dispatch", "images", "presets", "family_presets", "gcp", "autoscale"],
-  image: ["id", "config", "also", "compute", "legacy", "note"],
+  image: ["id", "carries", "compute", "note"],
   preset: ["id", "title", "description", "standard", "image", "config", "prequant", "licence", "container_disk_gb", "models", "max_queued", "job_timeout_s", "stale_after_s"],
   model: ["variant", "id", "recipe"],
   family: ["id", "title", "description", "image", "config", "min_vram_gb", "members", "prequant", "left_out"],
@@ -501,8 +460,11 @@ const text = (x, at) => {
   return x;
 };
 
+/** The config every serve image carries for CI's no-GPU smoke check (FV_WORKER_CONFIG=/etc/fv/runpod-fake.toml;
+ * fastvideo-manifest deploy SMOKE_CONFIG). */
+export const SMOKE_CONFIG = "runpod-fake.toml";
 /** deploy/deploy.toml, validated against the family manifests and resolved for the generators: every model's
- * variant, family and recipe; whether a preset's config rides inline (its image does not carry it). */
+ * variant, family and recipe. */
 export function parseDeploy(textIn, set = loadFamilies(), label = "deploy/deploy.toml") {
   const doc = parseToml(textIn);
   onlyKeys(doc, KEYS.top, label);
@@ -513,29 +475,33 @@ export function parseDeploy(textIn, set = loadFamilies(), label = "deploy/deploy
   for (const [k, v] of Object.entries(dispatch)) text(v, `${label}: dispatch.${k}`);
   const dispatchFams = new Set(Object.values(dispatch));
 
+  // The serve images: one CUDA image, at most one CPU image (owner decision 2026-10-25); none bakes a config.
   const images = (doc.images ?? []).map((im, i) => {
     const at = `${label}: images[${i}]`;
     onlyKeys(im, KEYS.image, at);
     if (!ID_RE.test(im.id ?? "")) throw new Error(`${at}.id ${JSON.stringify(im.id)}`);
-    if (!CONFIG_RE.test(im.config ?? "")) throw new Error(`${at}.config: a configs/serve file name`);
-    const also = im.also ?? [];
-    if (!strs(also) || also.some((c) => !CONFIG_RE.test(c) || c === im.config)) throw new Error(`${at}.also`);
+    const carried = im.carries;
+    if (!strs(carried) || carried.some((c) => !CONFIG_RE.test(c)) || new Set(carried).size !== carried.length) throw new Error(`${at}.carries: configs/serve file names, unique`);
+    if (!carried.includes(SMOKE_CONFIG)) throw new Error(`${at}.carries: every serve image carries ${SMOKE_CONFIG} (CI's no-GPU smoke check)`);
     const compute = im.compute ?? "gpu";
     if (!["gpu", "cpu"].includes(compute)) throw new Error(`${at}.compute: gpu | cpu`);
     if (im.note !== undefined) text(im.note, `${at}.note`);
-    return { id: im.id, config: im.config, also: [...also], compute, legacy: im.legacy === true, note: im.note ?? null };
+    return { id: im.id, carries: [...carried], compute, note: im.note ?? null };
   });
   const imageById = new Map();
   for (const im of images) {
     if (imageById.has(im.id)) throw new Error(`${label}: image ${im.id} twice`);
     imageById.set(im.id, im);
   }
+  for (const [compute, one] of [["gpu", true], ["cpu", false]]) {
+    const n = images.filter((x) => x.compute === compute).length;
+    if (n > 1 || (one && n === 0)) throw new Error(`${label}: ${n} ${compute.toUpperCase()} images: one CUDA image (and at most one CPU image), configs are sent at boot`);
+  }
   const servingImage = (id, at) => {
     const im = imageById.get(id);
-    if (!im || im.legacy || im.compute !== "gpu") throw new Error(`${at}: ${JSON.stringify(id)} is not a GPU image variant (${images.filter((x) => !x.legacy && x.compute === "gpu").map((x) => x.id).join(", ")})`);
+    if (!im || im.compute !== "gpu") throw new Error(`${at}: ${JSON.stringify(id)} is not the GPU image (${images.filter((x) => x.compute === "gpu").map((x) => x.id).join(", ")})`);
     return im;
   };
-  const carries = (im, cfg) => im.config === cfg || im.also.includes(cfg);
   const covered = (trees, rel) => trees.some((t) => rel === t || rel.startsWith(t + "/"));
 
   const ids = new Set();
@@ -580,7 +546,6 @@ export function parseDeploy(textIn, set = loadFamilies(), label = "deploy/deploy
       standard: p.standard === true,
       image: im.id,
       config: p.config,
-      inline: !carries(im, p.config),
       ...(prequant.length ? { prequant: [...prequant] } : {}),
       ...(p.licence !== undefined ? { licence: p.licence } : {}),
       ...(p.container_disk_gb !== undefined ? { container_disk_gb: p.container_disk_gb } : {}),
@@ -614,7 +579,7 @@ export function parseDeploy(textIn, set = loadFamilies(), label = "deploy/deploy
       onlyKeys(l, ["what", "why"], `${at}.left_out[${j}]`);
       return { what: text(l.what, `${at}.left_out[${j}].what`), why: text(l.why, `${at}.left_out[${j}].why`) };
     });
-    return { id: p.id, title: p.title, description: p.description, image: im.id, config: p.config, inline: !carries(im, p.config), min_vram_gb: p.min_vram_gb, members: [...p.members], prequant: [...prequant], left_out };
+    return { id: p.id, title: p.title, description: p.description, image: im.id, config: p.config, min_vram_gb: p.min_vram_gb, members: [...p.members], prequant: [...prequant], left_out };
   });
 
   const gcpNames = new Set();
@@ -657,25 +622,26 @@ function volumePlacements(x, at) {
 export function loadDeploy(set = loadFamilies()) {
   return parseDeploy(readFileSync(DEPLOY_FILE, "utf8"), set);
 }
-/** The image variants CI builds (not the legacy tag set), in file order. */
-export const builtImages = (dep) => dep.images.filter((i) => !i.legacy);
-/** The presets whose config rides inline (FV_WORKER_TOML_B64): their image does not carry it. */
-export const inlineWorkerConfigs = (dep = loadDeploy()) => [...new Set([...dep.presets, ...dep.family_presets].filter((p) => p.inline).map((p) => p.config))];
+/** WORKER_CONFIG_NAMES: the presets' configs in order, then every other configs/serve/runpod*.toml by name. */
+export function workerConfigNames(dep = loadDeploy()) {
+  const presets = [...new Set([...dep.presets, ...dep.family_presets].map((p) => p.config))];
+  const rest = readdirSync(SERVE)
+    .filter((f) => /^runpod.*\.toml$/.test(f) && !presets.includes(f))
+    .sort();
+  return [...presets, ...rest];
+}
 
 /** src/deploy-gen.ts: the deployment tables fv-control's presets.ts and enums.ts read. */
 export function deployGenTs(dep = loadDeploy()) {
-  const images = builtImages(dep).map(({ legacy, ...i }) => i);
   return `// ${DEPLOY_HEADER}.
-// The deployment data (plan C1, docs/adr/0011-deploy-section.md): the image variants CI builds, the pool presets
-// (each one pool: one image, one worker config, its models, queue and timeouts) and the family presets. Consumers:
-// src/presets.ts (POOL_PRESETS, STANDARD_POOLS), the regions of src/enums.ts. No imports: every module may import it.
-// Regenerate with \`node gen-configs.mjs\`; CI runs \`--check\`.
+// The deployment data (plan C1, docs/adr/0011-deploy-section.md): the serve images CI builds (one CUDA image and the
+// CPU image; none bakes a config), the pool presets (each one pool: one worker config sent at boot, its models, queue
+// and timeouts) and the family presets. Consumers: src/presets.ts (POOL_PRESETS, STANDARD_POOLS), the regions of
+// src/enums.ts. No imports: every module may import it. Regenerate with \`node gen-configs.mjs\`; CI runs \`--check\`.
 export interface DeployImage {
   id: string;
-  /** Baked as FV_CONFIG (configs/serve/<config>). */
-  config: string;
-  /** Further worker configs the image carries under /etc/fv. */
-  also: string[];
+  /** The worker configs the image carries under /etc/fv (FV_WORKER_CONFIG may name one): the smoke config. */
+  carries: string[];
   compute: "gpu" | "cpu";
   note: string | null;
 }
@@ -694,11 +660,10 @@ export interface DeployPreset {
   description: string;
   /** One of the default cluster's pools (STANDARD_POOLS). */
   standard: boolean;
-  /** The image variant (DeployImage.id). */
+  /** The serve image (DeployImage.id): the CUDA image. */
   image: string;
-  /** The worker config (configs/serve/<config>); \`inline\`: the image does not carry it, it rides as FV_WORKER_TOML_B64. */
+  /** The worker config (configs/serve/<config>), sent at boot as FV_WORKER_TOML_B64. */
   config: string;
-  inline: boolean;
   prequant?: string[];
   licence?: string;
   container_disk_gb?: number;
@@ -714,7 +679,6 @@ export interface DeployFamilyPreset {
   description: string;
   image: string;
   config: string;
-  inline: boolean;
   /** Hand-chosen card class (GB), at least the members' variants' gpu.min_vram_gib. */
   min_vram_gb: number;
   /** The model presets whose models the one pool serves, in the presets' order. */
@@ -722,7 +686,7 @@ export interface DeployFamilyPreset {
   prequant: string[];
   left_out: { what: string; why: string }[];
 }
-export const DEPLOY_IMAGES: DeployImage[] = ${JSON.stringify(images, null, 2)};
+export const DEPLOY_IMAGES: DeployImage[] = ${JSON.stringify(dep.images, null, 2)};
 export const DEPLOY_PRESETS: DeployPreset[] = ${JSON.stringify(dep.presets, null, 2)};
 export const DEPLOY_FAMILY_PRESETS: DeployFamilyPreset[] = ${JSON.stringify(dep.family_presets, null, 2)};
 /** The edge / dispatch family of each model family. */
@@ -731,13 +695,15 @@ export const DISPATCH_FAMILY: Record<string, string> = ${JSON.stringify(dep.disp
 }
 
 const tsRegion = (what) => [`// BEGIN ${DEPLOY_HEADER}: ${what}`, "// END GENERATED"];
-export const ENUMS_VARIANTS_REGION = tsRegion("VARIANTS");
+export const ENUMS_IMAGES_REGION = tsRegion("SERVE_IMAGES");
 export const ENUMS_PRESETS_REGION = tsRegion("POOL_PRESET_IDS");
-/** src/enums.ts: the VARIANTS and POOL_PRESET_IDS lines (enums.ts has no imports, so they are written into it). */
+/** src/enums.ts: the SERVE_IMAGES and POOL_PRESET_IDS lines (enums.ts has no imports, so they are written into it). */
 export function enumsTs(dep = loadDeploy()) {
   const list = (xs) => `[${xs.map((x) => JSON.stringify(x)).join(", ")}]`;
+  const of = (c) => dep.images.find((i) => i.compute === c)?.id;
+  const images = `{ GPU: ${JSON.stringify(of("gpu"))}${of("cpu") ? `, CPU: ${JSON.stringify(of("cpu"))}` : ""} }`;
   let t = readRel("src/enums.ts");
-  t = withRegion(t, ...ENUMS_VARIANTS_REGION, `export const VARIANTS = ${list(builtImages(dep).map((i) => i.id))} as const;`, "src/enums.ts");
+  t = withRegion(t, ...ENUMS_IMAGES_REGION, `export const SERVE_IMAGES = ${images} as const;`, "src/enums.ts");
   t = withRegion(t, ...ENUMS_PRESETS_REGION, `export const POOL_PRESET_IDS = ${list([...dep.presets, ...dep.family_presets].map((p) => p.id))} as const;`, "src/enums.ts");
   return t;
 }
@@ -748,59 +714,22 @@ const pad = (rows) => {
 };
 export const VARIANTS_SH_BEGIN = `# BEGIN ${DEPLOY_HEADER}`;
 export const VARIANTS_SH_END = "# END GENERATED";
-/** scripts/serve/variants.sh: the variant and preset tables, FV_VARIANTS, FV_POOL_PRESETS and fv_variant_config. */
+/** scripts/serve/variants.sh: the image table and FV_IMAGES (no per-variant images, no config table: every launch
+ * sends its config). */
 export function variantsSh(dep = loadDeploy()) {
-  const built = builtImages(dep);
-  const imgRows = [["variant", "config (baked as FV_CONFIG)", "GHCR tag", "Runpod templates", "note"]];
-  for (const i of dep.images) {
-    const note = (i.note ?? "").replace(/`/g, "");
-    if (i.legacy) imgRows.push([i.id, "every config (legacy image)", "…:latest / :sha-…", "(none)", note]);
-    else imgRows.push([i.id, i.config + (i.also.length ? ` (+ ${i.also.join(", ")})` : ""), `…:${i.id}[-sha-…]`, i.compute === "cpu" ? `fv-serve-${i.id}-pod` : `fv-serve-${i.id}-sls / -pod`, note]);
-  }
-  const extra = [...dep.presets.filter((p) => !p.standard), ...dep.family_presets];
-  const preRows = [["preset", "variant", "config", "how", "title"], ...extra.map((p) => [p.id, p.image, p.config, p.inline ? "inline" : "in the image", p.title.replace(/\{members\}/g, p.members?.join(", ") ?? "")])];
+  const rows = [["image", "compute", "carries (FV_WORKER_CONFIG)", "GHCR tag", "Runpod templates", "note"]];
+  for (const i of dep.images) rows.push([i.id, i.compute, i.carries.join(", "), `…:${i.id}[-sha-…]`, i.compute === "cpu" ? `fv-serve-${i.id}-pod` : `fv-serve-${i.id}-sls / -pod`, (i.note ?? "").replace(/`/g, "")]);
   const body = [
     "#",
-    ...pad(imgRows).map((l) => `#   ${l}`),
+    ...pad(rows).map((l) => `#   ${l}`),
     "#",
-    "# Pool presets (fv-control's POOL_PRESETS, control/src/presets.ts) beyond the standard pools: more worker",
-    "# configs on the same images. A config the variant's image does not carry rides inline (FV_WORKER_TOML_B64).",
-    "#",
-    ...pad(preRows).map((l) => `#   ${l}`),
+    "# No image bakes a worker config: a launch sends one (FV_WORKER_TOML_B64, or FV_WORKER_CONFIG naming a file the",
+    "# image carries; fv_config_env_json below), and an image started without one refuses to boot.",
     "",
-    `FV_VARIANTS="${built.map((i) => i.id).join(" ")}"`,
-    "# <preset>:<variant>:<config> for every non-standard preset (the table above).",
-    `FV_POOL_PRESETS="${extra.map((p) => `${p.id}:${p.image}:${p.config}`).join(" ")}"`,
-    "",
-    "# fv_variant_config <variant> -> config file name",
-    "fv_variant_config() {",
-    '  case "$1" in',
-    ...built.map((i) => `    ${i.id}) echo ${i.config} ;;`),
-    "    *) return 1 ;;",
-    "  esac",
-    "}",
+    `FV_IMAGES="${dep.images.map((i) => i.id).join(" ")}"`,
+    `FV_CUDA_IMAGE="${dep.images.find((i) => i.compute === "gpu").id}"`,
   ].join("\n");
   return withRegion(readRel("../scripts/serve/variants.sh"), VARIANTS_SH_BEGIN, VARIANTS_SH_END, body, "scripts/serve/variants.sh");
-}
-
-export const DOCKERFILE_BEGIN = `# BEGIN ${DEPLOY_HEADER}`;
-export const DOCKERFILE_END = "# END GENERATED";
-/** docker/gpucheck.Dockerfile: one thin `serve-<variant>` stage per CUDA image variant (the cpu stage has its own
- * build graph and stays hand-written; crossChecks ties it to the data). */
-export function dockerfile(dep = loadDeploy()) {
-  const stages = builtImages(dep)
-    .filter((i) => i.compute === "gpu")
-    .map((i) => {
-      const files = [i.config, ...i.also, "runpod-fake.toml"].map((f) => `configs/serve/${f}`).join(" ");
-      return [
-        ...i.also.map((a) => `# Also carries ${a}: FV_CONFIG=/etc/fv/${a} selects it.`),
-        `FROM serve-cuda-bin AS serve-${i.id}`,
-        `COPY ${files} /etc/fv/`,
-        `ENV FV_VARIANT=${i.id} FV_CONFIG=/etc/fv/${i.config}`,
-        `LABEL org.opencontainers.image.description="fv-serve ${i.id} (configs/serve/${i.config})"`,
-      ].join("\n");
-    });
-  return withRegion(readRel("../docker/gpucheck.Dockerfile"), DOCKERFILE_BEGIN, DOCKERFILE_END, stages.join("\n\n"), "docker/gpucheck.Dockerfile");
 }
 
 export const AUTOSCALE_BEGIN = `# BEGIN ${DEPLOY_HEADER}: [[autoscale.pools]]`;
@@ -829,25 +758,13 @@ export const IMAGES_MD_BEGIN = `<!-- BEGIN ${DEPLOY_HEADER} -->`;
 export const IMAGES_MD_END = "<!-- END GENERATED -->";
 /** docs/serve/images.md: the image table. */
 export function imagesMd(set = loadFamilies(), dep = loadDeploy(set)) {
-  // What an extra config serves: its [[models]] ids and their variants' served names (`wan14b-turbo`).
-  const serves = (cfg) =>
-    configModels(readFileSync(join(SERVE, cfg), "utf8"), set)
-      .map((m) => {
-        const names = [m.id, ...set.variants.get(m.catalog).served_names].filter((n, i, a) => a.indexOf(n) === i);
-        return names.map((n) => `\`${n}\``).join(" / ");
-      })
-      .join(", ");
-  const rows = ["| variant | config baked as `FV_CONFIG` | GHCR tags | Runpod templates |", "|---|---|---|---|"];
+  const rows = ["| image | fv-serve | carries under `/etc/fv` (`FV_WORKER_CONFIG`) | GHCR tags | Runpod templates |", "|---|---|---|---|---|"];
   for (const i of dep.images) {
     const name = i.note ? `${i.id} (${i.note})` : i.id;
-    if (i.legacy) {
-      rows.push(`| ${name} | every config, \`${i.config}\` default | \`:sha-<sha>\`, \`:latest\`, \`:stable\` | none |`);
-      continue;
-    }
-    const cfg = `\`${i.config}\`${i.also.map((a) => ` (also carries \`${a}\`, serving ${serves(a)}: set \`FV_CONFIG=/etc/fv/${a}\`)`).join("")}`;
+    const bin = i.compute === "cpu" ? "CPU only (fake engine)" : "CUDA (every preset)";
     const tags = `\`:${i.id}-sha-<sha>\`, \`:${i.id}\` / \`:${i.id}-latest\`, \`:${i.id}-stable\``;
     const tpl = i.compute === "cpu" ? `\`fv-serve-${i.id}-pod\`` : `\`fv-serve-${i.id}-sls\`, \`fv-serve-${i.id}-pod\``;
-    rows.push(`| ${name} | ${cfg} | ${tags} | ${tpl} |`);
+    rows.push(`| ${name} | ${bin} | ${i.carries.map((c) => `\`${c}\``).join(", ")} | ${tags} | ${tpl} |`);
   }
   return withRegion(readRel("../docs/serve/images.md"), IMAGES_MD_BEGIN, IMAGES_MD_END, ["", ...rows, ""].join("\n"), "docs/serve/images.md");
 }
@@ -889,9 +806,30 @@ export function crossChecks(set = loadFamilies()) {
   return out;
 }
 
-/** What must agree with deploy/deploy.toml but is kept elsewhere: the configs it names exist, the hand-written cpu
- * stage and the CI build list name the image variants, the GCP cells are verify-weights.sh cells, the autoscale
- * prices cover the pools' GPU types. A list of problems (parseDeploy's own refusal among them). */
+/** The hand-written `serve-<id>` stages of the Dockerfile (not serve-build / serve-cuda-bin): the configs each COPYs
+ * into /etc/fv, and its ENV assignments. */
+export function serveStages(df = readRel("../docker/gpucheck.Dockerfile")) {
+  const out = {};
+  let cur = null;
+  for (const line of df.split("\n")) {
+    const from = /^FROM\s+\S+\s+AS\s+serve-([a-z0-9-]+)\s*$/i.exec(line);
+    if (from) {
+      cur = ["build", "cuda-bin"].includes(from[1]) ? null : (out[from[1]] = { files: [], env: {} });
+      continue;
+    }
+    if (/^FROM\s/i.test(line)) cur = null;
+    if (!cur) continue;
+    const cp = /^COPY\s+(.+)\s+\/etc\/fv\/\s*$/.exec(line);
+    if (cp) for (const f of cp[1].split(/\s+/)) if (f.startsWith("configs/serve/")) cur.files.push(f.slice("configs/serve/".length));
+    if (/^ENV\s/.test(line)) for (const m of line.slice(4).matchAll(/([A-Z_][A-Z0-9_]*)=(\S+)/g)) cur.env[m[1]] = m[2];
+  }
+  return out;
+}
+
+/** What must agree with deploy/deploy.toml but is kept elsewhere: the configs it names exist, the hand-written
+ * serve-<image> stages carry what the data says and bake no config, the CI build list names the images, the GCP
+ * cells are verify-weights.sh cells, the autoscale prices cover the pools' GPU types. A list of problems
+ * (parseDeploy's own refusal among them). */
 export function deployChecks(set = loadFamilies()) {
   const out = [];
   let dep;
@@ -902,26 +840,29 @@ export function deployChecks(set = loadFamilies()) {
   }
   const configs = new Set(readdirSync(SERVE).filter((f) => f.endsWith(".toml")));
   const named = [
-    ...dep.images.flatMap((i) => [i.config, ...i.also].map((c) => [`images ${i.id}`, c])),
+    ...dep.images.flatMap((i) => i.carries.map((c) => [`images ${i.id}`, c])),
     ...[...dep.presets, ...dep.family_presets].map((p) => [`presets ${p.id}`, p.config]),
     ...dep.gcp.flatMap((r) => [[`gcp ${r.name}`, r.config], ...(r.runpod_twin ? [[`gcp ${r.name} runpod_twin`, r.runpod_twin]] : [])]),
   ];
   for (const [where, c] of named) if (!configs.has(c)) out.push(`deploy/deploy.toml ${where}: configs/serve/${c} does not exist`);
-  // The Dockerfile as this run writes it (the CUDA stages generated from the data): a serve-<id> stage per image
-  // variant baking its config and carrying its configs. Only the hand-written serve-cpu stage can disagree.
-  const stages = imageConfigs();
-  const built = builtImages(dep);
-  for (const i of built) {
-    const s = stages[i.id];
-    if (!s) out.push(`docker/gpucheck.Dockerfile: no serve-${i.id} stage (deploy/deploy.toml images ${i.id})`);
-    else if (s.default !== `/etc/fv/${i.config}` || [i.config, ...i.also].some((c) => !s.files.includes(c))) out.push(`docker/gpucheck.Dockerfile serve-${i.id}: FV_CONFIG ${s.default} and /etc/fv ${s.files.join(" ")}, deploy/deploy.toml says ${i.config} (+ ${i.also.join(" ") || "nothing"})`);
+  // One serve-<id> stage per image: it carries exactly the configs the data says and bakes none (no FV_CONFIG: the
+  // boot refuses an image started without a config), FV_VARIANT names the image; no other serve-<x> stage.
+  const stages = serveStages();
+  for (const i of dep.images) {
+    const st = stages[i.id];
+    if (!st) out.push(`docker/gpucheck.Dockerfile: no serve-${i.id} stage (deploy/deploy.toml images ${i.id})`);
+    else {
+      if (JSON.stringify([...st.files].sort()) !== JSON.stringify([...i.carries].sort())) out.push(`docker/gpucheck.Dockerfile serve-${i.id}: /etc/fv ${st.files.join(" ") || "nothing"}, deploy/deploy.toml carries ${i.carries.join(" ")}`);
+      if (st.env.FV_CONFIG !== undefined) out.push(`docker/gpucheck.Dockerfile serve-${i.id}: bakes FV_CONFIG=${st.env.FV_CONFIG}; the images bake no config (every launch sends one)`);
+      if (st.env.FV_VARIANT !== i.id) out.push(`docker/gpucheck.Dockerfile serve-${i.id}: FV_VARIANT=${st.env.FV_VARIANT ?? "(unset)"}, want ${i.id}`);
+    }
   }
-  for (const id of Object.keys(stages)) if (!built.some((i) => i.id === id)) out.push(`docker/gpucheck.Dockerfile: serve-${id} is not an image variant of deploy/deploy.toml`);
+  for (const id of Object.keys(stages)) if (!dep.images.some((i) => i.id === id)) out.push(`docker/gpucheck.Dockerfile: serve-${id} is not an image of deploy/deploy.toml`);
   // The CI build list (serve-image.yml's input default and its fallback).
-  const want = built.map((i) => i.id).join(" ");
+  const want = dep.images.map((i) => i.id).join(" ");
   const wf = readRel("../.github/workflows/serve-image.yml");
   const lists = [...wf.matchAll(/default: "([a-z0-9 -]+)"/g), ...wf.matchAll(/\|\| '([a-z0-9 -]+)'/g)].map((m) => m[1]).filter((l) => l.split(" ").includes("cpu"));
-  if (lists.length < 2 || lists.some((l) => l !== want)) out.push(`.github/workflows/serve-image.yml: variant lists ${JSON.stringify(lists)}, deploy/deploy.toml builds "${want}"`);
+  if (lists.length < 2 || lists.some((l) => l !== want)) out.push(`.github/workflows/serve-image.yml: image lists ${JSON.stringify(lists)}, deploy/deploy.toml builds "${want}"`);
   // GCP verify cells: cells of scripts/gpu/verify-weights.sh (CELLS) or variant:<id>.
   const cells = new Set((/^CELLS=\(([^)]*)\)/m.exec(readRel("../scripts/gpu/verify-weights.sh"))?.[1] ?? "").split(/\s+/).filter(Boolean));
   for (const r of dep.gcp) for (const c of r.verify_cells) if (!cells.has(c) && !(c.startsWith("variant:") && set.variants.has(c.slice(8)))) out.push(`deploy/deploy.toml gcp ${r.name}: ${c} is not a scripts/gpu/verify-weights.sh cell`);
@@ -936,7 +877,6 @@ export function deployChecks(set = loadFamilies()) {
 
 export const OUTPUTS = {
   "src/cluster/worker-configs.ts": workerConfigsTs,
-  "src/cluster/image-configs.ts": imageConfigsTs,
   "src/serverless/console-assets.ts": consoleAssetsTs,
   "src/weights-sources.ts": weightsSourcesTs,
   "src/r2-trees.ts": r2TreesTs,
@@ -948,7 +888,6 @@ export const OUTPUTS = {
   "src/deploy-gen.ts": () => deployGenTs(),
   "src/enums.ts": () => enumsTs(),
   "../scripts/serve/variants.sh": () => variantsSh(),
-  "../docker/gpucheck.Dockerfile": () => dockerfile(),
   "../configs/autoscale.toml": autoscaleToml,
   "../docs/serve/images.md": () => imagesMd(),
 };

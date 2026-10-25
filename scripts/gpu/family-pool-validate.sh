@@ -12,7 +12,7 @@
 #   family-pool-validate.sh down <pod>      delete the pod, check it is gone, drop the staged bundle
 #   family-pool-validate.sh print-start     the pod's start command (what up sends)
 #
-# The pod: the h3-max serve image (FV_SERVE_IMAGE; it carries python3, curl and the CUDA libraries fv-serve links),
+# The pod: the CUDA serve image (FV_SERVE_IMAGE; it carries python3, curl and the CUDA libraries fv-serve links),
 # RTX PRO 6000 Server or Workstation Edition, secure cloud, any data centre with stock; the trees come from the R2
 # weights store onto the container disk. The R2 plan (presigned GETs, valid 3 h) and the bundle reach the pod through
 # the staging bucket (a presigned URL, checked by SHA-256); no key goes to the pod.
@@ -29,7 +29,7 @@ GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-4200}"
 MIN_BALANCE="${FV_MIN_BALANCE:-10}"
 MAX_DPH="${FV_MAX_DPH:-2.70}"
-IMAGE="${FV_SERVE_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-serve:h3-max-latest}"
+IMAGE="${FV_SERVE_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-latest}"
 TREES=(h3-base FastH3-4-step-Preview-v1-LoRA fasth3-v2-nvfp4 auxiliary/tae)
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 rest() {

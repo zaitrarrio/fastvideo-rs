@@ -336,16 +336,15 @@ fn config_check(c: &Ctx<'_>, m: &config::Materialized) -> Result<(), BootError> 
 /// The trees an old-form config names that are missing (fv-entry.sh's
 /// preflight: a warning; fv-serve reports the error itself).
 fn tree_preflight(c: &Ctx<'_>, m: &config::Materialized) {
-    let Some(p) = &m.path else { return };
-    let Ok(text) = std::fs::read_to_string(p) else {
+    let Ok(text) = std::fs::read_to_string(&m.path) else {
         return;
     };
     let root = c.weights_dir();
     for t in config::weight_trees(&text) {
         if !root.join(&t).exists() {
             c.say(&format!(
-                "variant {}: weights tree {}/{t} is missing",
-                c.get_or("FV_VARIANT", "?"),
+                "config {}: weights tree {}/{t} is missing",
+                m.path.display(),
                 root.display()
             ));
         }
@@ -356,15 +355,17 @@ fn tree_preflight(c: &Ctx<'_>, m: &config::Materialized) {
 /// boots skip fv-boot with it; the image entrypoint (serverless without a boot override,
 /// v2 load balancers, GCP / CloudRift `docker run`, Vast) gets the old `fv-entry.sh`
 /// behaviour here: the serverless volume link, the `FV_WEIGHTS` default, the upsampler
-/// sidecar, then exec fv-serve with the arguments as given. No driver check, config
-/// step, weights plan, tunnel, watchdog or report.
+/// sidecar, then exec fv-serve with the config the launch sent (inline, `--config` or
+/// `FV_WORKER_CONFIG`; without one it refuses, as the boot does). No driver check,
+/// `--print-config`, weights plan, tunnel, watchdog or report.
 pub fn legacy_requested(env: &BootEnv) -> bool {
     env.flag("FV_BOOT_LEGACY")
 }
 
 /// The `FV_BOOT_LEGACY=1` entrypoint (see [`legacy_requested`]).
-pub fn legacy(c: &mut Ctx<'_>, args: &[String]) -> ExecPlan {
+pub fn legacy(c: &mut Ctx<'_>, args: &[String]) -> Result<ExecPlan, BootError> {
     c.say("FV_BOOT_LEGACY=1: fv-entry's steps only (volume link, FV_WEIGHTS, upsampler), then fv-serve");
+    let m = config::materialize(&c.env, &c.kind, args, &c.paths.worker_toml)?;
     let rv = c.paths.runpod_volume_weights.clone();
     let ws = c.paths.workspace_weights.clone();
     if rv.is_dir() && std::fs::symlink_metadata(&ws).is_err() {
@@ -386,11 +387,11 @@ pub fn legacy(c: &mut Ctx<'_>, args: &[String]) -> ExecPlan {
     for (k, v) in &c.exports {
         env.insert(k.clone(), v.clone());
     }
-    ExecPlan {
+    Ok(ExecPlan {
         program: c.serve_bin(),
-        args: args.to_vec(),
+        args: m.serve_args,
         env,
-    }
+    })
 }
 
 /// fv-serve's own informational flags: `fv-boot --version` (CI's image
@@ -409,6 +410,11 @@ pub fn passthrough(args: &[String]) -> bool {
 pub fn run(c: &mut Ctx<'_>, args: &[String]) -> Result<ExecPlan, BootError> {
     c.log
         .marker(&format!("start ({}; fv-boot {VERSION})", c.kind.label()));
+    // An image started without a config refuses to boot (ADR-0011, one image):
+    // first, so the message is not hidden behind the driver check.
+    if let Some(e) = config::missing(&c.env, args) {
+        return Err(e);
+    }
     driver_step(c)?;
     volume_step(c);
     mkdir(&c.state_dir())?;
@@ -417,10 +423,7 @@ pub fn run(c: &mut Ctx<'_>, args: &[String]) -> Result<ExecPlan, BootError> {
     config_check(c, &m)?;
     c.say(&format!(
         "config ok: {} ({})",
-        m.path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "default".into()),
+        m.path.display(),
         m.source.describe()
     ));
     match &c.kind {

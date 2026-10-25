@@ -66,7 +66,7 @@ function fvBootTimeline(podId) {
         { label: "status", get: (p) => badge(p.op ? `${p.op.kind}…` : p.status, statusKind(p.status)) },
         { label: "boot", get: (p) => (p.pod?.boot ? badge(p.pod.boot.phase, BOOT_KIND[p.pod.boot.phase] || "") : p.pool_status && p.pool_status.status !== "ready" ? badge(p.pool_status.status, poolKind(p.pool_status.status)) : "–") },
         { label: "pod", get: (p) => (p.pod ? h("a", { href: `#/pod/${p.pod.pod_id}` }, p.pod.pod_id) : "–") },
-        { label: "variant", get: (p) => p.definition.variant },
+        { label: "serve image", get: (p) => p.definition.serve_image },
         { label: "image", get: (p) => imageText(p.definition.image), wrap: true },
         { label: "GPU", get: (p) => p.pod?.gpu || (p.definition.compute === "CPU" ? "cpu" : (p.definition.gpu_types || ["region default"])[0]) },
         { label: "DC", get: (p) => p.pod?.dc || p.definition.dc },
@@ -147,7 +147,7 @@ function fvBootTimeline(podId) {
           card(
             "Definition and cost",
             kv([
-              ["variant", p.definition.variant],
+              ["serve image", p.definition.serve_image],
               ["image", imageText(p.definition.image)],
               ["compute", `${p.definition.compute}${p.definition.gpu_types ? ` · ${p.definition.gpu_types.join(", ")}` : ""}`],
               ["region", `${p.definition.region} (${p.definition.dc})${p.definition.volume ? ` · volume ${p.definition.volume}` : ""}`],

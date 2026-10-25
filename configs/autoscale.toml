@@ -80,8 +80,10 @@ default_job_s = 40
 serverless = { gpu_type = "NVIDIA H100 80GB HBM3", scaler_type = "QUEUE_DELAY", scaler_value = 60, idle_timeout_s = 60 }
 
 # sfwan-live: WebRTC peer sessions need pods (one live stream per GPU).
-# Pods come from a template (image, fv-serve worker config, secrets as
-# {{ RUNPOD_SECRET_* }}) and register themselves with the gateway pool.
+# Pods come from the one CUDA image's pod template (fv-serve-cuda-pod: the
+# image, secrets as {{ RUNPOD_SECRET_* }}; it bakes no worker config) with the
+# pool's worker config in the pod's env (worker_config, sent as
+# FV_WORKER_TOML_B64), and register themselves with the gateway pool.
 [[autoscale.pools]]
 name = "sfwan-live"
 family = "wan"
@@ -96,10 +98,13 @@ idle_timeout_s = 600
 budget_usd_per_hr = 9.5
 
 [autoscale.pools.pod]
-template_id = "REPLACE_SFWAN_POD_TEMPLATE"
+# The Runpod id of the fv-serve-cuda-pod template (`scripts/serve/runpod-templates.sh id cuda pod`);
+# a placeholder until the owner creates it (docs/serve/images.md "One image: the live steps").
+template_id = "REPLACE_FV_SERVE_CUDA_POD_TEMPLATE_ID"
+worker_config = "runpod-sfwan.toml"
 gpu_types = ["NVIDIA RTX PRO 6000 Blackwell Server Edition", "NVIDIA H100 80GB HBM3", "NVIDIA H200"]
 # The EU weights volume (fv-weights-h3-ltx-500, EU-RO-1, since 2026-10-13) holds
-# the H3 + LTX trees only: sfwan21-1.3b is NOT on it, so this pod template must
+# the H3 + LTX trees only: sfwan21-1.3b is NOT on it, so these pods must
 # fetch it from R2 before the pool leaves dry_run (docs/ops/runpod-volumes.md).
 # The US weights volume (s2k01690bi, US-CA-2) was deleted; add a US placement
 # back, first, with the rebuilt volume's id when the owner rebuilds it.

@@ -1,7 +1,7 @@
 # Release channels for the fv-serve images (docs/serve/releases.md).
 #
-#   promote <sha|digest|tag> [channel]  retag the all-in-one image and every
-#       variant image of that build to :<channel> / :<variant>-<channel>
+#   promote <sha|digest|tag> [channel]  retag the debug image and the CUDA
+#       and CPU serve images of that build to :<channel> / :<image>-<channel>
 #       (docker buildx imagetools create: no rebuild, same digests), point the
 #       Runpod templates at them when <channel> is the one they follow
 #       (vars.FV_TEMPLATE_CHANNEL, default stable), record the release in D1
@@ -45,7 +45,7 @@ on:
         required: false
         default: "true"
       allow_partial:
-        description: "promote a build that lacks some variant images"
+        description: "promote a build that lacks some serve images"
         required: false
         default: "false"
       dry_run:

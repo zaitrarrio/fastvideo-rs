@@ -8,6 +8,7 @@ import { bootMatch, bootPhase, bootRows, foldBoot, getBoot, markReady, recordBoo
 import { checkImages, imageRevision, IMAGE_FEATURES, neededFeatures, revisionContains } from "../../src/cluster/preflight";
 import { bootFor, EDGE_WORKER_BOOT, WATCHDOG_WORKER_BOOT, WORKER_BOOT, workerCreatePayload, workerPlacements, workerSystemEnv, type EnvCtx } from "../../src/cluster/payloads";
 import { normalizeSpec } from "../../src/cluster/spec";
+import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
 import { getCluster, ownerOf } from "../../src/cluster/store";
 import { summarize, upOutcome, type PoolView } from "../../src/cluster/upwait";
 import { b64, randomBytes } from "../../src/crypto";
@@ -18,6 +19,8 @@ import { parseLogQuery, queryLogs } from "../../src/logquery";
 import { captureRunpodLogs, checkPod, diagnose, getDiagnosis, lineLevel, newSince, parseRunpodLine, PULL_DEADLINE_MS, saveDiagnosis, STUCK_MS } from "../../src/podlogs";
 import { standaloneSpec, STANDALONE_POOL } from "../../src/standalone";
 import { d1 } from "./d1shim";
+import { checkSpec } from "../../src/cluster/editor";
+import { workerConfigEnv } from "../../src/worker-config";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -214,20 +217,27 @@ describe("standalone pods: the spec", () => {
     const { spec, env } = standaloneSpec({ name: "h3-solo", preset: "h3-turbo", channel: "latest", deadline_min: 45, idle_stop_min: 20, env: { FASTVIDEO_ATTN_SAGE: "0", HF_TOKEN: { value: "hf_x", secret: true } } });
     expect(spec).toMatchObject({ name: "h3-solo", control_plane: "direct", regions: ["eu"], image: { channel: "latest" }, cap_s: 2700, auto_stop_idle_min: 20, log_shipping: true });
     expect(spec.pools).toHaveLength(1);
-    expect(spec.pools[0]).toMatchObject({ id: STANDALONE_POOL, variant: "h3-turbo", count: 1, compute: "GPU", volume: true, config: "/etc/fv/runpod.toml", regions: ["eu"] });
+    expect(spec.pools[0]).toMatchObject({ id: STANDALONE_POOL, count: 1, compute: "GPU", volume: true, regions: ["eu"] });
+    // The preset's config by name, sent as its text at launch (the one CUDA image bakes none).
+    expect(spec.pools[0]!.config).toBe("runpod.toml");
+    expect(WORKER_CONFIGS[spec.pools[0]!.config!]).toBeTruthy();
+    expect("variant" in spec.pools[0]!).toBe(false);
     expect(env).toEqual([
       { key: "FASTVIDEO_ATTN_SAGE", value: "0", secret: false },
       { key: "HF_TOKEN", value: "hf_x", secret: true },
     ]);
   });
-  it("custom variant on CPU, a DC alias, a GPU type, an image ref or a sha", () => {
-    const cpu = standaloneSpec({ name: "fake1", variant: "cpu", compute: "CPU", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], dc: "EU-RO-1" }).spec;
-    expect(cpu.pools[0]).toMatchObject({ compute: "CPU", volume: false, fake_models: ["fake-wan"] });
+  it("custom on CPU, a DC alias, a GPU type, an image ref or a sha", () => {
+    const cpu = standaloneSpec({ name: "fake1", compute: "CPU", config: "runpod-fake.toml", fake_models: ["fake-wan"], dc: "EU-RO-1" }).spec;
+    expect(cpu.pools[0]).toMatchObject({ compute: "CPU", volume: false, fake_models: ["fake-wan"], config: "runpod-fake.toml" });
+    // A launch as a client from before the one image sends it: the cpu variant is a CPU pod.
+    const old = standaloneSpec({ name: "fake2", variant: "cpu", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"] } as any).spec;
+    expect([old.pools[0]!.compute, "variant" in old.pools[0]!]).toEqual(["CPU", false]);
     expect(cpu.image).toEqual({ channel: "stable" });
     const g = standaloneSpec({ name: "g", preset: "ltx-pro", gpu_type: "NVIDIA RTX PRO 6000 Blackwell Server Edition", sha: "b51ddcd" }).spec;
     expect(g.image).toEqual({ sha: "b51ddcd" });
     expect(g.pools[0]!.gpu_types).toEqual(["NVIDIA RTX PRO 6000 Blackwell Server Edition"]);
-    expect(g.pools[0]!.config_toml).toContain("ltx");
+    expect(g.pools[0]!.config).toContain("ltx");
     const r = standaloneSpec({ name: "r", preset: "h3-max", image: "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:" + "a".repeat(64) }).spec;
     expect(r.pools[0]!.image).toMatch(/@sha256:a{64}$/);
   });
@@ -242,7 +252,7 @@ describe("standalone pods: the spec", () => {
     expect(bad({ channel: "latest", sha: "abcdef1" })).toThrow(/at most one/);
     expect(bad({ preset: "nope" })).toThrow(/no pool preset/);
     expect(bad({ name: "Bad Name" })).toThrow(/name/);
-    expect(() => standaloneSpec({ name: "x" } as any)).toThrow(/preset or variant/);
+    expect(() => standaloneSpec({ name: "x" } as any)).toThrow(/a preset, or config \/ config_toml/);
   });
   it("its worker env carries the backstop and its boot runs the watchdog; a direct cluster's does not", () => {
     const { spec } = standaloneSpec({ name: "h3-solo", preset: "h3-turbo" });
@@ -282,7 +292,7 @@ describe("standalone pods: the API", () => {
     const r = await call(env, "/api/v1/standalone", { method: "POST", body: launch, headers: admin });
     expect(r.status).toBe(201);
     const j: any = await r.json();
-    expect(j.pod).toMatchObject({ name: "h3-solo", status: "defined", definition: { variant: "h3-turbo", image: { channel: "latest" }, region: "eu", dc: "EU-RO-1", volume: "bz0ofkfx45", deadline_min: 30 }, pod: null });
+    expect(j.pod).toMatchObject({ name: "h3-solo", status: "defined", definition: { serve_image: "cuda", image: { channel: "latest" }, region: "eu", dc: "EU-RO-1", volume: "bz0ofkfx45", deadline_min: 30 }, pod: null });
     expect(j.operation).toMatch(/^op_/);
     expect(ops.calls.find((x) => x.path === "/op/start")?.body).toMatchObject({ kind: "up", params: { skip_price_check: false } });
     const cl = await getCluster(env, "h3-solo");
@@ -325,6 +335,36 @@ describe("standalone pods: the API", () => {
     expect(r.status).toBe(202);
     expect(ops.calls.filter((x) => x.path === "/op/start").at(-1)?.body).toMatchObject({ kind: "down", params: { delete_definition: true } });
     expect((await call(env, "/api/v1/standalone/solo", { headers: admin })).status).toBe(200);
+  });
+  it("a stored spec an older fv-control accepted, whose config cannot be sent: it loads, checkSpec names it, and up / scale / roll refuse with a typed 409 before any pod", async () => {
+    const { env, ops } = mkEnv();
+    const admin = { authorization: `Bearer ${(await mintApiToken(env, "t", "admin", "test")).token}` };
+    await call(env, "/api/v1/standalone", { method: "POST", body: { name: "old", preset: "h3-max", start: false }, headers: admin });
+    const cl = await getCluster(env, "old");
+    const big = "# " + "x".repeat(20_000) + "\n[engine]\nbackend = \"cuda\"\n";
+    for (const [bad, field] of [[{ config: "/workspace/x.toml" }, "config"], [{ config: "/etc/fv/nope.toml" }, "config"], [{ config_toml: big }, "config_toml"]] as const) {
+      const pool: any = { ...cl.spec.pools[0], ...bad };
+      if (field === "config") delete pool.config_toml;
+      else delete pool.config;
+      const stored = { ...cl.spec, pools: [pool] };
+      await env.DB.prepare("UPDATE clusters SET spec = ? WHERE id = ?").bind(JSON.stringify(stored), cl.id).run();
+      // It loads (the cluster list and its page keep working).
+      const loaded = await getCluster(env, cl.id);
+      expect(loaded.spec.pools[0]![field], field).toBeTruthy();
+      // The editor's check names the field.
+      const chk = await checkSpec(env, loaded.spec, { id: cl.id, name: cl.name });
+      expect(chk.issues.some((i) => i.path.join(".") === `pools.0.${field}`), JSON.stringify(chk.issues)).toBe(true);
+      // The ops that create pods refuse it before the operation starts, with the issue at the field.
+      const before = ops.calls.length;
+      const r = await call(env, "/api/v1/standalone/old/start", { method: "POST", body: {}, headers: admin });
+      expect(r.status, field).toBe(409);
+      expect(((await r.json()) as any).issues?.[0]?.path, field).toEqual(["pools", 0, field]);
+      for (const op of [["scale", { pool: STANDALONE_POOL, count: 1 }], ["roll", { target: "stable" }]] as const)
+        expect((await call(env, `/api/v1/clusters/${cl.id}/${op[0]}`, { method: "POST", body: op[1], headers: admin })).status, `${op[0]} ${field}`).toBe(409);
+      expect(ops.calls.length).toBe(before);
+      // Inside the DO the same config is a typed 409, not a plain Error.
+      expect(() => workerConfigEnv(pool)).toThrow(expect.objectContaining({ status: 409 }));
+    }
   });
   it("pod status and logs as JSON for any controller pod", async () => {
     const { env } = mkEnv();

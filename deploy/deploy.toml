@@ -1,10 +1,12 @@
 # Deployment data (plan C1, docs/adr/0011-deploy-section.md): how the variants of families/*.toml are deployed.
-# The deployment unit is a preset (one pool: a set of variants served together by one fv-serve process, on one
-# image variant, with one worker config, queue and timeouts), not a variant. Validated by
+# The deployment unit is a preset (one pool: a set of variants served together by one fv-serve process, with one
+# worker config, queue and timeouts), not a variant. Every preset runs on the one CUDA image; its worker config is
+# sent at boot (ADR-0011 "one image with boot-time config", owner decision 2026-10-25). Validated by
 # crates/fastvideo-manifest (module `deploy`, schema schemas/deploy.v1.json) against the family manifests;
-# control/gen-configs.mjs generates from it: control/src/deploy-gen.ts (fv-control's presets and image
-# variants), the regions of control/src/enums.ts, scripts/serve/variants.sh, docker/gpucheck.Dockerfile,
-# configs/autoscale.toml and docs/serve/images.md, and scripts/gcp/families.tsv. Edit here, then run
+# control/gen-configs.mjs generates from it: control/src/deploy-gen.ts (fv-control's presets and images), the
+# regions of control/src/enums.ts, scripts/serve/variants.sh, control/src/cluster/worker-configs.ts,
+# configs/autoscale.toml and docs/serve/images.md, and scripts/gcp/families.tsv; it checks
+# docker/gpucheck.Dockerfile and .github/workflows/serve-image.yml against [[images]]. Edit here, then run
 # `node control/gen-configs.mjs` (CI: `--check`, .github/workflows/control.yml).
 #
 # What is not here: the worker configs themselves (configs/serve/*.toml: the variants a process serves and
@@ -19,48 +21,21 @@ h3 = "h3"
 ltx2 = "ltx"
 wan = "wan"
 
-# ---- image variants: the serve images CI builds (docker/gpucheck.Dockerfile `serve-<id>` stages,
-# .github/workflows/serve-image.yml, docs/serve/images.md). `config` is baked as FV_CONFIG; `also` are further
-# worker configs the image carries; every CUDA image also carries runpod-fake.toml for the CI smoke check.
-# `compute = "cpu"`: fv-serve without CUDA (the fake engine), its own build stage. `legacy`: an old tag set
-# documented in the tables, not built as a variant.
+# ---- serve images: one CUDA image and the CPU image (owner decision 2026-10-25, docs/adr/0011-deploy-section.md
+# "One image with boot-time config"; docker/gpucheck.Dockerfile stages serve-cuda and serve-cpu,
+# .github/workflows/serve-image.yml, docs/serve/images.md). No image bakes a worker config: every launch sends one
+# (FV_WORKER_TOML_B64, or FV_WORKER_CONFIG naming a file the image carries), and an image started without one refuses
+# to boot (fv-boot). `carries`: the configs under /etc/fv, runpod-fake.toml for CI's no-GPU smoke check.
+# `compute = "cpu"`: fv-serve without CUDA (the fake engine), its own build stage.
 [[images]]
-id = "h3-turbo"
-config = "runpod.toml"
-
-[[images]]
-id = "h3-max"
-config = "runpod-h3-max.toml"
-
-[[images]]
-id = "ltx"
-config = "runpod-ltx.toml"
-
-[[images]]
-id = "wan"
-config = "runpod-wan.toml"
-
-[[images]]
-id = "wan5b"
-config = "runpod-wan5b.toml"
-# runpod-wan14b.toml: the Wan 14B fast tier on the same binary (FV_CONFIG=/etc/fv/runpod-wan14b.toml selects it).
-also = ["runpod-wan14b.toml"]
-
-[[images]]
-id = "sfwan"
-config = "runpod-sfwan.toml"
+id = "cuda"
+carries = ["runpod-fake.toml"]
 
 [[images]]
 id = "cpu"
-config = "runpod-fake.toml"
+carries = ["runpod-fake.toml"]
 compute = "cpu"
 note = "CPU only, fake engine; `gateway` until 2026-10-06"
-
-[[images]]
-id = "debug"
-config = "runpod.toml"
-legacy = true
-note = "the old all-in-one tags; since 2026-10-06 the `runtime` image + fv-serve, on the shared layers"
 
 # ---- model presets: one model (or one tier and its companions) per pool. Their weights and GPU memory
 # (min_vram_gb) derive from the family manifests through their models' variants (control/src/presets.ts
@@ -72,7 +47,7 @@ id = "h3-turbo"
 title = "H3 turbo (fasth3)"
 description = "MiniMax H3 turbo tier; also the Reactor's clip model."
 standard = true
-image = "h3-turbo"
+image = "cuda"
 config = "runpod.toml"
 prequant = ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]
 models = [{ variant = "fasth3-4step-vsa", id = "fasth3", recipe = "h3-turbo" }]
@@ -85,7 +60,7 @@ id = "h3-max"
 title = "H3 max (Sol-H3)"
 description = "MiniMax H3 max tier (Sol-H3 4-step ladder)."
 standard = true
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-max.toml"
 prequant = ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_sol-h3_mxfp8"]
 models = [{ variant = "sol-h3", recipe = "h3-max" }]
@@ -98,7 +73,7 @@ id = "ltx"
 title = "LTX turbo"
 description = "LTX-2.5 turbo tier (Sol stage 2): fal lightricks/ltx-2.5 /fast."
 standard = true
-image = "ltx"
+image = "cuda"
 config = "runpod-ltx.toml"
 models = [{ variant = "ltx25-distill-sol", recipe = "ltx-turbo" }]
 max_queued = 32
@@ -110,7 +85,7 @@ id = "wan"
 title = "Wan 2.2 5B (turbo + max)"
 description = "Wan 2.2 TI2V-5B: FastWan turbo and the 50-step max tier; fal-ai/wan."
 standard = true
-image = "wan5b"
+image = "cuda"
 config = "runpod-wan5b.toml"
 models = [
   { variant = "fastwan22-ti2v-5b", recipe = "wan-turbo" },
@@ -124,7 +99,7 @@ stale_after_s = 120
 id = "ltx-pro"
 title = "LTX pro (dense)"
 description = "LTX-2.5 pro tier (ltx25-distill-dense, two-stage dense): fal lightricks/ltx-2.5 /pro and fal-ai/ltx-2.3 retake / extend. Sage attention is on by default on sm_120 (RTX PRO 6000; FASTVIDEO_ATTN_SAGE=0 turns it off)."
-image = "ltx"
+image = "cuda"
 config = "runpod-ltx-pro.toml"
 models = [{ variant = "ltx25-distill-dense", recipe = "ltx-pro" }]
 max_queued = 16
@@ -135,7 +110,7 @@ stale_after_s = 180
 id = "ltx-a2v"
 title = "LTX guided audio-to-video"
 description = "The guided A2V companion of ltx-pro (LTX-2.5 dev DiT, multimodal guider): fal lightricks/ltx-2.5 audio-to-video/pro. An 80-96 GB card and ~38 GB of host RAM."
-image = "ltx"
+image = "cuda"
 config = "runpod-ltx-a2v.toml"
 container_disk_gb = 60
 models = [{ variant = "ltx25-a2v-guided" }]
@@ -147,7 +122,7 @@ stale_after_s = 180
 id = "ltx-ref2v"
 title = "LTX reference-to-video"
 description = "The Ref2V companion of ltx-pro (Ingredients IC-LoRA): fal fal-ai/ltx-2.3-quality ingredient."
-image = "ltx"
+image = "cuda"
 config = "runpod-ltx-ref2v.toml"
 models = [{ variant = "ltx25-ref2v" }]
 max_queued = 8
@@ -158,7 +133,7 @@ stale_after_s = 180
 id = "h3-ref2v"
 title = "H3 reference-to-video"
 description = "H3 Ref2VA, turbo and max (the reference companions of h3-turbo / h3-max)."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-ref2v.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [
@@ -173,7 +148,7 @@ stale_after_s = 180
 id = "fasth3-trim"
 title = "FastH3 Trim 8-step"
 description = "FastH3 Trim (FastVideo/FastVideo-FastH3-Trim-8-Step): 42 of the 50 H3 blocks, 8 DMD steps, VSA; text-to-video with audio only. Faster and smaller than FastH3 V2, with some quality cost. Served as h3-trim."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-trim.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "fasth3-trim-8step", recipe = "h3-trim" }]
@@ -187,7 +162,7 @@ stale_after_s = 120
 id = "fasth3-trim-nvfp4"
 title = "FastH3 Trim 8-step NVFP4"
 description = "FastH3 Trim with the release's NVFP4 DiT (FastVideo/FastVideo-FastH3-Trim-Comfy): every block's attention and FFN linears W4A4 on NVFP4 tensor cores (RTX PRO 6000 / B200 only, no fallback); text-to-video with audio only. Opt-in; served as h3-trim-nvfp4."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-trim-nvfp4.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "fasth3-trim-nvfp4", recipe = "h3-trim-nvfp4" }]
@@ -202,7 +177,7 @@ stale_after_s = 120
 id = "fasth3-v2-nvfp4"
 title = "H3 NVFP4 tier: FastH3 V2 NVFP4"
 description = "FastH3 V2 NVFP4 (FastVideo/FastVideo-FastH3-8-Step-V2-NVFP4): the release's ModelOpt NVFP4 DiT, 8 DMD steps, sparse FP4 VSA, and its own published NVFP4 VAE decoder (gate pass, 5 GiB less peak; FASTVIDEO_H3_VAE_NVFP4=0 decodes with h3-base's VAE). NVFP4 tensor cores only (RTX PRO 6000 / B200, no fallback); text-to-video with audio. Opt-in; served as h3-v2-nvfp4."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-v2-nvfp4.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "fasth3-v2-nvfp4", recipe = "h3-v2-nvfp4" }]
@@ -214,7 +189,7 @@ stale_after_s = 120
 id = "fasth3-4step-nvfp4"
 title = "H3 NVFP4 tier: FastH3 4-step NVFP4"
 description = "FastH3 4-step VSA DataFree NVFP4 (FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree-NVFP4): the release's ModelOpt NVFP4 DiT, 4 DMD steps (VSA 0.9), sparse FP4 VSA, and its own published NVFP4 VAE decoder (FASTVIDEO_H3_VAE_NVFP4=0: h3-base's). NVFP4 tensor cores only (RTX PRO 6000 / B200, no fallback); text-to-video with audio. Opt-in; served as h3-turbo-nvfp4."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-turbo-nvfp4.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "fasth3-4step-vsa-nvfp4", recipe = "h3-turbo-nvfp4" }]
@@ -229,7 +204,7 @@ stale_after_s = 120
 id = "fasth3-v2-nvfp4-preview"
 title = "H3 NVFP4 tier, fast preview (TAEH3)"
 description = "FastH3 V2 NVFP4 decoded by TAEH3 instead of the official VAE: a fast preview for drafts and scrubbing, never a default. Fails the quality gate's sharpness floor (0.82-0.91, softer frames of the same picture); about 10-12% faster end to end. NVFP4 tensor cores only; text-to-video with audio. Served as h3-v2-nvfp4-preview."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-v2-nvfp4-preview.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "fasth3-v2-nvfp4-taeh3", recipe = "h3-v2-nvfp4-preview" }]
@@ -241,7 +216,7 @@ stale_after_s = 120
 id = "fasth3-4step-nvfp4-preview"
 title = "H3 NVFP4 4-step, fast preview (TAEH3)"
 description = "FastH3 4-step VSA DataFree NVFP4 decoded by TAEH3 instead of the official VAE: a fast preview, never a default. Fails the quality gate's sharpness floor (0.82-0.91); about 10-12% faster end to end. NVFP4 tensor cores only; text-to-video with audio. Served as h3-turbo-nvfp4-preview."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-turbo-nvfp4-preview.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "fasth3-4step-vsa-nvfp4-taeh3", recipe = "h3-turbo-nvfp4-preview" }]
@@ -253,7 +228,7 @@ stale_after_s = 120
 id = "h3-turbo-preview"
 title = "H3 turbo, fast preview (TAEH3)"
 description = "The h3-turbo recipe (FastH3 Preview 4-step VSA, MXFP8) decoded by TAEH3 instead of the official VAE, at 768p and 480p: a fast preview, never a default (the 480p draft tier is h3-draft). Fails the quality gate's sharpness floor; about 10-12% faster end to end. Served as h3-turbo-preview."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-turbo-preview.toml"
 prequant = ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]
 models = [{ variant = "fasth3-4step-vsa-taeh3", recipe = "h3-turbo-preview" }]
@@ -267,7 +242,7 @@ stale_after_s = 120
 id = "fasth3-trim-nvfp4-fast"
 title = "FastH3 Trim NVFP4 + FP4 attention (fastest, opt-in)"
 description = "The fastest H3 configuration measured: FastH3 Trim 8-step with the release's NVFP4 DiT and the VSA fine stage on sparse FP4 tensor cores (9.2 s denoise at 480p, 24.6 s at 768p on an RTX PRO 6000, about 20 GiB peak). A DIFFERENT MODEL from FastH3 V2 and NOT gate-equivalent to any H3 tier: judge it by eye. RTX PRO 6000 (sm_120) only, no fallback; text-to-video with audio only. Opt-in; served as h3-trim-nvfp4-fast."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-trim-nvfp4-fast.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "fasth3-trim-nvfp4-fast", recipe = "h3-trim-nvfp4-fast" }]
@@ -281,7 +256,7 @@ stale_after_s = 120
 id = "h3-larry-turbo"
 title = "MiniMax-H3 Turbo LoRA (larry)"
 description = "MiniMax-H3 with larryvrh/MiniMax-H3-Turbo-Lora (ckpt850 EMA, Apache-2.0) folded in at load, as the MiniMaxAI/MiniMax-H3-Turbo-Lora Space runs it: 6 forwards (4 allowed), dense attention, MXFP8; text-, image- and first/last-frame-to-video with audio."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-larry-turbo.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "h3-larry-turbo" }]
@@ -293,7 +268,7 @@ stale_after_s = 120
 id = "h3-lightx2v-turbo"
 title = "MiniMax-H3 Turbo LoRA (lightx2v)"
 description = "MiniMax-H3 with lightx2v/Minimax-h3-Turbo FL2VA/T2VA 4-step v1.2 768p (Apache-2.0) folded in at load: 4 forwards at shifts 6 / 3, dense attention, MXFP8; text-, image- and first/last-frame-to-video with audio."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-lightx2v-turbo.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "h3-lightx2v-turbo" }]
@@ -305,7 +280,7 @@ stale_after_s = 120
 id = "vdn-h3"
 title = "VDN-H3 (Video DeltaNet)"
 description = "VDN-H3 (OpenVDN/vdn-minimax-h3, stage B): MiniMax-H3 with hybrid attention, a chunk-aligned window softmax plus a frame-wise delta-rule linear branch in every block; 50 forwards, no CFG, bf16 linears; text-to-video with audio (docs/ports/vdn-h3.md). Served as vdn-h3."
-image = "h3-max"
+image = "cuda"
 config = "runpod-vdn-h3.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "vdn-h3", recipe = "vdn-h3-50step" }]
@@ -317,7 +292,7 @@ stale_after_s = 300
 id = "vdn-h3-8step"
 title = "VDN-H3 8-step (Video DeltaNet, DMD)"
 description = "VDN-H3 8-step (OpenVDN/vdn-minimax-h3 stage-dmd-step-250): the stage-B hybrid attention plus the DMD turbo LoRA, 8 forwards, no CFG, bf16 linears; text-to-video with audio (docs/ports/vdn-h3.md). Served as vdn-h3-8step."
-image = "h3-max"
+image = "cuda"
 config = "runpod-vdn-h3-8step.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "vdn-h3-8step" }]
@@ -329,7 +304,7 @@ stale_after_s = 120
 id = "h3-lightx2v-turbo-v01"
 title = "MiniMax-H3 Turbo LoRA (lightx2v v0.1, the Space's)"
 description = "MiniMax-H3 with lightx2v/Minimax-h3-Turbo FL2VA/T2VA 4-step v0.1 (Apache-2.0), the file the MiniMax-H3-Turbo-Lora Space folds: 4 forwards at shifts 12 / 3, dense attention, MXFP8; text-, image- and first/last-frame-to-video with audio."
-image = "h3-max"
+image = "cuda"
 config = "runpod-h3-lightx2v-turbo-v01.toml"
 prequant = ["h3-base/text_encoder_fp8"]
 models = [{ variant = "h3-lightx2v-turbo-v01" }]
@@ -341,7 +316,7 @@ stale_after_s = 120
 id = "fastwan21"
 title = "FastWan 2.1 1.3B"
 description = "FastWan 2.1 T2V 1.3B (480p, 3 DMD steps): fal fastvideo/fastwan21-1.3b."
-image = "wan"
+image = "cuda"
 config = "runpod-wan.toml"
 models = [{ variant = "fastwan21-1.3b" }]
 max_queued = 64
@@ -352,7 +327,7 @@ stale_after_s = 90
 id = "sfwan"
 title = "SF-Wan causal streaming"
 description = "SF-Wan 1.3B causal rollout: Reactor and native streams (one session per GPU); the cluster's Reactor model when no pool serves fasth3."
-image = "sfwan"
+image = "cuda"
 config = "runpod-sfwan.toml"
 models = [{ variant = "sfwan21-1.3b" }]
 max_queued = 8
@@ -363,7 +338,7 @@ stale_after_s = 60
 id = "longlive"
 title = "LongLive-1.3B causal (NON-COMMERCIAL)"
 description = "LongLive-1.3B on the SF-Wan engine (window 12, sink 3, KV re-cache at prompt switches): Reactor and native streams. NON-COMMERCIAL licence: research and evaluation only."
-image = "sfwan"
+image = "cuda"
 config = "runpod-longlive.toml"
 licence = "LongLive-1.3B weights: CC-BY-NC-SA-4.0 (non-commercial; research / evaluation only)"
 models = [{ variant = "longlive-1.3b" }]
@@ -384,7 +359,7 @@ stale_after_s = 60
 id = "h3-family"
 title = "H3 family: every H3 variant on one pod"
 description = "Every H3 variant a preset serves on ONE GPU, one fv-serve process ({members}, and the 480p draft tier): turbo resident, the others loaded on their first request (one DiT at a time: a switch unloads the resident one and loads the next from the pod's disk, about a minute). RTX PRO 6000 (96 GB, sm_120) or B200: the NVFP4 releases need NVFP4 tensor cores and VDN-H3 a 96 GB card. Weights from R2 by default (the EU volume lacks the NVFP4, Trim, LoRA and VDN trees): about 396 GB, a 485 GB container disk."
-image = "h3-max"
+image = "cuda"
 config = "runpod-family-h3.toml"
 min_vram_gb = 96
 members = ["h3-turbo", "h3-max", "h3-ref2v", "fasth3-trim", "fasth3-trim-nvfp4", "fasth3-v2-nvfp4", "fasth3-4step-nvfp4", "fasth3-v2-nvfp4-preview", "fasth3-4step-nvfp4-preview", "h3-turbo-preview", "fasth3-trim-nvfp4-fast", "h3-larry-turbo", "h3-lightx2v-turbo", "vdn-h3", "vdn-h3-8step", "h3-lightx2v-turbo-v01"]
@@ -401,7 +376,7 @@ why = "they would take the union (about 396 GB, 485 GB of disk) to 573 GB of dis
 id = "fasth3-family"
 title = "FastH3 family: every FastH3 release on one pod"
 description = "Every FastH3 release a preset serves on ONE GPU, one fv-serve process ({members}, and the 480p draft tier): turbo resident, the previews, Trim and the NVFP4 tier loaded on their first request (one DiT at a time). RTX PRO 6000 (96 GB, sm_120) or B200 (NVFP4 tensor cores). Weights from R2 by default: about 371 GB with turbo's pre-quantized trees, a 457 GB container disk."
-image = "h3-max"
+image = "cuda"
 config = "runpod-family-fasth3.toml"
 min_vram_gb = 96
 members = ["h3-turbo", "fasth3-trim", "fasth3-trim-nvfp4", "fasth3-v2-nvfp4", "fasth3-4step-nvfp4", "fasth3-v2-nvfp4-preview", "fasth3-4step-nvfp4-preview", "h3-turbo-preview", "fasth3-trim-nvfp4-fast"]
@@ -415,7 +390,7 @@ why = "its 148 GB h3-8step tree would take the union past Runpod's 500 GB contai
 id = "ltx-family"
 title = "LTX family: turbo, pro, guided A2V and Ref2V on one pod"
 description = "Every LTX-2.5 preset on ONE GPU, one fv-serve process ({members}): turbo resident, the others loaded on their first request (one 22B DiT at a time); the fal apps route by tier within the process. An 80-96 GB card and ~38 GB of host RAM (the guided A2V model). Its trees (about 165 GB) are on the EU volume."
-image = "ltx"
+image = "cuda"
 config = "runpod-family-ltx.toml"
 min_vram_gb = 80
 members = ["ltx", "ltx-pro", "ltx-a2v", "ltx-ref2v"]
@@ -428,7 +403,7 @@ why = "its NVFP4 linears are a process-wide load setting the other LTX recipes d
 id = "streaming-family"
 title = "Streaming: every causal streaming model on one pod ({members}; LongLive weights NON-COMMERCIAL)"
 description = "Every causal streaming model on ONE GPU, one fv-serve process ({members}): SF-Wan resident (the Reactor's model), LongLive loaded on its first request; an SF-Wan pipeline stays resident once loaded, so both end up resident (26-33 GB peak each): an 80 GB-class card. Weights from R2 by default (about 36 GB)."
-image = "sfwan"
+image = "cuda"
 config = "runpod-family-streaming.toml"
 min_vram_gb = 80
 members = ["sfwan", "longlive"]
@@ -540,8 +515,10 @@ default_job_s = 40
 serverless = { gpu_type = "NVIDIA H100 80GB HBM3", scaler_type = "QUEUE_DELAY", scaler_value = 60, idle_timeout_s = 60 }
 
 # sfwan-live: WebRTC peer sessions need pods (one live stream per GPU).
-# Pods come from a template (image, fv-serve worker config, secrets as
-# {{ RUNPOD_SECRET_* }}) and register themselves with the gateway pool.
+# Pods come from the one CUDA image's pod template (fv-serve-cuda-pod: the
+# image, secrets as {{ RUNPOD_SECRET_* }}; it bakes no worker config) with the
+# pool's worker config in the pod's env (worker_config, sent as
+# FV_WORKER_TOML_B64), and register themselves with the gateway pool.
 [[autoscale.pools]]
 name = "sfwan-live"
 family = "wan"
@@ -556,10 +533,13 @@ idle_timeout_s = 600
 budget_usd_per_hr = 9.5
 
 [autoscale.pools.pod]
-template_id = "REPLACE_SFWAN_POD_TEMPLATE"
+# The Runpod id of the fv-serve-cuda-pod template (`scripts/serve/runpod-templates.sh id cuda pod`);
+# a placeholder until the owner creates it (docs/serve/images.md "One image: the live steps").
+template_id = "REPLACE_FV_SERVE_CUDA_POD_TEMPLATE_ID"
+worker_config = "runpod-sfwan.toml"
 gpu_types = ["NVIDIA RTX PRO 6000 Blackwell Server Edition", "NVIDIA H100 80GB HBM3", "NVIDIA H200"]
 # The EU weights volume (fv-weights-h3-ltx-500, EU-RO-1, since 2026-10-13) holds
-# the H3 + LTX trees only: sfwan21-1.3b is NOT on it, so this pod template must
+# the H3 + LTX trees only: sfwan21-1.3b is NOT on it, so these pods must
 # fetch it from R2 before the pool leaves dry_run (docs/ops/runpod-volumes.md).
 # The US weights volume (s2k01690bi, US-CA-2) was deleted; add a US placement
 # back, first, with the rebuilt volume's id when the owner rebuilds it.

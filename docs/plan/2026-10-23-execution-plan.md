@@ -84,6 +84,7 @@ parallel agents.
 | C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | merged (#156; single image: owner decision, ADR-0011) |
 | C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | merged (#159: fv-boot is the images' entrypoint and every fv-control boot prefers it, ADR-0014; GPU gate green for the image kind on the EU volume (ltx); open per-kind gates before lifting `FV_BOOT_LEGACY` (cluster worker, serverless r2 streaming, edge watchdog, GMI / Brev, upsampler; ADR-0014 §6); remaining: C2b deletes the shell boots and sends env only after the image promotion, the `registry` source after WO-002, the upsampler launcher in Rust) |
 | C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo (C3a pr #169: Runpod pods and serverless queue endpoints, the `Provider` trait in `fastvideo-deploy`, the `Launch` schema, the shared guards and backstop, `fv-deploy plan|up|status|logs|smoke|down`, ADR-0018; live gate passed on Runpod EU (h3-turbo smoke); next: C3b Vast + GCP, C3c fv-control on the generated `Launch` types, C3d templates / release / D1 ledger) |
+| C4 | One image with boot-time config (owner decision 2026-10-25, ADR-0011): one CUDA serve image plus the CPU image instead of seven variant images; every launch path sends the worker config at boot; an image started without one refuses to boot; `variant` fields, `VARIANTS`, the thin Dockerfile stages, `image-configs.ts` and `fv_variant_for_config` removed, stored specs read through a mapping | gates green; no live resource changed; the owner's live steps written (`docs/serve/images.md` "One image: the live steps") | pod; CI image build on main; live steps by the owner | C1, C2, C3a | active (draft PR `claude/c4-one-image`; live steps pending the owner) |
 
 ### Phase 5: validation driver and gold standards (Workstream D)
 
@@ -1140,3 +1141,15 @@ ran (pod id, $/hr), result, cost.
   `fv-lab run --runs-dir`; `precision`'s `ltx-nvfp4` mode and `ltxvae`'s
   `FV_VAE_GEN` arms dropped. Every remaining family's dry run equal before
   and after. No GPU cost.
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): C4 (one image with
+  boot-time config, owner decision 2026-10-25) on `claude/c4-one-image`
+  (draft PR): `[[images]]` is `cuda` + `cpu`, every preset on `cuda`;
+  fv-boot refuses to boot without `FV_WORKER_TOML_B64` / `--config` /
+  `FV_WORKER_CONFIG`; fv-control, fv-deploy, the autoscaler and the Runpod
+  scripts send every config at boot (largest 5600 base64 bytes, guard
+  16 KiB); stored `variant` specs read through `legacyVariant`. No live
+  template, endpoint or GHCR tag changed; the owner's ordered live steps are
+  in `docs/serve/images.md`. Gates on build pod `pgozx2aeruu9jx`: fmt,
+  workspace clippy, crate tests, `cargo test --workspace --lib`,
+  `scripts/serve/check.sh`; control gen `--check`, typecheck, unit tests;
+  script lint and goldens. No GPU cost.

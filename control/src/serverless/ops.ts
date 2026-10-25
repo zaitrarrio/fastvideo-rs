@@ -14,6 +14,8 @@ import { normalizeEndpointSpec, specDiff, type EndpointSpec } from "./spec";
 import { newWeightsToken, slsHubEnv, slsWeightsEnv } from "./weights";
 import { upsamplerPodEnv } from "../upsampler";
 import { defaultCancelPath } from "../jobapi";
+import { legacyVariant } from "../enums";
+import { withPresetOwned } from "./presets";
 
 export interface SlsRow {
   id: string;
@@ -75,7 +77,11 @@ export function normalizeSlsPolicy(x: Partial<SlsPolicy>): SlsPolicy {
 }
 
 export const LIVE = "deleted_at IS NULL AND status NOT IN ('deleted', 'gone', 'failed')";
-export const specOf = (r: SlsRow): EndpointSpec => parseJson<EndpointSpec>(r.spec, {} as EndpointSpec);
+/** A stored endpoint's spec. One stored before the one-image decision names an image `variant`: it reads as its compute
+ * and, without a config of its own, the config that variant's image baked (enums.ts legacyVariant), which fv-control
+ * now sends at boot; one naming a preset carries the preset's compute and config by name (presets.ts withPresetOwned:
+ * a preset whose config was the variant image's default stored none, an inline preset stored a text snapshot). */
+export const specOf = (r: SlsRow): EndpointSpec => withPresetOwned(legacyVariant(parseJson<EndpointSpec>(r.spec, {} as EndpointSpec)));
 
 // ---------------------------------------------------------------- ownership
 /** One of fv-control's endpoints by its row id (se_…), Runpod endpoint id, or live name; 404 otherwise. */
@@ -122,7 +128,7 @@ async function liveSizes(env: Env): Promise<{ id: string; workers_max: number }[
 // ---------------------------------------------------------------- images
 /** The spec's image, resolved to a digest the way clusters resolve theirs (ghcr.ts resolveClusterImages). */
 export async function resolveImage(env: Env, spec: EndpointSpec): Promise<string> {
-  const pseudo = { image: spec.image, pools: [{ id: "sls", variant: spec.variant }] } as unknown as ClusterSpec;
+  const pseudo = { image: spec.image, pools: [{ id: "sls", compute: spec.compute }] } as unknown as ClusterSpec;
   const out = await resolveClusterImages(env, pseudo);
   return out.sls!;
 }
@@ -183,11 +189,9 @@ export async function createEndpoint(env: SlsEnv, who: Actor, input: unknown, o:
       const got = await sls.getEndpoint(env, ep);
       tpl = got?.templateId ?? er?.templateId ?? null;
       await patchRow(env, id, { template_id: tpl, own_template: tpl ? 1 : 0 });
-      const boot = v2TemplateBoot(spec);
-      if (boot) {
-        if (!tpl) throw new HttpError(502, "runpod: the v2 endpoint has no template to give the config");
-        await sls.updateTemplate(env, tpl, boot);
-      }
+      // Its config's boot (every endpoint sends one: the images bake none).
+      if (!tpl) throw new HttpError(502, "runpod: the v2 endpoint has no template to give the config");
+      await sls.updateTemplate(env, tpl, v2TemplateBoot(spec));
     }
     // Runpod's create drops some fields (REST v1: flashboot false, workersMax 0; live 2026-10-06): set them again.
     await sls.patchEndpoint(env, ep, endpointUpdatePayload(spec));
@@ -210,7 +214,15 @@ export async function updateEndpoint(env: SlsEnv, who: Actor, row: SlsRow, input
   if (row.deleted_at || !["active", "scaled-down"].includes(row.status)) throw new HttpError(409, `endpoint is ${row.status}`);
   assertOurs(row);
   const prev = specOf(row);
-  const next = normalizeEndpointSpec({ ...(input as object), name: row.name });
+  // A document that changes only the worker counts is a scale: the stored spec is kept as is (scaledSpec).
+  const inp: Record<string, unknown> = { ...legacyVariant({ ...(input as Record<string, unknown>) }), name: row.name };
+  const keys = new Set([...Object.keys(prev), ...Object.keys(withPresetOwned(inp))]);
+  const changed = [...keys].filter((k) => JSON.stringify((prev as any)[k] ?? null) !== JSON.stringify((withPresetOwned(inp) as any)[k] ?? null));
+  if (!o.image && changed.every((k) => k === "workers_min" || k === "workers_max"))
+    return applyUpdate(env, who, row, prev, scaledSpec(prev, { ...(inp.workers_min !== undefined ? { workers_min: Number(inp.workers_min) } : {}), ...(inp.workers_max !== undefined ? { workers_max: Number(inp.workers_max) } : {}) }), { action: o.action || "serverless.scale" });
+  return applyUpdate(env, who, row, prev, normalizeEndpointSpec({ ...(input as object), name: row.name }), o);
+}
+async function applyUpdate(env: SlsEnv, who: Actor, row: SlsRow, prev: EndpointSpec, next: EndpointSpec, o: { image?: string; action?: string }): Promise<SlsRow> {
   const d = specDiff(prev, next);
   if (d.recreate.length) throw new HttpError(409, `${d.recreate.join(", ")}: cannot change in place; delete the endpoint and create a new one`);
   const pol = await slsPolicy(env);
@@ -246,11 +258,22 @@ export async function updateEndpoint(env: SlsEnv, who: Actor, row: SlsRow, input
   await audit(env, { actor: who.actor, ip: who.ip, action: o.action || "serverless.update", target: row.name, before: prev, after: { ...next, applied, image } });
   return reload(env, row.id);
 }
-export async function scaleEndpoint(env: SlsEnv, who: Actor, row: SlsRow, s: { workers_min?: number; workers_max?: number }): Promise<SlsRow> {
-  const prev = specOf(row);
+/** The stored spec with only the worker counts changed: a scale never re-validates or re-renders the rest of the
+ * spec (a spec stored by an older fv-control may not pass today's checks), so it never touches the template or the
+ * image, and a scale to 0 always works. */
+export function scaledSpec(prev: EndpointSpec, s: { workers_min?: number; workers_max?: number }): EndpointSpec {
   const next = { ...prev, ...(s.workers_min !== undefined ? { workers_min: Number(s.workers_min) } : {}), ...(s.workers_max !== undefined ? { workers_max: Number(s.workers_max) } : {}) };
   if (s.workers_max !== undefined && s.workers_min === undefined && next.workers_min > next.workers_max) next.workers_min = next.workers_max;
-  return updateEndpoint(env, who, row, next, { action: "serverless.scale" });
+  if (!(Number.isInteger(next.workers_min) && Number.isInteger(next.workers_max) && next.workers_min >= 0 && next.workers_min <= 4 && next.workers_max >= 0 && next.workers_max <= 8))
+    throw new HttpError(400, "workers_min: 0-4, workers_max: 0-8 (integers)");
+  if (next.workers_min > next.workers_max) throw new HttpError(400, "workers_min: workers_min is above workers_max");
+  return next;
+}
+export async function scaleEndpoint(env: SlsEnv, who: Actor, row: SlsRow, s: { workers_min?: number; workers_max?: number }): Promise<SlsRow> {
+  if (row.deleted_at || !["active", "scaled-down"].includes(row.status)) throw new HttpError(409, `endpoint is ${row.status}`);
+  assertOurs(row);
+  const prev = specOf(row);
+  return applyUpdate(env, who, row, prev, scaledSpec(prev, s), { action: "serverless.scale" });
 }
 export async function extendEndpoint(env: Env, who: Actor, row: SlsRow, minutes: number): Promise<SlsRow> {
   if (!(minutes >= 1 && minutes <= 7 * 1440)) throw new HttpError(400, "minutes: 1-10080");

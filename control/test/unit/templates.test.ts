@@ -9,6 +9,7 @@ import CATALOG from "../../src/cluster/catalog.json";
 import { defaultSpec, FAMILY_PRESETS, FASTH3_FAMILY_MEMBERS, H3_FAMILY_MEMBERS, LTX_FAMILY_MEMBERS, MODEL_PRESETS, normalizeSpec, POOL_PRESETS, poolModelFamilies, STREAMING_FAMILY_MEMBERS, TEMPLATES, type ModelRef } from "../../src/cluster/spec";
 import type { Env } from "../../src/env";
 import { mustVariant } from "../../src/families";
+import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
 import { H3_DRAFT } from "../../src/presets";
 import { weightsPlan, weightsSource } from "../../src/providers";
 import { r2Bytes, r2DiskGb } from "../../src/r2weights";
@@ -81,7 +82,7 @@ describe("family templates: one pod per family", () => {
   });
   it("each family config: one process, the first model resident, every other one swapped in", () => {
     for (const p of FAMILY_PRESETS) {
-      const toml = p.pool.config_toml!;
+      const toml = WORKER_CONFIGS[p.pool.config!]!;
       expect(toml, p.id).toMatch(/^swap = true$/m);
       const bs = blocks(toml);
       expect(bs.map((b) => b.id), p.id).toEqual(p.pool.models!.map((m) => m.id));

@@ -48,6 +48,7 @@ pub use canonical::{to_canonical_bytes, to_canonical_string, CanonicalError};
 pub use deploy::{
     AutoscaleSection, Compute, DeployError, DeployManifest, FamilyPreset, GcpRow, GpuFloor, Image,
     LeftOut, PoolModel, Preset, DEPLOY_SCHEMA, EU_DATA_CENTER, EU_REGION, EU_VOLUME_ID,
+    SMOKE_CONFIG,
 };
 pub use family::{
     FamilyError, FamilyHeader, FamilyId, FamilyManifest, FamilySet, GpuNeeds, HdTier, ServingCaps,

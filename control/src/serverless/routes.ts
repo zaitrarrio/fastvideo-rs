@@ -41,6 +41,7 @@ import { gpusWithAtLeast } from "../gpus";
 import { recentBoots } from "./ingest";
 import { slsOutlook, slsTrees, slsWeightsIssues } from "./weights";
 import { r2Trees } from "../r2weights";
+import { legacyVariant } from "../enums";
 
 type App = { Bindings: Env; Variables: Vars };
 type C = Context<App>;
@@ -74,7 +75,11 @@ serverlessRoutes.get("/", async (c) => {
 });
 serverlessRoutes.get("/defaults", (c) => {
   const ws = c.req.query("weights_source");
-  const d = defaultEndpointSpec(c.req.query("name") || "example", c.req.query("variant") || "cpu", c.req.query("preset") || undefined);
+  // ?compute=GPU|CPU (default CPU); an old client's ?variant= reads as its compute and the config it baked.
+  const q: Record<string, unknown> = legacyVariant({ compute: c.req.query("compute") || undefined, variant: c.req.query("variant") || undefined });
+  const compute = q.compute === "GPU" ? "GPU" : "CPU";
+  const d0 = defaultEndpointSpec(c.req.query("name") || "example", compute, c.req.query("preset") || undefined);
+  const d = !c.req.query("preset") && compute === "GPU" && typeof q.config === "string" ? { ...d0, config: q.config } : d0;
   // ?weights_source=r2|hub|volume: that source's placement (r2 / hub: no volume, any data centre, a disk for the trees;
   // hub: FlashBoot on, and the approval left to the caller).
   return c.json({ spec: (ws === "r2" || ws === "volume" || ws === "hub") && d.compute === "GPU" ? withWeightsSource(d, ws) : d });
@@ -83,12 +88,12 @@ serverlessRoutes.get("/defaults", (c) => {
 serverlessRoutes.get("/presets", (c) =>
   c.json({
     presets: SLS_PRESETS.map((p) => {
-      const spec = defaultEndpointSpec("example", p.variant, p.id);
+      const spec = defaultEndpointSpec("example", p.compute, p.id);
       const v = servingView(spec);
       const trees = slsTrees(spec);
       const pub = r2Trees(c.env);
       const r2 = { trees, published: trees.filter((t) => pub[t]), missing: trees.filter((t) => !pub[t]), outlook: p.compute === "GPU" ? slsOutlook(c.env, withWeightsSource(spec, "r2")).note : null };
-      return { id: p.id, title: p.title, description: p.description, variant: p.variant, compute: p.compute, config: p.config ?? null, inline_config: !!p.config_toml, weights: p.weights, prequant: p.prequant, min_vram_gb: p.min_vram_gb, gpu_types_ok: p.min_vram_gb ? gpusWithAtLeast(p.min_vram_gb) : [], container_disk_gb: p.container_disk_gb, execution_timeout_s: p.execution_timeout_s, licence: p.licence ?? null, serves: v.serves, r2 };
+      return { id: p.id, title: p.title, description: p.description, compute: p.compute, config: p.config ?? null, weights: p.weights, prequant: p.prequant, min_vram_gb: p.min_vram_gb, gpu_types_ok: p.min_vram_gb ? gpusWithAtLeast(p.min_vram_gb) : [], container_disk_gb: p.container_disk_gb, execution_timeout_s: p.execution_timeout_s, licence: p.licence ?? null, serves: v.serves, r2 };
     }),
     protocols: PROTOCOL_INFO,
   }),

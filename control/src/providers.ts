@@ -30,9 +30,8 @@
 import { brev, brevInstanceTypes, brevOff, brevPrice, brevPriceLive, brevTaskLine, type BrevType } from "./brev";
 import { recordBoot } from "./boottime";
 import { adoptAndStop, bootEstimate, brevDiskGb, treesGb, brevRowById, brevRunScript, brevStartup, markBrevDeleted, newBootToken, parkedDph, recordBrevCreate, releaseBrev, restartDiag, warmCandidates, type Release, type TreeRevs } from "./brev-park";
-import { BAKED_CONFIGS } from "./cluster/image-configs";
 import type { PoolSpec } from "./cluster/spec";
-import { WORKER_CONFIGS } from "./cluster/worker-configs";
+import { namedConfig } from "./worker-config";
 import { sha256Hex } from "./crypto";
 import { expectedTunnelUrl, releaseTunnels, tunnelSettings, tunnelView } from "./tunnels";
 import { OTHER_PROVIDERS, type OtherProviderId, type ProviderId } from "./enums";
@@ -361,10 +360,12 @@ export async function poolDph(env: Env, pool: PoolSpec, cap: number): Promise<{ 
 }
 
 // ---------------------------------------------------------------- weights
-const configText = (pool: PoolSpec): string => {
-  if (pool.config_toml) return pool.config_toml;
-  const f = (pool.config || "").split("/").pop() || "";
-  return BAKED_CONFIGS[f] || WORKER_CONFIGS[f] || "";
+/** The pool's worker config text: its inline one, else the named configs/serve file's ("" when unknown). */
+const configText = (pool: PoolSpec): string => pool.config_toml || namedConfig(pool.config) || "";
+/** The preset whose pool runs this pool's config (the same text, inline or named). */
+const presetOfPool = (pool: PoolSpec) => {
+  const t = configText(pool);
+  return t ? POOL_PRESETS.find((x) => configText(x.pool) === t) : undefined;
 };
 export interface WeightsPlan {
   source: "hub" | "r2" | "none";
@@ -385,13 +386,12 @@ export function poolTrees(pool: PoolSpec): string[] {
     if (/^\s*#/.test(line)) continue;
     for (const m of line.matchAll(/\$\{FV_WEIGHTS\}\/([A-Za-z0-9._-]+)(?:\/([A-Za-z0-9._-]+))?/g)) out.add(m[2] && HUB_TREES[`${m[1]}/${m[2]}`] ? `${m[1]}/${m[2]}` : m[1]!);
   }
-  for (const p of POOL_PRESETS) if (p.pool.variant === pool.variant && ((pool.config && p.pool.config === pool.config) || (pool.config_toml && p.pool.config_toml === pool.config_toml))) p.weights.forEach((w) => out.add(w));
+  for (const w of presetOfPool(pool)?.weights ?? []) out.add(w);
   return [...out].sort();
 }
 /** The pre-quantized trees of the pool's preset (presets.ts PoolPreset.prequant): r2 fetches them, the Hub cannot. */
 export function poolPrequant(pool: PoolSpec): string[] {
-  const p = POOL_PRESETS.find((x) => x.pool.variant === pool.variant && ((pool.config && x.pool.config === pool.config) || (pool.config_toml && x.pool.config_toml === pool.config_toml)));
-  return [...(p?.prequant ?? [])];
+  return [...(presetOfPool(pool)?.prequant ?? [])];
 }
 /** A GMI / Brev pool's weights source: its own, else r2 when its config loads trees and every one is published in
  * the R2 weights store (r2weights.ts), else none. Runpod GPU pools: their own, else the volume when it holds every

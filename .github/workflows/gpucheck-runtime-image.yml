@@ -95,7 +95,7 @@ jobs:
       # The shared lower layers (Ubuntu + ffmpeg, + CUDA libraries) as
       # published images, one per content hash, built here only when missing.
       # Passing them as named contexts puts this image on the same layer
-      # digests as fastvideo-rs-runtime and every serve variant (docs/serve/images.md "Layers").
+      # digests as fastvideo-rs-runtime and the serve images (docs/serve/images.md "Layers").
       - name: Shared base images
         id: base
         env:

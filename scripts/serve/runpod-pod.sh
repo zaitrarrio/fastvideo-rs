@@ -12,14 +12,15 @@
 #                                 appear only as {{ RUNPOD_SECRET_* }} references)
 #
 # The image must be digest-pinned (…@sha256:…); a tag is resolved to its
-# digest first. Default: for a published variant's config (FV_VARIANT, or
-# derived from FV_SERVE_CONFIG; scripts/serve/variants.sh) the image of its
-# Runpod template fv-serve-<variant>-pod (docs/serve/images.md), else the
-# legacy all-in-one ghcr.io/zaitrarrio/fastvideo-rs-serve:stable (the release
-# channel deploys follow; :latest until the first promotion,
-# docs/serve/releases.md). Every pod is recorded in the D1 deployments
-# table (scripts/serve/lib/registry.sh; best effort).
-# fv-serve starts from the image ENTRYPOINT with `--config $FV_SERVE_CONFIG`.
+# digest first. Default: the one CUDA image, as its Runpod template
+# fv-serve-cuda-pod names it (docs/serve/images.md), else its :cuda tag.
+# Every pod is recorded in the D1 deployments table
+# (scripts/serve/lib/registry.sh; best effort).
+# The pod starts from the image ENTRYPOINT (fv-boot) with the config sent in
+# the env (variants.sh fv_config_env_json): /etc/fv/runpod-fake.toml, the one
+# config the images carry, as FV_WORKER_CONFIG; any other FV_SERVE_CONFIG (a
+# configs/serve name, also written /etc/fv/<name>, or a local file) inline
+# as FV_WORKER_TOML_B64. The images bake no config (docs/adr/0011-deploy-section.md).
 #
 # Money guards: the GPU's $/hr cap (RUNPOD_GPU_MAX_DPH, default 1.0), a
 # wall-clock cap (FV_POD_CAP_S, default 1800 s) enforced by a detached
@@ -28,8 +29,8 @@
 # (artifacts/runpod/serve/ledger.tsv).
 #
 # Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; FV_SERVE_CONFIG (default
-# /etc/fv/runpod-fake.toml: the fake engine until the CUDA backend lands;
-# /etc/fv/runpod.toml for real models); RUNPOD_GPU_TYPES (comma list, cheapest
+# /etc/fv/runpod-fake.toml: the fake engine; runpod.toml, runpod-ltx.toml, …
+# for real models); RUNPOD_GPU_TYPES (comma list, cheapest
 # first); RUNPOD_VOLUME_ID (optional weight volume at /workspace, read only:
 # state goes to /fvstate on the container disk); RUNPOD_ALLOWED_CUDA (an exact
 # space list; default scripts/gpu/runpod-cuda.sh fv_runpod_cuda, none today:
@@ -52,13 +53,12 @@ fv_check_volume "${RUNPOD_VOLUME_ID:-}" # the deleted US volume: refuse (EU only
 
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
-CONFIG="${FV_SERVE_CONFIG:-/etc/fv/runpod-fake.toml}"
-VARIANT="${FV_VARIANT:-$(fv_variant_for_config "$CONFIG")}"
+CONFIG="${FV_SERVE_CONFIG:-$FV_IMAGE_CONFIG}"
+CONFIG_ENV_JSON="$(fv_config_env_json "$CONFIG")" || die "FV_SERVE_CONFIG=$CONFIG: no such worker config"
 pick_image() {
   if [[ -n "${1:-}" ]]; then echo "$1"
   elif [[ -n "${FV_SERVE_IMAGE:-}" ]]; then echo "$FV_SERVE_IMAGE"
-  elif [[ -n "$VARIANT" ]]; then fv_variant_image "$VARIANT" pod
-  else fv_default_image
+  else fv_image_ref "$FV_CUDA_IMAGE" pod
   fi
 }
 GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX A4000,NVIDIA RTX A4500,NVIDIA RTX 4000 Ada Generation,NVIDIA RTX A5000,NVIDIA RTX 2000 Ada Generation,NVIDIA GeForce RTX 3090,NVIDIA L4}"
@@ -128,14 +128,13 @@ payload() {
     dc="$(rest GET "/networkvolumes/$RUNPOD_VOLUME_ID" | jq -r '.dataCenterId')"
     vol_json="$(jq -n --arg v "$RUNPOD_VOLUME_ID" --arg dc "$dc" '{networkVolumeId: $v, volumeMountPath: "/workspace", dataCenterIds: [$dc]}')"
   fi
-  jq -n --arg name "$name" --arg image "$image" --arg gpu "$gpu" --arg cfg "$CONFIG" --arg cuda "$CUDA" \
+  jq -n --arg name "$name" --arg image "$image" --arg gpu "$gpu" --argjson cfg "$CONFIG_ENV_JSON" --arg cuda "$CUDA" \
     --arg keys "$keyhash" --argjson secrets "$SECRET_ENV_JSON" --argjson vol "$vol_json" --argjson ident "$(fv_image_env_json "$image")" '{
       name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 30, volumeInGb: 0,
       ports: ["8000/http", "70000/tcp"],
-      dockerEntrypoint: ["/opt/fastvideo-rs/bin/fv-serve"],
-      dockerStartCmd: ["--config", $cfg],
-      env: ($secrets + $ident + {
+      dockerEntrypoint: ["/opt/fastvideo-rs/bin/fv-boot"],
+      env: ($secrets + $ident + $cfg + {
         FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
         FV_API_KEYS: $keys, FV_SERVE_FORWARD: "1", RUST_LOG: "info"
       })
@@ -185,7 +184,7 @@ create() {
       'sleep "$CAP"; curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "$API/pods/$POD_ID" >/dev/null' \
       >/dev/null 2>&1 &
     log "pod $POD: $gpu at \$$dph/hr (wall-clock cap ${CAP_S}s)"
-    fv_deploy_created pod "$POD" name="$name" image="$image" gpu="$gpu" cost_per_hr="$dph" variant="$VARIANT" \
+    fv_deploy_created pod "$POD" name="$name" image="$image" gpu="$gpu" cost_per_hr="$dph" variant="$FV_CUDA_IMAGE" \
       dc="$(jq -r '.machine.dataCenterId // .dataCenterId // empty' <<<"$resp")" meta="$(jq -nc --arg c "$CONFIG" '{config: $c}')"
     CREATED_GPU="$gpu"; CREATED_DPH="$dph"
     return 0

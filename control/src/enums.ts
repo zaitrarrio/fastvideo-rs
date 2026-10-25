@@ -4,11 +4,48 @@
 // dashboard's controls all read them from here, so a value the UI offers is
 // a value the server accepts. No imports: every module may import this one.
 
-/** Image variants CI builds (scripts/serve/variants.sh, docs/serve/images.md). `cpu`: the fake engine on CPU pods. */
-// BEGIN GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit: VARIANTS
-export const VARIANTS = ["h3-turbo", "h3-max", "ltx", "wan", "wan5b", "sfwan", "cpu"] as const;
+/** The serve images CI builds (deploy/deploy.toml [[images]], docs/serve/images.md): one CUDA image for every GPU
+ * pool and endpoint, the CPU image (fake engine) for CPU ones. No image bakes a worker config: every launch sends one
+ * (docs/adr/0011-deploy-section.md, owner decision 2026-10-25). */
+// BEGIN GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit: SERVE_IMAGES
+export const SERVE_IMAGES = { GPU: "cuda", CPU: "cpu" } as const;
 // END GENERATED
-export type Variant = (typeof VARIANTS)[number];
+export type ServeImage = (typeof SERVE_IMAGES)[keyof typeof SERVE_IMAGES];
+/** The image a pool, launch or endpoint runs: the compute decides (GPU: the CUDA image; CPU: the CPU image). */
+export function imageOf(x: { compute?: string }): ServeImage {
+  return x.compute === "CPU" ? SERVE_IMAGES.CPU : SERVE_IMAGES.GPU;
+}
+/** The image variants before the one-image decision (2026-10-25) and the config each baked (its FV_CONFIG). Stored
+ * specs and API inputs may still name one in `variant`: it is read once and dropped (legacyVariant). */
+export const LEGACY_VARIANT_CONFIGS: Readonly<Record<string, string>> = {
+  "h3-turbo": "runpod.toml",
+  "h3-max": "runpod-h3-max.toml",
+  ltx: "runpod-ltx.toml",
+  wan: "runpod-wan.toml",
+  wan5b: "runpod-wan5b.toml",
+  sfwan: "runpod-sfwan.toml",
+  cpu: "runpod-fake.toml",
+  gateway: "runpod-fake.toml",
+};
+/**
+ * Read-compat for a stored spec, launch or endpoint that names an image variant (`variant`, removed 2026-10-25):
+ * drops the field; when `compute` is unset takes it from the variant (`cpu` and the CPU image's old name `gateway`:
+ * CPU; any other: GPU; on GMI / Brev, GPU machines only, none is set); and when the document names no config and no preset, names the config the variant's image
+ * baked (an endpoint that relied on it serves the same; `fillConfig: false` when a preset fills it instead).
+ * Returns the object (mutated) for chaining.
+ */
+export function legacyVariant<T extends Record<string, any>>(x: T, opts: { fillConfig?: boolean } = {}): T {
+  if (!x || typeof x !== "object" || !("variant" in x)) return x;
+  const o = x as Record<string, any>;
+  const v = o.variant;
+  // GMI / Brev have GPU machines only: the old cpu variant there was a fake-engine smoke test on a GPU (now the CUDA image).
+  const gpuOnly = typeof o.provider === "string" && o.provider !== "runpod";
+  if (o.compute === undefined && typeof v === "string" && !gpuOnly) o.compute = v === "cpu" || v === "gateway" ? "CPU" : "GPU";
+  const baked = typeof v === "string" ? LEGACY_VARIANT_CONFIGS[v] : undefined;
+  if (baked && opts.fillConfig !== false && o.config === undefined && o.config_toml === undefined && o.preset === undefined) o.config = baked;
+  delete o.variant;
+  return x;
+}
 /** Fake-engine model ids the `cpu` image serves (crates/fastvideo-serve fake engine). */
 export const FAKE_MODELS = ["fake-h3-max", "fake-h3-turbo", "fake-sol-h3", "fake-ltx-pro", "fake-ltx-turbo", "fake-wan", "fake-sfwan"] as const;
 /** Runpod CPU flavors (REST v1 PodCreateInput.cpuFlavorIds). */
@@ -65,8 +102,8 @@ export const DC_ANY = "any";
 export const RUNPOD_DC_CHOICES = [...RUNPOD_DATA_CENTERS, DC_ANY] as const;
 /** A Runpod pod that mounts no weights volume, so it may run in any data centre: a GPU pod with weights_source r2, hub
  * or none (the volume off), a CPU pod with the volume off. */
-export function noVolumePod(x: { compute?: string; variant?: string; weights_source?: string; volume?: boolean }): boolean {
-  const cpu = x.compute === "CPU" || (x.compute === undefined && x.variant === "cpu");
+export function noVolumePod(x: { compute?: string; weights_source?: string; volume?: boolean }): boolean {
+  const cpu = x.compute === "CPU";
   return cpu ? x.volume !== true : (x.weights_source === "r2" || x.weights_source === "hub" || x.weights_source === "none") && x.volume !== true;
 }
 /** Runpod GPU type ids (REST v1 openapi, PodCreateInput.gpuTypeIds, 2026-10). The live catalog (prices, stock) is /api/v1/schemas/dynamic. */
@@ -180,8 +217,9 @@ export const SHA_RE = /^[0-9a-f]{7,40}$/;
 export const CHANNEL_RE = /^[a-z][a-z0-9-]{0,30}$/;
 /** An OCI image reference: registry/repo[:tag][@sha256:digest] (lower-case registry and path). */
 export const IMAGE_REF_RE = /^[a-z0-9.\-]+(:[0-9]+)?\/[a-z0-9._\-/]+(:[A-Za-z0-9._-]+)?(@sha256:[0-9a-f]{64})?$/;
-/** A worker config file inside the image. */
-export const CONFIG_PATH_RE = /^\/[A-Za-z0-9._/-]+\.toml$/;
+/** A named worker config: a configs/serve file name fv-control carries and sends inline (worker-config.ts), written
+ * `<file>.toml` or, as specs stored before the one-image decision (2026-10-25) do, `/etc/fv/<file>.toml`. */
+export const CONFIG_NAME_RE = /^(?:\/etc\/fv\/)?[A-Za-z0-9._-]+\.toml$/;
 
 /**
  * Values of the engine env keys fv-serve and the engine read

@@ -1,17 +1,19 @@
 // Live values for the editors' autocomplete and dropdowns
 // (GET /api/v1/schemas/dynamic): GPU types with price and stock, regions and
-// volumes, CPU flavors, release channels and their digests, image
-// variants and the pool presets that use them, pools, model ids, recipes and
+// volumes, CPU flavors, release channels and their digests, the serve
+// images and the worker configs a pool may name, pools, model ids, recipes and
 // fal apps (cluster/catalog.json), env keys (the engine's, with what they do,
 // and those in use) and the controller's reserved keys.
 import CATALOG from "./cluster/catalog.json";
 import { RESERVED_KEYS } from "./cluster/payloads";
-import { POOL_PRESETS, REGIONS, regionAvailable, STANDARD_POOLS } from "./cluster/spec";
+import { POOL_PRESETS, REGIONS, regionAvailable } from "./cluster/spec";
 import { getCluster, listClusters } from "./cluster/store";
 import type { Env } from "./env";
 import { releaseHeads } from "./releases";
 import { CPU_DPH_PER_VCPU, runpod } from "./runpod";
-import { ENV_VALUE_TYPES, FAKE_MODELS, OTHER_PROVIDERS, RUNPOD_DATA_CENTERS, VARIANTS, type OtherProviderId } from "./enums";
+import { ENV_VALUE_TYPES, FAKE_MODELS, OTHER_PROVIDERS, RUNPOD_DATA_CENTERS, SERVE_IMAGES, type OtherProviderId } from "./enums";
+import { DEPLOY_IMAGES } from "./deploy-gen";
+import { CONFIG_NAMES } from "./worker-config";
 import { brevGpuOptions, providerImpl, providerView } from "./providers";
 import { brevInstanceTypes } from "./brev";
 import { presetWeightsDefault } from "./standalone";
@@ -41,11 +43,7 @@ export function gpuTypes(env: Env): Promise<GpuType[]> {
   });
 }
 
-export { VARIANTS, FAKE_MODELS } from "./enums";
-const variantDetail = (v: string) => {
-  const ps = POOL_PRESETS.filter((p) => p.pool.variant === v).map((p) => p.id);
-  return v === "cpu" ? "CPU: the fake engine" : ps.length ? `presets: ${ps.join(", ")}` : "";
-};
+export { FAKE_MODELS } from "./enums";
 /** Env keys with what they do: the engine's (catalog.json) and the controller-facing serve ones. */
 export function envKeyOptions(inUse: { key: string; scope: string; n: number }[]) {
   const use = new Map<string, string[]>();
@@ -56,11 +54,18 @@ export function envKeyOptions(inUse: { key: string; scope: string; n: number }[]
 }
 
 let tagCache: { at: number; shas: string[] } | null = null;
-/** Commits with serve images in GHCR (tags <variant>-sha-<sha7>), newest first as the registry lists them; 5-minute cache, 4 s budget. */
+/** The commits a launch can pin (`sha`): those with the one CUDA serve image (`cuda-sha-<sha7>`; a GPU pool resolves
+ * `<image>-sha-<sha7>`, enums.ts imageOf). A build from before the one image has only variant tags (`h3-turbo-sha-…`)
+ * and an old `cpu-sha-…`: not offered, a GPU pool could not resolve it. Newest first as the registry lists them. */
+export function launchableShas(tags: string[]): string[] {
+  const re = new RegExp(`^${SERVE_IMAGES.GPU}-sha-([0-9a-f]{7,40})$`);
+  return [...new Set(tags.map((t) => re.exec(t)?.[1]).filter((x): x is string => !!x))].reverse().slice(0, 50);
+}
+/** launchableShas of the GHCR tags; 5-minute cache, 4 s budget. */
 async function imageShas(env: Env): Promise<string[]> {
   if (tagCache && Date.now() - tagCache.at < 300_000) return tagCache.shas;
   const tags = await Promise.race([listTags(env), new Promise<string[]>((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000))]);
-  const shas = [...new Set(tags.map((t) => /(?:^|-)sha-([0-9a-f]{7,40})$/.exec(t)?.[1]).filter((x): x is string => !!x))].reverse().slice(0, 50);
+  const shas = launchableShas(tags);
   tagCache = { at: Date.now(), shas };
   return shas;
 }
@@ -99,12 +104,14 @@ export async function dynamicEnums(env: Env, clusterId?: string, opts: { live?: 
     volumes: vols.map((v) => ({ id: v.id, dc: v.dc, region: v.region, detail: `${v.region} weights volume in ${v.dc}` })),
     data_centers: RUNPOD_DATA_CENTERS.map((dc) => ({ id: dc, detail: vols.some((v) => v.dc === dc) ? "weights volume here" : "" })),
     dc_prefixes: [...new Set(RUNPOD_DATA_CENTERS.flatMap((dc) => [dc.split("-")[0]!, dc.split("-").slice(0, 2).join("-"), dc]))].sort(),
-    config_paths: [...new Set([...POOL_PRESETS, ...STANDARD_POOLS.map((pool) => ({ pool }))].map((p) => p.pool.config).filter((x): x is string => !!x).concat(["/etc/fv/runpod-fake.toml"]))].sort(),
+    // The worker configs a pool or endpoint may name (fv-control sends the text at boot; the images bake none).
+    config_paths: [...CONFIG_NAMES].sort(),
     endpoints: (endpoints.results || []).map((e) => e.name),
-    variants: VARIANTS.map((v) => ({ id: v, detail: variantDetail(v) })),
+    // The serve images (one per compute: GPU pools run the CUDA image, CPU pools the cpu image).
+    images: DEPLOY_IMAGES.map((i) => ({ id: i.id, detail: i.compute === "cpu" ? "CPU pools: the fake engine" : "GPU pools: every preset" })),
     // weights_source: the preset's default on a Runpod GPU pod (the launch form's Weights default; standalone.ts).
     pool_presets: POOL_PRESETS.map((p) => ({ id: p.id, detail: `${p.title}${p.licence ? ` · ${p.licence}` : ""}`, weights_source: presetWeightsDefault(p.id) })),
-    sls_presets: SLS_PRESETS.map((p) => ({ id: p.id, detail: `${p.title} · ${p.variant}${p.config_toml ? " + inline config" : ""}${p.min_vram_gb ? ` · ≥ ${p.min_vram_gb} GB GPU` : ""}${p.licence ? ` · ${p.licence}` : ""}` })),
+    sls_presets: SLS_PRESETS.map((p) => ({ id: p.id, detail: `${p.title} · ${p.compute}${p.min_vram_gb ? ` · ≥ ${p.min_vram_gb} GB GPU` : ""}${p.licence ? ` · ${p.licence}` : ""}` })),
     fake_models: FAKE_MODELS,
     models: POOL_PRESETS.flatMap((p) => p.pool.models || []),
     catalog_models: CATALOG.models.map((m) => ({ id: m.id, family: m.family, recipe: m.recipe })),

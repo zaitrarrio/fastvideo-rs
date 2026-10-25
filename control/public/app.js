@@ -810,7 +810,7 @@ async function pageCluster(main, id) {
       table(
         [
           { label: "pool", get: (p) => p.id },
-          { label: "variant", get: (p) => p.variant },
+          { label: "image", get: (p) => (p.compute === "CPU" ? "cpu" : "cuda") },
           { label: "compute", get: (p) => p.compute },
           { label: "workers", get: (p) => `${(c.state.workers[p.id] || []).length} / ${p.count}`, num: true },
           {
@@ -943,7 +943,7 @@ function presetPicker(presets, onAdd, label = "Add pool") {
   const sel = h("select", { "aria-label": "Pool preset", onchange: () => show() }, presets.map((p) => h("option", { value: p.id }, `${p.id}: ${p.title}`)));
   const show = () => {
     const p = presets.find((x) => x.id === sel.value);
-    info.replaceChildren(p.description, ` Image ${p.pool.variant}; weights ${p.weights.join(", ")}.`, p.licence ? h("span", {}, " ", badge("licence", "critical"), " ", p.licence) : "");
+    info.replaceChildren(p.description, ` Image ${p.pool.compute === "CPU" ? "cpu" : "cuda"} (config sent at boot); weights ${p.weights.join(", ")}.`, p.licence ? h("span", {}, " ", badge("licence", "critical"), " ", p.licence) : "");
   };
   show();
   return h(
@@ -1206,7 +1206,7 @@ async function pageReleases(main) {
       return card(
         `Deployment registry (fv-jobs)${deleted ? ` · ${deleted} deleted hidden` : ""}`,
         table(
-          [{ label: "resource", get: (r) => r.id }, { label: "pool", get: (r) => r.pool || "" }, { label: "variant", get: (r) => r.variant || "" }, { label: "sha", get: (r) => (r.git_sha || "").slice(0, 7) }, { label: "status", get: (r) => r.status }, { label: "by", get: (r) => r.created_by }, { label: "created", get: (r) => ago(r.created_at) }],
+          [{ label: "resource", get: (r) => r.id }, { label: "pool", get: (r) => r.pool || "" }, { label: "image", get: (r) => r.variant || "" }, { label: "sha", get: (r) => (r.git_sha || "").slice(0, 7) }, { label: "status", get: (r) => r.status }, { label: "by", get: (r) => r.created_by }, { label: "created", get: (r) => ago(r.created_at) }],
           live.slice(0, 50),
           "No live deployments."
         )

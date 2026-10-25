@@ -42,10 +42,18 @@ fn committed_deploy_file_validates_against_the_families() {
     let (d, set) = committed();
     assert_eq!(d.presets.len(), 24);
     assert_eq!(d.family_presets.len(), 4);
+    // One CUDA image and the CPU image (owner decision 2026-10-25): every
+    // preset runs on the CUDA image with its config sent at boot.
     assert_eq!(
-        d.built_images().map(|i| i.id.as_str()).collect::<Vec<_>>(),
-        ["h3-turbo", "h3-max", "ltx", "wan", "wan5b", "sfwan", "cpu"]
+        d.images.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+        ["cuda", "cpu"]
     );
+    for p in &d.presets {
+        assert_eq!(p.image, "cuda", "{}", p.id);
+    }
+    for p in &d.family_presets {
+        assert_eq!(p.image, "cuda", "{}", p.id);
+    }
     // Every family preset's card class meets its members' floor (checked by
     // validate_with); the NVFP4 members put the H3 families at 96 GB.
     for fp in &d.family_presets {
@@ -70,8 +78,7 @@ fn every_named_worker_config_exists() {
     let serve = repo().join("configs/serve");
     let mut names: Vec<&str> = Vec::new();
     for i in &d.images {
-        names.push(&i.config);
-        names.extend(i.also.iter().map(String::as_str));
+        names.extend(i.carries.iter().map(String::as_str));
     }
     names.extend(d.presets.iter().map(|p| p.config.as_str()));
     names.extend(d.family_presets.iter().map(|p| p.config.as_str()));

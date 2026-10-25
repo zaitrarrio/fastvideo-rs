@@ -218,19 +218,15 @@
       "type": "object",
       "properties": {
         "config": {
-          "description": "The worker config (a `configs/serve` file name).",
+          "description": "The worker config (a `configs/serve` file name), sent inline as\n`FV_WORKER_TOML_B64` (the image bakes none).",
           "type": "string"
-        },
-        "config_baked": {
-          "description": "Whether the image carries the config (else it is sent inline as\n`FV_WORKER_TOML_B64`).",
-          "type": "boolean"
         },
         "family": {
           "description": "The model family (`families/<family>.toml`).",
           "type": "string"
         },
-        "image_variant": {
-          "description": "The image variant (`[[images]]` id).",
+        "image": {
+          "description": "The serve image (`[[images]]` id: the CUDA image).",
           "type": "string"
         },
         "preset": {
@@ -242,9 +238,8 @@
       "required": [
         "family",
         "preset",
-        "image_variant",
-        "config",
-        "config_baked"
+        "image",
+        "config"
       ]
     },
     "Placement": {

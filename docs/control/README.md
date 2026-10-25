@@ -379,8 +379,10 @@ A **spec** (`control/src/cluster/spec.ts`) holds:
   `control_plane: "gateway"`) is read as today's: `enabled: false` gives
   `direct`, anything else `edge`; `gateway.auth` becomes `auth`; the pool
   variant `gateway` becomes `cpu`.
-- `pools`: `id`, `variant`, `count`, `compute` GPU/CPU, `config` (a path in
-  the image) or `config_toml` (inline, sent as `FV_WORKER_TOML_B64`), GPU
+- `pools`: `id`, `count`, `compute` GPU/CPU (the CUDA or the CPU serve
+  image), `config` (a `configs/serve` name) or `config_toml`, always sent at
+  boot as `FV_WORKER_TOML_B64` (the images bake no config, ADR-0011; a stored
+  pool's `variant` is read and dropped, `enums.ts` `legacyVariant`), GPU
   types, regions, static caps (`models` or `fake_models`), and queue and
   timeout limits.
 - `cap_s` (backstop), `min_balance` (the edge workers' watchdog floor),

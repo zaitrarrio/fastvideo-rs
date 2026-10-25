@@ -73,10 +73,13 @@ describe("cluster-spec", () => {
     expect(bad("cluster-spec", { ...base(), auto_stop_idle_min: 4 })).toContain("auto_stop_idle_min");
     ok("cluster-spec", { ...base(), auto_stop_idle_min: null });
   });
-  it("pools: variant, compute, config, models, ranges", () => {
+  it("pools: compute, config, models, ranges (an old `variant` reads as its compute)", () => {
     const P = (p: any) => ({ ...base(), pools: [{ ...base().pools[0], ...p }] });
     const G = (p: any) => ({ ...gpu(), pools: [{ ...gpu().pools[0], ...p }] });
-    expect(bad("cluster-spec", P({ variant: "nope" }))).toContain("pools.0.variant");
+    expect(bad("cluster-spec", P({ compute: "TPU" }))).toContain("pools.0.compute");
+    // One image (2026-10-25): a pool's image `variant` is read once and dropped (read-compat), never refused.
+    ok("cluster-spec", P({ variant: "cpu" }));
+    ok("cluster-spec", G({ variant: "h3-max" }));
     expect(bad("cluster-spec", P({ count: 9 }))).toContain("pools.0.count");
     expect(bad("cluster-spec", P({ vcpu: 3 }))).toContain("pools.0.vcpu");
     expect(bad("cluster-spec", P({ cpu_flavors: ["cpu9z"] }))).toContain("pools.0.cpu_flavors.0");
@@ -84,10 +87,14 @@ describe("cluster-spec", () => {
     expect(bad("cluster-spec", P({ fake_models: ["fake-nope"] }))).toContain("pools.0.fake_models.0");
     expect(bad("cluster-spec", P({ config: "/etc/fv/x.toml" }))).toContain("pools.0.config"); // both config and config_toml
     expect(bad("cluster-spec", P({ config_toml: undefined, config: "etc/x" }))).toContain("pools.0.config");
+    // A named config fv-control does not carry (the images carry none of the old ones), or none at all.
+    expect(bad("cluster-spec", G({ config_toml: undefined, config: "/etc/fv/nope.toml" }))).toContain("pools.0.config");
+    expect(bad("cluster-spec", G({ config_toml: undefined, config: undefined }))).toContain("pools.0.config");
+    expect(bad("cluster-spec", G({ config_toml: "#".repeat(13000), config: undefined }))).toContain("pools.0.config_toml");
     expect(bad("cluster-spec", P({ models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }))).toContain("pools.0.models");
     expect(bad("cluster-spec", P({ job_timeout_s: 100, stale_after_s: 200 }))).toContain("pools.0.stale_after_s");
     expect(bad("cluster-spec", P({ id: "gateway" }))).toContain("pools.0.id");
-    expect(bad("cluster-spec", G({ variant: "cpu" }))).toContain("pools.0.variant");
+
     expect(bad("cluster-spec", G({ cpu_flavors: ["cpu3c"] }))).toContain("pools.0.cpu_flavors");
     expect(bad("cluster-spec", G({ gpu_types: ["NVIDIA RTX 9999"] }))).toContain("pools.0.gpu_types.0");
     expect(bad("cluster-spec", G({ gpu_types: ["NVIDIA H200", "NVIDIA H200"] }))).toContain("pools.0.gpu_types");
@@ -103,11 +110,11 @@ describe("cluster-spec", () => {
   });
   it("normalizeSpec reports every problem with its path", () => {
     try {
-      normalizeSpec({ name: "Bad Name", cap_s: 1, pools: [{ id: "x", variant: "nope", config: "/etc/fv/runpod.toml", models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }] });
+      normalizeSpec({ name: "Bad Name", cap_s: 1, pools: [{ id: "x", compute: "GPU", config: "/etc/fv/nope.toml", models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }] });
       throw new Error("accepted");
     } catch (e: any) {
       const paths = e.extra.issues.map((i: any) => i.path.join("."));
-      expect(paths).toEqual(expect.arrayContaining(["name", "cap_s", "pools.0.variant"]));
+      expect(paths).toEqual(expect.arrayContaining(["name", "cap_s", "pools.0.config"]));
     }
   });
 });
@@ -115,16 +122,20 @@ describe("cluster-spec", () => {
 describe("standalone-launch", () => {
   it("valid launches", () => {
     ok("standalone-launch", { name: "s1", preset: "h3-turbo" });
-    ok("standalone-launch", { name: "s2", variant: "cpu", compute: "CPU", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], vcpu: 4, cpu_flavors: ["cpu3c"] });
+    ok("standalone-launch", { name: "s2", compute: "CPU", config: "runpod-fake.toml", fake_models: ["fake-wan"], vcpu: 4, cpu_flavors: ["cpu3c"] });
+    // Read-compat: a launch naming an image variant (before 2026-10-25) is its compute.
+    ok("standalone-launch", { name: "s4", variant: "cpu", compute: "CPU", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], vcpu: 4, cpu_flavors: ["cpu3c"] });
     ok("standalone-launch", { name: "s3", preset: "ltx", sha: "abcdef1", gpu_types: ["NVIDIA H200"], deadline_min: 30, idle_stop_min: null, env: { FASTVIDEO_ATTN_SAGE: "2", TOK: { value: "x", secret: true } } });
   });
   it("every rule", () => {
     const b = { name: "s", preset: "h3-turbo" };
     expect(bad("standalone-launch", { ...b, name: "New" })).toContain("name");
     expect(bad("standalone-launch", { ...b, preset: "nope" })).toContain("preset");
-    expect(bad("standalone-launch", { ...b, variant: "ltx" })).toContain("preset");
-    expect(bad("standalone-launch", { name: "s" })).toContain("variant");
-    expect(bad("standalone-launch", { name: "s", variant: "ltx" })).toContain("config");
+    expect(bad("standalone-launch", { ...b, config: "runpod-ltx.toml" })).toContain("preset");
+    expect(bad("standalone-launch", { name: "s" })).toContain("config");
+    expect(bad("standalone-launch", { name: "s", config: "runpod-ltx.toml" })).toContain("models");
+    expect(bad("standalone-launch", { name: "s", config: "/etc/fv/nope.toml", models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] })).toContain("config");
+    expect(bad("standalone-launch", { name: "s", compute: "CPU", config: "runpod-fake.toml", models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] })).toContain("models");
     expect(bad("standalone-launch", { ...b, channel: "stable", sha: "abcdef1" })).toContain("channel");
     expect(bad("standalone-launch", { ...b, compute: "CPU", gpu_types: ["NVIDIA H200"] })).toContain("gpu_types");
     expect(bad("standalone-launch", { ...b, compute: "GPU", vcpu: 4 })).toContain("cpu_flavors");
@@ -141,19 +152,24 @@ describe("standalone-launch", () => {
     expect(bad("standalone-launch", { ...b, min_start: 9, balance_floor: 10 })).toContain("min_start");
     expect(bad("standalone-launch", { ...b, bogus: 1 })).toContain("");
   });
-  it("the cpu variant defaults to a CPU pod", () => {
+  it("a launch naming the old cpu variant is a CPU pod (read-compat)", () => {
     expect(standaloneSpec({ name: "c", variant: "cpu", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"] }).spec.pools[0]!.compute).toBe("CPU");
   });
 });
 
 describe("serverless-endpoint", () => {
   it("defaults are valid; every rule", () => {
-    ok("serverless-endpoint", defaultEndpointSpec("x", "cpu"));
-    ok("serverless-endpoint", defaultEndpointSpec("x", "h3-turbo"));
-    const c = defaultEndpointSpec("x", "cpu");
-    const g = defaultEndpointSpec("x", "h3-turbo");
+    ok("serverless-endpoint", defaultEndpointSpec("x", "CPU"));
+    // A custom GPU endpoint names its config (the images bake none).
+    expect(bad("serverless-endpoint", defaultEndpointSpec("x", "GPU"))).toContain("config");
+    const c = defaultEndpointSpec("x", "CPU");
+    const g = { ...defaultEndpointSpec("x", "GPU"), config: "runpod.toml" };
+    ok("serverless-endpoint", g);
     expect(bad("serverless-endpoint", { ...c, name: "tick" })).toContain("name");
-    expect(bad("serverless-endpoint", { ...c, variant: "nope" })).toContain("variant");
+    expect(bad("serverless-endpoint", { ...c, config: "/etc/fv/nope.toml" })).toContain("config");
+    expect(bad("serverless-endpoint", { ...c, config: undefined })).toContain("config");
+    // Read-compat: an image variant is read once and dropped.
+    ok("serverless-endpoint", { ...c, variant: "cpu" });
     expect(bad("serverless-endpoint", { ...c, idle_timeout_s: 4 })).toContain("idle_timeout_s");
     expect(bad("serverless-endpoint", { ...c, scaler_value: 0.5 })).toContain("scaler_value");
     expect(bad("serverless-endpoint", { ...c, scaler_value: 501 })).toContain("scaler_value");
@@ -254,7 +270,7 @@ describe("UI coverage", () => {
         }
         const it = unwrap(u.items, root);
         if (it && enumValues(it)) expect(kind, `${name}:${path.join(".")}[]`).toBe("chips");
-        if (u["x-dynamic"] && ["channels", "variants", "regions", "pool_presets", "data_centers", "volumes", "releases", "pools", "clusters"].includes(u["x-dynamic"])) expect(kind, `${name}:${path.join(".")}`).toBe("select");
+        if (u["x-dynamic"] && ["channels", "regions", "pool_presets", "data_centers", "volumes", "releases", "pools", "clusters"].includes(u["x-dynamic"])) expect(kind, `${name}:${path.join(".")}`).toBe("select");
       }
     expect(enums).toBeGreaterThan(30);
     // Nullable fields keep their hints: the serverless volume is a select of the known volumes.
@@ -277,7 +293,7 @@ describe("UI coverage", () => {
     for (const k of Object.keys(S["cluster-spec"]!.properties)) expect(src.includes(`["${k}"]`) || src.includes(`"${k}"`), `cluster-spec.${k}`).toBe(true);
     for (const k of Object.keys(S.pool!.properties)) expect(src.includes(`P("${k}")`) || src.includes(`"${k}"`) || new RegExp(`\\.${k}\\b`).test(src), `pool.${k}`).toBe(true);
     // No free-text input for an enum field there.
-    for (const k of ["family", "vcpu", "fake_models", "log_level", "variant"]) expect(src).not.toMatch(new RegExp(`text\\(P\\("${k}"\\)`));
+    for (const k of ["family", "vcpu", "fake_models", "log_level"]) expect(src).not.toMatch(new RegExp(`text\\(P\\("${k}"\\)`));
   });
 });
 
@@ -327,7 +343,7 @@ describe("serverless GPU types (staging rows scale2, scale, testing)", () => {
     expect(r2.issues).toEqual([]);
     expect(r2.warnings.map((w) => w.path.join("."))).toEqual(["gpu_types.1"]);
     // CPU endpoints and Runpod not answering: nothing.
-    expect((await placementIssues(defaultEndpointSpec("c", "cpu"), stock)).issues).toEqual([]);
+    expect((await placementIssues(defaultEndpointSpec("c", "CPU"), stock)).issues).toEqual([]);
     expect((await placementIssues(h100, async () => Promise.reject(new Error("down")))).issues).toEqual([]);
   });
 });
@@ -355,5 +371,27 @@ describe("Runpod errors made readable", () => {
       [{ name: "a", scaler_type: "QUEUE" }, /scaler_type: "QUEUE" is not a Runpod scaler type; did you mean "QUEUE_DELAY"/],
     ] as const)
       expect(() => normalizeEndpointSpec(spec)).toThrow(re);
+  });
+});
+
+describe("CPU workers run the fake engine only (the CPU image has no CUDA)", () => {
+  const cudaToml = '[engine]\nbackend = "cuda"\n';
+  it("serverless: a custom endpoint defaults to CPU (as before the one image) and refuses a CUDA config; GPU or a fake config is fine", () => {
+    expect(() => normalizeEndpointSpec({ name: "x", config: "runpod-ltx.toml" })).toThrow(/compute: CPU workers run the fake engine.*engine is cuda/);
+    expect(() => normalizeEndpointSpec({ name: "x", compute: "CPU", config: "runpod-h3-max.toml" })).toThrow(/compute: CPU workers run the fake engine/);
+    expect(() => normalizeEndpointSpec({ name: "x", compute: "CPU", config_toml: cudaToml })).toThrow(/compute: CPU workers run the fake engine/);
+    expect(normalizeEndpointSpec({ name: "x", compute: "GPU", config: "runpod-ltx.toml" }).compute).toBe("GPU");
+    expect(normalizeEndpointSpec({ name: "x", config: "runpod-fake.toml" }).compute).toBe("CPU");
+    expect(normalizeEndpointSpec({ name: "x" }).config).toBe("runpod-fake.toml");
+  });
+  it("standalone: a CPU pod with a CUDA config is refused", () => {
+    expect(() => standaloneSpec({ name: "s", compute: "CPU", config: "runpod-ltx.toml", fake_models: ["fake-wan"] })).toThrow(/compute: CPU workers run the fake engine/);
+    expect(standaloneSpec({ name: "s", compute: "CPU", config: "runpod-fake.toml", fake_models: ["fake-wan"] }).spec.pools[0]!.compute).toBe("CPU");
+  });
+  it("cluster pools: a CPU pool with a CUDA config is refused", () => {
+    const pool = { id: "c", count: 1, compute: "CPU", cpu_flavors: ["cpu3c"], vcpu: 2, volume: false, fake_models: ["fake-wan"] };
+    expect(() => normalizeSpec({ name: "a", pools: [{ ...pool, config: "runpod-ltx.toml" }] })).toThrow(/pools\.0\.compute: CPU workers run the fake engine/);
+    expect(() => normalizeSpec({ name: "a", pools: [{ ...pool, config_toml: cudaToml }] })).toThrow(/pools\.0\.compute: CPU workers run the fake engine/);
+    expect(normalizeSpec({ name: "a", pools: [{ ...pool, config: "runpod-fake.toml" }] }).pools[0]!.compute).toBe("CPU");
   });
 });

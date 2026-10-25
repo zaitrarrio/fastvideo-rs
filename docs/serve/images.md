@@ -1,11 +1,14 @@
-# fv-serve images: one per pod variant, published to GHCR and Runpod
+# fv-serve images: one CUDA image and one CPU image, published to GHCR and Runpod
 
 Date: 2026-09-28; shared layer stack 2026-10-06 ([Lean runtime
-images](#lean-runtime-images-2026-10-06)). Build: `docker/gpucheck.Dockerfile`
-(stages `base-os`, `base-cuda` … `serve-<variant>`, `runtime`, `serve`), CI:
-`.github/workflows/serve-image.yml` + `scripts/serve/ci-images.sh` +
-`scripts/ci/base-images.sh`, Runpod publishing:
-`scripts/serve/runpod-templates.sh`, variant table: `scripts/serve/variants.sh`.
+images](#lean-runtime-images-2026-10-06)); one image with boot-time config
+2026-10-25 ([below](#one-image-with-boot-time-config-2026-10-25); before it,
+CI built seven variant images, one per baked config). Build:
+`docker/gpucheck.Dockerfile` (stages `base-os`, `base-cuda` … `serve-cuda`,
+`serve-cpu`, `runtime`, `serve`), CI: `.github/workflows/serve-image.yml` +
+`scripts/serve/ci-images.sh` + `scripts/ci/base-images.sh`, Runpod
+publishing: `scripts/serve/runpod-templates.sh`, image table:
+`scripts/serve/variants.sh` (generated from `deploy/deploy.toml` `[[images]]`).
 
 ## Images
 
@@ -15,24 +18,21 @@ deploy scripts pull anonymously).
 
 <!-- BEGIN GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit -->
 
-| variant | config baked as `FV_CONFIG` | GHCR tags | Runpod templates |
-|---|---|---|---|
-| h3-turbo | `runpod.toml` | `:h3-turbo-sha-<sha>`, `:h3-turbo` / `:h3-turbo-latest`, `:h3-turbo-stable` | `fv-serve-h3-turbo-sls`, `fv-serve-h3-turbo-pod` |
-| h3-max | `runpod-h3-max.toml` | `:h3-max-sha-<sha>`, `:h3-max` / `:h3-max-latest`, `:h3-max-stable` | `fv-serve-h3-max-sls`, `fv-serve-h3-max-pod` |
-| ltx | `runpod-ltx.toml` | `:ltx-sha-<sha>`, `:ltx` / `:ltx-latest`, `:ltx-stable` | `fv-serve-ltx-sls`, `fv-serve-ltx-pod` |
-| wan | `runpod-wan.toml` | `:wan-sha-<sha>`, `:wan` / `:wan-latest`, `:wan-stable` | `fv-serve-wan-sls`, `fv-serve-wan-pod` |
-| wan5b | `runpod-wan5b.toml` (also carries `runpod-wan14b.toml`, serving `wan14b-plug-4step` / `wan14b-turbo`: set `FV_CONFIG=/etc/fv/runpod-wan14b.toml`) | `:wan5b-sha-<sha>`, `:wan5b` / `:wan5b-latest`, `:wan5b-stable` | `fv-serve-wan5b-sls`, `fv-serve-wan5b-pod` |
-| sfwan | `runpod-sfwan.toml` | `:sfwan-sha-<sha>`, `:sfwan` / `:sfwan-latest`, `:sfwan-stable` | `fv-serve-sfwan-sls`, `fv-serve-sfwan-pod` |
-| cpu (CPU only, fake engine; `gateway` until 2026-10-06) | `runpod-fake.toml` | `:cpu-sha-<sha>`, `:cpu` / `:cpu-latest`, `:cpu-stable` | `fv-serve-cpu-pod` |
-| debug (the old all-in-one tags; since 2026-10-06 the `runtime` image + fv-serve, on the shared layers) | every config, `runpod.toml` default | `:sha-<sha>`, `:latest`, `:stable` | none |
+| image | fv-serve | carries under `/etc/fv` (`FV_WORKER_CONFIG`) | GHCR tags | Runpod templates |
+|---|---|---|---|---|
+| cuda | CUDA (every preset) | `runpod-fake.toml` | `:cuda-sha-<sha>`, `:cuda` / `:cuda-latest`, `:cuda-stable` | `fv-serve-cuda-sls`, `fv-serve-cuda-pod` |
+| cpu (CPU only, fake engine; `gateway` until 2026-10-06) | CPU only (fake engine) | `runpod-fake.toml` | `:cpu-sha-<sha>`, `:cpu` / `:cpu-latest`, `:cpu-stable` | `fv-serve-cpu-pod` |
 
 <!-- END GENERATED -->
 
-Each image also carries `runpod-fake.toml` (CI smoke check, fake engine).
-`<sha>` tags are immutable. Two release channels move over them
-([releases.md](releases.md)): `latest` (`:latest`, `:<variant>`,
-`:<variant>-latest`) is the newest green main build, moved by CI;
-`stable` (`:stable`, `:<variant>-stable`) moves only when a build is
+Neither image bakes a worker config: every launch sends one at boot
+(`FV_WORKER_TOML_B64`, the config inline, or `FV_WORKER_CONFIG`, a file in the
+image), and an image started without one refuses to boot. The only config
+each carries is `/etc/fv/runpod-fake.toml` (fake engine), for CI's no-GPU
+smoke check, which names it explicitly. `<sha>` tags are immutable. Two release channels move over them
+([releases.md](releases.md)): `latest` (`:latest`, `:<image>`,
+`:<image>-latest`) is the newest green main build, moved by CI;
+`stable` (`:stable`, `:<image>-stable`) moves only when a build is
 promoted (`scripts/serve/release.sh promote <sha>`), and is what deploys
 and the Runpod templates follow. Deploy tooling pins digests. Every image's
 `fv-serve --version` and `/health` (`build`) report its git sha and build
@@ -56,7 +56,7 @@ base-cuda: cuBLASLt                                  every CUDA image
              runtime-compiled + tensor-IR engines)    or the ffmpeg build changes)
            cuBLAS + NVRTC (+ builtins) + cudart
            ld.so config
- ├─ serve-cuda-bin: fv-serve --features cuda,http-client, python3 + curl + scripts/gpu/r2-fetch.py (weights_source r2)  -> serve-<variant>: config + FV_VARIANT
+ ├─ serve-cuda: fv-serve --features cuda,http-client, python3 + curl + scripts/gpu/r2-fetch.py (weights_source r2), runpod-fake.toml, FV_VARIANT=cuda
  │    + llama-server (llama.cpp, CUDA; fastvideo-rs-runtime:llama-server-<hash>, 82 MB) + fv-upsampler: the local
  │      prompt upsampler sidecar, docs/serve/upsampler-local.md
  ├─ runtime: sshd/rsync/curl, CUPTI, hf-fm, scripts/gpu, oxide, fv-gpucheck
@@ -64,9 +64,9 @@ base-cuda: cuBLASLt                                  every CUDA image
 base-os ─ serve-cpu: fv-serve --features http-client (no CUDA library)
 ```
 
-The CUDA variants differ only in their last layer (a few KB), so a host that
-has pulled any one of them pulls the next in seconds, and Runpod's host
-image cache covers every family at once; `fastvideo-rs-runtime` and the
+One CUDA image serves every preset, so Runpod's host image cache covers
+every family at once (before 2026-10-25 six CUDA variants differed only in
+a last layer of a few KB); `fastvideo-rs-runtime` and the
 debug image add only their thin top layers to the same base. The `cpu` image (fv-control's
 fake-engine workers) shares the OS and ffmpeg layers and has no CUDA
 library at all (the smoke check asserts it).
@@ -76,8 +76,8 @@ library at all (the smoke check asserts it).
 upscalers, shared kernels). Splitting it would mean cfg-gating the engine
 service and the pipelines; the binary is ~30 MB compressed against ~1 GB of
 CUDA libraries, so the win would be small and one shared binary layer is
-cached once across variants instead of seven. The variant images therefore
-share the binary and differ in config and entrypoint.
+cached once. The worker config, the only thing the variant images
+differed in, is now sent at boot.
 
 **Entrypoint** (`/opt/fastvideo-rs/bin/fv-boot`, `crates/fastvideo-deploy`
 `boot`, [ADR-0014](../adr/0014-fv-boot.md); it replaced
@@ -85,7 +85,9 @@ share the binary and differ in config and entrypoint.
 `/workspace/weights` to `/runpod-volume/weights` on serverless workers (the
 volume's HF-cache trees link absolutely into `/workspace/weights`), defaults
 `FV_WEIGHTS` to the mounted root, materializes the config (inline
-`FV_WORKER_TOML_B64`, `--config` / `FV_WORKER_CONFIG`, baked `FV_CONFIG`) and
+`FV_WORKER_TOML_B64`, else `--config`, else `FV_WORKER_CONFIG`; with none of
+them it **refuses to boot**, exit code non-zero, naming the remedy; a baked
+`FV_CONFIG` from an old image is not read) and
 checks it with `fv-serve --print-config`, runs the weights plan
 (`FV_WEIGHTS_SOURCE`: volume, r2, hub, none), the upsampler sidecar, a GMI /
 Brev pod's tunnel and the watchdog, and `exec`s fv-serve. Arguments pass
@@ -118,6 +120,144 @@ from the R2 bucket `fv-weights`; the US volume `s2k01690bi` was deleted
   mounts where the network volume mounts. It is worth revisiting for a
   single-repo family once the trees are published on the Hub.
 
+## One image with boot-time config (2026-10-25)
+
+Owner decision 2026-10-25 ([ADR-0011](../adr/0011-deploy-section.md) "One
+image with boot-time config"): CI builds one CUDA serve image (`cuda`) and
+the CPU image (`cpu`) instead of seven variant images whose only difference
+was a baked config. Every launch path sends the worker config at boot:
+
+| launch path | how the config is sent |
+|---|---|
+| fv-control clusters (Runpod pods, GMI / Brev) | `FV_WORKER_TOML_B64`, the pool's config text (`control/src/worker-config.ts` `workerConfigEnv`, via `cluster/payloads.ts` and `providers.ts`) |
+| fv-control serverless endpoints | `FV_WORKER_TOML_B64` in the endpoint's own template; what the endpoint serves derives from the spec's config (`serverless/serves.ts`) |
+| fv-control standalone launches | a preset's config, a named `configs/serve` file or the given text, inline |
+| `fv-deploy` (`crates/fastvideo-deploy` `launch`) | `FV_WORKER_TOML_B64` of the preset's config, for every preset (`inline_config`) |
+| autoscaler pod pools | `[autoscale.pools.pod] worker_config` (a `configs/serve` name), read at start and sent as `FV_WORKER_TOML_B64` in the pod's env |
+| `runpod-pod.sh`, `runpod-endpoint.sh` | `variants.sh` `fv_config_env_json`: `FV_WORKER_CONFIG=/etc/fv/runpod-fake.toml`, else the file inline |
+| `vast.sh`, `cloudrift-worker.sh`, GCP `vm.sh` | `--config` (unchanged) |
+| CI's smoke check (`ci-images.sh smoke`) | `FV_WORKER_CONFIG=/etc/fv/runpod-fake.toml`, explicitly; a second check asserts the image refuses to boot without a config |
+
+An image started without a config exits non-zero with `no worker config:
+the image serves no default; send FV_WORKER_TOML_B64 (inline) or
+FV_WORKER_CONFIG (a file in the image), or pass --config <path>`
+(`crates/fastvideo-deploy` `boot::config::missing`).
+
+**Size of a config in the env.** Runpod documents no limit on one
+environment variable's value (the pod API allows up to 50 variables; the
+v2 template body is capped at 1 MiB). The largest worker config,
+`runpod-family-h3.toml`, is 4199 bytes, 5600 bytes as base64. fv-control
+(`worker-config.ts` `MAX_WORKER_TOML_B64`) and fv-deploy
+(`launch.rs` `MAX_WORKER_TOML_B64`) refuse an encoded config over 16 KiB, a
+conservative guard; tests assert the two agree and that every committed
+config fits within half of it.
+
+**Stored specs.** Cluster specs, pool specs, standalone launches and
+serverless specs saved with a `variant` still load: the field is dropped,
+`cpu` becomes `compute = "CPU"`, and a pool or spec with no config takes
+the config its variant image used to bake (`enums.ts` `legacyVariant`,
+`LEGACY_VARIANT_CONFIGS`; tests in `payloads.test.ts` and
+`serverless.test.ts`). A preset owns its config **by name** (`config =
+"runpod.toml"`, its text read at each launch), so an edited
+`configs/serve` file reaches the next launch and never makes a stored
+preset spec invalid; a stored serverless spec naming a preset reads with the
+preset's compute and config, whatever an older fv-control stored (none, a
+path in a variant image, an inline snapshot). A scale (or an update that
+changes only the worker counts) keeps the stored spec and never touches the
+template or the image. CPU workers run the fake engine only: a CPU pool,
+standalone pod or serverless endpoint whose config's `[engine] backend` is
+not `fake` is refused (a custom serverless endpoint still defaults to CPU, as
+before, so a CUDA config there needs `compute: GPU`). A stored cluster spec
+whose pool config cannot be sent (a path outside `configs/serve`, an inline
+config over 12 KiB, a CUDA config on CPU) loads, is named by the editor's
+check, and up / scale / roll / start refuse it with a 409 naming the field.
+
+### One image: the live steps
+
+The change ships as code; the live resources move only when the owner runs
+these, in order (none of them was run by the change itself).
+
+**What the old fv-control resolves, and the window.** The deployed (old)
+fv-control resolves a pool's or endpoint's image as `<variant>-<channel>`:
+`h3-turbo-stable`, `ltx-latest`, …, and `cpu-<channel>` for CPU workers.
+The merge-time CI build moves `:cpu-latest` / `:cpu` (and `:latest`, the
+debug image), never a CUDA variant tag; the promotion (step 4) moves
+`:cpu-stable`. The new CPU image bakes no config, and the old fv-control
+creates CPU **serverless** endpoints without one (its CPU cluster pools and
+standalone pods send theirs: `config_toml` inline, or `FV_WORKER_CONFIG` of
+the fake config, which the image carries). So from the merge build until the
+new fv-control is deployed, a CPU serverless endpoint **created or updated**
+on channel `latest` would refuse to boot; from the promotion, the same on
+`stable`. Endpoints and pods already running pin a digest and are not
+affected. Hence: deploy fv-control right after the merge, before the
+promotion, and create or update no CPU serverless endpoint in between.
+
+1. **Merge and build.** The push to main runs `serve-image.yml`, which pushes
+   `:cuda-sha-<sha>`, `:cuda`, `:cuda-latest`, `:cpu-sha-<sha>`, `:cpu`,
+   `:cpu-latest` and the debug image's `:sha-<sha>` / `:latest`, and records
+   the `latest` release with the keys `debug cuda cpu`. The old CUDA variant
+   tags (`:h3-turbo-stable`, `:ltx-latest`, …) stay where they are; nothing
+   moves them again. The templates move only if the repository variable
+   `FV_TEMPLATE_CHANNEL` is `latest` (default: `stable`, so they do not);
+   check it before merging.
+2. **Deploy fv-control** (`control/`, wrangler deploy) from that main, as
+   soon as the build is green. From then on every cluster, serverless
+   endpoint and standalone launch resolves `:cuda-<channel>` /
+   `:cpu-<channel>` and sends its config inline. Until the promotion,
+   `:cuda-stable` does not exist and a `stable` launch falls back to
+   `:cuda-latest` (`ghcr.ts`, as before the first promotion of any image).
+   Running pods and endpoints keep their old images and configs until
+   relaunched or rolled.
+3. **Verify on something small first**: a CPU cluster (`tiny-cpu`), then
+   one GPU cluster pool and one serverless endpoint (both on `latest`);
+   check `/health` reports the new image and the expected served models.
+   Optionally a hand smoke on one GPU pod:
+   `FV_SERVE_CONFIG=runpod.toml scripts/serve/runpod-pod.sh up` and a job,
+   then `down` (a few cents).
+4. **Promote.** `scripts/serve/release.sh promote <sha> stable`. It creates
+   `:cuda-stable` / `:cpu-stable` and, because the templates follow
+   `stable`, runs `runpod-templates.sh sync` for `cuda` and `cpu`: this
+   **creates** `fv-serve-cuda-sls` and `fv-serve-cuda-pod` and moves
+   `fv-serve-cpu-pod` to the new CPU image. `release.sh list --verify` must
+   pass (it fails when a channel head lacks one of `debug cuda cpu`).
+   `fv-serve-cpu-pod` and `:cpu-stable` now name an image with no baked
+   config: a hand-started pod needs `FV_WORKER_CONFIG=/etc/fv/runpod-fake.toml`
+   or `--config`.
+5. **Roll what is running.** Existing clusters: roll each to its channel
+   (Releases page, or the cluster's roll action); a stored spec with
+   `variant` loads through the read-compat mapping, and one whose pool
+   config the new fv-control cannot send (a path outside `configs/serve`, an
+   inline config over 12 KiB) is named by the editor's check and refused by
+   up / scale / roll (409) until edited. Existing serverless endpoints: a
+   scale never touches their template or image; update or relaunch each
+   from fv-control to move it to the new image (a template edit alone no
+   longer changes what an endpoint serves).
+6. **Autoscaler.** Put the id of `fv-serve-cuda-pod`
+   (`scripts/serve/runpod-templates.sh id cuda pod`) in `deploy/deploy.toml`
+   `sfwan-live` `template_id` (replacing `REPLACE_FV_SERVE_CUDA_POD_TEMPLATE_ID`)
+   and run `node control/gen-configs.mjs`. The autoscaler reads the
+   template's env (`GET /templates/{id}`) and sends it with the worker config
+   on top, because REST v1 `POST /pods` documents no rule for a body `env`
+   next to a `templateId` (the v2 create documents a per-key merge, body
+   values winning). Before leaving `dry_run`, start one pod through it and
+   check its env has both the `{{ RUNPOD_SECRET_fv_* }}` references and
+   `FV_WORKER_TOML_B64`.
+7. **Retire the old resources** only after 2-6 hold for a while: the
+   `fv-serve-<variant>-sls` / `-pod` templates of the six CUDA variants (no
+   code names them any more; `runpod-templates.sh list` shows them). Leave
+   the old GHCR tags: they are immutable history and what the previous
+   fv-control deployment boots.
+
+**Rollback.** Before step 2, only CPU serverless creates on `latest` are
+affected (above). After it, roll fv-control back to the previous
+deployment: it boots the old CUDA variant tags, which still exist; its CPU
+serverless endpoints need a `:cpu-<channel>` from before the change
+(`release.sh promote <old sha> latest --allow-partial` moves `:cpu-latest`
+back). `release.sh rollback` cannot cross this change: an older release has
+no `cuda` digest, so it refuses and names the tags that would stay, unless
+`--allow-partial`. From here on a rollback or pin is per image, no longer per
+variant.
+
 ## Prebuilt binaries (compile on the build pod, assemble on GitHub)
 
 Since 2026-10-06 (owner decisions) no image workflow needs to compile Rust
@@ -140,7 +280,7 @@ Each workflow then:
    `cpu-build`, `binary`, `oxide`, `hf-fm`). The Dockerfiles' `COPY
    --from=<stage>` lines take the prebuilt files unchanged, so the lean
    runtime stages (`runtime`, `serve-os`, `serve-cuda-base`,
-   `serve-cuda-bin`, `serve-<variant>`, `serve-cpu`, `serve`) are exactly
+   `serve-cuda`, `serve-cpu`, `serve`) are exactly
    as before: no toolkit, no compiler in any runtime image. BuildKit never
    runs a replaced stage or its `builder` parent, so the log shows no
    `cargo` step (the C ffmpeg build stays, from the registry cache).
@@ -159,7 +299,7 @@ Each workflow then:
 
 | workflow | sets downloaded | what no longer compiles on the runner |
 |---|---|---|
-| serve-image | `oxide gpucheck hf-fm serve-cuda serve-cpu` | every stage with `cargo` / `nvcc` / `tileiras` (debug + 7 variants) |
+| serve-image | `oxide gpucheck hf-fm serve-cuda serve-cpu` | every stage with `cargo` / `nvcc` / `tileiras` (debug, `cuda`, `cpu`) |
 | gpucheck-runtime-image | `oxide gpucheck hf-fm` | builder, oxide, build, hf-fm |
 | vast-pytorch-image | `gpucheck-vast hf-fm`, always from the **newest** tools release (or the pin); no release: the job fails, it never compiles | builder, build, hf-fm |
 | serve-compat (`build` job) | `serve-fake` | the debug `fake,full` fv-serve (toolchain + rust-cache skipped) |
@@ -190,10 +330,10 @@ Options checked (Runpod docs, 2026-09-28):
 | Runpod-hosted registry you push to | does not exist: Runpod pulls from Docker Hub, GHCR, ECR, …; the API only stores **credentials** for external registries (`/containerregistryauth`, v2 `/registries`) | n/a |
 | **Deploy from GitHub** (serverless) | Runpod builds the repo's Dockerfile and stores the image in its own registry (`registry.runpod.net/…`, visible in `GET /v2/serverless/{id}/builds`), then rolls the endpoint | the only way to get a Runpod-hosted image, but: set up per endpoint in the console (GitHub OAuth; no API to create one), triggered by GitHub **releases**, serverless only (no pods), 30 min limit on the Docker build step (our Rust + CUDA build is ~45 min cold), no private base images, and the built image is bound to that endpoint. Our deploy scripts create and delete endpoints per run and pods need the same image. Not used; a thin `FROM ghcr.io/…:<variant>-sha-…` Dockerfile would fit the 30 min limit if a permanent GitHub-built endpoint is ever wanted |
 | Runpod Hub | public listing of a repo (hub.json, tests.json, `handler.py`), manual review | not a private deployment path |
-| **Templates pointing at the image** | persistent `fv-serve-<variant>-sls` / `-pod` templates the endpoints and pods start from; updating a template rolls every endpoint using it (rolling release) | **chosen** |
+| **Templates pointing at the image** | persistent `fv-serve-<image>-sls` / `-pod` templates the endpoints and pods start from; updating a template rolls every endpoint using it (rolling release) | **chosen** |
 | Cached models | weights on the host, see above | not applicable to the image |
 
-What `runpod-templates.sh sync` does, per variant (run by
+What `runpod-templates.sh sync` does, per image (run by
 `release.sh promote … stable` / `rollback`, see [releases.md](releases.md);
 CI's `Register the Runpod templates` step runs `sync-all` after main builds
 only when the repository variable `FV_TEMPLATE_CHANNEL` is `latest`):
@@ -206,22 +346,29 @@ Runpod secret references (`{{ RUNPOD_SECRET_fv_* }}`), never values. If the
 registry ever goes private, create a Runpod registry auth for GHCR once and set
 its id as the `RUNPOD_REGISTRY_AUTH_ID` secret; the script adds it to every
 template. The env also names the image (`FV_IMAGE_REF`, `FV_IMAGE_DIGEST`)
-and the channel (`FV_RELEASE_CHANNEL`), which fv-serve reports.
+and the channel (`FV_RELEASE_CHANNEL`), which fv-serve reports. The
+templates carry **no worker config** (since 2026-10-25): whatever starts an
+endpoint or pod from one adds it to the env, so a template edit changes the
+image, never what a running endpoint serves.
 
 Deploy scripts boot what the templates name:
 
-- `scripts/serve/runpod-endpoint.sh`: for a variant config
-  (`FV_SERVE_CONFIG=/etc/fv/runpod-wan.toml`, or `FV_VARIANT=wan`) with no
-  explicit image, the queue endpoint is created **on the published template**
-  itself (`down` never deletes it); with `FV_EXTRA_ENV_JSON` (worker role)
-  or for load-balancer endpoints, a per-run template/endpoint boots the
-  template's image digest. `[image]` / `FV_SERVE_IMAGE` still override; the
-  fake config boots the all-in-one `:stable` (`:latest` until the first
-  promotion).
+- `scripts/serve/runpod-endpoint.sh`: every endpoint gets a per-run
+  template that boots the digest `fv-serve-cuda-sls` names, with the config
+  in its env (`FV_SERVE_CONFIG`: `/etc/fv/runpod-fake.toml` as
+  `FV_WORKER_CONFIG`, a `configs/serve` name or a local file inline as
+  `FV_WORKER_TOML_B64`; `variants.sh` `fv_config_env_json`). `[image]` /
+  `FV_SERVE_IMAGE` still override.
 - `scripts/serve/runpod-pod.sh`: the pod boots the image of
-  `fv-serve-<variant>-pod`.
+  `fv-serve-cuda-pod`, with the config in its env the same way.
 - Without templates (no API key, not yet synced) the scripts fall back to the
-  GHCR variant tag (`:wan`, …).
+  GHCR tag `:cuda`.
+- Both start the image's entrypoint, fv-boot, with the config in the env and
+  no `--config` argument, so they need an image with fv-boot (plan C2,
+  #159, 2026-10-24, and later). A hand-passed `FV_SERVE_IMAGE` / `[image]`
+  from before it does not serve the config sent (its `fv-entry.sh` reads only
+  the baked `FV_CONFIG`, not `FV_WORKER_TOML_B64` / `FV_WORKER_CONFIG`); use
+  an older checkout of the scripts for such an image.
 
 ### Required GitHub secrets
 
@@ -238,7 +385,9 @@ The Runpod account needs the `fv_*` Runpod secrets the templates reference
 
 ## Size reduction
 
-Compressed sizes from the registry manifests (gzip layers, linux/amd64).
+(2026-09-28; the variant images measured here were replaced by the one
+`cuda` image on 2026-10-25, which is any one of them without the config
+layer.) Compressed sizes from the registry manifests (gzip layers, linux/amd64).
 **Before**: every variant ran the one image `fastvideo-rs-serve:latest`
 (`sha256:c0ce4f45…`, main before this change). **After**: the variant images
 of CI run 36491613203 (branch `claude/serve-images`, `a3292bf`).

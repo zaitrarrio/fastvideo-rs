@@ -59,7 +59,7 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
   // volume pins the pod to the volume's data centre (region); r2 / none (and a CPU pod with volume off) run anywhere:
   // data_centers, in order, a last "any" letting Runpod place it.
   const volumeDcOf = (region: string | undefined) => (dyn.regions || []).find((r: any) => r.id === (region || "eu"))?.dc ?? "EU-RO-1";
-  const isCpu = () => f.get(["compute"]) === "CPU" || (f.get(["compute"]) === undefined && f.get(["variant"]) === "cpu");
+  const isCpu = () => f.get(["compute"]) === "CPU";
   const runpodWeights = (): string | null => (isCpu() ? (f.get(["volume"]) === true ? "volume" : "none") : f.get(["weights_source"]) || presetWeights());
   const presetWeights = (): string => (dyn.pool_presets || []).find((p: any) => p.id === f.get(["preset"]))?.weights_source || "volume";
   /** The pod mounts no volume: any data centre (schemas.ts noVolumePod). */
@@ -234,7 +234,9 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
     const picked: string | undefined = f.get(["provider"]);
     const prov = picked || "runpod";
     const other = prov !== "runpod";
-    const cpu = !other && (f.get(["compute"]) === "CPU" || (f.get(["compute"]) === undefined && f.get(["variant"]) === "cpu"));
+    const cpu = !other && f.get(["compute"]) === "CPU";
+    // The fake engine: a CPU pod, or a GPU smoke test naming the fake config (it serves fake models).
+    const fake = cpu || /(^|\/)runpod-fake\.toml$/.test(String(f.get(["config"]) || ""));
     if (picked && !provLoad && dyn.provider_details?.[picked]) provStatus.replaceChildren(providerSummary(dyn.provider_details[picked]));
     const where = !picked
       ? []
@@ -320,26 +322,38 @@ export async function mountLaunchForm(host: HTMLElement, o: { api: Api; toast: (
           F(["preset"], {
             label: "Preset",
             options: presetOpts,
-            unsetLabel: "custom (variant + config)",
+            unsetLabel: "custom (compute + config)",
             allowUnset: true,
             onSet: (v) => {
-              if (v) for (const k of ["variant", "config", "models", "fake_models"]) f.set([k], undefined, true);
+              if (v) for (const k of ["config", "models", "fake_models"]) f.set([k], undefined, true);
               else {
-                f.set(["variant"], "cpu", true), f.set(["config"], "/etc/fv/runpod-fake.toml", true), f.set(["fake_models"], ["fake-wan"], true);
-                // compute / volume are Runpod's: GMI / Brev take none (the cpu variant runs on their GPU machines).
+                f.set(["config"], "runpod-fake.toml", true), f.set(["fake_models"], ["fake-wan"], true);
+                // compute / volume are Runpod's: GMI / Brev take none (the fake engine runs on their GPU machines, on the CUDA image).
                 if ((f.get(["provider"]) || "runpod") === "runpod") f.set(["compute"], "CPU", true), f.set(["volume"], false, true);
               }
               // Runpod: the new preset's default weights (the backend's: standalone.ts presetWeightsDefault).
               if ((f.get(["provider"]) || "runpod") === "runpod") f.set(["weights_source"], isCpu() ? undefined : presetWeights(), true), weightsChanged();
               else draw();
             },
-            help: "A preset brings its image variant, worker config and models.",
+            help: "A preset brings its worker config (sent at boot: the images bake none) and models.",
           }),
           ...(custom
             ? [
-                F(["variant"], { label: "Image variant", allowUnset: false, onSet: (v) => (f.set(["compute"], v === "cpu" ? "CPU" : "GPU", true), v === "cpu" ? f.set(["models"], undefined, true) : f.set(["fake_models"], undefined, true), (f.get(["provider"]) || "runpod") === "runpod" ? (f.set(["volume"], v === "cpu" ? false : undefined, true), f.set(["weights_source"], v === "cpu" ? undefined : presetWeights(), true), weightsChanged()) : draw()) }),
-                F(["config"], { label: "Worker config in the image", placeholder: "/etc/fv/runpod.toml" }),
-                f.get(["variant"]) === "cpu" ? F(["fake_models"], { label: "Fake-engine models" }) : F(["models"], { label: "Models", kind: "chips", options: catalog, help: "The catalog's models (family and recipe filled in)." }),
+                other
+                  ? null
+                  : F(["compute"], {
+                      label: "Compute",
+                      allowUnset: false,
+                      help: "GPU: the one CUDA image; CPU: the cpu image (the fake engine).",
+                      onSet: (v) => (
+                        v === "CPU" ? (f.set(["models"], undefined, true), f.set(["config"], "runpod-fake.toml", true), f.set(["fake_models"], ["fake-wan"], true)) : f.set(["fake_models"], undefined, true),
+                        f.set(["volume"], v === "CPU" ? false : undefined, true),
+                        f.set(["weights_source"], v === "CPU" ? undefined : presetWeights(), true),
+                        weightsChanged()
+                      ),
+                    }),
+                F(["config"], { label: "Worker config", placeholder: "a configs/serve file, e.g. runpod.toml", onSet: () => draw(), help: "Sent at boot (FV_WORKER_TOML_B64): the images bake none." }),
+                fake ? F(["fake_models"], { label: "Fake-engine models" }) : F(["models"], { label: "Models", kind: "chips", options: catalog, help: "The catalog's models (family and recipe filled in)." }),
               ]
             : []),
           F(["upsampler_local"], {

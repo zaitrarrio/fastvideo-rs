@@ -12,6 +12,8 @@
 //! ```
 //!
 //! `FV_BOOT_LEGACY=1` runs only the old `fv-entry.sh` steps, then fv-serve.
+//! Without a worker config (`FV_WORKER_TOML_B64`, `FV_WORKER_CONFIG` or
+//! `--config`) every path refuses to boot and exits non-zero (ADR-0011).
 //!
 //! Every input is the environment (ADR-0014 §3); arguments other than the
 //! subcommands above are fv-serve's (`--config <path>`, as the image
@@ -109,14 +111,18 @@ fn main() -> ExitCode {
         }
         _ if boot::legacy_requested(&env) => {
             let mut c = Ctx::new(env, deps, Paths::image(), pid);
-            let plan = boot::legacy(&mut c, &args);
-            let e = Command::new(&plan.program)
-                .args(&plan.args)
-                .env_clear()
-                .envs(&plan.env)
-                .exec();
-            let err = BootError::Config(format!("exec {}: {e}", plan.program.display()));
-            ExitCode::from(u8::try_from(c.fail(&err)).unwrap_or(1))
+            match boot::legacy(&mut c, &args) {
+                Ok(plan) => {
+                    let e = Command::new(&plan.program)
+                        .args(&plan.args)
+                        .env_clear()
+                        .envs(&plan.env)
+                        .exec();
+                    let err = BootError::Config(format!("exec {}: {e}", plan.program.display()));
+                    ExitCode::from(u8::try_from(c.fail(&err)).unwrap_or(1))
+                }
+                Err(e) => ExitCode::from(u8::try_from(c.fail(&e)).unwrap_or(1)),
+            }
         }
         _ => {
             let mut c = Ctx::new(env, deps, Paths::image(), pid);

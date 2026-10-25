@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
-# Publish the per-variant serve images to Runpod as templates (docs/serve/images.md).
+# Publish the serve images to Runpod as templates (docs/serve/images.md): fv-serve-cuda-sls / fv-serve-cuda-pod
+# for the one CUDA image, fv-serve-cpu-pod for the CPU image.
 #
-#   runpod-templates.sh sync <variant> <image>   create or update fv-serve-<variant>-sls
+#   runpod-templates.sh sync <id> <image>        create or update fv-serve-<id>-sls
 #                                                (serverless queue worker) and
-#                                                fv-serve-<variant>-pod (HTTP pod) to boot
+#                                                fv-serve-<id>-pod (HTTP pod) to boot
 #                                                <image> (a digest: ghcr.io/…@sha256:…)
-#   runpod-templates.sh sync-all <file>          the same for every "<variant> <image> …" line
+#   runpod-templates.sh sync-all <file>          the same for every "<id> <image> …" line
 #   runpod-templates.sh list                     the fv-serve-* templates (id, name, image)
-#   runpod-templates.sh id <variant> <sls|pod>   print one template id
-#   runpod-templates.sh plan <variant> <image>   print the payloads (no API call)
+#   runpod-templates.sh id <id> <sls|pod>        print one template id
+#   runpod-templates.sh plan <id> <image>        print the payloads (no API call)
+#
+# The images bake no worker config (owner decision 2026-10-25, docs/adr/0011-deploy-section.md), and neither do
+# these templates: whatever starts a pod or endpoint from one sends the config in its env (FV_WORKER_TOML_B64, or
+# FV_WORKER_CONFIG=/etc/fv/runpod-fake.toml) — the autoscaler's pod pools name it in [autoscale.pools.pod] worker_config
+# and send it as FV_WORKER_TOML_B64.
+# Started without one, the image refuses to boot.
 #
 # The templates follow one release channel (FV_TEMPLATE_CHANNEL, default
 # `stable`; docs/serve/releases.md): `release.sh promote … stable` and
@@ -51,8 +58,8 @@ rest() {
     -H 'content-type: application/json' ${3:+-d "$3"} "$REST$2"
 }
 
-# payload <variant> <sls|pod> <image> [create] -> template JSON. The image's
-# entrypoint (fv-boot; fv-entry on older images) and baked FV_CONFIG start fv-serve; no start command.
+# payload <id> <sls|pod> <image> [create] -> template JSON. The image's
+# entrypoint (fv-boot) starts fv-serve with the config the launch adds to the env; no start command.
 # `create` adds the fields the update API does not take (isServerless, category).
 payload() {
   local v="$1" flavour="$2" image="$3" mode="${4:-}"
@@ -62,7 +69,7 @@ payload() {
     ({FV_IMAGE_REF: $image} + (if ($image | contains("@sha256:")) then {FV_IMAGE_DIGEST: ($image | split("@")[1])} else {} end)
      + (if $ch == "" then {} else {FV_RELEASE_CHANNEL: $ch} end)) as $ident
     | {name: $name, imageName: $image, volumeInGb: 0,
-     readme: ("fv-serve " + $v + " (" + $flavour + "), published by CI; docs/serve/images.md")}
+     readme: ("fv-serve " + $v + " (" + $flavour + "), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md")}
     + (if $flavour == "sls" then {
          containerDiskInGb: 20,
          env: ($secrets + $ident + {FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_STATE_DIR: "/fvstate",
@@ -79,9 +86,9 @@ payload() {
 
 sync_one() {
   local v="$1" image="$2" flavour name cur id resp
-  fv_variant_config "$v" >/dev/null || die "unknown variant $v (known: $FV_VARIANTS)"
+  [[ " $FV_IMAGES " == *" $v "* ]] || die "unknown serve image $v (known: $FV_IMAGES)"
   [[ "$image" == *@sha256:* ]] || die "$v: pass a digest reference, not $image"
-  for flavour in $(fv_variant_flavours "$v"); do
+  for flavour in $(fv_image_flavours "$v"); do
     name="$(fv_template_name "$v" "$flavour")"
     cur="$(fv_template_get "$name")"
     if [[ -n "$cur" ]]; then
@@ -100,7 +107,7 @@ sync_one() {
 }
 
 case "${1:-}" in
-  sync) shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; sync_one "${1:?variant}" "${2:?image}" ;;
+  sync) shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; sync_one "${1:?image id}" "${2:?image}" ;;
   sync-all)
     shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
     while read -r v img _; do [[ -z "$v" || "$v" == \#* ]] || sync_one "$v" "$img"; done <"${1:?file}" ;;
@@ -109,9 +116,9 @@ case "${1:-}" in
     rest GET /templates | jq -r '.[] | select(.name | startswith("fv-serve-")) | select(.name | test("-(sls|pod)$")) | "\(.id)\t\(.name)\t\(.imageName)"' ;;
   id)
     shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
-    fv_template_get "$(fv_template_name "${1:?variant}" "${2:?sls|pod}")" | jq -r '.id // empty' ;;
+    fv_template_get "$(fv_template_name "${1:?image id}" "${2:?sls|pod}")" | jq -r '.id // empty' ;;
   plan)
     shift
-    for f in $(fv_variant_flavours "${1:?variant}"); do payload "$1" "$f" "${2:?image}" create; done ;;
-  *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    for f in $(fv_image_flavours "${1:?image id}"); do payload "$1" "$f" "${2:?image}" create; done ;;
+  *) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

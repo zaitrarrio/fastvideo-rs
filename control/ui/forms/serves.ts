@@ -17,10 +17,10 @@ export function servesPanel(serving: any, o: { check?: () => Promise<any> } = {}
   const models: any[] = s.models || [];
   const box = h("div", { class: "sv-serves small", "data-serves": "" });
   const presetLine = serving.preset
-    ? h("span", {}, "preset ", h("b", {}, serving.preset), serving.preset_inferred ? h("span", { class: "muted" }, " (inferred: the variant and config match it)") : null)
-    : h("span", {}, h("b", {}, "custom"), h("span", { class: "muted" }, " (no preset matches the variant and config)"));
+    ? h("span", {}, "preset ", h("b", {}, serving.preset), serving.preset_inferred ? h("span", { class: "muted" }, " (inferred: the compute and config match it)") : null)
+    : h("span", {}, h("b", {}, "custom"), h("span", { class: "muted" }, " (no preset matches the compute and config)"));
   const src = s.source || {};
-  const srcLine = src.kind === "inline" ? "inline config" : src.kind === "image" ? `${src.config} (in the image)` : src.kind === "image-default" ? `${src.config} (the image's default)` : `${src.config || "?"}: unknown to fv-control`;
+  const srcLine = src.kind === "inline" ? "inline config (sent at boot)" : src.kind === "named" ? `${src.config} (sent at boot)` : `${src.config || "no config"}: unknown to fv-control`;
   box.append(...([
     h("div", { class: "row", style: "flex-wrap:wrap;gap:12px" }, presetLine, h("span", { class: "muted" }, "config: ", srcLine), s.engine ? h("span", { class: "muted" }, `engine ${s.engine}${s.swap ? ", swap on (one model resident at a time)" : ""}`) : null),
     src.note ? h("p", { class: "muted" }, src.note) : null,

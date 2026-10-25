@@ -38,13 +38,22 @@ fn fixture(name: &str) -> Value {
     serde_json::from_str(&t).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
 }
 
+/// The text the scripts send inline for `CONFIG` (the image carries only
+/// `runpod-fake.toml`): `configs/serve/runpod.toml`.
+fn config_text() -> String {
+    let p = repo_root().join("configs/serve/runpod.toml");
+    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+}
+
 fn script_pod_launch() -> fastvideo_deploy::provider::Launch {
+    let text = config_text();
     script_pod(&ScriptPod {
         name: "fv-serve-plan",
         image: IMAGE,
         gpu: GPU,
         key_hash: KEY_HASH_PLACEHOLDER,
         config: CONFIG,
+        inline: Some(&text),
         volume: Some(("bz0ofkfx45", "EU-RO-1")),
         guards: guard::default_guards(),
     })
@@ -60,11 +69,13 @@ fn pod_create_equals_runpod_pod_sh() {
 
 #[test]
 fn template_and_endpoint_equal_runpod_endpoint_sh() {
+    let text = config_text();
     let l = script_endpoint(&ScriptEndpoint {
         name: "fv-serve-plan",
         image: IMAGE,
         gpus: &[GPU],
         config: CONFIG,
+        inline: Some(&text),
         volume: "bz0ofkfx45",
         data_center: "EU-RO-1",
         guards: guard::default_guards(),
@@ -97,8 +108,9 @@ fn repo() -> Repo {
 }
 
 /// `fv-deploy up --family h3 --preset h3-turbo --region eu` (the live gate):
-/// the script pod with fv-boot as the entrypoint, the volume weights source,
-/// the channel, fv-control's 40 GB container disk; nothing else differs.
+/// the script pod (fv-boot, the config inline: the one image bakes none) on
+/// the CUDA image's channel tag, with the volume weights source, the channel
+/// and fv-control's 40 GB container disk; nothing else differs.
 #[test]
 fn preset_pod_is_the_script_pod_plus_fv_boot() {
     let r = repo();
@@ -108,33 +120,25 @@ fn preset_pod_is_the_script_pod_plus_fv_boot() {
         "1024120000",
     )
     .unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(
-        l.image,
-        "ghcr.io/zaitrarrio/fastvideo-rs-serve:h3-turbo-stable"
-    );
+    assert_eq!(l.image, "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable");
     assert_eq!(guard::check_region(&l), Ok(()));
     pin_image(&mut l, IMAGE);
     let got = pod_create_body(&l);
     let mut want = fixture("runpod-pod.json");
     want["name"] = json!("fv-deploy-h3-turbo-1024120000");
-    want["dockerEntrypoint"] = json!(["/opt/fastvideo-rs/bin/fv-boot"]);
     want["containerDiskInGb"] = json!(40);
     want["env"]["FV_WEIGHTS_SOURCE"] = json!("volume");
     want["env"]["FV_RELEASE_CHANNEL"] = json!("stable");
     assert_eq!(got, want);
     let src = l.source.unwrap_or_else(|| panic!("no source"));
     assert_eq!(
-        (
-            src.image_variant.as_str(),
-            src.config.as_str(),
-            src.config_baked
-        ),
-        ("h3-turbo", "runpod.toml", true)
+        (src.image.as_str(), src.config.as_str()),
+        ("cuda", "runpod.toml")
     );
 }
 
-/// A preset serverless endpoint: the script's template with fv-boot as the
-/// entrypoint (it links the volume itself) and the endpoint unchanged.
+/// A preset serverless endpoint: the script's template (fv-boot links the
+/// volume itself, the config inline) and the endpoint unchanged.
 #[test]
 fn preset_endpoint_is_the_script_endpoint_plus_fv_boot() {
     let r = repo();
@@ -147,7 +151,6 @@ fn preset_endpoint_is_the_script_endpoint_plus_fv_boot() {
     pin_image(&mut l, IMAGE);
     let mut want_t = fixture("runpod-template.json");
     want_t["name"] = json!("fv-deploy-h3-turbo-1024120000");
-    want_t["dockerEntrypoint"] = json!(["/opt/fastvideo-rs/bin/fv-boot"]);
     want_t["env"]["FV_WEIGHTS_SOURCE"] = json!("volume");
     want_t["env"]["FV_RELEASE_CHANNEL"] = json!("stable");
     assert_eq!(template_body(&l), want_t);
@@ -157,8 +160,9 @@ fn preset_endpoint_is_the_script_endpoint_plus_fv_boot() {
 }
 
 /// Every preset either builds (its trees are on the EU volume; its config
-/// baked as `--config`, or inline as `FV_WORKER_TOML_B64` equal to the
-/// committed file) or is refused for its trees; H3 and LTX presets build.
+/// inline as `FV_WORKER_TOML_B64` equal to the committed file, under the
+/// env size guard, never as `--config`) or is refused for its trees; H3 and
+/// LTX presets build.
 #[test]
 fn every_preset_builds_or_is_refused_for_its_trees() {
     let r = repo();
@@ -176,22 +180,17 @@ fn every_preset_builds_or_is_refused_for_its_trees() {
             Ok(l) => {
                 assert_eq!(guard::check_region(&l), Ok(()), "{}", p.id);
                 let src = l.source.clone().unwrap_or_else(|| panic!("no source"));
-                if src.config_baked {
-                    assert_eq!(
-                        l.args,
-                        ["--config".to_owned(), format!("/etc/fv/{}", p.config)]
-                    );
-                    assert!(!l.env.contains_key("FV_WORKER_TOML_B64"));
-                } else {
-                    assert!(l.args.is_empty(), "{}", p.id);
-                    let b64 = l.env.get("FV_WORKER_TOML_B64").cloned().unwrap_or_default();
-                    let text = base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .unwrap_or_default();
-                    let file = std::fs::read(repo_root().join("configs/serve").join(&p.config))
-                        .unwrap_or_default();
-                    assert_eq!(text, file, "{}", p.id);
-                }
+                assert_eq!(src.image, "cuda", "{}", p.id);
+                assert!(l.args.is_empty(), "{}", p.id);
+                assert!(!l.env.contains_key("FV_WORKER_CONFIG"), "{}", p.id);
+                let b64 = l.env.get("FV_WORKER_TOML_B64").cloned().unwrap_or_default();
+                assert!(b64.len() <= launch::MAX_WORKER_TOML_B64, "{}", p.id);
+                let text = base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .unwrap_or_default();
+                let file = std::fs::read(repo_root().join("configs/serve").join(&p.config))
+                    .unwrap_or_default();
+                assert_eq!(text, file, "{}", p.id);
                 built.push(p.id.clone());
             }
             Err(e) => assert!(
@@ -273,4 +272,32 @@ fn stamps_and_keys() {
         launch::key_hash("abc"),
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
+}
+
+/// The template env size guard (ADR-0011 "What it needs" (3)): Runpod
+/// documents no limit on one env value, so a launch refuses a config whose
+/// `FV_WORKER_TOML_B64` exceeds `MAX_WORKER_TOML_B64`, and every committed
+/// worker config fits under it with room (the largest, the H3 family's, is
+/// about a third of it).
+#[test]
+fn every_worker_config_fits_the_env_size_guard() {
+    let dir = repo_root().join("configs/serve");
+    let mut largest = (0usize, String::new());
+    for e in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+        let p = e.unwrap_or_else(|e| panic!("{e}")).path();
+        if p.extension().is_none_or(|x| x != "toml") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        let (k, v) =
+            launch::inline_config(&text).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        assert_eq!(k, "FV_WORKER_TOML_B64");
+        if v.len() > largest.0 {
+            largest = (v.len(), p.display().to_string());
+        }
+    }
+    assert!(largest.0 * 2 < launch::MAX_WORKER_TOML_B64, "{largest:?}");
+    let big = "#".repeat(launch::MAX_WORKER_TOML_B64);
+    let e = launch::inline_config(&big).err().unwrap_or_default();
+    assert!(e.contains("over the 16384-byte guard"), "{e}");
 }

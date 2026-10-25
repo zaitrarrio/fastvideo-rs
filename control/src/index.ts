@@ -11,6 +11,7 @@ import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminAll, adminOne, adminTargets, adminToken, desiredEnv, edgeCfg, edgeFamilies, edgePublic, edgeWorkers, envCtx, projectSpend, workerHealth } from "./cluster/ops";
 import { isDirect, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
 import { assertRegionsAvailable, defaultSpec, isEdge, normalizeSpec, POOL_PRESETS, presetById, presetPool, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
+import { assertPoolConfigs } from "./worker-config";
 import { allPods, deleteClusterRow, emptyState, getCluster, insertCluster, isStandalone, listClusters, livePods, newSecrets, STANDALONE, type Cluster } from "./cluster/store";
 import { getDiagnosis } from "./podlogs";
 import { bootPhase, bootRows, getBoot } from "./boottime";
@@ -60,7 +61,7 @@ import { serverlessRoutes } from "./serverless/routes";
 import { getRow, serverlessTick } from "./serverless/ops";
 import { consoleRequest, sweepUploads, uploadGet } from "./serverless/console";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
-import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
+import { legacyVariant, OTHER_PROVIDERS, type OtherProviderId } from "./enums";
 import { brevBoot, brevRow, deleteParked, parkedView, storageDph, unpark } from "./brev-park";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "./r2-fetch-script";
 import { slsReport } from "./serverless/ingest";
@@ -554,6 +555,7 @@ app.post("/api/v1/deploy/apply", async (c) => {
   // configuration page's rule: saving changes the definition only).
   if (start && !p.target.running) {
     assertRegionsAvailable(cl.spec);
+    assertPoolConfigs(cl.spec);
     const r = await startOp(c.env, cl.id, "up", { skip_price_check: false }, actor(c));
     operation = r.id;
     await auditC(c, { action: "cluster.up", target: cl.name, after: { operation: r.id } });
@@ -856,7 +858,7 @@ for (const [path, def] of Object.entries(OPS)) {
     const cl = await getCluster(c.env, c.req.param("id"));
     const params = def.params(await body(c));
     // Ops that create pods refuse a stored spec that still names an unavailable region (us: no weights volume).
-    if (["up", "scale", "roll", "restart"].includes(def.kind)) assertRegionsAvailable(cl.spec);
+    if (["up", "scale", "roll", "restart"].includes(def.kind)) assertRegionsAvailable(cl.spec), assertPoolConfigs(cl.spec);
     for (const p of def.kind === "scale" ? [params.pool] : def.kind === "roll" ? params.pools || [] : [])
       if (!cl.spec.pools.some((x) => x.id === p)) throw new HttpError(400, `pool: ${cl.name} has no pool ${p} (${cl.spec.pools.map((x) => x.id).join(", ")})`, { issues: [{ path: ["pool"], message: `no pool ${p}` }] });
     if (def.kind === "scale" && isStandalone(cl) && params.count > 1) throw new HttpError(400, `${cl.name} is a standalone pod: one pod (launch another for more)`);
@@ -1068,6 +1070,7 @@ app.post("/api/v1/standalone/:id/start", async (c) => {
   const cl = await standaloneOf(c);
   if ((cl.state.workers[STANDALONE_POOL] || []).length) throw new HttpError(409, `${cl.name} has a pod already`);
   assertRegionsAvailable(cl.spec);
+  assertPoolConfigs(cl.spec);
   const b = await body<{ skip_image_check?: boolean }>(c);
   const r = await startOp(c.env, cl.id, "up", { skip_price_check: false, skip_image_check: !!b.skip_image_check }, actor(c));
   await auditC(c, { action: "standalone.start", target: cl.name });
@@ -1401,9 +1404,11 @@ app.post("/api/v1/preflight", async (c) => {
   }
   if (b.launch) spec = standaloneSpec(b.launch).spec;
   else if (b.endpoint) {
-    // A preset names the variant (a spec as the API and the CLI send it, before the defaults are filled).
-    const e = { ...b.endpoint, variant: b.endpoint.variant ?? slsPreset(b.endpoint.preset)?.variant, image: b.endpoint.image ?? { channel: "stable" } };
-    spec = normalizeSpec({ name: "preflight", image: e.image, control_plane: "direct", pools: [{ id: "endpoint", variant: e.variant, compute: e.variant === "cpu" ? "CPU" : "GPU", count: 1, config: "/etc/fv/runpod.toml", ...(e.variant === "cpu" ? { fake_models: ["fake-wan"] } : { models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }) }] });
+    // A preset names the compute (a spec as the API and the CLI send it, before the defaults are filled); the image is
+    // the compute's (the CUDA image or the cpu image), so the check is a pool of that compute.
+    const e = legacyVariant({ ...b.endpoint });
+    const compute = e.compute ?? slsPreset(e.preset)?.compute ?? "CPU";
+    spec = normalizeSpec({ name: "preflight", image: e.image ?? { channel: "stable" }, control_plane: "direct", pools: [{ id: "endpoint", compute, count: 1, ...(compute === "CPU" ? { config: "runpod-fake.toml", fake_models: ["fake-wan"] } : { config: "runpod.toml", models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }) }] });
   } else spec = normalizeSpec(b.spec || {});
   let images: Record<string, string>;
   try {

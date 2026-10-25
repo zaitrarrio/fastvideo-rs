@@ -1691,3 +1691,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §10
 - Verification: `scripts/gpu/tests/fv-lab-route.test.sh` (67 checks; each fix's mutation fails it), `tests/fv_lab_bin.rs::wall_cap_can_only_be_lowered`, `tests/dry_run.rs::branch_labels_are_read_as_bash_reads_them`; gates on the build pod
+
+### FVID · 2026-10-25 · FVID-2026-10-25-one-image-boot-config
+- Trigger: ADR-0011's open owner decision (one CUDA image whose worker config is always supplied at boot, review §7.4)
+- Options: keep seven variant images with baked configs; one CUDA image + the CPU image, config sent at boot
+- Decision: (owner, 2026-10-25) one image with boot-time config. `[[images]]` is `cuda` (carries only `runpod-fake.toml`) and `cpu`; every preset runs on `cuda`; every launch path sends `FV_WORKER_TOML_B64` (or `FV_WORKER_CONFIG` for a file the image carries); fv-boot refuses to boot without a config; stored specs naming a `variant` load through a mapping; an encoded config over 16 KiB is refused (Runpod documents no per-value limit; the largest config is 5600 bytes encoded). Live templates, endpoints and GHCR tags are moved by the owner's ordered steps, not by the change
+- Reason: the variants differed only in a few-KB config layer; 22 of 28 presets already sent their config inline; one image, one CI build, one template pair
+- Reversibility: medium (code: revert the PR; live: roll fv-control back to the previous deployment, whose variant tags remain; `release.sh rollback` cannot cross the change)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0011-deploy-section.md "One image with boot-time config"; docs/serve/images.md "One image: the live steps"
+- Verification: `fastvideo-deploy` `an_image_started_without_a_config_refuses_to_boot`, `boot::config::tests::no_config_refuses_to_boot`, `payload_goldens::every_worker_config_fits_the_env_size_guard`; `fastvideo-manifest` deploy tests (one GPU image, smoke config carried); fv-control `payloads.test.ts` (read-compat, size guard), `gen-configs.mjs --check`; `ci-images.sh smoke` asserts the refusal (runs in CI on the image build); live steps pending the owner

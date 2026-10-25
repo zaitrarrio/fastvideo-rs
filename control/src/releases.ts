@@ -4,6 +4,7 @@
 import type { Cluster } from "./cluster/store";
 import type { Env } from "./env";
 import { parseJson } from "./util";
+import { imageOf } from "./enums";
 
 export interface ReleaseRow {
   id: number;
@@ -43,10 +44,12 @@ export async function registry(env: Env, limit = 100): Promise<any[]> {
   }
 }
 
-/** The release key of a pod's image: its variant (wan pool: wan5b), or `debug` for the all-in-one image. */
+/** The release key of a pod's image: its pool's serve image (cuda, or cpu for a CPU pool), or `debug` for the
+ * all-in-one image. */
 export function releaseKey(c: Cluster, podKey: string): string {
   if (c.spec.image.ref) return "debug";
-  return c.spec.pools.find((p) => p.id === podKey)?.variant || podKey;
+  const p = c.spec.pools.find((x) => x.id === podKey);
+  return p ? imageOf(p) : podKey;
 }
 
 /** Per pod of a cluster: the digest it runs, the channel head's digest, and whether they differ. */
