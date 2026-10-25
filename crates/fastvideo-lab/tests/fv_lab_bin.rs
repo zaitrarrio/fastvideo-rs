@@ -360,3 +360,210 @@ fn pod_up_cells_must_be_arms_of_the_tier() {
         assert!(String::from_utf8_lossy(&o.stderr).contains("is not an arm of tier `gold`"));
     }
 }
+
+/// `fv-lab run b4a --dry-run` (D1d): the script's dry run, verdict lines
+/// included (the arm directories removed, the verdict's description, the
+/// family verdict). `{root}` is this checkout here, `/opt/fastvideo-rs` in
+/// the fixture (the goldens' image root).
+#[test]
+fn b4a_dry_run_prints_the_scripts_verdict_lines() {
+    let root = repo_root().canonicalize().unwrap().display().to_string();
+    let out = stdout(fv_lab().args([
+        "run",
+        "b4a",
+        "--dry-run",
+        "--baseline-sha",
+        "7654321",
+        "--work",
+        "/workspace",
+        "--scratch",
+        "/fvscratch",
+        "--tag",
+        "1234567-10241200",
+    ]));
+    let ours: Vec<String> = out
+        .lines()
+        .map(|l| {
+            l.get(11..)
+                .unwrap_or("")
+                .replace(&root, "/opt/fastvideo-rs")
+        })
+        .collect();
+    let fixture = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/b4a-dry-run.txt"),
+    )
+    .unwrap();
+    assert_eq!(ours, fixture.lines().collect::<Vec<_>>());
+    assert!(ours
+        .iter()
+        .any(|l| l.contains("family verdict b4_family_verdict b4a")));
+}
+
+/// A finished b4a run directory, as a fetch leaves it, under `<dir>/b4a/<tag>`,
+/// with fv-lab's selection record of the one pair when `record`.
+fn b4a_run(dir: &std::path::Path, pr_reuses: bool, record: bool) -> PathBuf {
+    let runs = dir.join("b4a/1234567-10241200");
+    let cell = "b4a-h3-fullopt-env";
+    for arm in ["base", "pr"] {
+        let d = runs.join(format!("{cell}-{arm}"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("summary.json"),
+            format!("{{\"cell\":\"{cell}-{arm}\",\"family\":\"b4a\",\"exit\":0,\"seconds\":9,\"ended\":\"x\"}}\n"),
+        )
+        .unwrap();
+        let step = if arm == "pr" && !pr_reuses {
+            "compute"
+        } else {
+            "REUSE"
+        };
+        std::fs::write(
+            d.join("stderr.log"),
+            format!("[INFO] h3 teacache: threshold 0.1\n[INFO] [fastvideo] h3 teacache step 1: {step} (x)\nother\n"),
+        )
+        .unwrap();
+    }
+    std::fs::create_dir_all(runs.join("compare")).unwrap();
+    std::fs::write(
+        runs.join(format!("compare/compare-clips-{cell}-base--{cell}-pr.json")),
+        "{\n  \"checks\": [\n    {\n      \"name\": \"off_identity\",\n      \"ok\": true\n    },\n    {\n      \"name\": \"off_identity_frame_count\",\n      \"ok\": true\n    }\n  ],\n  \"status\": \"pass\"\n}\n",
+    )
+    .unwrap();
+    if record {
+        std::fs::write(
+            runs.join("b4a.arms.json"),
+            format!("{{\"family\":\"b4a\",\"arms\":[\"{cell}-base\",\"{cell}-pr\"]}}\n"),
+        )
+        .unwrap();
+    }
+    runs
+}
+
+fn out_err(c: &mut Command) -> (Option<i32>, String, String) {
+    let o = c.output().unwrap();
+    (
+        o.status.code(),
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+    )
+}
+
+/// `fv-lab gate <run dir>` (D1d): the verdicts of a fetched run evaluated
+/// again offline, the tier from the directory's parent, the arms from the
+/// run's selection record (or --cells), written beside the run
+/// (`<run>.regate`), never into it; exit 0 on a pass, 1 on a failure.
+#[test]
+fn gate_evaluates_a_finished_runs_verdicts_offline() {
+    let tmp = std::env::temp_dir().join(format!("fv-lab-bin-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let runs = b4a_run(&tmp.join("pass"), true, true);
+    let out = stdout(fv_lab().arg("gate").arg(&runs));
+    assert!(out.contains("b4a b4a-h3-fullopt-env: pass"), "{out}");
+    assert!(
+        out.contains("fv-lab gate b4a: 2 evaluated, 0 failed, 0 skipped"),
+        "{out}"
+    );
+    let sibling = runs.with_file_name("1234567-10241200.regate");
+    assert_eq!(
+        std::fs::read_to_string(sibling.join("b4a.verdict.json")).unwrap(),
+        "{\"family\":\"b4a\",\"verdict\":\"pass\",\"cells\":\"b4a-h3-fullopt-env\",\"why\":\"\"}\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(sibling.join("b4a-h3-fullopt-env-pr/cache-evidence.log")).unwrap(),
+        "h3 teacache: threshold 0.1\nh3 teacache step 1: REUSE (x)\n"
+    );
+    assert!(
+        !runs.join("b4a.verdict.json").exists(),
+        "the run is only read"
+    );
+    assert!(!runs
+        .join("b4a-h3-fullopt-env-pr/cache-evidence.log")
+        .exists());
+
+    // --check: the run holds none of the derived files: each a difference.
+    let (code, out, _) = out_err(fv_lab().arg("gate").arg(&runs).arg("--check"));
+    assert_eq!(code, Some(1), "{out}");
+    assert!(
+        out.contains("DIFF b4a.verdict.json: not in the run"),
+        "{out}"
+    );
+    // Copied into the run, they are what fv-lab derives: --check passes.
+    for f in [
+        "b4a.verdict.json",
+        "b4a-b4a-h3-fullopt-env.verdict.json",
+        "b4a-h3-fullopt-env.evidence.diff",
+        "b4a-h3-fullopt-env-base/cache-evidence.log",
+        "b4a-h3-fullopt-env-pr/cache-evidence.log",
+    ] {
+        std::fs::copy(sibling.join(f), runs.join(f)).unwrap();
+    }
+    let (code, out, err) = out_err(fv_lab().arg("gate").arg(&runs).arg("--check"));
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert!(out.contains("0 difference(s)"), "{out}");
+    // Never into the run itself.
+    let (code, _, err) = out_err(fv_lab().arg("gate").arg(&runs).arg("--out").arg(&runs));
+    assert_ne!(code, Some(0));
+    assert!(err.contains("is the run directory or inside it"), "{err}");
+
+    // The PR arm reused nothing: its evidence differs too. Into --out.
+    let runs = b4a_run(&tmp.join("fail"), false, true);
+    let elsewhere = tmp.join("out");
+    let (code, _, err) = out_err(fv_lab().arg("gate").arg(&runs).arg("--out").arg(&elsewhere));
+    assert_eq!(code, Some(1), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.join("b4a-b4a-h3-fullopt-env.verdict.json")).unwrap(),
+        "{\"cell\":\"b4a-h3-fullopt-env\",\"verdict\":\"fail\",\"why\":\"pr:no-reuse evidence-differs\"}\n"
+    );
+
+    // No selection record and 2 of the 6 arms (a script run, or one cut
+    // short): no guess; --cells names the selection.
+    let runs = b4a_run(&tmp.join("norecord"), true, false);
+    let (code, _, err) = out_err(fv_lab().arg("gate").arg(&runs));
+    assert_ne!(code, Some(0));
+    assert!(
+        err.contains("holds 2 of the 6 arms") && err.contains("--cells"),
+        "{err}"
+    );
+    let out = stdout(
+        fv_lab()
+            .arg("gate")
+            .arg(&runs)
+            .args(["--cells", "b4a-h3-fullopt-env-base,b4a-h3-fullopt-env-pr"]),
+    );
+    assert!(out.contains("b4a family: pass"), "{out}");
+
+    // Not under a tier's name: --family says which.
+    let odd = tmp.join("odd");
+    std::fs::create_dir_all(&odd).unwrap();
+    let (code, _, err) = out_err(fv_lab().arg("gate").arg(&odd));
+    assert_ne!(code, Some(0));
+    assert!(err.contains("pass --family"), "{err}");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// F8: `FV_B4A_CELLS`, which fv-lab would ignore (and run every b4a cell),
+/// is refused by `pod up --extra-env` and by `run`.
+#[test]
+fn fv_b4a_cells_is_refused_not_ignored() {
+    let (code, _, err) = out_err(fv_lab().args([
+        "pod",
+        "up",
+        "--sha",
+        "1234567",
+        "--family",
+        "b4a",
+        "--baseline-sha",
+        "7654321",
+        "--extra-env",
+        "FV_B4A_CELLS=b4a-h3-4step-tea",
+    ]));
+    assert_ne!(code, Some(0));
+    assert!(err.contains("not FV_B4A_CELLS"), "{err}");
+    let (code, _, err) = out_err(
+        fv_lab()
+            .args(["run", "b4a", "--dry-run", "--baseline-sha", "7654321"])
+            .env("FV_B4A_CELLS", "b4a-h3-4step-tea"),
+    );
+    assert_ne!(code, Some(0));
+    assert!(err.contains("not FV_B4A_CELLS"), "{err}");
+}

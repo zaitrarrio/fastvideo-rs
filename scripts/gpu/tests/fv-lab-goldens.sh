@@ -61,9 +61,11 @@ MATRIX="$ROOT/scripts/gpu/runpod-matrix.sh"
 # A family's `case` branch in runpod-matrix.sh: a label of the top-level
 # `case "$FAMILY" in` (two-space indent; `name)`, `name )`, `a|name)`, a
 # trailing comment all count; nested cases' labels do not).
+# grep reads all of its input (no -q): under pipefail an early exit would
+# SIGPIPE sed and read as "no branch" whenever the branch is found.
 has_branch() {
   sed -n '/^case "\$FAMILY" in$/,/^esac$/p' "$MATRIX" \
-    | grep -qE "^  ([A-Za-z0-9_-]+ *\| *)*$1( *\| *[A-Za-z0-9_-]+)* *\)"
+    | grep -E "^  ([A-Za-z0-9_-]+ *\| *)*$1( *\| *[A-Za-z0-9_-]+)* *\)" >/dev/null
 }
 for f in $FV_LAB_RETIRED; do
   grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: retired family $f is no tier of lab/tiers.toml" >&2; exit 2; }
@@ -199,6 +201,32 @@ done
 cp -a "$TMP/rb" "$TMP/rj"; cp -a "$TMP/rb" "$TMP/rk"
 echo 'not json' >"$TMP/rj/compare/compare-clips-a--s.json"; echo 'not json' >"$TMP/rk/compare/compare-clips-a--s.json"
 if clean bash "$CMP" "$TMP/rj" "$TMP/rk" >/dev/null; then echo "fv-lab-goldens: compare-runs passed two unreadable reports" >&2; rc=1; fi
+# The verdict step's files (D1d): equal in both pass; another verdict, an
+# evidence file in one run only, or another evidence diff fails.
+cp -a "$TMP/rb" "$TMP/va"; cp -a "$TMP/rb" "$TMP/vb"
+for r in va vb; do
+  echo '{"cell":"c","verdict":"pass","why":""}' >"$TMP/$r/fam-c.verdict.json"
+  : >"$TMP/$r/c.evidence.diff"; echo 'h3 teacache step 1: REUSE' >"$TMP/$r/a/cache-evidence.log"
+done
+clean bash "$CMP" "$TMP/va" "$TMP/vb" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on equal verdict files" >&2; rc=1; }
+cp -a "$TMP/vb" "$TMP/vc"; echo '{"cell":"c","verdict":"fail","why":"pr:exit"}' >"$TMP/vc/fam-c.verdict.json"
+cp -a "$TMP/vb" "$TMP/vd"; rm "$TMP/vd/a/cache-evidence.log"
+cp -a "$TMP/vb" "$TMP/ve"; echo '1c1' >"$TMP/ve/c.evidence.diff"
+for bad in vc vd ve; do
+  if clean bash "$CMP" "$TMP/va" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a verdict difference ($bad)" >&2; rc=1; fi
+done
+# --expect-verdicts: three files the same pass 3, not 4; runs without any fail 1.
+clean bash "$CMP" --expect-verdicts 3 "$TMP/va" "$TMP/vb" >/dev/null || { echo "fv-lab-goldens: compare-runs --expect-verdicts 3 failed on three equal verdict files" >&2; rc=1; }
+if clean bash "$CMP" --expect-verdicts 4 "$TMP/va" "$TMP/vb" >/dev/null; then echo "fv-lab-goldens: compare-runs --expect-verdicts 4 passed with three" >&2; rc=1; fi
+if clean bash "$CMP" --expect-verdicts 1 "$TMP/ra" "$TMP/rb" >/dev/null; then echo "fv-lab-goldens: compare-runs --expect-verdicts 1 passed with no verdict file" >&2; rc=1; fi
+# A family verdict lists its cells (and reasons) in the tier's order on fv-lab's
+# side, FV_B4A_CELLS's on the script's: the same set is the same; another is not.
+cp -a "$TMP/va" "$TMP/vf"; cp -a "$TMP/va" "$TMP/vg"; cp -a "$TMP/va" "$TMP/vh"
+echo '{"family":"fam","verdict":"fail","cells":"c d","why":"c:fail d:fail"}' >"$TMP/vf/fam.verdict.json"
+echo '{"family":"fam","verdict":"fail","cells":"d c","why":"d:fail c:fail"}' >"$TMP/vg/fam.verdict.json"
+echo '{"family":"fam","verdict":"fail","cells":"d c","why":"d:fail"}' >"$TMP/vh/fam.verdict.json"
+clean bash "$CMP" "$TMP/vf" "$TMP/vg" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on a family verdict in another order" >&2; rc=1; }
+if clean bash "$CMP" "$TMP/vf" "$TMP/vh" >/dev/null; then echo "fv-lab-goldens: compare-runs missed another family verdict" >&2; rc=1; fi
 for bad in rc rd re rf rh ri; do
   if clean bash "$CMP" "$TMP/ra" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a difference ($bad)" >&2; rc=1; fi
 done
