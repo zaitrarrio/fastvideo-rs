@@ -20,7 +20,7 @@
 //!
 //! The API key is only ever sent as a header; errors never echo it.
 //!
-//! **One Runpod implementation** (docs/adr/0018-fv-deploy.md §9): the
+//! **One Runpod implementation** (docs/adr/0018-fv-deploy.md §8): the
 //! requests (`fastvideo_deploy::provider::runpod::Requests`), the answer
 //! mapping (`decode`, `delete_answer`, `graphql_data`: no capacity, 4xx,
 //! 5xx, the key scrubbed), the balance (`account_of`), the billed price
@@ -681,7 +681,7 @@ impl RunpodPods {
                     };
                     // A number or a numeric string (fv-deploy's `parse_usd`; Runpod's
                     // REST docs show `'0.74'`); missing stays 0 here (the pool's cap
-                    // applies to a reported price; ADR-0018 §9 open decision).
+                    // applies to a reported price; ADR-0018 §8 open decision).
                     let dph = parse_usd(v.get("costPerHr")).unwrap_or(0.0);
                     let gpu = body["gpuTypeIds"][0].as_str().unwrap_or("");
                     let cap = if pool.pod.max_usd_per_hr > 0.0 {

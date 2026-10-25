@@ -95,7 +95,7 @@ pub enum GuardError {
 /// Runpod GPU instances only with the EU weights volume `bz0ofkfx45` in
 /// `EU-RO-1` (CLAUDE.md; plan §1, owner instruction 2026-10-23); the deleted
 /// US volume is refused by id and by name; volume weights only (C3a). Vast
-/// and GCP have their own weights rules (C3b, §8).
+/// and GCP have their own weights rules (C3b, §7).
 pub fn check_region(l: &Launch) -> Result<(), GuardError> {
     if let Some(r) = &l.placement.region {
         if r == "us" {
@@ -139,7 +139,7 @@ pub fn check_region(l: &Launch) -> Result<(), GuardError> {
     Ok(())
 }
 
-/// Vast (C3b, docs/adr/0018-fv-deploy.md §8.2): no weights volume, and r2
+/// Vast (C3b, docs/adr/0018-fv-deploy.md §7.2): no weights volume, and r2
 /// weights are not in fv-deploy yet: weights `none` (the fake-engine smoke).
 fn check_vast(l: &Launch) -> Result<(), GuardError> {
     if l.placement.volume.is_some() || l.weights != WeightsSource::None {
@@ -155,7 +155,7 @@ fn check_vast(l: &Launch) -> Result<(), GuardError> {
     Ok(())
 }
 
-/// GCP (C3b, §8.3): the weights are the zone's read-only weights disk
+/// GCP (C3b, §7.3): the weights are the zone's read-only weights disk
 /// (`fv-weights-hdml-<zone>`) or none (the fake engine); the VM runs in an
 /// EU zone (`europe-*`, CLAUDE.md: EU only).
 fn check_gcp(l: &Launch) -> Result<(), GuardError> {

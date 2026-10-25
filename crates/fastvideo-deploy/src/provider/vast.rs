@@ -1,4 +1,4 @@
-//! A Vast instance (docs/adr/0018-fv-deploy.md §8.2): the offer search
+//! A Vast instance (docs/adr/0018-fv-deploy.md §7.2): the offer search
 //! (REST `POST /bundles/`) and the create (`PUT /asks/<offer>/`) that
 //! `scripts/serve/vast.sh` sends, field for field
 //! (`fixtures/deploy/vast-{offers,create}.json`, written by that script's own

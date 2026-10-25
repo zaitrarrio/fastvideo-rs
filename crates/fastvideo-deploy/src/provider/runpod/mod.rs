@@ -12,7 +12,7 @@
 //! The API key is only ever an `Authorization` header; error bodies are
 //! scrubbed of it and `Debug` never prints it.
 //!
-//! **Shared with the autoscaler** (docs/adr/0018-fv-deploy.md §9): the
+//! **Shared with the autoscaler** (docs/adr/0018-fv-deploy.md §8): the
 //! requests ([`Requests`]: URL, method, headers, body, timeout), the answer
 //! mapping ([`decode`], [`delete_answer`], [`graphql_data`]: no capacity, 4xx,
 //! 5xx, the key scrubbed), the balance ([`account_of`]), the billed price

@@ -488,6 +488,8 @@ struct FakeGcp {
     insert_fails: Cell<bool>,
     /// The insert is carried out but its answer is lost.
     lose_insert: Cell<bool>,
+    /// `GET` of an instance answers 403 (a lookup refused after the insert).
+    get_forbidden: Cell<bool>,
     ops: Cell<u32>,
     serve: FakeServe,
     log: RefCell<Vec<Request>>,
@@ -501,6 +503,7 @@ impl FakeGcp {
             disk: Cell::new(true),
             insert_fails: Cell::new(false),
             lose_insert: Cell::new(false),
+            get_forbidden: Cell::new(false),
             ops: Cell::new(0),
             serve: FakeServe::new(&[502, 200]),
             log: RefCell::new(Vec::new()),
@@ -569,6 +572,11 @@ impl FakeGcp {
                 inst["networkInterfaces"][0]["accessConfigs"][0]["natIP"] = json!(GCP_IP);
                 self.instances.borrow_mut().insert(n, inst);
                 self.op(false)
+            }
+            (Method::Get, ["projects", "p", "zones", _, "instances", _])
+                if self.get_forbidden.get() =>
+            {
+                resp(403, json!({"error": {"message": "forbidden"}}))
             }
             (Method::Get, ["projects", "p", "zones", _, "instances", n]) => {
                 match self.instances.borrow().get(*n) {
@@ -953,4 +961,21 @@ fn every_kind_parses_and_names_itself() {
     }
     assert_eq!(ProviderKind::parse("vast"), Some(ProviderKind::Vast));
     assert_eq!(ProviderKind::parse("gcp"), Some(ProviderKind::Gcp));
+}
+
+/// The VM exists once its insert is done: an address lookup refused right
+/// after is not a failed create (that would read as a definite refusal and
+/// leave the VM to the exit sweep); the probe looks the address up later.
+#[test]
+fn gcp_a_refused_address_lookup_after_the_insert_is_not_a_failed_create() {
+    let fg = FakeGcp::new();
+    fg.get_forbidden.set(true);
+    let clock = FakeClock::at(0.0);
+    let tok = StaticToken(GCP_TOKEN.into());
+    let vm = gcp_vm(&fg, &clock, &tok, Some(50.0));
+    let inst = vm
+        .create(&gcp_launch(true))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(inst.url, None);
+    assert!(fg.instances.borrow().contains_key(&inst.name));
 }

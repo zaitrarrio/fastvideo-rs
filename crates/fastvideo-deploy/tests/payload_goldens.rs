@@ -573,7 +573,12 @@ fn every_gcp_row_builds() {
             "{}",
             row.name
         );
-        assert_eq!(l.gpu.types, std::slice::from_ref(&row.machine), "{}", row.name);
+        assert_eq!(
+            l.gpu.types,
+            std::slice::from_ref(&row.machine),
+            "{}",
+            row.name
+        );
         let o = launch::gcp_options(
             &r,
             &req,

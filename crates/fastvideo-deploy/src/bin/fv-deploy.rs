@@ -344,6 +344,7 @@ impl Ctx {
         keyed: bool,
         gcp_opts: Option<GcpOptions>,
         budget: Option<f64>,
+        zone: Option<&str>,
     ) -> Result<Box<dyn Provider + '_>, String> {
         let http = self.http.as_ref();
         Ok(match kind {
@@ -376,6 +377,11 @@ impl Ctx {
                 let mut api = GcpApi::from_env(http, &self.clock, self.token.as_ref(), &self.env);
                 if let Some(b) = budget {
                     api.budget_usd = Some(b);
+                }
+                // The launch's zone, not GCP_ZONE: status and delete must look
+                // where the VM was created.
+                if let Some(z) = zone {
+                    api.zone = z.to_owned();
                 }
                 let (assets, prices) = match &self.root {
                     Some(r) => (
@@ -531,7 +537,8 @@ fn cmd_plan(a: &LaunchArgs) -> Result<(), String> {
     guard::check_region(&l).map_err(|e| e.to_string())?;
     let cidrs = source_cidrs(a, &ctx.env, None)?;
     let opts = gcp_options(a, &repo, &req, &stamp, cidrs)?;
-    let p = ctx.provider(l.provider, false, opts, a.gcp.budget_usd)?;
+    let zone = l.placement.data_centers.first().map(String::as_str);
+    let p = ctx.provider(l.provider, false, opts, a.gcp.budget_usd, zone)?;
     let mut calls = p.payload(&l).map_err(|e| e.to_string())?;
     if l.provider == ProviderKind::Gcp {
         for c in &mut calls {
@@ -621,7 +628,8 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     // The env guard's test: never send the key in a launch (it is only a header).
     let api_key = ctx.key(l.provider);
     let leaks = |s: &str| !api_key.is_empty() && s.contains(api_key.as_str());
-    let p = ctx.provider(l.provider, true, opts, u.launch.gcp.budget_usd)?;
+    let zone = l.placement.data_centers.first().map(String::as_str);
+    let p = ctx.provider(l.provider, true, opts, u.launch.gcp.budget_usd, zone)?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut backstop = DetachedBackstop::new(
         exe,
@@ -754,7 +762,7 @@ fn with_provider<T>(
         usd_per_hr: None,
         created_at: None,
     });
-    let p = ctx.provider(kind, true, None, None)?;
+    let p = ctx.provider(kind, true, None, None, None)?;
     f(p.as_ref(), inst, &state, clock)
 }
 
@@ -862,7 +870,7 @@ fn run() -> Result<bool, String> {
             let kind = kind_of(&kind)?;
             let ctx = Ctx::new(None, false)?;
             let clock = &ctx.clock;
-            let p = ctx.provider(kind, true, None, None)?;
+            let p = ctx.provider(kind, true, None, None, None)?;
             // GCP: a token must come now, not first at the deadline.
             if kind == ProviderKind::Gcp {
                 p.status(&InstanceId::new(id.clone()))

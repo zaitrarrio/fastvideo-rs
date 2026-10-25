@@ -1,4 +1,4 @@
-//! A Google Compute Engine GPU VM (docs/adr/0018-fv-deploy.md §8.3): the
+//! A Google Compute Engine GPU VM (docs/adr/0018-fv-deploy.md §7.3): the
 //! firewall rule and the instance insert that `scripts/gcp/vm.sh up` sends,
 //! field for field (`fixtures/deploy/gcp-{firewall,instance}.json`, written
 //! from that script's own `firewall_payload` / `instance_payload`;
@@ -11,7 +11,7 @@
 //! environment from `fv-env` (ADR-0011: the config is sent at boot; a
 //! launch's `FV_WORKER_TOML_B64` becomes `fv-config`).
 //!
-//! Money guards that differ from Runpod's (§8.3): the quote is the price
+//! Money guards that differ from Runpod's (§7.3): the quote is the price
 //! table of `scripts/gcp/lib.sh` (`GCP_PRICES`, read from the file, not a
 //! live price: Compute Engine has no price API the scripts use); there is no
 //! account balance, so the floor is checked on the run's budget
@@ -274,10 +274,17 @@ impl TokenSource for ScriptToken {
             })?;
         let tok = String::from_utf8_lossy(&out.stdout).trim().to_owned();
         if !out.status.success() || tok.is_empty() {
-            // Its stderr names the problem (never the key or the token).
-            return Err(ProviderError::MissingKey(
-                "a GCP token (GCP_SA_KEY_JSON / GCP_SA_KEY_FILE for scripts/gcp/auth.sh, or GCP_ACCESS_TOKEN)",
-            ));
+            // Its stderr names the problem (it never prints the key or a token).
+            let err = String::from_utf8_lossy(&out.stderr);
+            let last = err
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("");
+            return Err(ProviderError::Unsupported(format!(
+                "no GCP token from scripts/gcp/auth.sh ({}); set GCP_SA_KEY_JSON / GCP_SA_KEY_FILE or GCP_ACCESS_TOKEN",
+                scrub(last.trim(), "", 300)
+            )));
         }
         Ok(tok)
     }
@@ -895,11 +902,18 @@ impl Provider for GcpVm<'_> {
             }
             return Err(e);
         }
-        let ip = self.api.instance(zone, &launch.name)?.and_then(|v| {
-            v.pointer("/networkInterfaces/0/accessConfigs/0/natIP")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        });
+        // The VM exists now: a failed address lookup is not a failed create
+        // (the readiness probe looks the address up again).
+        let ip = self
+            .api
+            .instance(zone, &launch.name)
+            .ok()
+            .flatten()
+            .and_then(|v| {
+                v.pointer("/networkInterfaces/0/accessConfigs/0/natIP")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            });
         let spot = provisioning(&machine, self.options.spot) == "SPOT";
         Ok(Instance {
             id: InstanceId::new(launch.name.clone()),
