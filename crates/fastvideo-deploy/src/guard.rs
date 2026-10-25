@@ -42,6 +42,22 @@ pub const US_DELETED_VOLUME_NAME: &str = "fv-weights-b200-us";
 pub const US_GONE: &str =
     "US weights volume deleted 2026-10; EU only, see docs/ops/runpod-volumes.md";
 
+/// `x >= floor`, false when either is NaN: every floor fails closed.
+pub fn at_least(x: f64, floor: f64) -> bool {
+    matches!(
+        x.partial_cmp(&floor),
+        Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+    )
+}
+
+/// `x <= cap`, false when either is NaN: every cap fails closed.
+pub fn at_most(x: f64, cap: f64) -> bool {
+    matches!(
+        x.partial_cmp(&cap),
+        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+    )
+}
+
 /// The default guards.
 pub fn default_guards() -> Guards {
     Guards {
@@ -94,7 +110,8 @@ pub enum GuardError {
 
 /// Runpod GPU instances only with the EU weights volume `bz0ofkfx45` in
 /// `EU-RO-1` (CLAUDE.md; plan §1, owner instruction 2026-10-23); the deleted
-/// US volume is refused by id and by name; volume weights only (C3a).
+/// US volume is refused by id and by name; volume weights only (C3a). Vast
+/// and GCP have their own weights rules (C3b, §8).
 pub fn check_region(l: &Launch) -> Result<(), GuardError> {
     if let Some(r) = &l.placement.region {
         if r == "us" {
@@ -104,8 +121,10 @@ pub fn check_region(l: &Launch) -> Result<(), GuardError> {
             return Err(GuardError::Region(format!("unknown region {r} (eu)")));
         }
     }
-    if !l.provider.is_runpod() {
-        return Ok(());
+    match l.provider {
+        ProviderKind::RunpodPod | ProviderKind::RunpodServerless => {}
+        ProviderKind::Vast => return check_vast(l),
+        ProviderKind::Gcp => return check_gcp(l),
     }
     let Some(v) = &l.placement.volume else {
         return Err(GuardError::Region(format!(
@@ -135,6 +154,69 @@ pub fn check_region(l: &Launch) -> Result<(), GuardError> {
     }
     Ok(())
 }
+
+/// Vast (C3b, docs/adr/0018-fv-deploy.md §8.2): no weights volume, and r2
+/// weights are not in fv-deploy yet: weights `none` (the fake-engine smoke).
+fn check_vast(l: &Launch) -> Result<(), GuardError> {
+    if l.placement.volume.is_some() || l.weights != WeightsSource::None {
+        return Err(GuardError::Region(format!(
+            "Vast: weights source {} with {}: Vast mounts no weights volume and fv-deploy does not fetch r2 weights yet (only weights none)",
+            l.weights.as_str(),
+            l.placement
+                .volume
+                .as_ref()
+                .map_or_else(|| "no volume".to_owned(), |v| format!("volume {}", v.id))
+        )));
+    }
+    Ok(())
+}
+
+/// GCP (C3b, §8.3): the weights are the zone's read-only weights disk
+/// (`fv-weights-hdml-<zone>`) or none (the fake engine); the VM runs in an
+/// EU zone (`europe-*`, CLAUDE.md: EU only).
+fn check_gcp(l: &Launch) -> Result<(), GuardError> {
+    let Some(zone) = l.placement.data_centers.first() else {
+        return Err(GuardError::Region("GCP: no zone".into()));
+    };
+    if !zone.starts_with("europe-") {
+        return Err(GuardError::Region(format!(
+            "GCP zone {zone}: EU zones only (europe-*; CLAUDE.md, the family Durable Objects in weur)"
+        )));
+    }
+    match (&l.placement.volume, l.weights) {
+        (Some(v), WeightsSource::Volume) => {
+            let want = crate::provider::gcp::weights_disk(zone);
+            if v.id != want {
+                return Err(GuardError::Region(format!(
+                    "GCP: weights disk {}: the zone's weights disk is {want} (read-only)",
+                    v.id
+                )));
+            }
+            Ok(())
+        }
+        (None, WeightsSource::None) => Ok(()),
+        (v, w) => Err(GuardError::Region(format!(
+            "GCP: weights source {} with {}: the weights disk (volume) or none",
+            w.as_str(),
+            v.as_ref()
+                .map_or_else(|| "no disk".to_owned(), |v| format!("disk {}", v.id))
+        ))),
+    }
+}
+
+/// The default price cap of a provider ($/hr): Runpod's for one GPU
+/// ([`MAX_USD_PER_HR`]), the scripts' for Vast (`VAST_MAX_DPH` 0.60) and for
+/// a whole GCP VM (`FV_GCP_MAX_DPH` 6.0).
+pub fn default_max_usd_per_hr(kind: ProviderKind) -> f64 {
+    match kind {
+        ProviderKind::RunpodPod | ProviderKind::RunpodServerless => MAX_USD_PER_HR,
+        ProviderKind::Vast => VAST_MAX_USD_PER_HR,
+        ProviderKind::Gcp => crate::provider::gcp::MAX_USD_PER_HR,
+    }
+}
+
+/// `vast.sh` `VAST_MAX_DPH`.
+pub const VAST_MAX_USD_PER_HR: f64 = 0.6;
 
 /// The guard numbers themselves.
 pub fn check_guards(g: &Guards) -> Result<(), GuardError> {
@@ -197,7 +279,7 @@ pub fn check_projection(
         .filter(|x| x.is_finite() && *x > 0.0)
         .unwrap_or(0.0);
     let projected = a.balance_usd - (usd_per_hr + spend) * cap_s as f64 / 3600.0;
-    if projected < floor {
+    if !at_least(projected, floor) {
         return Err(GuardError::BalanceWouldDropBelowFloor {
             balance: a.balance_usd,
             projected,
@@ -226,7 +308,7 @@ pub fn check_env(l: &Launch, leaks: impl Fn(&str) -> bool) -> Result<(), GuardEr
 
 /// The balance floor.
 pub fn check_balance(a: &Account, floor: f64) -> Result<(), GuardError> {
-    if a.balance_usd < floor {
+    if !at_least(a.balance_usd, floor) {
         return Err(GuardError::BalanceBelowFloor {
             balance: a.balance_usd,
             floor,
@@ -242,7 +324,7 @@ pub fn check_quote(o: &Offer, cap: f64) -> Result<f64, GuardError> {
         None => Err(GuardError::NoQuote {
             gpu: o.gpu_type.clone(),
         }),
-        Some(p) if p > cap => Err(GuardError::OverCap {
+        Some(p) if !at_most(p, cap) => Err(GuardError::OverCap {
             gpu: o.gpu_type.clone(),
             usd: p,
             cap,
@@ -255,7 +337,7 @@ pub fn check_quote(o: &Offer, cap: f64) -> Result<f64, GuardError> {
 /// bills at create): over the cap, or no readable price, fails.
 pub fn check_billed(i: &Instance, cap: f64) -> Result<(), GuardError> {
     match i.usd_per_hr {
-        Some(p) if p > cap => Err(GuardError::BilledOverCap {
+        Some(p) if !at_most(p, cap) => Err(GuardError::BilledOverCap {
             id: i.id.to_string(),
             usd: p,
             cap,

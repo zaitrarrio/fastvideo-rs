@@ -6,6 +6,8 @@
 //!   [`Account`] (serde + schemars; [`schema`] exports them).
 //! - [`runpod`]: [`runpod::Pod`] and [`runpod::Serverless`] over the Runpod
 //!   REST v1 / GraphQL APIs, on the blocking [`Http`] seam fv-boot uses.
+//! - [`vast`]: [`vast::Vast`] instances over the Vast REST API (C3b).
+//! - [`gcp`]: [`gcp::GcpVm`] Compute Engine VMs over its REST API (C3b).
 //! - [`Reach`]: how the readiness poll and the smoke reach a running instance
 //!   (a pod's HTTPS proxy; a serverless endpoint's queue, one native job per
 //!   call).
@@ -15,12 +17,16 @@
 //! `Clock`) run the whole lifecycle in tests without a network or a clock.
 //! An async caller (the autoscaler) runs it on `spawn_blocking`.
 
+pub mod gcp;
 pub mod runpod;
 pub mod schema;
 pub mod types;
+pub mod vast;
 
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod tests_c3b;
 
 use std::time::Duration;
 

@@ -26,7 +26,7 @@
   ],
   "$defs": {
     "ProviderKind": {
-      "description": "Which provider, and which kind of instance on it. Later slices add\n`vast` and `gcp` (plan C3b).",
+      "description": "Which provider, and which kind of instance on it (C3a: the two Runpod\nkinds; C3b: `vast` and `gcp`, docs/adr/0018-fv-deploy.md §8).",
       "oneOf": [
         {
           "description": "A Runpod GPU pod (REST v1 `POST /pods`).",
@@ -37,6 +37,16 @@
           "description": "A Runpod serverless queue endpoint (REST v1 `POST /templates` +\n`POST /endpoints`).",
           "type": "string",
           "const": "runpod-serverless"
+        },
+        {
+          "description": "A Vast instance (REST `POST /bundles/` offer search, `PUT\n/asks/<offer>/` create; `scripts/serve/vast.sh`).",
+          "type": "string",
+          "const": "vast"
+        },
+        {
+          "description": "A Google Compute Engine GPU VM (Compute REST v1 firewall + instance\ninsert; `scripts/gcp/vm.sh`).",
+          "type": "string",
+          "const": "gcp"
         }
       ]
     }

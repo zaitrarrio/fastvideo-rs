@@ -48,6 +48,8 @@ pub enum DeployError {
     },
     #[error("could not delete {id} ({why}); stopped instead of creating another (its backstop deletes it at the cap; `fv-deploy down {id}`)")]
     DeleteFailed { id: InstanceId, why: String },
+    #[error("{0} not found (nothing deleted): check the id, --kind and, on GCP, --zone")]
+    NotFound(InstanceId),
     #[error("the create's answer was lost ({why}); stopped; swept by name: {swept}")]
     CreateUncertain { why: String, swept: String },
 }
@@ -341,6 +343,10 @@ enum Ready {
 pub const DELETE_ATTEMPTS: u32 = 3;
 /// The pause between them.
 pub const DELETE_RETRY: Duration = Duration::from_secs(5);
+/// Sweeps after a lost create answer (until one finds the instance) …
+pub const LOST_SWEEPS: u32 = 6;
+/// … this far apart (1.5 min in all).
+pub const LOST_SWEEP_GAP: Duration = Duration::from_secs(18);
 
 /// The lifecycle on one provider.
 pub struct Deployer<'a> {
@@ -506,7 +512,11 @@ impl Deployer<'_> {
                 None => DeployError::NoCapacity(notes.join("; ")),
             });
         }
-        let attempts: Vec<Launch> = if launch.provider == ProviderKind::RunpodServerless {
+        let attempts: Vec<Launch> = if launch.gpu.types.is_empty() {
+            // The launch names no GPU type (Vast: any GPU): the provider
+            // quoted "any" and creates it as it is, unnarrowed.
+            vec![launch.clone()]
+        } else if launch.provider == ProviderKind::RunpodServerless {
             let mut l = launch.clone();
             l.gpu.types = ok_types;
             vec![l]
@@ -561,7 +571,7 @@ impl Deployer<'_> {
                     self.say(&format!(
                         "the create's answer was lost on {label}: {e}; sweeping by name"
                     ));
-                    let swept = self.sweep(&launch.name, None);
+                    let swept = self.sweep_lost(&launch.name);
                     return Err(DeployError::CreateUncertain {
                         why: e.to_string(),
                         swept,
@@ -570,6 +580,28 @@ impl Deployer<'_> {
             }
         }
         Err(DeployError::NoCapacity(notes.join("; ")))
+    }
+
+    /// After a lost create answer: sweeps by name until it finds something,
+    /// [`LOST_SWEEPS`] times [`LOST_SWEEP_GAP`] apart (an instance may only
+    /// show in the provider's listing a little later; on Vast this sweep is
+    /// the only protection: no id, so no backstop, and no cloud-side cap).
+    fn sweep_lost(&self, name: &str) -> String {
+        let mut last = String::new();
+        for i in 1..=LOST_SWEEPS {
+            last = self.sweep(name, None);
+            // Something swept: done. Nothing, or a failed sweep: again.
+            if last != "nothing left" && !last.starts_with("FAILED") {
+                return last;
+            }
+            if i < LOST_SWEEPS {
+                self.clock.sleep(LOST_SWEEP_GAP);
+            }
+        }
+        format!(
+            "{last} after {LOST_SWEEPS} sweeps over {} s",
+            (LOST_SWEEPS - 1) as u64 * LOST_SWEEP_GAP.as_secs()
+        )
     }
 
     /// Deletes everything named `name` but `keep`; a summary for the error
@@ -786,8 +818,12 @@ impl Deployer<'_> {
         })
     }
 
-    /// `fv-deploy down`.
+    /// `fv-deploy down`: an instance the provider does not know (a wrong
+    /// id, kind or zone) is "not found", never "deleted".
     pub fn down(&self, id: &InstanceId) -> Result<(), DeployError> {
+        if self.provider.status(id)? == InstanceState::Terminated {
+            return Err(DeployError::NotFound(id.clone()));
+        }
         self.provider.destroy(id)?;
         self.record(&format!("{}-deleted {id} down", self.provider.kind()));
         Ok(())
