@@ -1711,3 +1711,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §11
 - Verification: `tests/verdict.rs` (script vs fv-lab verdicts, evidence and diffs byte-identical on fakes; FV_B4A_CELLS vs --cells; stale verdicts; `fv-lab gate` offline), `tests/{dry_run,payload_golden,fv_lab_bin,schema}.rs` with the `b4a` fixtures, `fv-lab-goldens.sh --check`; GPU gate (§11.6) pending, the coordinator's
+
+### FVID · 2026-10-25 · FVID-2026-10-25-fv-lab-verdict-step-review
+- Trigger: independent review of PR #188 (D1d first slice): nothing blocking in the on-pod verdict step; `fv-lab gate` and its tooling needed eight fixes
+- Options: per finding, as the review proposed or documented instead; F4 either reproduce the script's cell order or document it
+- Decision: `fv-lab run` records its arm selection (`<tier>.arms.json`, fetched) and `fv-lab gate` reads it, refusing to guess without it unless the run holds every arm (F1); `gate` never writes into the run directory (`--out` default `<run>.regate`) and `--check` compares the derived files with the run's (F2); a gate whose arms both ran without `benchmark.json` fails and skipped gates are counted (F3); F4 documented, not reproduced: fv-lab lists a family verdict's cells in the tier's order and `fv-lab-compare-runs.sh` compares `cells` / `why` as sets; a reused `--out` is cleared first (F5); the script's evidence `grep` / `sed` / `diff` pinned to bytes (`LC_ALL=C`, `-a`) as fv-lab reads them, the runtime image being in the C locale anyway (F6; `diff -a` also keeps run paths out of an evidence diff); `fv-lab-compare-runs.sh --expect-verdicts N` (F7); `FV_B4A_CELLS` refused by `run` and `pod up`, a duplicate evidence `diff` name refused (F8)
+- Reason: an offline judge must not pass a run it cannot see whole, nor overwrite the evidence it judges; the rest closes gaps where a check could pass on nothing
+- Reversibility: high (fv-lab and two script helpers; the b4a dry run is unchanged)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §11.1, §11.3, §11.4, §11.5, §11.6
+- Verification: `tests/verdict.rs` (edge cases in a UTF-8 locale, one-arm selection, interrupted run, `--out` refusal, `--check`, gates skipped / failed, script vs fv-lab byte for byte), `tests/fv_lab_bin.rs` (`gate` record / `--cells` / `--check` / `--out`, `FV_B4A_CELLS` refused), `plan` validation test, `fv-lab-goldens.sh --check` (compare-runs `--expect-verdicts`, family verdict order)

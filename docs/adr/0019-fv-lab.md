@@ -592,7 +592,8 @@ What runs, in the script's order (`b4a_pair`, `b4_family_verdict`):
    lines, `dry-run <cell>: <describe>`, and the family line (which names `b4_family_verdict`, as the script's does).
 
 Validation: the verdict's arms are arms of the cell named `<cell>-<label>`; `family` is the name of the tier that
-lists the cell; evidence files end in `-evidence.log` and are unique; a `diff` needs exactly two arms; patterns are
+lists the cell; evidence files end in `-evidence.log` and are unique; a `diff` needs exactly two arms and its name is
+unique (two evidence files diffed into one file would hide the first's difference); patterns are
 one line and not only `*`; reasons are tokens; every `identical` pair has a `[[compare]]` with `--off-identity`.
 
 **Line patterns** are substrings with `*` for any run of characters (pieces matched in order), not regular
@@ -600,7 +601,17 @@ expressions: the script's two patterns (`a\|b\|c\|d`, `h3 teacache step .*REUSE`
 engine would be a new dependency of the crate. Matching is on bytes, line by line as grep reads them.
 
 **The `diff` file** is written by `diff` itself (a process, like `verify-weights.sh` and `fv-gpucheck`): its format is
-the script's by construction.
+the script's by construction. Both sides run `LC_ALL=C diff -a`: evidence holding a NUL would otherwise make `diff`
+write `Binary files <path> and <path> differ`, naming the run directory, which differs between two runs' tags and
+between a pod and `fv-lab gate` (review of #188).
+
+**Bytes, not a locale (review of #188, F6).** The runtime image (`docker/gpucheck.Dockerfile`, `ubuntu:22.04`) sets no
+`LANG` / `LC_ALL` and installs no locales, and neither pod start command sets one, so pods run in the C locale. All
+the same, the script's evidence `grep` / `sed` and its reuse count now run `LC_ALL=C grep -a` / `LC_ALL=C sed`
+(real runs only; the dry run is unchanged): under a UTF-8 locale GNU grep reads a line that is not valid UTF-8 (or
+holds a NUL) as binary and writes no evidence line at all, while fv-lab matches bytes. `tests/verdict.rs` runs the
+script under `C.UTF-8` with CRLF lines, bytes that are not UTF-8, a NUL, an unterminated last line and an empty
+`stderr.log`, and holds both runners byte-identical.
 
 **Why typed and not a hook** (a shell snippet per cell): the equality with the script holds only if fv-lab writes the
 same files, which a typed step does by construction and a test can hold (below); `fv-lab check` validates it; and
@@ -627,19 +638,42 @@ whose arms log step-cache lines and whose compare writes an off-identity report,
 `verify-weights.sh` and `fetch-baseline.sh`. One cell passes, one fails on its evidence only, one fails on
 everything. Every verdict file, evidence file and evidence diff is byte-identical between the two runners, and so
 are the verdict lines of `live.log`; with `FV_B4A_CELLS` against `--cells` the same subset runs on both sides; a stale
-verdict or arm directory never stands in. `fv-lab gate` over either run directory reproduces the script's files.
+verdict or arm directory never stands in. `fv-lab gate` over either run directory, with the selection it infers
+itself (`run::gate_selection`), reproduces the script's files and `--check` finds them equal. The review of #188
+added the cases the first fake left out, each script against fv-lab byte for byte: an empty `stderr.log`, CRLF,
+non-UTF-8 and NUL bytes in a UTF-8 locale, a missing compare report, arms skipped on their weight gate, a one-arm
+selection (its compare a `frames missing` skip), and a run cut short after its first cell (F1, below).
 
 #### 11.3 `fv-lab gate <run dir>`
 
-`gate` was not an fv-lab subcommand. It is now: `fv-lab gate <run dir> [--family T] [--cells …] [--out D]
+`gate` was not an fv-lab subcommand. It is now: `fv-lab gate <run dir> [--family T] [--cells …] [--out D] [--check]
 [--gpucheck B] [--policy F]` evaluates a finished run's promotion gates and verdicts again from its files, with the
-runner's own code and no GPU. The tier is `--family` or the run directory's parent (`artifacts/runpod/<tier>/<tag>`);
-the arms are `--cells` or those with a `summary.json` in the run (the arms the run selected). No arm or compare runs
-and nothing is removed. Each `[[gate]]` / paired gate is `fv-gpucheck gate` (CPU only: `benchmark.json` and the
-compare reports under the gate policy) into `<out>/gate/`; each verdict is §11.1 into `<out>` (default the run
-directory). It prints one line per gate and verdict and a summary; exit 0 when everything evaluated passed, 1 when
-anything failed or nothing could be evaluated (no gate with both `benchmark.json` files, no verdict cell in the run).
-A tier with gates needs an fv-gpucheck (`--gpucheck` / `FV_GPUCHECK`, any build).
+runner's own code and no GPU. No arm or compare runs and nothing in the run directory is written or removed.
+
+- **The tier** is `--family` or the run directory's parent (`artifacts/runpod/<tier>/<tag>`).
+- **The arms** (review of #188, F1) are `--cells`; else the run's selection record `<tier>.arms.json`, which `fv-lab
+  run` writes before its first arm (the arms it selected, in run order) and `pod fetch` takes; else, for a run without
+  one (a script run, or fv-lab before the record), every arm of the tier when the run holds them all, and otherwise an
+  error asking for `--cells`. The first version took the arms holding a `summary.json` as "the arms the run selected":
+  a run cut short after its first cell then passed with a family verdict of that one cell, where the script fails the
+  cells it never finished (`:no-verdict`). With the record, those cells fail (`:exit :no-run`); without it, fv-lab
+  does not guess. Unknown arm names are refused.
+- **The output** (F2) goes to `--out`, default a sibling `<run dir>.regate`, and never into the run directory or below
+  it (refused before anything is created): overwritten, the run's own verdict files would be fv-lab's, and a later
+  comparison would compare fv-lab with itself. What an earlier evaluation left in `--out` is removed first (F5), so an
+  arm without a `stderr.log` cannot keep an old evidence file that is then diffed.
+- **`--check`** compares each file the evaluation writes with the run's own (verdicts, evidence files and diffs byte
+  for byte; a gate report by its `status`, as it also holds timings): one `DIFF` line each, exit 1 on any. That is the
+  judge's question (does the run hold what fv-lab derives from it?), independent of whether the verdicts pass.
+- **Gates** (F3): each `[[gate]]` / paired gate is `fv-gpucheck gate` (CPU only: `benchmark.json` and the compare
+  reports under the gate policy) into `<out>/gate/`. A gate whose arms did not both run (skipped or not selected) is
+  skipped and counted; one whose arms both ran (`summary.json` records an exit) without a `benchmark.json` fails,
+  where the first version counted it as neither and could hide a crashed candidate.
+- **Verdicts** are §11.1 into `<out>`.
+
+It prints one line per gate and verdict and `<n> evaluated, <f> failed, <s> skipped`; exit 0 when everything
+evaluated passed, 1 when anything failed or nothing could be evaluated. A tier with gates needs an fv-gpucheck
+(`--gpucheck` / `FV_GPUCHECK`, any build).
 
 **Moved or aliased (the review's question, §8):** aliased. The promotion rule stays `fv-gpucheck gate`, the measured
 code with its own tests, which `fv-lab run` already calls as a process; moving it into `fastvideo-lab` would mean
@@ -649,11 +683,12 @@ and the verdict step. The weight gates (`verify-weights.sh`) are not re-evaluate
 #### 11.4 The verdict files reach `artifacts/`
 
 Neither fetch took them: `runpod-http.sh fetch_results` and `fv-lab pod fetch` take fixed run files, and per
-directory `summary.json`, the logs and JSONs. `fv-lab pod fetch` now also takes the run directory's `*.verdict.json`
-and `*.diff` and each directory's `*-evidence.log` (`pod::is_verdict_file`). `runpod-http.sh` is unchanged: its
+directory `summary.json`, the logs and JSONs. `fv-lab pod fetch` now also takes the run directory's `*.verdict.json`,
+`*.diff` and `<tier>.arms.json` (§11.3) and each directory's `*-evidence.log` (`pod::is_verdict_file`). `runpod-http.sh` is unchanged: its
 `FV_FETCH_TREE=1` (with `FV_FETCH_SKIP=/frames/`) already mirrors them. `fv-lab-compare-runs.sh` compares those files
-byte for byte whenever either run has them (another verdict, or a file in one run only, is a difference); its
-self-test in `fv-lab-goldens.sh` covers both. Without the files, `fv-lab gate` rebuilds them from what both fetches
+byte for byte whenever either run has them (another verdict, or a file in one run only, is a difference), and
+`--expect-verdicts N` fails unless at least N of them compared the same (F7: two runs whose verdict files never
+arrived would otherwise pass with none); its self-test in `fv-lab-goldens.sh` covers each case. Without the files, `fv-lab gate` rebuilds them from what both fetches
 take (`summary.json`, `stderr.log`, the compare reports).
 
 #### 11.5 Differences from the script, and why
@@ -665,7 +700,10 @@ take (`summary.json`, `stderr.log`, the compare reports).
 | `FV_GEN_TIMEOUT_S` default 900 | when run by hand | the tier's 3600 | `runpod-http.sh` passes 3600 (§9.4) |
 | the compare fields copied into `live.log` after the family | yes | no | log only (§9.4) |
 | the verdict files in `artifacts/` | only with `FV_FETCH_TREE=1` | `pod fetch` takes them | §11.4 |
-| a `stderr.log` with NUL bytes | grep prints `Binary file … matches` | read as text | fv-gpucheck's logs are text |
+| the family verdict's `cells` (and so its `why`) | in `FV_B4A_CELLS`'s order; a name matching no cell fails (`<name>:no-verdict`) | in the tier's order; `pod up` refuses an arm name the tier lacks, `gate` too | chosen (review of #188, F4): document it, not reproduce it, since fv-lab has no ordered cell list to follow; `fv-lab-compare-runs.sh` compares a family verdict's `cells` and `why` as sets |
+| `FV_B4A_CELLS` handed to fv-lab | (the script's knob) | refused by `pod up --extra-env` and by `run` (F8) | fv-lab would ignore it and run all three cells at three times the cost |
+| the arm selection | not recorded | `<tier>.arms.json` in the run directory | `fv-lab gate` reads it (§11.3) |
+| `fv-lab gate` on a fetched run | n/a | writes beside it (`<run>.regate`), never into it | §11.3 |
 
 #### 11.6 The GPU gate for `b4a` (the coordinator's)
 
@@ -677,38 +715,40 @@ is a commit whose runtime image is published, the B4a gate's baseline.
 
 ```sh
 SHA=<7>; BASE=e93e357
-# fv-lab side (fetch takes the verdict files)
+# fv-lab side (fetch takes the verdict files and b4a.arms.json)
 RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family b4a --cells b4a-h3-4step-tea-base b4a-h3-4step-tea-pr \
   --baseline-sha $BASE --yes --wait
 # script side, the same commit and cell; the tree fetch brings the verdict files
 RUNPOD_API_KEY=… FV_FAMILY=b4a FV_EXTRA_ENV="FV_BASELINE_SHA=$BASE FV_B4A_CELLS=b4a-h3-4step-tea" \
   FV_FETCH_TREE=1 FV_FETCH_SKIP=/frames/ bash scripts/gpu/runpod-http.sh run $SHA
 L=artifacts/runpod/b4a/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/b4a/$SHA-<MMDDHHMM>
-bash scripts/gpu/fv-lab-compare-runs.sh $L $S
-# the offline gate reproduces each pod's verdicts from its fetched files
-for d in $L $S; do ./fv-lab gate $d --out /tmp/regate-$(basename $d); \
-  for f in b4a.verdict.json b4a-b4a-h3-4step-tea.verdict.json b4a-h3-4step-tea.evidence.diff; do cmp $d/$f /tmp/regate-$(basename $d)/$f; done; done
+bash scripts/gpu/fv-lab-compare-runs.sh --expect-verdicts 5 $L $S
+# each pod's verdict files are what fv-lab derives from that run's own files (written elsewhere, compared)
+./fv-lab gate $L --check --out /tmp/regate-fvlab      # the arms from $L/b4a.arms.json
+./fv-lab gate $S --check --out /tmp/regate-script --cells b4a-h3-4step-tea-base,b4a-h3-4step-tea-pr   # the script writes no record
 ```
 
-Pass: `fv-lab-compare-runs.sh` exits 0 with 2 arms the same (both ran, frames byte-identical), the compare report
-the same and 5 verdict files the same (`b4a.verdict.json`, `b4a-b4a-h3-4step-tea.verdict.json`,
-`b4a-h3-4step-tea.evidence.diff`, both `cache-evidence.log`); both `matrix_exit=0`; the `cmp`s silent. The verdict
-itself may pass or fail; what is gated is that both runners reach the same one. Estimate: ~8 min of arms (the B4a
+Pass: `fv-lab-compare-runs.sh --expect-verdicts 5` exits 0 with 2 arms the same (both ran, frames byte-identical),
+the compare report the same and 5 verdict files the same (`b4a.verdict.json`, `b4a-b4a-h3-4step-tea.verdict.json`,
+`b4a-h3-4step-tea.evidence.diff`, both `cache-evidence.log`); both `matrix_exit=0`; both `fv-lab gate --check` exit 0
+(`0 difference(s)`). The verdict itself may pass or fail; what is gated is that both runners reach the same one and
+that it is what fv-lab derives. Estimate: ~8 min of arms (the B4a
 runs: 280 s and 175 s per arm) plus ~5 min boot and preflight per side, ~13 min, about $0.55 per side, $1.10 in all
 at $2.49/hr; both sides in parallel. The other two cells (49 forwards, ~6 to 8 min per arm) add about $1 per side
-each if wanted.
+each if wanted (`--expect-verdicts` is then 1 + 4 per cell, 13 for all three: the family file, and each cell's
+verdict, diff and two evidence files).
 
 Then, in the next D1 PR: `b4a` joins `fv-lab-retired.sh`, its branch is deleted, its three fixtures freeze (§10), and
 `runpod-http.sh`'s route refuses `FV_B4A_CELLS` in `FV_EXTRA_ENV` as it refuses the other dropped knobs.
 
 #### 11.7 Open decisions
 
-1. **Selection by arm** (§11.5): `--cells` takes arms; a cell-name form (`--cells b4a-h3-4step-tea` meaning its
+1. **Selection by arm** (§11.5): `--cells` takes arms (and `FV_B4A_CELLS` is refused); a cell-name form (`--cells b4a-h3-4step-tea` meaning its
    verdict arms) would read closer to `FV_B4A_CELLS`. Proposed: arms only, as every tier.
 2. **`runpod-http.sh`'s fetch** stays without the verdict files (the script side of the gate uses `FV_FETCH_TREE=1`).
    Proposed: no change to a fetch that retires with the script.
-3. **`fv-lab gate` writes into the run directory by default**, over the files the pod wrote (equal when the runner
-   is right); `--out` keeps them apart. Proposed: keep the default; the GPU gate uses `--out`.
+3. **Settled (review of #188, F2):** `fv-lab gate` never writes into the run directory; `--out` defaults to
+   `<run>.regate`, and `--check` compares.
 4. **`oracle`** (the `oracle` family, `oracle.sh`, `fv-gpucheck compare-dumps`) is the second D1d slice; the
    `determinism` verdicts become new typed checks under `[verdict]` (§11.1) with D1c / D1d.
 

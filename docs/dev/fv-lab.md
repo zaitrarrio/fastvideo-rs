@@ -165,16 +165,30 @@ b4a-h3-4step-tea-base,b4a-h3-4step-tea-pr` is the script's `FV_B4A_CELLS=b4a-h3-
 
 ```sh
 ./fv-lab run b4a --dry-run --baseline-sha <7>          # the script's dry run, verdict lines included
-./fv-lab gate artifacts/runpod/b4a/<tag>               # verdicts and gates again, offline, into the run directory
+./fv-lab gate artifacts/runpod/b4a/<tag>               # verdicts and gates again, offline, into <tag>.regate
+./fv-lab gate artifacts/runpod/b4a/<tag> --check --out /tmp/regate   # and compare with the run's own files
 ./fv-lab gate artifacts/runpod/fastvideo/<tag> --gpucheck ./fv-gpucheck --out /tmp/regate   # a tier with gates
 ```
 
 `fv-lab gate <run dir>` evaluates a finished run's promotion gates (`fv-gpucheck gate`, CPU only, so any build of
-fv-gpucheck) and verdicts again from its files, with no GPU and without running an arm or a compare: the tier from
-`--family` or the directory's parent, the arms those with a `summary.json` (or `--cells`), the output into the run
-directory or `--out`. Exit 0 when all passed, 1 when one failed or nothing could be evaluated. `pod fetch` takes the
-verdict files (`*.verdict.json`, `*.diff`, `<arm>/*-evidence.log`); `runpod-http.sh` only with `FV_FETCH_TREE=1`, and
-`fv-lab-compare-runs.sh` compares them byte for byte when either run has them.
+fv-gpucheck) and verdicts again from its files, with no GPU and without running an arm or a compare
+([ADR-0019 §11.3](../adr/0019-fv-lab.md)):
+
+- the tier is `--family` or the directory's parent;
+- the arms are `--cells`, else the run's `<tier>.arms.json` (the selection `fv-lab run` records), else all of the
+  tier's when the run holds them all; a run without the record that holds fewer (a script run with `FV_B4A_CELLS`, or
+  one cut short) is refused until `--cells` names its selection, because a guess would pass the cells it never
+  finished;
+- the output goes to `--out`, default `<run dir>.regate`, never into the run directory;
+- `--check` compares each derived file with the run's own (gate reports by status) and exits 1 on any difference,
+  whether or not the verdicts pass;
+- a gate whose arms did not both run is skipped and counted; one whose arms ran without a `benchmark.json` fails.
+
+Exit 0 when all passed, 1 when one failed or nothing could be evaluated. `pod fetch` takes the verdict files
+(`*.verdict.json`, `*.diff`, `<tier>.arms.json`, `<arm>/*-evidence.log`); `runpod-http.sh` only with
+`FV_FETCH_TREE=1`. `fv-lab-compare-runs.sh` compares them byte for byte when either run has them (a family verdict's
+cell list as a set), and `--expect-verdicts N` fails unless at least N compared the same. `FV_B4A_CELLS` is refused
+by `fv-lab run` and `pod up --extra-env`: select a pair by its arms (`--cells <cell>-base <cell>-pr`).
 
 ## On a GPU box: `fv-lab run`
 

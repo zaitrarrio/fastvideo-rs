@@ -1177,3 +1177,13 @@ ran (pod id, $/hr), result, cost.
   (`tests/verdict.rs`). Gates on build pod `k66zz15an4sktc`. No GPU cost;
   the `b4a` GPU gate (one 4-step pair per side, ~$1.10) is the
   coordinator's.
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): #188 review fixes
+  (F1-F8): `fv-lab run` records its arm selection and `fv-lab gate` reads it
+  (no guessing a cut-short run), writes beside the run (`<run>.regate`),
+  `--check` compares with the run's files, fails a gate whose arms ran
+  without `benchmark.json`; the script's evidence grep / sed / diff pinned
+  to bytes; `fv-lab-compare-runs.sh --expect-verdicts`; `FV_B4A_CELLS`
+  refused by fv-lab. New script-vs-fv-lab cases (UTF-8 locale, CRLF, NUL,
+  empty stderr, missing compare, skipped arms, one-arm selection,
+  interrupted run). b4a dry run unchanged. No GPU cost.
+
