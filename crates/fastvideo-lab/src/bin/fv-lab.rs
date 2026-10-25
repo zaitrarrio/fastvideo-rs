@@ -362,6 +362,8 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
     let (tier, cells) = lab
         .resolve(&a.target, a.family.as_deref())
         .map_err(|e| e.to_string())?;
+    // A retired family's mode knob would be ignored: refused (ADR-0019 §11).
+    fastvideo_lab::knobs::check_run_env(&tier.name, env_nonempty)?;
     if a.all && tier.name != a.target {
         return Err(format!(
             "--all runs a whole tier; `{}` is a cell (of `{}`)",
@@ -567,6 +569,8 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let mut so = StartOptions::for_tier(t, &tag);
     so.cells = u.cells.iter().flat_map(|c| split_list(c)).collect();
     so.extra_env = u.extra_env.clone();
+    // What no tier reads would be ignored on the pod: refused (ADR-0019 §11).
+    fastvideo_lab::knobs::check_extra_env(&t.name, &so.extra_env)?;
     let cells: Vec<_> = t.cells.iter().filter_map(|c| lab.cells.get(c)).collect();
     check_cells(
         &t.name,

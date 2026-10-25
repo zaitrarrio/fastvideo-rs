@@ -409,3 +409,75 @@ fn pod_up_cells_must_be_arms_of_the_tier() {
         assert!(String::from_utf8_lossy(&o.stderr).contains("is not an arm of tier `gold`"));
     }
 }
+
+/// What no tier reads is refused, not ignored (ADR-0019 §11, `knobs`): a
+/// restored mode's setting in `fv-lab run`'s environment or in `pod up
+/// --extra-env` names the tier, every other mode knob is refused, and so is
+/// what the start command sets after `--extra-env`.
+#[test]
+fn mode_knobs_are_refused_naming_the_restored_tier() {
+    let fails = |c: &mut Command, want: &str| {
+        let o = c.output().expect("fv-lab runs");
+        let err = String::from_utf8_lossy(&o.stderr).into_owned();
+        assert!(!o.status.success(), "{c:?} succeeded");
+        assert!(err.contains(want), "{c:?}: {err}");
+    };
+    fails(
+        fv_lab()
+            .args(["run", "precision", "--dry-run"])
+            .env("FV_PRECISION_ARM", "ltx-nvfp4"),
+        "FV_PRECISION_ARM=ltx-nvfp4 was a mode of runpod-matrix.sh precision; it is the fv-lab tier precision-nvfp4 now",
+    );
+    fails(
+        fv_lab()
+            .args(["run", "ltxvae", "--dry-run"])
+            .env("FV_VAE_TRACE", "0")
+            .env("FV_VAE_GEN", "1"),
+        "refused, fv-lab would not read them: FV_VAE_GEN=1 was a mode of runpod-matrix.sh ltxvae",
+    );
+    fails(
+        fv_lab()
+            .args(["run", "rtx6000", "--dry-run"])
+            .env("FV_TECH_CELLS", "x"),
+        "FV_TECH_CELLS: no tier reads it",
+    );
+    let up = |extra: &str| {
+        let mut c = fv_lab();
+        c.args([
+            "pod",
+            "up",
+            "--sha",
+            "1234567",
+            "--family",
+            "precision",
+            "--tag",
+            "1234567-10241200",
+            "--extra-env",
+            extra,
+        ]);
+        c
+    };
+    fails(
+        &mut up("FV_PRECISION_ARM=ltx-nvfp4"),
+        "--extra-env FV_PRECISION_ARM=ltx-nvfp4 was a mode of runpod-matrix.sh precision; it is the fv-lab tier precision-nvfp4 now",
+    );
+    fails(&mut up("FV_NVFP4_WORKLOADS=4k5s"), "narrow them by arm");
+    fails(
+        &mut up("FV_WORK=/x"),
+        "--extra-env FV_WORK: the pod's start command sets it",
+    );
+    // Unread values pass: FV_PRECISION_ARM is refused as a knob on any value,
+    // and a plain setting goes through to the plan.
+    fails(
+        &mut up("FV_PRECISION_ARM=all"),
+        "FV_PRECISION_ARM: no tier reads it",
+    );
+    let out = stdout(&mut up("FASTVIDEO_TEST_X=1"));
+    assert!(out.contains("FASTVIDEO_TEST_X=1"), "{out}");
+    // The environment of a plain run is fine (FV_WORK and friends are its inputs).
+    stdout(
+        fv_lab()
+            .args(["run", "precision-nvfp4", "--dry-run"])
+            .env("FV_PRECISION_ARM", ""),
+    );
+}

@@ -69,9 +69,25 @@ modes dropped with them are tiers again (owner decision 2026-10-25, [ADR-0019 §
 ```sh
 ./fv-lab run precision-nvfp4 --dry-run      # was FV_PRECISION_ARM=ltx-nvfp4 runpod-matrix.sh precision
 ./fv-lab run ltxvae-gen --dry-run           # was FV_VAE_GEN=1 runpod-matrix.sh ltxvae (all 16 arms)
-./fv-lab run ltxvae-gen --cells ltx25-4k5s-gen,ltx25-4k5s-gen-streaming   # FV_VAE_WORKLOADS / FV_VAE_UNTRACED=0: by arm
+./fv-lab run ltxvae-gen --cells ltx25-4k5s-gen,ltx25-4k5s-gen-streaming   # only the 4k5s gen pair (no knob did this)
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family precision-nvfp4 --lpips --yes --wait
 ```
+
+The old knobs pick arms, and `--cells` (`FV_CELLS`) names the same arms. Each list below assumes the mode's other knobs
+at their defaults:
+
+| old setting | `--cells` |
+|---|---|
+| `FV_NVFP4_WORKLOADS=4k5s` | `ltx25-4k5s-sol-bf16,ltx25-4k5s-sol-nvfp4` |
+| `FV_NVFP4_WORKLOADS=1080p20s` | `ltx25-1080p20s-sol-bf16,ltx25-1080p20s-sol-nvfp4` |
+| `FV_VAE_WORKLOADS=4k5s` (the 8 arms of 4k5s) | `ltxvae-4k5s-fast,ltxvae-4k5s-streaming,ltxvae-4k5s-fast-untraced,ltxvae-4k5s-streaming-untraced,ltxvae-4k5s-fast-mp4,ltxvae-4k5s-fast-tune,ltx25-4k5s-gen,ltx25-4k5s-gen-streaming` |
+| `FV_VAE_WORKLOADS=1080p20s` | the same eight with `1080p20s` |
+| `FV_VAE_UNTRACED=0` (traced and gen arms, both workloads) | `ltxvae-4k5s-fast,ltxvae-4k5s-streaming,ltx25-4k5s-gen,ltx25-4k5s-gen-streaming,ltxvae-1080p20s-fast,ltxvae-1080p20s-streaming,ltx25-1080p20s-gen,ltx25-1080p20s-gen-streaming` |
+| `FV_VAE_UNTRACED=0 FV_VAE_WORKLOADS=4k5s` | `ltxvae-4k5s-fast,ltxvae-4k5s-streaming,ltx25-4k5s-gen,ltx25-4k5s-gen-streaming` |
+
+`--cells` runs the same arms, but the run is not identical. The script never reached the arms its knobs left out. fv-lab
+logs each unselected arm as `skip <arm> (not in FV_CELLS)` and a compare of two unselected arms as `skip compare
+(frames missing)`. The arm directories, frames and reports are the same.
 
 Their goldens are what the script wrote in that mode at `5987e6a4` (`scripts/gpu/tests/fv-lab-restored-goldens.sh
 --check` reproduces them from git history), frozen from the start; fv-lab's dry run and pod equal them with the
@@ -102,7 +118,11 @@ that fv-lab would not honour is refused, not dropped, unless fv-lab does the sam
   restored modes' settings name their tier: `FV_PRECISION_ARM=ltx-nvfp4` says `use FV_FAMILY=precision-nvfp4`,
   `FV_VAE_GEN=1` says `use FV_FAMILY=ltxvae-gen` (refused, not routed: the run would land under another run
   directory and pod name than `FV_FAMILY`'s); `FV_NVFP4_WORKLOADS`, `FV_VAE_WORKLOADS`, `FV_VAE_UNTRACED` say to
-  narrow by arm with `FV_CELLS`.
+  narrow by arm with `FV_CELLS`. A mode setting is answered before any other refusal, and one message lists every
+  refused `FV_EXTRA_ENV` key. `fv-lab` itself refuses the same: `pod up --extra-env` this whole set, `fv-lab run`
+  the mode knobs in its environment (its own inputs `FV_WORK`, … are not refused, and `FV_PROMPTS` / `FV_PROMPT` /
+  `FV_SEED` keep their warning); `runpod-matrix.sh precision` with `FV_PRECISION_ARM=ltx-nvfp4` (or `ltxvae` with
+  `FV_VAE_GEN=1`, or the tier's own name) names the tier.
 
 `FV_CELLS` and `FV_EXTRA_ENV` are split on spaces (and `FV_CELLS` on commas) without globbing. `all` mode is refused
 (run `kernels`, then `run`), and `FV_FAMILY=gold` is refused for `run` / `all` (no script family: `fv-lab pod up

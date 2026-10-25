@@ -533,6 +533,21 @@ fv_lab_route() {
   refuse() { die "$FAMILY runs through fv-lab (fv-lab-retired.sh), which $*; unset it (docs/dev/fv-lab.md)"; }
   # same <var> <what fv-lab does>: refused when set, non-empty and different.
   same() { [[ -z "${!1:-}" || "${!1}" == "$2" ]] || refuse "uses $1=$2, not ${!1}"; }
+  # A restored mode's setting first (fv-lab-retired.sh FV_LAB_RESTORED,
+  # ADR-0019 §11): the mode is a tier of its own, named, not routed (the run
+  # would land in another run directory than FV_FAMILY's, under another pod
+  # name). Checked before any other refusal, so the hint is the first answer.
+  local r r_tier r_fam r_mode extra_in=()
+  read -r -a extra_in <<<"${FV_EXTRA_ENV:-}"
+  for e in ${extra_in[@]+"${extra_in[@]}"}; do
+    for r in $FV_LAB_RESTORED; do
+      IFS=: read -r r_tier r_fam r_mode <<<"$r"
+      [[ "$e" == "$r_mode" ]] || continue
+      [[ "$FAMILY" == "$r_tier" ]] \
+        && die "FV_FAMILY=$r_tier is the $r_fam family's $r_mode mode already: drop $r_mode from FV_EXTRA_ENV (ADR-0019 §11)"
+      die "$r_mode was a mode of runpod-matrix.sh $r_fam; it is the fv-lab tier $r_tier now: use FV_FAMILY=$r_tier (without $r_mode in FV_EXTRA_ENV; ADR-0019 §11, docs/dev/fv-lab.md)"
+    done
+  done
   local cap cell_s disk cloud gpu tae max_dph
   cap="$(tier_value "$FAMILY" wall_cap_s)"
   cell_s="$(tier_value "$FAMILY" cell_timeout_s)"
@@ -590,24 +605,24 @@ fv_lab_route() {
   (( ${#cells[@]} )) && args+=(--cells "${cells[@]}")
   [[ -n "${FV_BASELINE_SHA:-}" ]] && args+=(--baseline-sha "$FV_BASELINE_SHA")
   read -r -a extra <<<"${FV_EXTRA_ENV:-}"
-  local r r_tier r_fam r_mode
+  # Every refused entry in one message (a retry must not reveal the next one).
+  local keys=() why=()
   for e in ${extra[@]+"${extra[@]}"}; do
     k="${e%%=*}"
-    # A restored mode (fv-lab-retired.sh FV_LAB_RESTORED, ADR-0019 §11) is a
-    # tier of its own: named, not routed (the run would land in another run
-    # directory than FV_FAMILY's, under another pod name).
-    for r in $FV_LAB_RESTORED; do
-      IFS=: read -r r_tier r_fam r_mode <<<"$r"
-      [[ "$e" != "$r_mode" ]] \
-        || die "$r_mode was a mode of runpod-matrix.sh $r_fam; it is the fv-lab tier $r_tier now: use FV_FAMILY=$r_tier (without $r_mode in FV_EXTRA_ENV; ADR-0019 §11, docs/dev/fv-lab.md)"
-    done
     case "$k" in
       FV_NVFP4_WORKLOADS|FV_VAE_WORKLOADS|FV_VAE_UNTRACED)
-        refuse "reads no $k from FV_EXTRA_ENV: the restored tiers (precision-nvfp4, ltxvae-gen) have one cell per workload; narrow them by arm with FV_CELLS (ADR-0019 §11)" ;;
+        keys+=("$k")
+        why+=("$k: the restored tiers (precision-nvfp4, ltxvae-gen) have one cell per workload; narrow them by arm with FV_CELLS (ADR-0019 §11)") ;;
+      *)
+        if [[ " $(echo $FV_LAB_NOT_READ) " == *" $k "* ]]; then
+          keys+=("$k")
+          why+=("$k: dropped with the branch, or set by the start command (ADR-0019 §9.4, §10)")
+        fi ;;
     esac
-    [[ " $(echo $FV_LAB_NOT_READ) " != *" $k "* ]] \
-      || refuse "reads no $k from FV_EXTRA_ENV (ADR-0019 §9.4, §10: dropped with the branch, or set by the start command)"
   done
+  if (( ${#keys[@]} )); then
+    refuse "reads no $(printf '%s, ' "${keys[@]}" | sed 's/, $//') from FV_EXTRA_ENV ($(printf '%s; ' "${why[@]}" | sed 's/; $//'))"
+  fi
   (( ${#extra[@]} )) && args+=(--extra-env "${extra[@]}")
   [[ "${FV_LPIPS:-0}" == 1 ]] && args+=(--lpips)
   [[ "$what" == run ]] && args+=(--yes --wait)

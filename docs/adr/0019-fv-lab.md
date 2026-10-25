@@ -642,22 +642,61 @@ about $2.49/hr. Estimates from D1b (`precision` 4k5s pair ~22 min per side; one 
 side, pod boot and preflight included): `precision-nvfp4` ~$1.85, `ltxvae-gen` ~$1.50, about **$3.35** for the
 four pods. Run the two sides of a tier in parallel.
 
-**Byte identity is expected.** Between `5987e6a4` and this branch (at its base `2258aec2`) no file that makes a frame
-changed: `git diff --stat 5987e6a4 HEAD` touches no fv-gpucheck crate (`fastvideo-{gpucheck,cudarc,models,loader,
-ops,oxide-kernels,core,media,trace,upsampler,engine-service,protocol}`), not `Cargo.lock`, not `profiles/`, and in
-`docker/gpucheck.Dockerfile` only the serve stages (the `runtime` stage is unchanged). What changed is fv-lab,
-fv-deploy, fv-manifest's deploy section, autoscale, control and scripts, none of them in a generation. Pass: each
-`fv-lab-compare-runs.sh` exits 0 (both arms ran with byte-identical frames records, the compare report agrees, the
-gate report exists in both for `precision-nvfp4`) and both sides end `matrix_exit=0`. A lossy gate *verdict* of
-fail (the 2026-09-27 run failed 4k5s on sharpness) is no run failure on either side. Before running, recheck at the
-SHA you test: `git diff --stat 5987e6a4 $SHA -- crates/fastvideo-{gpucheck,cudarc,models,loader,ops,oxide-kernels,
-core,media,trace,upsampler,engine-service,protocol} Cargo.lock profiles rust-toolchain.toml` (other agents work in
-`crates/fastvideo-engine-service`'s tests), and the fv-lab image's `dev.fastvideo.tools` label: a stale tools
-release (`FV_PREBUILT_STALE=latest`) built from another commit's gpucheck inputs is another binary. If either shows
-a change in generation code, byte identity is no longer promised; then require only a successful run on both sides
-(`matrix_exit=0`, both arms `exit 0`, the compare and gate reports present) and record which files differed. The
-same holds if the bf16 arm is byte-identical and only the NVFP4 arm differs: cuBLASLt picks its FP4 algorithm per
-driver, so compare the two pods' `box.txt` driver versions before calling it a regression.
+**Byte identity is expected.** The crates in fv-gpucheck's build are `cargo tree --locked -p fastvideo-gpucheck
+--features cuda -e normal,build`'s workspace members: `fastvideo-{gpucheck,cudarc,engine-service,loader,manifest,
+media,models,ops,protocol,trace}`. Add `fastvideo-oxide-kernels` for the oxide cubins (the tools release's `oxide`
+set), `profiles/`, `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`. Between `5987e6a4` and this branch (main at
+`6c13e195` merged in), the only change among these is in `fastvideo-manifest`: the deploy section
+(`deploy.rs`, `schemas/deploy.v1.json`) and a `SMOKE_CONFIG` re-export in `lib.rs`. fv-gpucheck links it through
+`fastvideo-engine-service` (the `cuda` feature), but no generation reads the deploy section. `family.rs` is
+unchanged. The other tools inputs (`third_party/cutile-rs`, `scripts/gpu/cuda-13.pins`, `docker/build-base.Dockerfile`,
+`scripts/dev/release-artifacts-pod.sh`) are unchanged, and so is the `runtime` stage of `docker/gpucheck.Dockerfile`
+(only its serve stages changed). Fv-lab, fv-deploy, autoscale, control and scripts changed too, and none of them is in
+a generation.
+
+The binary is not the same build. The tools release's inputs are all of `crates/` (and the paths above;
+`tools-release.sh` `INPUTS`), and `crates/` changed. So the image of the PR head carries another tools build than
+`tools-v0.1.49`: one released from the head's own inputs, else the job compiles, else (on main, with
+`FV_PREBUILT_STALE=latest`) the newest release with a warning. What is promised is equal frames from equal generation
+source, not an equal binary.
+
+Pass: each `fv-lab-compare-runs.sh` exits 0, meaning:
+- both arms ran with byte-identical frames records;
+- the compare report agrees;
+- for `precision-nvfp4`, the gate report exists in both runs;
+- both sides end `matrix_exit=0`.
+
+A lossy gate *verdict* of fail (the 2026-09-27 run failed 4k5s on sharpness) is no run failure on either side.
+
+Before running, recheck at the `SHA` you test (other agents work in `crates/fastvideo-engine-service`'s tests):
+
+```sh
+git diff --stat 5987e6a4 $SHA -- crates/fastvideo-{gpucheck,cudarc,engine-service,loader,manifest,media,models,ops,protocol,trace,oxide-kernels} \
+  profiles Cargo.toml Cargo.lock rust-toolchain.toml third_party/cutile-rs scripts/gpu/cuda-13.pins
+cargo tree --locked -p fastvideo-gpucheck --features cuda -e normal,build --prefix none | grep '(/'   # the list above, unchanged?
+```
+
+Then read the fv-lab image's `dev.fastvideo.tools` label and the image job's notice. It must name a release built
+from `SHA`'s own inputs ("built from this commit's tools inputs") or a compile. A stale release (`FV_PREBUILT_STALE=latest`
+with "no release matches") is another commit's gpucheck.
+
+- **Byte identity no longer promised.** If the diff shows a change outside `fastvideo-manifest`'s deploy section, or
+  the binary is stale, require only a successful run on both sides: `matrix_exit=0`, both arms `exit 0`, the compare
+  and gate reports present. Record which files differed.
+- **Only the NVFP4 arm differs** (the bf16 arm is byte-identical): cuBLASLt picks its FP4 algorithm per driver, so
+  compare the two pods' `box.txt` driver versions before calling it a regression.
+
+**Refused, not ignored (review of #191).**
+- `fv-lab` refuses the settings no tier reads (`crates/fastvideo-lab/src/knobs.rs`):
+  - `fv-lab run` refuses the retired families' mode knobs (§9.4) in its environment.
+  - `pod up --extra-env` refuses those knobs and what the start command sets after `--extra-env`.
+  - This is the same set as `runpod-http.sh`'s `FV_LAB_NOT_READ` (`tests/knobs.rs` holds them equal, and
+    `RESTORED_MODES` equal to `FV_LAB_RESTORED`).
+- A restored mode's setting is answered first and names its tier. Each refusal lists every refused key at once.
+- `runpod-http.sh` does the same: the mode check comes before every other refusal of the call, and one message lists
+  all the refused `FV_EXTRA_ENV` keys.
+- `runpod-matrix.sh` names the tier for `FV_PRECISION_ARM=ltx-nvfp4 … precision` / `FV_VAE_GEN=1 … ltxvae`, and says
+  that `precision-nvfp4` / `ltxvae-gen` are fv-lab tiers, never script families (`fv-lab-route.test.sh`).
 
 ## Open decisions
 

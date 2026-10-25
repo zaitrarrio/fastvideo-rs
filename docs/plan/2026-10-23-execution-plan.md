@@ -1196,3 +1196,12 @@ ran (pod id, $/hr), result, cost.
   tier for the modes' settings. GPU check pending (coordinator: fv-lab at the
   PR's commit vs `runpod-http.sh` at `5987e6a4`, image `sha-5987e6a`
   published; about $3.35). No GPU cost.
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): #191 review fixes
+  (main at `6c13e195` merged in): the byte-identity check's crate list from
+  `cargo tree -p fastvideo-gpucheck --features cuda` (adds
+  `fastvideo-manifest`, changed only in its deploy section) and a note that
+  the PR head's image carries another tools build than `tools-v0.1.49`; the
+  old knobs' exact `--cells` lists in `docs/dev/fv-lab.md`; `fv-lab run` /
+  `pod up --extra-env` refuse what no tier reads (the same keys as
+  `runpod-http.sh`), the mode's setting first, all keys in one message;
+  `runpod-matrix.sh` names the restored tier. No GPU cost.
