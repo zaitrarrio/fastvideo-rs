@@ -198,6 +198,9 @@ metadata_items() {
 }
 
 # instance_payload <name> <family> <machine> <image> <keyhash> <run> <deadline>
+# The metadata items (startup.sh, the verify scripts and their tables: about
+# 135 KB) reach jq through a file descriptor: as one argument they exceed
+# Linux's 128 KiB limit on a single argument (E2BIG).
 instance_payload() {
   local name="$1" family="$2" machine="$3" image="$4" keyhash="$5" run="$6" deadline="$7" prov boot disks
   prov="$(gcp_provisioning "$machine")"
@@ -213,7 +216,7 @@ instance_payload() {
   jq -n --arg name "$name" --arg zone "$ZONE" --arg mt "$machine" --arg prov "$prov" --argjson cap "$(cap_s)" \
     --arg net "projects/$PROJECT/global/networks/$NETWORK" --arg sa "$(vm_sa_email)" \
     --argjson labels "$(gcp_labels "$VM_ROLE" "$run" "$(jq -nc --arg f "$family" --arg r "$VM_ROLE" --arg d "$deadline" '{"fv-family": $f, "fv-role": $r, "fv-deadline": $d}')")" \
-    --argjson disks "$disks" --argjson items "$(metadata_items "$family" "$image" "$keyhash")" '{
+    --argjson disks "$disks" --slurpfile items <(metadata_items "$family" "$image" "$keyhash") '{
       name: $name,
       description: "fastvideo-rs fv-serve (fv-owner=fastvideo-rs)",
       machineType: ("zones/" + $zone + "/machineTypes/" + $mt),
@@ -231,7 +234,7 @@ instance_payload() {
       }],
       serviceAccounts: [{email: $sa, scopes: ["https://www.googleapis.com/auth/cloud-platform"]}],
       shieldedInstanceConfig: {enableSecureBoot: false, enableVtpm: true, enableIntegrityMonitoring: true},
-      metadata: {items: $items}
+      metadata: {items: $items[0]}
     }'
 }
 
