@@ -12,6 +12,7 @@ import { DRIVER_CHECK_SH } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH } from "../upsampler";
 import { PREFER_FV_BOOT_SH } from "../fv-boot";
 import { workerConfigEnv } from "../worker-config";
+import { checkLaunch, LAUNCH_SCHEMA, runpodEndpointBody, runpodTemplateBody, SLS_VOLUME_MOUNT, type Guards, type Launch } from "../launch";
 
 /** Every Runpod endpoint and template fv-control creates is named fvc-<name>…; nothing else is ever touched. */
 export const SLS_PREFIX = "fvc-";
@@ -71,18 +72,83 @@ const bootFields = (spec: EndpointSpec) => {
   return bash ? { dockerEntrypoint: ["bash", "-c", bash], dockerStartCmd: [] as string[] } : { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] };
 };
 
-/** REST v1 POST /templates (queue endpoints). */
+/**
+ * The rules fv-control holds a serverless endpoint to, as a Launch's guards (ADR-0018 §7.2, §7.3).
+ *
+ * READ THIS BEFORE CONSUMING THESE GUARDS (a ledger, a plan printout, fv-deploy's guard code): fv-control checks no
+ * serverless price (Runpod reports none at create: fv-deploy's own known gap, ADR-0018 §5.3) and no worker readiness
+ * (Runpod starts and replaces the workers). Launch v1 has no way to say "not checked" (every guard is a required
+ * number; ADR-0018 §7.3 proposes `null` for it), so those fields carry the FAIL-CLOSED values of fv-deploy's own
+ * semantics: `max_usd_per_hr` 0 (no offer is under it: fv-deploy would create nothing), `ready_timeout_s` 0. Never
+ * show them as a price cap or a timeout; `SLS_GUARDS_NOT_CHECKED` names them. What is real: `ready_cycles` 1 (one
+ * endpoint per create; fv-control never replaces it), `min_balance_usd` 8 (the least of what create, scale-up and
+ * invoke need: the account floor plus the serverless margin, ops.ts assertFloor), `cap_s` = deadline_min (the cron's
+ * backstop: scale to 0 or delete; 0 without one).
+ */
+export const SLS_GUARDS_NOT_CHECKED = ["max_usd_per_hr", "ready_timeout_s"] as const;
+export function endpointGuards(spec: Pick<EndpointSpec, "deadline_min">): Guards {
+  return { max_usd_per_hr: 0, min_balance_usd: 8, cap_s: (spec.deadline_min ?? 0) * 60, ready_timeout_s: 0, ready_cycles: 1 };
+}
+
+/** A GPU endpoint as fv-deploy's Launch (plan C3c, docs/adr/0018-fv-deploy.md §7), without its template's image and
+ * env: what the endpoint itself carries (its GPU types and count, the CUDA minimum, the volume and data centres, the
+ * scaling). `endpointLaunch` adds the template's part. */
+function endpointLaunchBase(spec: EndpointSpec, guards: Guards): Launch {
+  if (spec.compute === "CPU") throw new Error(`endpoint ${spec.name}: a CPU endpoint is not a Launch (fv-deploy's schema has no CPU compute)`);
+  const ws = spec.weights_source ?? (spec.network_volume ? "volume" : "none");
+  return {
+    schema: LAUNCH_SCHEMA,
+    name: endpointName(spec),
+    provider: "runpod-serverless",
+    image: "",
+    env: {},
+    gpu: {
+      types: spec.gpu_types || [],
+      count: spec.gpu_count ?? 1,
+      // "At least CUDA 13.0": Runpod applies minCudaVersion as a minimum, so it keeps the 13.1 / 13.2 hosts (which REST
+      // cannot name in allowedCudaVersions) and drops the pre-13 ones (enums.ts MIN_CUDA, DEFAULT_ALLOWED_CUDA).
+      min_cuda: MIN_CUDA,
+      allowed_cuda: [...(spec.allowed_cuda ?? [])],
+    },
+    placement: { data_centers: [...(spec.data_centers ?? [])], volume: spec.network_volume ? { id: spec.network_volume, mount_path: SLS_VOLUME_MOUNT } : null, cloud: "SECURE" },
+    disk: { container_gb: spec.container_disk_gb, volume_gb: 0 },
+    weights: ws,
+    guards,
+    serverless: {
+      workers_min: spec.workers_min,
+      workers_max: spec.workers_max,
+      idle_timeout_s: spec.idle_timeout_s,
+      flashboot: spec.flashboot,
+      execution_timeout_ms: spec.execution_timeout_s * 1000,
+      scaler_type: spec.scaler_type,
+      scaler_value: spec.scaler_value,
+    },
+  };
+}
+
+/** A GPU endpoint's Launch: its template's image, start (the boot as the entrypoint, no start command) and env, and
+ * the endpoint's scaling and placement; checked against the schema. Queue and load-balancer endpoints alike: an LB
+ * endpoint's template and REST v1 fields are the same, only its create is the REST v2 envelope (v2CreatePayload). */
+export function endpointLaunch(spec: EndpointSpec, image: string, weights: Record<string, string> = {}, guards: Guards = endpointGuards(spec)): Launch {
+  return checkLaunch({ ...endpointLaunchBase(spec, guards), image, entrypoint: bootFields(spec).dockerEntrypoint, args: [], env: workerEnv(spec, image, weights) });
+}
+
+/** REST v1 POST /templates (queue endpoints): a GPU endpoint's from its Launch (src/launch.ts runpodTemplateBody, the
+ * Rust provider's rules) under the template's own name, plus what only fv-control sends: the category, a readme and
+ * an explicit empty start command (so a PATCH clears an older template's). A CPU endpoint's from its spec. */
 export function templateCreatePayload(spec: EndpointSpec, image: string, name: string, weights: Record<string, string> = {}) {
+  const readme = `fv-control serverless endpoint ${spec.name} (${imageOf(spec)}); docs/control/serverless.md`;
+  if (spec.compute !== "CPU") return { ...runpodTemplateBody({ ...endpointLaunch(spec, image, weights), name }), category: "NVIDIA", dockerStartCmd: [] as string[], readme };
   return {
     name,
     imageName: image,
     isServerless: true,
-    category: spec.compute === "CPU" ? "CPU" : "NVIDIA",
+    category: "CPU",
     containerDiskInGb: spec.container_disk_gb,
     volumeInGb: 0,
     env: workerEnv(spec, image, weights),
     ...bootFields(spec),
-    readme: `fv-control serverless endpoint ${spec.name} (${imageOf(spec)}); docs/control/serverless.md`,
+    readme,
   };
 }
 /** REST v1 PATCH /templates/<id>: image, env, start and disk (a rolling release of the endpoint's workers). */
@@ -91,33 +157,30 @@ export function templateUpdatePayload(spec: EndpointSpec, image: string, weights
   return rest;
 }
 
-/** The scaling and placement fields REST v1 takes on create and PATCH. */
+/** The scaling and placement fields REST v1 takes on create and PATCH: a GPU endpoint's from its Launch
+ * (runpodEndpointBody without the create-only name, template and volume), a CPU endpoint's from its spec. */
 export function endpointFields(spec: EndpointSpec) {
-  const common = {
-    workersMin: spec.workers_min,
-    workersMax: spec.workers_max,
-    idleTimeout: spec.idle_timeout_s,
-    flashboot: spec.flashboot,
-    executionTimeoutMs: spec.execution_timeout_s * 1000,
-    scalerType: spec.scaler_type,
-    scalerValue: spec.scaler_value,
-    ...(spec.data_centers?.length ? { dataCenterIds: spec.data_centers } : {}),
-  };
-  if (spec.compute === "CPU") return { ...common, computeType: "CPU" as const, cpuFlavorIds: spec.cpu_flavors || ["cpu3c", "cpu5c"], vcpuCount: spec.vcpu ?? 2 };
-  return {
-    ...common,
-    computeType: "GPU" as const,
-    gpuTypeIds: spec.gpu_types || [],
-    gpuCount: spec.gpu_count ?? 1,
-    // "At least CUDA 13.0": Runpod applies minCudaVersion as a minimum, so it keeps the 13.1 / 13.2 hosts (which REST
-    // cannot name in allowedCudaVersions) and drops the pre-13 ones (enums.ts MIN_CUDA, DEFAULT_ALLOWED_CUDA).
-    minCudaVersion: MIN_CUDA,
-    ...((spec.allowed_cuda ?? []).length ? { allowedCudaVersions: spec.allowed_cuda } : {}),
-  };
+  if (spec.compute === "CPU")
+    return {
+      workersMin: spec.workers_min,
+      workersMax: spec.workers_max,
+      idleTimeout: spec.idle_timeout_s,
+      flashboot: spec.flashboot,
+      executionTimeoutMs: spec.execution_timeout_s * 1000,
+      scalerType: spec.scaler_type,
+      scalerValue: spec.scaler_value,
+      ...(spec.data_centers?.length ? { dataCenterIds: spec.data_centers } : {}),
+      computeType: "CPU" as const,
+      cpuFlavorIds: spec.cpu_flavors || ["cpu3c", "cpu5c"],
+      vcpuCount: spec.vcpu ?? 2,
+    };
+  const { name: _n, templateId: _t, networkVolumeId: _v, ...f } = runpodEndpointBody(checkLaunch(endpointLaunchBase(spec, endpointGuards(spec))), "");
+  return f;
 }
 
-/** REST v1 POST /endpoints (a queue endpoint on a template). */
+/** REST v1 POST /endpoints (a queue endpoint on a template): a GPU endpoint's from its Launch (runpodEndpointBody). */
 export function endpointCreatePayload(spec: EndpointSpec, templateId: string) {
+  if (spec.compute !== "CPU") return runpodEndpointBody(checkLaunch(endpointLaunchBase(spec, endpointGuards(spec))), templateId);
   return { name: endpointName(spec), templateId, ...endpointFields(spec), ...(spec.network_volume ? { networkVolumeId: spec.network_volume } : {}) };
 }
 
@@ -139,9 +202,34 @@ export function endpointUpdatePayload(spec: EndpointSpec, prev?: EndpointSpec) {
 
 /** REST v2 POST /serverless: a load-balancer endpoint (GPU pools from Runpod's catalog), or a CPU queue
  * endpoint (REST v1 creates every endpoint with GPU workers: it ignores computeType CPU, live 2026-10-06).
- * v2 makes the endpoint's template itself (Runpod deletes it with the endpoint). */
+ * v2 makes the endpoint's template itself (Runpod deletes it with the endpoint). The envelope is REST v2's own (not a
+ * Launch payload: LB endpoints are the owner's open decision, ADR-0018); a GPU endpoint's image, env, disk, GPU
+ * count, CUDA filter, scaling and placement come from its Launch. */
 export function v2CreatePayload(spec: EndpointSpec, image: string, pools: string[] = [], weights: Record<string, string> = {}) {
   const lb = spec.mode === "lb";
+  const scaling = spec.scaler_type === "REQUEST_COUNT" ? { type: "REQUEST_COUNT", requestCount: spec.scaler_value } : { type: "QUEUE_DELAY", queueDelay: spec.scaler_value };
+  if (spec.compute !== "CPU") {
+    const l = endpointLaunch(spec, image, weights);
+    const s = l.serverless!;
+    const vol = l.placement.volume;
+    const dcs = l.placement.data_centers ?? [];
+    const cuda = l.gpu.allowed_cuda ?? [];
+    return {
+      name: l.name,
+      type: lb ? "LOAD_BALANCER" : "QUEUE",
+      image: l.image,
+      ...(lb ? { ports: ["8000/http"] } : {}),
+      disk: l.disk.container_gb,
+      env: l.env ?? {},
+      gpu: { pools: pools.length ? pools : ["BLACKWELL_96"], count: l.gpu.count, ...(cuda.length ? { allowedCudaVersions: cuda } : {}) },
+      workers: { min: s.workers_min, max: s.workers_max, idleTimeout: s.idle_timeout_s },
+      scaling,
+      ...(vol ? { networkVolumes: [vol.id] } : {}),
+      ...(dcs.length ? { dataCenterIds: dcs } : {}),
+      flashboot: s.flashboot ? "FLASHBOOT" : "OFF",
+      timeout: s.execution_timeout_ms,
+    };
+  }
   return {
     name: endpointName(spec),
     type: lb ? "LOAD_BALANCER" : "QUEUE",
@@ -149,11 +237,9 @@ export function v2CreatePayload(spec: EndpointSpec, image: string, pools: string
     ...(lb ? { ports: ["8000/http"] } : {}),
     disk: spec.container_disk_gb,
     env: workerEnv(spec, image, weights),
-    ...(spec.compute === "CPU"
-      ? { cpu: (spec.cpu_flavors || ["cpu3c", "cpu5c"]).map((id) => ({ id, vcpuCount: spec.vcpu ?? 2 })) }
-      : { gpu: { pools: pools.length ? pools : ["BLACKWELL_96"], count: spec.gpu_count ?? 1, ...((spec.allowed_cuda ?? []).length ? { allowedCudaVersions: spec.allowed_cuda } : {}) } }),
+    cpu: (spec.cpu_flavors || ["cpu3c", "cpu5c"]).map((id) => ({ id, vcpuCount: spec.vcpu ?? 2 })),
     workers: { min: spec.workers_min, max: spec.workers_max, idleTimeout: spec.idle_timeout_s },
-    scaling: spec.scaler_type === "REQUEST_COUNT" ? { type: "REQUEST_COUNT", requestCount: spec.scaler_value } : { type: "QUEUE_DELAY", queueDelay: spec.scaler_value },
+    scaling,
     ...(spec.network_volume ? { networkVolumes: [spec.network_volume] } : {}),
     ...(spec.data_centers?.length ? { dataCenterIds: spec.data_centers } : {}),
     flashboot: spec.flashboot ? "FLASHBOOT" : "OFF",
