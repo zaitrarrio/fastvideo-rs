@@ -1,0 +1,28 @@
+{
+  "allowed": [
+    {
+      "IPProtocol": "tcp",
+      "ports": [
+        "8000",
+        "40000"
+      ]
+    },
+    {
+      "IPProtocol": "udp",
+      "ports": [
+        "40010"
+      ]
+    }
+  ],
+  "description": "fv-owner=fastvideo-rs fv-run=1025120000 fv-serve TCP 8000,40000, ICE-UDP 40010",
+  "direction": "INGRESS",
+  "name": "fv-serve-fv-h3-turbo-1025120000",
+  "network": "projects/golden-project/global/networks/default",
+  "priority": 1000,
+  "sourceRanges": [
+    "198.51.100.7/32"
+  ],
+  "targetTags": [
+    "fv-h3-turbo-1025120000"
+  ]
+}

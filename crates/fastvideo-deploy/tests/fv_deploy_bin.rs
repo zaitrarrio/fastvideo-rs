@@ -307,3 +307,222 @@ fn down_needs_a_kind_for_a_bare_id_and_infers_serverless_from_a_slash() {
     );
     assert!(!reqs.iter().any(|r| r.contains("/pods/")), "{reqs:?}");
 }
+
+const VAST_KEY: &str = "vast_SENTINEL_KEY_43";
+const GCP_TOKEN: &str = "ya29.SENTINEL_TOKEN_44";
+
+/// `plan --kind vast|gcp`: no request (not even a token mint), no key
+/// printed; Vast's search and create, GCP's firewall rule and instance with
+/// the file items shortened for display.
+#[test]
+fn plan_vast_and_gcp_make_no_request_and_hide_the_keys() {
+    let (base, seen) = fake_runpod(20.0);
+    for (kind, family, preset) in [("vast", "fake", "fake"), ("gcp", "h3", "h3-turbo")] {
+        let mut c = Command::new(BIN);
+        c.args([
+            "plan", "--kind", kind, "--family", family, "--preset", preset,
+        ])
+        .arg("--root")
+        .arg(repo_root());
+        fake_env(&mut c, &base);
+        c.env("VAST_API_KEY", VAST_KEY)
+            .env("VAST_API_BASE", format!("{base}/vast"))
+            .env("GCP_ACCESS_TOKEN", GCP_TOKEN)
+            .env("GCP_PROJECT", "plan-project")
+            .env("FV_GCP_COMPUTE_API", format!("{base}/compute/v1"))
+            .env_remove("FV_GCP_SOURCE_CIDR");
+        let out = c.output().unwrap_or_else(|e| panic!("run: {e}"));
+        let (so, se) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        assert!(out.status.success(), "{kind}: {se}");
+        for k in [KEY, VAST_KEY, GCP_TOKEN] {
+            assert!(!so.contains(k) && !se.contains(k), "{kind}");
+        }
+        let v: serde_json::Value =
+            serde_json::from_str(&so).unwrap_or_else(|e| panic!("{e}: {so}"));
+        assert_eq!(v["launch"]["provider"], kind);
+        let reqs = v["requests"].as_array().cloned().unwrap_or_default();
+        assert_eq!(reqs.len(), 2, "{kind}");
+        if kind == "vast" {
+            assert!(reqs[0]["url"]
+                .as_str()
+                .unwrap_or("")
+                .ends_with("/vast/bundles/"));
+            assert_eq!(reqs[0]["body"]["dph_total"]["lte"], 0.6);
+            assert_eq!(reqs[1]["method"], "PUT");
+            assert_eq!(reqs[1]["body"]["runtype"], "ssh_direct");
+            assert_eq!(reqs[1]["body"]["env"]["FV_WEIGHTS_SOURCE"], "none");
+        } else {
+            assert_eq!(reqs[0]["body"]["sourceRanges"][0], "198.51.100.7/32");
+            let inst = &reqs[1]["body"];
+            assert_eq!(inst["scheduling"]["maxRunDuration"]["seconds"], "1800");
+            assert_eq!(inst["disks"][1]["mode"], "READ_ONLY");
+            let items = inst["metadata"]["items"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let start = items
+                .iter()
+                .find(|i| i["key"] == "startup-script")
+                .and_then(|i| i["value"].as_str())
+                .unwrap_or_default()
+                .to_owned();
+            assert!(start.starts_with('<') && start.contains("chars"), "{start}");
+            assert!(reqs[1]["url"]
+                .as_str()
+                .unwrap_or("")
+                .contains("/projects/plan-project/zones/europe-west4-b/instances"));
+        }
+    }
+    assert!(seen.lock().map(|g| g.is_empty()).unwrap_or(false));
+}
+
+/// `down --kind vast` deletes with the Vast key as a bearer header; `down
+/// --kind gcp` refuses a VM without the `fv-owner` label (the fake answers
+/// `{}`) and deletes nothing.
+#[test]
+fn down_on_vast_and_a_foreign_gcp_vm() {
+    let (base, seen) = fake_runpod(20.0);
+    let state = std::env::temp_dir().join(format!("fv-deploy-down-c3b-{}", std::process::id()));
+    let mut c = Command::new(BIN);
+    c.args(["down", "4242", "--kind", "vast"])
+        .arg("--state-dir")
+        .arg(&state)
+        .arg("--root")
+        .arg(repo_root());
+    fake_env(&mut c, &base);
+    c.env("VAST_API_KEY", VAST_KEY)
+        .env("VAST_API_BASE", format!("{base}/vast"));
+    let out = c.output().unwrap_or_else(|e| panic!("run: {e}"));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let gcp_down = |id: &str, zone: Option<&str>| {
+        let mut c = Command::new(BIN);
+        c.args(["down", id, "--kind", "gcp"])
+            .arg("--state-dir")
+            .arg(&state)
+            .arg("--root")
+            .arg(repo_root());
+        if let Some(z) = zone {
+            c.args(["--zone", z]);
+        }
+        fake_env(&mut c, &base);
+        c.env("GCP_ACCESS_TOKEN", GCP_TOKEN)
+            .env("GCP_PROJECT", "p")
+            .env("GCP_ZONE", "europe-west4-b")
+            .env("FV_GCP_COMPUTE_API", format!("{base}/compute/v1"));
+        let out = c.output().unwrap_or_else(|e| panic!("run: {e}"));
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    // No record, no --zone: refused before any request (never GCP_ZONE).
+    let (ok, se) = gcp_down("fv-other", None);
+    assert!(!ok && se.contains("pass --zone"), "{se}");
+    assert!(!seen
+        .lock()
+        .map(|g| g.iter().any(|r| r.contains("/compute/")))
+        .unwrap_or(true));
+    // The zone `up` recorded wins over GCP_ZONE.
+    std::fs::create_dir_all(state.join("instances")).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(
+        state.join("instances/fv-other.json"),
+        r#"{"instance":{"id":"fv-other","provider":"gcp","name":"fv-other","state":"running","data_center":"europe-west1-c"},"launch":"fv-other"}"#,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let (ok, se) = gcp_down("fv-other", None);
+    // The fake answers `{}`: no fv-owner label, so the delete is refused.
+    assert!(!ok && se.contains("refusing"), "{se}");
+    assert!(!se.contains(GCP_TOKEN));
+    // --zone without a record.
+    let (ok, _) = gcp_down("fv-third", Some("europe-west2-a"));
+    assert!(!ok);
+    let reqs = seen.lock().map(|g| g.clone()).unwrap_or_default();
+    assert!(
+        reqs.iter()
+            .any(|r| r == &format!("DELETE /vast/instances/4242/ Bearer {VAST_KEY}")),
+        "{reqs:?}"
+    );
+    for (zone, vm) in [
+        ("europe-west1-c", "fv-other"),
+        ("europe-west2-a", "fv-third"),
+    ] {
+        let get =
+            format!("GET /compute/v1/projects/p/zones/{zone}/instances/{vm} Bearer {GCP_TOKEN}");
+        assert!(reqs.contains(&get), "{reqs:?}");
+    }
+    assert!(
+        !reqs.iter().any(|r| r.contains("/zones/europe-west4-b/")),
+        "{reqs:?}"
+    );
+    assert!(
+        !reqs.iter().any(|r| r.starts_with("DELETE /compute")),
+        "{reqs:?}"
+    );
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+/// Review 5, 7, 8: a NaN budget is refused; a separator-only
+/// FV_GCP_SOURCE_CIDR is unset (never an empty source list); a fixed
+/// GCP_ACCESS_TOKEN refuses a cap the token would not outlive. No request.
+#[test]
+fn gcp_cli_refuses_nan_budgets_empty_ranges_and_long_static_tokens() {
+    let (base, seen) = fake_runpod(20.0);
+    let run = |args: &[&str], cidr: &str| {
+        let mut c = Command::new(BIN);
+        c.args(args).arg("--root").arg(repo_root());
+        fake_env(&mut c, &base);
+        c.env("GCP_ACCESS_TOKEN", GCP_TOKEN)
+            .env("GCP_PROJECT", "p")
+            .env("FV_GCP_SOURCE_CIDR", cidr)
+            .env("FV_GCP_COMPUTE_API", format!("{base}/compute/v1"));
+        let out = c.output().unwrap_or_else(|e| panic!("run: {e}"));
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let gcp = ["--kind", "gcp", "--family", "h3", "--preset", "h3-turbo"];
+    let mut nan = vec!["plan"];
+    nan.extend(gcp);
+    nan.extend(["--budget-usd", "nan"]);
+    let (ok, _, se) = run(&nan, "203.0.113.1/32");
+    assert!(!ok && se.contains("--budget-usd NaN"), "{se}");
+    let mut plan = vec!["plan"];
+    plan.extend(gcp);
+    let (ok, so, se) = run(&plan, " , ");
+    assert!(ok, "{se}");
+    let v: serde_json::Value = serde_json::from_str(&so).unwrap_or_else(|e| panic!("{e}: {so}"));
+    assert_eq!(
+        v["requests"][0]["body"]["sourceRanges"],
+        serde_json::json!(["198.51.100.7/32"])
+    );
+    let state = std::env::temp_dir().join(format!("fv-deploy-tok-{}", std::process::id()));
+    let state_s = state.display().to_string();
+    let image = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    let mut up = vec!["up"];
+    up.extend(gcp);
+    up.extend([
+        "--yes",
+        "--cap-s",
+        "3600",
+        "--image",
+        image,
+        "--state-dir",
+        state_s.as_str(),
+        "--budget-usd",
+        "50",
+    ]);
+    let (ok, _, se) = run(&up, "203.0.113.1/32");
+    assert!(!ok && se.contains("outlive the token"), "{se}");
+    assert!(!se.contains(GCP_TOKEN));
+    assert!(seen.lock().map(|g| g.is_empty()).unwrap_or(false));
+    let _ = std::fs::remove_dir_all(&state);
+}

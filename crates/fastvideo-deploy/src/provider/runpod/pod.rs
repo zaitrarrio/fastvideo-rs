@@ -155,12 +155,11 @@ impl Provider for Pod<'_> {
     }
 
     fn create(&self, launch: &Launch) -> Result<Instance, ProviderError> {
-        let v = self.api.rest(
-            Method::Post,
-            "/pods",
-            Some(&create_body(launch)),
+        let r = self.api.send(
+            &self.api.requests().create_pod(&create_body(launch)),
             "POST pods",
         )?;
+        let v = self.api.json_or_error(r, "POST pods")?;
         let id = v
             .get("id")
             .and_then(Value::as_str)
@@ -239,19 +238,13 @@ impl Provider for Pod<'_> {
         })
     }
 
+    /// The request and the answer's reading are shared with the autoscaler
+    /// ([`super::Requests::delete_pod`], [`super::delete_answer`]).
     fn destroy(&self, id: &InstanceId) -> Result<(), ProviderError> {
-        let url = format!("{}/pods/{}", self.api.urls.rest, id);
-        let r = self.api.raw(
-            Method::Delete,
-            &url,
-            None,
-            Duration::from_secs(60),
-            "DELETE pod",
-        )?;
-        if r.status == 404 {
-            return Ok(());
-        }
-        self.api.json_or_error(r, "DELETE pod").map(|_| ())
+        let r = self
+            .api
+            .send(&self.api.requests().delete_pod(id.as_str()), "DELETE pod")?;
+        self.api.deleted(r, "DELETE pod")
     }
 
     fn account(&self) -> Result<Account, ProviderError> {

@@ -80,7 +80,7 @@ describe("fv-deploy's types in TypeScript (src/launch-gen.ts, gen-configs.mjs)",
     expect(DEPLOY_SCHEMAS).toEqual(["launch", "instance", "offer", "account"]);
     expect(readFileSync(join(repo, "control/src/launch-gen.ts"), "utf8")).toBe((OUTPUTS as Record<string, () => string>)["src/launch-gen.ts"]!());
     const ts = launchGenTs();
-    for (const t of ["interface Launch ", "interface Instance ", "interface Offer ", "interface Account ", 'type ProviderKind = "runpod-pod" | "runpod-serverless"', "LaunchZ: z.ZodType<Launch>"]) expect(ts).toContain(t);
+    for (const t of ["interface Launch ", "interface Instance ", "interface Offer ", "interface Account ", 'type ProviderKind = "runpod-pod" | "runpod-serverless" | "vast" | "gcp";', "LaunchZ: z.ZodType<Launch>"]) expect(ts).toContain(t);
   });
   it("validates as serde reads: unknown fields, a wrong kind, a negative disk or a missing guard are refused", () => {
     for (const l of [scriptPod(), scriptEndpoint()]) expect(LaunchZ.safeParse(wire(l)).success, l.provider).toBe(true);
@@ -152,11 +152,12 @@ describe("fv-deploy's types in TypeScript (src/launch-gen.ts, gen-configs.mjs)",
       symlinkSync(join(repo, "control/node_modules"), join(root, "control/node_modules"), "dir");
       const gen = (...args: string[]) => execFileSync(process.execPath, ["gen-configs.mjs", ...args], { cwd: join(root, "control"), encoding: "utf8", stdio: "pipe" });
       gen("--check");
-      // As C3b adds a provider kind: every schema that names ProviderKind changes.
+      // As a slice adds a provider kind (C3b added vast and gcp; gmi is proposed, ADR-0018 §7.3):
+      // every schema that names ProviderKind changes.
       for (const s of DEPLOY_SCHEMAS) {
         const p = join(root, "crates/fastvideo-deploy/schemas", `${s}.v1.json`);
         const j = JSON.parse(readFileSync(p, "utf8"));
-        j.$defs.ProviderKind.oneOf.push({ description: "A Vast.ai instance.", type: "string", const: "vast" });
+        j.$defs.ProviderKind.oneOf.push({ description: "A GMI instance.", type: "string", const: "gmi" });
         writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
       }
       let err = "";
@@ -167,7 +168,7 @@ describe("fv-deploy's types in TypeScript (src/launch-gen.ts, gen-configs.mjs)",
       }
       expect(err).toContain("stale: src/launch-gen.ts");
       gen();
-      expect(readFileSync(join(root, "control/src/launch-gen.ts"), "utf8")).toContain('export type ProviderKind = "runpod-pod" | "runpod-serverless" | "vast";');
+      expect(readFileSync(join(root, "control/src/launch-gen.ts"), "utf8")).toContain('export type ProviderKind = "runpod-pod" | "runpod-serverless" | "vast" | "gcp" | "gmi";');
       gen("--check");
     } finally {
       rmSync(root, { recursive: true, force: true });

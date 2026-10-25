@@ -87,15 +87,32 @@ pub fn env_dict(ports: &[Port], vars: &[(&str, &str)]) -> Result<Value, String> 
 /// `fv-boot` (docs/adr/0014-fv-boot.md: driver check, config, weights,
 /// then exec fv-serve) when the image has it, else fv-serve itself (an image
 /// from before fv-boot; that fallback goes once every Vast image carries
-/// fv-boot). `args` are fv-serve's arguments (e.g. `--config /etc/fv/vast.toml`).
+/// fv-boot). `args` are fv-serve's arguments (e.g. `--config /etc/fv/vast.toml`;
+/// empty when the launch sends its config in the env, `FV_WORKER_TOML_B64`).
 pub fn onstart(args: &str) -> String {
+    let args = match args.trim() {
+        "" => String::new(),
+        a => format!(" {a}"),
+    };
     format!(
         "#!/bin/bash\n\
          env | grep -E '^(FV_|VAST_|PUBLIC_IPADDR|CONTAINER_ID|RUST_LOG)' >> /etc/environment\n\
          mkdir -p /var/log /fvstate\n\
          B=/opt/fastvideo-rs/bin/fv-boot; [ -x \"$B\" ] || B=/opt/fastvideo-rs/bin/fv-serve\n\
-         nohup \"$B\" {args} >> {MODEL_LOG} 2>&1 &\n"
+         nohup \"$B\"{args} >> {MODEL_LOG} 2>&1 &\n"
     )
+}
+
+/// The published port a launch names (`8000/http`, `8000/tcp`, `70010/udp`,
+/// `70000`); `None` when it is not one.
+pub fn port_of(spec: &str) -> Option<Port> {
+    let (n, proto) = spec.split_once('/').unwrap_or((spec, "tcp"));
+    let port = n.trim().parse::<u32>().ok().filter(|p| *p > 0)?;
+    match proto {
+        "udp" => Some(Port::udp(port)),
+        "tcp" | "http" => Some(Port::tcp(port)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +142,24 @@ mod tests {
             "B=/opt/fastvideo-rs/bin/fv-boot; [ -x \"$B\" ] || B=/opt/fastvideo-rs/bin/fv-serve\n"
         ));
         assert!(s.contains("nohup \"$B\" --config /etc/fv/vast.toml >> /var/log/fv-serve.log"));
+    }
+
+    #[test]
+    fn onstart_without_args_starts_the_boot_bare() {
+        let s = onstart("");
+        assert!(
+            s.contains("nohup \"$B\" >> /var/log/fv-serve.log 2>&1 &\n"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn ports_parse_from_launch_specs() {
+        assert_eq!(port_of("8000/http"), Some(Port::tcp(8000)));
+        assert_eq!(port_of("70010/udp"), Some(Port::udp(70010)));
+        assert_eq!(port_of("70000"), Some(Port::tcp(70000)));
+        assert_eq!(port_of("x/tcp"), None);
+        assert_eq!(port_of("80/sctp"), None);
     }
 
     #[test]

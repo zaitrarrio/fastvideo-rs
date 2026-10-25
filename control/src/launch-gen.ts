@@ -5,10 +5,10 @@
 // deny_unknown_fields). fv-control builds its Runpod launches as a Launch (src/launch.ts).
 import { z } from "zod";
 
-/** Which provider, and which kind of instance on it. Later slices add
- * `vast` and `gcp` (plan C3b). */
-export type ProviderKind = "runpod-pod" | "runpod-serverless";
-export const ProviderKindZ: z.ZodType<ProviderKind> = z.enum(["runpod-pod", "runpod-serverless"]);
+/** Which provider, and which kind of instance on it (C3a: the two Runpod
+ * kinds; C3b: `vast` and `gcp`, docs/adr/0018-fv-deploy.md §8). */
+export type ProviderKind = "runpod-pod" | "runpod-serverless" | "vast" | "gcp";
+export const ProviderKindZ: z.ZodType<ProviderKind> = z.enum(["runpod-pod", "runpod-serverless", "vast", "gcp"]);
 
 /** The account, for the balance floor. */
 export interface Account {

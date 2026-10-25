@@ -140,6 +140,20 @@ check "reap: deletes ours past fv-deadline (any zone) and stopped" bash -c 'jq -
 check "reap: keeps ours before the deadline and the foreign VM" bash -c 'jq -e ".instances | has(\"fv-live\") and has(\"someone-else\") and has(\"fv-w-ltx-0101000002\")" "$0" >/dev/null' "$S"
 check "reap: removes our orphan firewall rules, keeps foreign and live ones" bash -c 'jq -e ".firewalls | (has(\"fv-serve-fv-gone\") | not) and has(\"fv-serve-other\") and has(\"fv-serve-fv-w-ltx-0101000002\")" "$0" >/dev/null' "$S"
 
+# ---- a payload whose metadata cannot be built is refused (no VM without its startup-script)
+# pl <metadata_items body>: instance_payload with that stand-in for metadata_items.
+pl() { bash -c 'source "$1" && VM_ROLE=serve && metadata_items() { '"$1"'; } &&
+  instance_payload fv-x h3-turbo g4-standard-48 "$2" h 1 2' _ "$VM" "$IMG"; }
+run pl 'return 3'
+check "instance payload: failing metadata items fail it, no body" bash -c '[[ $0 != 0 && -z "$(grep "^{" <<<"$1")" ]]' "$RC" "$OUT"
+run pl 'echo "[]"'
+check "instance payload: an empty item list fails it" bash -c '[[ $0 != 0 && $1 == *"not one non-empty array"* ]]' "$RC" "$OUT"
+run pl 'echo "[{\"key\":\"startup-script\",\"value\":\"x\"}]"'
+check "instance payload: one item list is the metadata" bash -c '[[ $0 == 0 ]] && jq -e ".metadata.items[0].key == \"startup-script\"" >/dev/null <<<"$1"' "$RC" "$OUT"
+n1="$(inserts)"
+run env FV_GCP_SOURCE_CIDR=" , " FV_GCP_RUN=0101000009 bash "$VM" up h3-turbo "$IMG"
+check "up: a separator-only FV_GCP_SOURCE_CIDR is no source range: refused, nothing created" bash -c '[[ $0 != 0 && $1 == *"no source CIDR"* && $2 == $3 ]]' "$RC" "$OUT" "$n1" "$(inserts)"
+
 # ---- secrets never leak
 check "no token, key or secret value in any output" bash -c 'for s in "$1" "$2" cf-sentinel-secret-1 r2-sentinel-secret-2 internal-sentinel-3 fvadm_sentinel4; do [[ $0 != *"$s"* ]] || { echo "leak: ${s:0:6}"; exit 1; }; done' "$ALL_OUT" "$TOKEN" "$PK_LINE"
 check "no token or secret in the ledger" bash -c '! grep -qE "ya29|sentinel" "$0"' "$FV_GCP_LEDGER"

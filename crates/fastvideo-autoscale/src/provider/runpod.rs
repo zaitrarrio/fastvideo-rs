@@ -19,11 +19,25 @@
 //!   running the controller without a gateway (provider validation).
 //!
 //! The API key is only ever sent as a header; errors never echo it.
+//!
+//! **One Runpod implementation** (docs/adr/0018-fv-deploy.md §9): the
+//! requests (`fastvideo_deploy::provider::runpod::Requests`), the answer
+//! mapping (`decode`, `delete_answer`, `graphql_data`: no capacity, 4xx,
+//! 5xx, the key scrubbed), the balance (`account_of`), the billed price
+//! (`parse_usd`) and the pod-from-template body (`template_pod_body`,
+//! `with_worker_config`) are fv-deploy's; this module only sends them on its
+//! async reqwest client ([`RunpodApi::send`]) and keeps the pool steering
+//! (observe / apply, the endpoint patch diff, `/health` counts).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use fastvideo_deploy::boot::sys::Request;
+use fastvideo_deploy::provider::runpod::{
+    self as shared, template_pod_body, with_worker_config, Requests, RunpodUrls, TemplatePod,
+};
+use fastvideo_deploy::provider::{parse_usd, ProviderKind};
 use serde_json::{json, Map, Value};
 
 use super::{ApplyReport, BalanceSource, Provider, ProviderError};
@@ -38,17 +52,25 @@ use crate::types::{
 pub struct RunpodApi {
     http: reqwest::Client,
     key: String,
-    pub rest: String,
-    pub queue: String,
-    pub graphql: String,
+    pub urls: RunpodUrls,
 }
 
 impl std::fmt::Debug for RunpodApi {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunpodApi")
-            .field("rest", &self.rest)
-            .field("queue", &self.queue)
+            .field("urls", &self.urls)
             .finish_non_exhaustive()
+    }
+}
+
+impl From<fastvideo_deploy::provider::ProviderError> for ProviderError {
+    fn from(e: fastvideo_deploy::provider::ProviderError) -> Self {
+        match e {
+            fastvideo_deploy::provider::ProviderError::NoCapacity(m) => {
+                ProviderError::NoCapacity(m)
+            }
+            other => ProviderError::Api(other.to_string()),
+        }
     }
 }
 
@@ -88,16 +110,28 @@ fn err(ctx: &str, e: impl std::fmt::Display) -> ProviderError {
 impl RunpodApi {
     pub fn new(api_key: impl Into<String>) -> Result<Self, ProviderError> {
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(60))
             .build()
             .map_err(|e| err("http client", e))?;
-        Ok(Self {
+        Ok(Self::with_client(http, api_key, RunpodUrls::default()))
+    }
+
+    /// On a given client and URLs (tests point it at a local fake).
+    pub fn with_client(
+        http: reqwest::Client,
+        api_key: impl Into<String>,
+        urls: RunpodUrls,
+    ) -> Self {
+        Self {
             http,
             key: api_key.into(),
-            rest: fastvideo_deploy::provider::runpod::REST.into(),
-            queue: fastvideo_deploy::provider::runpod::QUEUE.into(),
-            graphql: fastvideo_deploy::provider::runpod::GRAPHQL.into(),
-        })
+            urls,
+        }
+    }
+
+    /// fv-deploy's requests for this key and these URLs.
+    pub fn requests(&self) -> Requests<'_> {
+        Requests::new(&self.urls, &self.key)
     }
 
     /// From `RUNPOD_API_KEY` (or `FV_RUNPOD_API_KEY`).
@@ -108,123 +142,88 @@ impl RunpodApi {
         Self::new(key)
     }
 
-    async fn send(&self, req: reqwest::RequestBuilder, ctx: &str) -> Result<Value, ProviderError> {
-        let resp = req
-            .bearer_auth(&self.key)
-            .send()
-            .await
-            .map_err(|e| err(ctx, e.without_url()))?;
-        let status = resp.status();
-        let text = resp.text().await.map_err(|e| err(ctx, e.without_url()))?;
-        if !status.is_success() {
-            let snippet: String = text.chars().take(300).collect();
-            if fastvideo_deploy::provider::runpod::NO_CAPACITY
-                .iter()
-                .any(|m| snippet.contains(m))
-            {
-                return Err(ProviderError::NoCapacity(format!("{ctx}: {snippet}")));
-            }
-            return Err(err(ctx, format!("HTTP {status}: {snippet}")));
+    /// Sends one of fv-deploy's requests on the async client: its status and
+    /// body (the transport's error never carries the URL or the key).
+    pub async fn send(&self, req: &Request, what: &str) -> Result<(u16, Vec<u8>), ProviderError> {
+        use fastvideo_deploy::boot::sys::Method;
+        let m = match req.method {
+            Method::Get => reqwest::Method::GET,
+            Method::Post => reqwest::Method::POST,
+            Method::Delete => reqwest::Method::DELETE,
+            Method::Patch => reqwest::Method::PATCH,
+            Method::Put => reqwest::Method::PUT,
+        };
+        let mut b = self.http.request(m, &req.url).timeout(req.timeout);
+        for (k, v) in &req.headers {
+            b = b.header(k, v);
         }
-        if text.trim().is_empty() {
-            return Ok(Value::Null);
+        if let Some(body) = &req.body {
+            b = b.body(body.clone());
         }
-        serde_json::from_str(&text).map_err(|e| err(ctx, e))
+        let resp = b.send().await.map_err(|e| err(what, e.without_url()))?;
+        let status = resp.status().as_u16();
+        let body = resp.bytes().await.map_err(|e| err(what, e.without_url()))?;
+        Ok((status, body.to_vec()))
+    }
+
+    /// A REST answer's JSON (fv-deploy's `decode`).
+    async fn json(&self, req: &Request, what: &str) -> Result<Value, ProviderError> {
+        let (status, body) = self.send(req, what).await?;
+        Ok(shared::decode(what, status, &body, &self.key)?)
     }
 
     pub async fn endpoint(&self, id: &str) -> Result<Value, ProviderError> {
-        self.send(
-            self.http.get(format!("{}/endpoints/{id}", self.rest)),
-            "GET endpoint",
-        )
-        .await
+        self.json(&self.requests().endpoint(id), "GET endpoint")
+            .await
     }
 
     pub async fn patch_endpoint(&self, id: &str, body: &Value) -> Result<Value, ProviderError> {
-        self.send(
-            self.http
-                .patch(format!("{}/endpoints/{id}", self.rest))
-                .json(body),
-            "PATCH endpoint",
-        )
-        .await
+        self.json(&self.requests().patch_endpoint(id, body), "PATCH endpoint")
+            .await
     }
 
     pub async fn health(&self, id: &str) -> Result<Health, ProviderError> {
-        let v = self
-            .send(
-                self.http.get(format!("{}/{id}/health", self.queue)),
-                "GET health",
-            )
-            .await?;
+        let v = self.json(&self.requests().health(id), "GET health").await?;
         serde_json::from_value(v).map_err(|e| err("health", e))
     }
 
     pub async fn balance(&self) -> Result<f64, ProviderError> {
-        let v = self
-            .send(
-                self.http
-                    .post(&self.graphql)
-                    .json(&json!({"query": "{ myself { clientBalance } }"})),
-                "GraphQL balance",
-            )
-            .await?;
-        v.pointer("/data/myself/clientBalance")
-            .and_then(Value::as_f64)
-            .ok_or_else(|| ProviderError::Api("GraphQL balance: no clientBalance".into()))
+        let what = "GraphQL balance";
+        let (status, body) = self.send(&self.requests().balance(), what).await?;
+        let data = shared::graphql_data(what, status, &body, &self.key)?;
+        Ok(shared::account_of(ProviderKind::RunpodPod, &data)?.balance_usd)
     }
 
     pub async fn pods(&self) -> Result<Vec<Value>, ProviderError> {
-        match self
-            .send(self.http.get(format!("{}/pods", self.rest)), "GET pods")
-            .await?
-        {
+        match self.json(&self.requests().pods(), "GET pods").await? {
             Value::Array(v) => Ok(v),
             _ => Ok(Vec::new()),
         }
     }
 
     pub async fn create_pod(&self, body: &Value) -> Result<Value, ProviderError> {
-        self.send(
-            self.http.post(format!("{}/pods", self.rest)).json(body),
-            "POST pods",
-        )
-        .await
+        self.json(&self.requests().create_pod(body), "POST pods")
+            .await
     }
 
     /// A template's `env` (REST v1 `GET /templates/{templateId}`; an absent `env` is empty).
     pub async fn template_env(&self, id: &str) -> Result<Map<String, Value>, ProviderError> {
         let v = self
-            .send(
-                self.http.get(format!("{}/templates/{id}", self.rest)),
-                "GET template",
-            )
+            .json(&self.requests().template(id), "GET template")
             .await?;
         Ok(template_env_of(&v))
     }
 
+    /// Gone (404) is deleted (fv-deploy's `delete_answer`).
     pub async fn delete_pod(&self, id: &str) -> Result<(), ProviderError> {
-        self.send(
-            self.http.delete(format!("{}/pods/{id}", self.rest)),
-            "DELETE pod",
-        )
-        .await
-        .map(|_| ())
+        let what = "DELETE pod";
+        let (status, body) = self.send(&self.requests().delete_pod(id), what).await?;
+        Ok(shared::delete_answer(what, status, &body, &self.key)?)
     }
 }
 
-/// The `env` of a REST v1 template object, as strings (a non-string value is skipped).
-pub fn template_env_of(v: &Value) -> Map<String, Value> {
-    v.get("env")
-        .and_then(Value::as_object)
-        .map(|m| {
-            m.iter()
-                .filter(|(_, x)| x.is_string())
-                .map(|(k, x)| (k.clone(), x.clone()))
-                .collect()
-        })
-        .unwrap_or_default()
-}
+/// Shared with fv-deploy (`fastvideo_deploy::provider::runpod`).
+pub use fastvideo_deploy::provider::runpod::template_env_of;
 
 /// Endpoint settings from a REST v1 endpoint object.
 pub fn endpoint_settings(v: &Value) -> EndpointSettings {
@@ -617,30 +616,22 @@ impl RunpodPods {
         name: &str,
         template_env: &Map<String, Value>,
     ) -> Vec<(String, Value)> {
+        // The template's image bakes no worker config (ADR-0011): the pool's
+        // rides in the pod's env (fv-deploy's `with_worker_config`).
+        let env = (!pool.pod.worker_toml_b64.is_empty())
+            .then(|| with_worker_config(template_env, &pool.pod.worker_toml_b64));
         let mut v = Vec::new();
         for pl in &pool.pod.placements {
             for gpu in &pool.pod.gpu_types {
-                let mut body = json!({
-                    "name": name,
-                    "templateId": pool.pod.template_id,
-                    "computeType": "GPU",
-                    "cloudType": pool.pod.cloud_type,
-                    "gpuTypeIds": [gpu],
-                    "gpuCount": 1,
-                    "networkVolumeId": pl.volume_id,
-                    "volumeMountPath": "/workspace",
-                    "dataCenterIds": [pl.data_center],
+                let body = template_pod_body(&TemplatePod {
+                    name,
+                    template_id: &pool.pod.template_id,
+                    cloud_type: &pool.pod.cloud_type,
+                    gpu,
+                    volume_id: &pl.volume_id,
+                    data_center: &pl.data_center,
+                    env: env.as_ref(),
                 });
-                // The template's image bakes no worker config (ADR-0011): the pool's
-                // rides in the pod's env.
-                if !pool.pod.worker_toml_b64.is_empty() {
-                    let mut env = template_env.clone();
-                    env.insert(
-                        "FV_WORKER_TOML_B64".into(),
-                        Value::String(pool.pod.worker_toml_b64.clone()),
-                    );
-                    body["env"] = Value::Object(env);
-                }
                 v.push((format!("{gpu} in {}", pl.data_center), body));
             }
         }
@@ -690,7 +681,10 @@ impl RunpodPods {
                         last = Some(ProviderError::Api(format!("create on {label}: no id")));
                         continue;
                     };
-                    let dph = v.get("costPerHr").and_then(Value::as_f64).unwrap_or(0.0);
+                    // A number or a numeric string (fv-deploy's `parse_usd`; Runpod's
+                    // REST docs show `'0.74'`); missing stays 0 here (the pool's cap
+                    // applies to a reported price; ADR-0018 §9 open decision).
+                    let dph = parse_usd(v.get("costPerHr")).unwrap_or(0.0);
                     let gpu = body["gpuTypeIds"][0].as_str().unwrap_or("");
                     let cap = if pool.pod.max_usd_per_hr > 0.0 {
                         pool.pod.max_usd_per_hr
@@ -796,7 +790,7 @@ impl Provider for RunpodPods {
                     .pointer("/machine/gpuTypeId")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
-                usd_per_hr: p.get("costPerHr").and_then(Value::as_f64),
+                usd_per_hr: parse_usd(p.get("costPerHr")),
             });
         }
         Ok(PoolObservation {
@@ -988,5 +982,123 @@ mod tests {
             .1
             .get("env")
             .is_none());
+    }
+
+    /// A local fake Runpod: `POST /v1/pods` says no stock, `DELETE` of a
+    /// gone pod is a 404, a 500 echoes the key, GraphQL answers a balance,
+    /// a template has an env. Every request's method, path and
+    /// authorization are recorded.
+    async fn fake_runpod() -> (RunpodUrls, Arc<Mutex<Vec<String>>>) {
+        use axum::extract::{OriginalUri, Request as AxRequest};
+        use axum::http::StatusCode;
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let s = Arc::clone(&seen);
+        let app = axum::Router::new().fallback(move |uri: OriginalUri, req: AxRequest| {
+            let s = Arc::clone(&s);
+            async move {
+                let auth = req
+                    .headers()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_owned();
+                let line = format!("{} {} {auth}", req.method(), uri.0.path());
+                s.lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(line.clone());
+                match line.split(' ').take(2).collect::<Vec<_>>().as_slice() {
+                    ["POST", "/v1/pods"] => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "There are no longer any instances available".to_owned(),
+                    ),
+                    ["DELETE", "/v1/pods/gone"] => (StatusCode::NOT_FOUND, String::new()),
+                    ["DELETE", _] => (StatusCode::OK, "{}".to_owned()),
+                    ["GET", "/v1/endpoints/boom"] => {
+                        (StatusCode::INTERNAL_SERVER_ERROR, format!("echo {auth}"))
+                    }
+                    ["GET", "/v1/templates/tpl"] => (
+                        StatusCode::OK,
+                        r#"{"env":{"FV_CF_ACCOUNT_ID":"{{ RUNPOD_SECRET_fv_cf_account_id }}"}}"#
+                            .to_owned(),
+                    ),
+                    ["POST", "/graphql"] => (
+                        StatusCode::OK,
+                        r#"{"data":{"myself":{"clientBalance":21.5,"currentSpendPerHr":0}}}"#
+                            .to_owned(),
+                    ),
+                    _ => (StatusCode::NOT_FOUND, "{}".to_owned()),
+                }
+            }
+        });
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|e| panic!("bind: {e}"));
+        let base = format!(
+            "http://{}",
+            l.local_addr().map(|a| a.to_string()).unwrap_or_default()
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(l, app).await;
+        });
+        let urls = RunpodUrls {
+            rest: format!("{base}/v1"),
+            queue: format!("{base}/v2"),
+            graphql: format!("{base}/graphql"),
+            ..RunpodUrls::default()
+        };
+        (urls, seen)
+    }
+
+    /// The autoscaler sends fv-deploy's requests and reads the answers with
+    /// fv-deploy's decoders: no stock is `NoCapacity`, a gone pod's delete
+    /// is done, the balance parses, a template's env is read, and an error
+    /// never carries the key.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_async_client_sends_the_shared_requests() {
+        const KEY: &str = "rpa_AUTOSCALE_SENTINEL";
+        let (urls, seen) = fake_runpod().await;
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let api = RunpodApi::with_client(http, KEY, urls.clone());
+        let e = api.create_pod(&json!({"name": "x"})).await;
+        assert!(matches!(e, Err(ProviderError::NoCapacity(_))), "{e:?}");
+        assert!(api.delete_pod("gone").await.is_ok());
+        assert!(api.delete_pod("p1").await.is_ok());
+        assert_eq!(api.balance().await.ok(), Some(21.5));
+        let env = api.template_env("tpl").await.unwrap_or_default();
+        assert_eq!(
+            env.get("FV_CF_ACCOUNT_ID").and_then(Value::as_str),
+            Some("{{ RUNPOD_SECRET_fv_cf_account_id }}")
+        );
+        let e = api
+            .endpoint("boom")
+            .await
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(e.contains("HTTP 500") && !e.contains(KEY), "{e}");
+        let got = seen.lock().map(|g| g.clone()).unwrap_or_default();
+        let bearer = format!("Bearer {KEY}");
+        assert!(got.iter().all(|l| l.ends_with(&bearer)), "{got:?}");
+        // The same requests fv-deploy's blocking client sends.
+        let r = Requests::new(&urls, KEY);
+        let want: Vec<String> = [
+            r.create_pod(&json!({"name": "x"})),
+            r.delete_pod("gone"),
+            r.delete_pod("p1"),
+            r.balance(),
+            r.template("tpl"),
+            r.endpoint("boom"),
+        ]
+        .iter()
+        .map(|q| {
+            let path = q.url.split_once("://").map_or("", |x| x.1);
+            let path = &path[path.find('/').unwrap_or(0)..];
+            format!("{} {path} {bearer}", q.method.as_str())
+        })
+        .collect();
+        assert_eq!(got, want);
     }
 }

@@ -82,9 +82,9 @@ env_dict() {
 
 create_payload() {
   local image="$1" keyhash="$2" label="$3"
-  jq -n --arg image "$image" --arg label "$label" --arg disk "$DISK" --arg onstart "$(onstart)" \
+  jq -n --arg image "$image" --arg lbl "$label" --arg disk "$DISK" --arg onstart "$(onstart)" \
     --argjson env "$(env_dict "$keyhash")" '{
-    client_id: "me", image: $image, label: $label, disk: ($disk|tonumber),
+    client_id: "me", image: $image, "label": $lbl, disk: ($disk|tonumber),
     runtype: "ssh_direct", target_state: "running", cancel_unavail: true,
     onstart: $onstart, env: $env
   }'

@@ -301,3 +301,345 @@ fn every_worker_config_fits_the_env_size_guard() {
     let e = launch::inline_config(&big).err().unwrap_or_default();
     assert!(e.contains("over the 16384-byte guard"), "{e}");
 }
+
+// ------------------------------------------------------------ Vast and GCP (C3b)
+
+use fastvideo_deploy::launch::{script_gcp, script_vast, ScriptGcp, ScriptVast};
+use fastvideo_deploy::provider::gcp::{
+    firewall_body, instance_body, GcpAssets, GcpOptions, GcpPrices, FILE_ITEMS,
+};
+use fastvideo_deploy::provider::vast::{create_body as vast_create_body, offer_query};
+
+/// Numbers compared as numbers: jq keeps the script's literal `13.0` /
+/// `0.60`, serde_json reads `13` and `13.0` as different `Value`s.
+fn num(v: &Value) -> Value {
+    match v {
+        Value::Number(n) => json!(n.as_f64().unwrap_or(f64::NAN)),
+        Value::Array(a) => Value::Array(a.iter().map(num).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), num(v))).collect()),
+        other => other.clone(),
+    }
+}
+
+fn vast_guards() -> fastvideo_deploy::provider::Guards {
+    let mut g = guard::default_guards();
+    g.max_usd_per_hr = guard::default_max_usd_per_hr(ProviderKind::Vast);
+    g
+}
+
+fn script_vast_launch() -> fastvideo_deploy::provider::Launch {
+    script_vast(&ScriptVast {
+        name: "fvgpu-serve-plan",
+        image: IMAGE,
+        key_hash: KEY_HASH_PLACEHOLDER,
+        config: "/etc/fv/runpod-fake.toml",
+        disk_gb: 40,
+        guards: vast_guards(),
+    })
+}
+
+#[test]
+fn vast_search_and_create_equal_vast_sh() {
+    let l = script_vast_launch();
+    assert_eq!(num(&offer_query(&l)), num(&fixture("vast-offers.json")));
+    let body = vast_create_body(&l).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(num(&body), num(&fixture("vast-create.json")));
+}
+
+fn vast_request() -> PresetRequest {
+    let mut r = request("fake", ProviderKind::Vast);
+    r.family = "fake".into();
+    r.guards = vast_guards();
+    r
+}
+
+/// `fv-deploy up --kind vast --family fake --preset fake`: the script's
+/// instance with the config inline (the one image bakes none, ADR-0011), so
+/// the onstart starts fv-boot without `--config`; plus the image identity,
+/// the channel and the weights source; the search is the script's.
+#[test]
+fn preset_vast_is_the_script_instance_plus_the_inline_config() {
+    let r = repo();
+    let mut l = from_preset(&r, &vast_request(), "1025120000").unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(guard::check_region(&l), Ok(()));
+    pin_image(&mut l, IMAGE);
+    assert_eq!(num(&offer_query(&l)), num(&fixture("vast-offers.json")));
+    let got = vast_create_body(&l).unwrap_or_else(|e| panic!("{e}"));
+    let mut want = fixture("vast-create.json");
+    want["label"] = json!("fv-deploy-fake-1025120000");
+    want["onstart"] = json!(want["onstart"]
+        .as_str()
+        .unwrap_or_default()
+        .replace(" --config /etc/fv/runpod-fake.toml", ""));
+    let fake =
+        std::fs::read(repo_root().join("configs/serve/runpod-fake.toml")).unwrap_or_default();
+    for (k, v) in [
+        ("FV_IMAGE_REF", IMAGE.to_owned()),
+        (
+            "FV_IMAGE_DIGEST",
+            IMAGE.split_once('@').map(|x| x.1).unwrap_or("").to_owned(),
+        ),
+        ("FV_RELEASE_CHANNEL", "stable".to_owned()),
+        ("FV_WEIGHTS_SOURCE", "none".to_owned()),
+        (
+            "FV_WORKER_TOML_B64",
+            base64::engine::general_purpose::STANDARD.encode(&fake),
+        ),
+    ] {
+        want["env"][k] = json!(v);
+    }
+    assert_eq!(num(&got), num(&want));
+}
+
+#[test]
+fn vast_refuses_presets_with_weights_and_secrets() {
+    let r = repo();
+    let mut req = vast_request();
+    req.family = "h3".into();
+    req.preset = "h3-turbo".into();
+    let e = from_preset(&r, &req, "1")
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(e.contains("only --family fake --preset fake"), "{e}");
+    let mut l = script_vast_launch();
+    l.env.insert("FV_R2_SECRET_ACCESS_KEY".into(), "x".into());
+    let e = vast_create_body(&l)
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(e.contains("Vast account env var"), "{e}");
+    let mut l = script_vast_launch();
+    l.weights = fastvideo_deploy::provider::WeightsSource::R2;
+    assert!(guard::check_region(&l).is_err());
+}
+
+const GCP_RUN: &str = "1025120000";
+const GCP_DEADLINE: u64 = 1_790_000_000;
+
+fn gcp_options(family: &str, cells: &[&str]) -> GcpOptions {
+    GcpOptions {
+        family: family.into(),
+        run: GCP_RUN.into(),
+        verify_cells: cells.iter().map(|c| (*c).to_owned()).collect(),
+        spot: false,
+        idle_s: 1800,
+        source_ranges: vec!["198.51.100.7/32".into()],
+        secret_manager: false,
+    }
+}
+
+/// The instance as the fixture holds it: the file items as `<file>`, after
+/// checking each is the repository file it names; `fv-env` as its object.
+fn gcp_normalized(body: &Value, assets: &GcpAssets, config: &str) -> Value {
+    let mut b = body.clone();
+    let files = [
+        ("startup-script", assets.startup_script.as_str()),
+        ("fv-config", config),
+        ("fv-script-verify-weights", assets.verify_weights.as_str()),
+        (
+            "fv-script-verify-safetensors",
+            assets.verify_safetensors.as_str(),
+        ),
+        ("fv-manifest", assets.manifest.as_str()),
+        ("fv-sha256", assets.sha256.as_str()),
+    ];
+    for it in b["metadata"]["items"]
+        .as_array_mut()
+        .unwrap_or(&mut Vec::new())
+    {
+        let k = it["key"].as_str().unwrap_or_default().to_owned();
+        if let Some((_, text)) = files.iter().find(|(f, _)| *f == k) {
+            assert!(FILE_ITEMS.contains(&k.as_str()));
+            assert_eq!(it["value"].as_str(), Some(*text), "{k}");
+            assert!(!text.is_empty(), "{k}");
+            it["value"] = json!("<file>");
+        } else if k == "fv-env" {
+            let env: Value =
+                serde_json::from_str(it["value"].as_str().unwrap_or("null")).unwrap_or(Value::Null);
+            it["value"] = env;
+        }
+    }
+    b
+}
+
+fn gcp_assets() -> GcpAssets {
+    GcpAssets::load(&repo_root()).unwrap_or_else(|e| panic!("{e}"))
+}
+
+#[test]
+fn gcp_firewall_and_instance_equal_vm_sh() {
+    let cfg = std::fs::read_to_string(repo_root().join("configs/serve/gcp-h3-turbo.toml"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut g = guard::default_guards();
+    g.cap_s = 1800;
+    let l = script_gcp(&ScriptGcp {
+        name: "fv-h3-turbo-1025120000",
+        image: IMAGE,
+        key_hash: KEY_HASH_PLACEHOLDER,
+        config_text: &cfg,
+        machine: "g4-standard-48",
+        zone: "europe-west4-b",
+        fake: false,
+        guards: g,
+    });
+    let o = gcp_options("h3-turbo", &["fasth3-4step-vsa", "aux"]);
+    let assets = gcp_assets();
+    let body = instance_body(&l, &o, &assets, "golden-project", GCP_DEADLINE)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        gcp_normalized(&body, &assets, &cfg),
+        fixture("gcp-instance.json")
+    );
+    assert_eq!(
+        firewall_body(&l.name, &o, "golden-project").unwrap_or_else(|e| panic!("{e}")),
+        fixture("gcp-firewall.json")
+    );
+    assert_eq!(guard::check_region(&l), Ok(()));
+}
+
+/// `fv-deploy up --kind gcp --family h3 --preset h3-turbo`: `vm.sh up
+/// h3-turbo` with fv-deploy's name, and the channel and the weights source
+/// in the container env; nothing else differs.
+#[test]
+fn preset_gcp_is_the_script_vm_plus_the_channel() {
+    let r = repo();
+    let mut req = request("h3-turbo", ProviderKind::Gcp);
+    req.guards.cap_s = 1800;
+    let mut l = from_preset(&r, &req, GCP_RUN).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(guard::check_region(&l), Ok(()));
+    pin_image(&mut l, IMAGE);
+    let o = launch::gcp_options(
+        &r,
+        &req,
+        GCP_RUN,
+        vec!["198.51.100.7/32".into()],
+        false,
+        1800,
+        false,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(o, gcp_options("h3-turbo", &["fasth3-4step-vsa", "aux"]));
+    let cfg = std::fs::read_to_string(repo_root().join("configs/serve/gcp-h3-turbo.toml"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let assets = gcp_assets();
+    let body = instance_body(&l, &o, &assets, "golden-project", GCP_DEADLINE)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut want = fixture("gcp-instance.json");
+    let name = "fv-deploy-h3-turbo-1025120000";
+    want["name"] = json!(name);
+    want["tags"]["items"] = json!(["fv-serve", name]);
+    for it in want["metadata"]["items"]
+        .as_array_mut()
+        .unwrap_or(&mut Vec::new())
+    {
+        if it["key"] == "fv-env" {
+            it["value"]["FV_RELEASE_CHANNEL"] = json!("stable");
+            it["value"]["FV_WEIGHTS_SOURCE"] = json!("volume");
+        }
+    }
+    assert_eq!(gcp_normalized(&body, &assets, &cfg), want);
+    let mut fw = fixture("gcp-firewall.json");
+    fw["name"] = json!(format!("fv-serve-{name}"));
+    fw["targetTags"] = json!([name]);
+    assert_eq!(
+        firewall_body(&l.name, &o, "golden-project").unwrap_or_else(|e| panic!("{e}")),
+        fw
+    );
+}
+
+/// Every `[[gcp]]` row builds for its family (a model family through
+/// `[dispatch]`, or `fake`), passes the GCP guard and sends its config;
+/// only `fake` mounts no weights disk.
+#[test]
+fn every_gcp_row_builds() {
+    let r = repo();
+    let assets = gcp_assets();
+    for row in &r.deploy.gcp {
+        let family = match &row.dispatch_family {
+            Some(df) => r
+                .deploy
+                .dispatch
+                .iter()
+                .find(|(_, d)| *d == df)
+                .map(|(m, _)| m.clone())
+                .unwrap_or_else(|| df.clone()),
+            None => "fake".into(),
+        };
+        let mut req = request(&row.name, ProviderKind::Gcp);
+        req.family = family.clone();
+        let l = from_preset(&r, &req, "1").unwrap_or_else(|e| panic!("{}: {e}", row.name));
+        assert_eq!(guard::check_region(&l), Ok(()), "{}", row.name);
+        assert_eq!(
+            l.placement.volume.is_none(),
+            row.name == "fake",
+            "{}",
+            row.name
+        );
+        assert_eq!(
+            l.gpu.types,
+            std::slice::from_ref(&row.machine),
+            "{}",
+            row.name
+        );
+        let o = launch::gcp_options(
+            &r,
+            &req,
+            "1",
+            vec!["198.51.100.7/32".into()],
+            false,
+            1800,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let body = instance_body(&l, &o, &assets, "p", 1).unwrap_or_else(|e| panic!("{e}"));
+        let file = std::fs::read_to_string(repo_root().join("configs/serve").join(&row.config))
+            .unwrap_or_default();
+        let items = body["metadata"]["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let cfg = items
+            .iter()
+            .find(|i| i["key"] == "fv-config")
+            .map(|i| i["value"].clone());
+        assert_eq!(cfg, Some(json!(file)), "{}", row.name);
+        let env: Value = items
+            .iter()
+            .find(|i| i["key"] == "fv-env")
+            .and_then(|i| i["value"].as_str())
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(Value::Null);
+        assert!(env.get("FV_WORKER_TOML_B64").is_none(), "{}", row.name);
+        let mut wrong = req.clone();
+        wrong.family = "no-such-family".into();
+        assert!(from_preset(&r, &wrong, "1").is_err(), "{}", row.name);
+    }
+    let mut us = request("h3-turbo", ProviderKind::Gcp);
+    us.region = "us".into();
+    let e = from_preset(&r, &us, "1")
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(e.contains("US weights volume deleted"), "{e}");
+}
+
+#[test]
+fn gcp_prices_are_read_from_lib_sh() {
+    let p = GcpPrices::load(&repo_root()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        p.price("g4-standard-48", false, "europe-west4"),
+        Some(4.9499)
+    );
+    assert_eq!(
+        p.price("g4-standard-48", true, "europe-west4"),
+        Some(2.2091)
+    );
+    // Not listed in the region: the highest listed row (conservative).
+    assert_eq!(
+        p.price("g2-standard-16", false, "europe-north1"),
+        Some(1.2058)
+    );
+    assert_eq!(p.price("no-such-machine", false, "europe-west4"), None);
+    assert!(p.0.len() >= 10, "{:?}", p.0.len());
+}
