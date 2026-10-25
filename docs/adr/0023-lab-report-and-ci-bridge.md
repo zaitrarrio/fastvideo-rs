@@ -167,19 +167,70 @@ shown as failed: that is a finding, not a number.
   `-X DELETE`; the payload goldens are regenerated from the script and equal. The script's `upstream` mode shares
   `idle_watchdog`, so its pods get the fix too.
 
-  **Follow-up, not changed here** (in-pod REST self-deletes with the pod-scoped `RUNPOD_API_KEY`, the same defect):
-  `scripts/serve/e2e/pod-boot.sh:49`, `scripts/serve/e2e/ltx-pod.sh:49`, `scripts/gpu/family-pool-pod.sh:40`,
-  `scripts/gpu/family-pool-validate.sh:82`, `scripts/gpu/sol-bench-pod.sh:41`, and the one-offs under
-  `scripts/gpu/experiments/` (`h3-tier-ship-validate.sh:126`, `h3-fp4attn-validate.sh:110`,
-  `h3-tier-options-pod.sh:81`, `h3-turbo-loras-validate.sh:96`, `vdn-h3-validate.sh:120`, `h3-glue-pod.sh:52`,
-  `h3-glue-validate.sh:113`, `vdn-h3-pod.sh:53`, `h3-graphs-validate.sh:107`, `h3-graphs-pod.sh:92`,
-  `h3-fp4attn-pod.sh:82`, `h3-tier-ship-pod.sh:74`, `h3-trim-pod.sh:56`, `h3-trim-validate.sh:120`,
-  `h3-tier-options-validate.sh:126`, `fasth3-nvfp4-validate.sh:93`, `h3-trim-nvfp4-pod.sh:48`,
-  `fasth3-nvfp4-pod.sh:56`, `h3-turbo-loras-pod.sh:49`, `h3-trim-nvfp4-validate.sh:83`; plan D1e retires them). With
-  another key, to be checked: `control/src/cluster/payloads.ts:54` and `crates/fastvideo-deploy/src/boot/watchdog.rs:139`
-  (`delete_runpod`, REST with `FV_BACKSTOP_API_KEY`, which also counts any HTTP answer, a 403 included, as done).
-  `scripts/dev/build-pod-server.py:73` already falls back to GraphQL. `artifacts/perf/h3-trim-vae-mxfp8/driver/`
-  is committed evidence and stays as run.
+  **Follow-up, done (2026-10-25, branch `claude/pod-self-delete-graphql`).** These in-pod REST self-deletes with
+  the pod-scoped `RUNPOD_API_KEY` had the same defect: `scripts/serve/e2e/pod-boot.sh:49`,
+  `scripts/serve/e2e/ltx-pod.sh:49`, `scripts/gpu/family-pool-pod.sh:40`, `scripts/gpu/family-pool-validate.sh:82`,
+  `scripts/gpu/sol-bench-pod.sh:41`, and the one-offs under `scripts/gpu/experiments/` (`h3-tier-ship-validate.sh:126`,
+  `h3-fp4attn-validate.sh:110`, `h3-tier-options-pod.sh:81`, `h3-turbo-loras-validate.sh:96`,
+  `vdn-h3-validate.sh:120`, `h3-glue-pod.sh:52`, `h3-glue-validate.sh:113`, `vdn-h3-pod.sh:53`,
+  `h3-graphs-validate.sh:107`, `h3-graphs-pod.sh:92`, `h3-fp4attn-pod.sh:82`, `h3-tier-ship-pod.sh:74`,
+  `h3-trim-pod.sh:56`, `h3-trim-validate.sh:120`, `h3-tier-options-validate.sh:126`, `fasth3-nvfp4-validate.sh:93`,
+  `h3-trim-nvfp4-pod.sh:48`, `fasth3-nvfp4-pod.sh:56`, `h3-turbo-loras-pod.sh:49`, `h3-trim-nvfp4-validate.sh:83`).
+  A re-grep found no others. Each now calls `fv_self_delete`, whose one definition is
+  `scripts/gpu/lib/self-delete.sh`; `runpod-http.sh` and `pod-start.sh.in` carry the same text (their goldens
+  regenerated). After review (2026-10-25) the function hands curl the `Authorization` header on stdin (`printf … |
+  curl … -H @-`: POSIX, the key never in a process's argv), keeps its status in `_fvsd_code` / `_fvsd_ok` (no global
+  `code`), and removes `<log>.resp` once logged (pod scripts serve their log directory over HTTP). The coordinator's
+  live check of the first text (CPU pod `inuqqmjr86ah47`, the library then `sleep 60; until fv_self_delete …`): gone
+  on the first attempt, 17:01:57Z.
+  - the launchers that build a start command locally (the eleven `*-validate.sh`, `ltx-pod.sh`) put that file first
+    in the command they send: the `*-validate.sh` through `start_cmd` (`up` sends `"$(start_cmd)"`, `print-start`
+    prints it), `ltx-pod.sh` through `entry_cmd` (`entry` prints it); the start commands' "delete 10/20/30 min after
+    DONE" is now `until fv_self_delete /tmp/self-delete.log; do sleep 60; done`, and ltx-pod.sh's idle watchdog calls
+    it each idle minute (as `runpod-http.sh`);
+  - the scripts that run on a pod (`family-pool-pod.sh`, the ten `experiments/*-pod.sh`, `sol-bench-pod.sh`,
+    `pod-boot.sh`) carry the same text inline: they are shipped alone (a bundle, a base64 env, an older image) and
+    cannot source the repository. The busy-GPU exit tries 5 times, 30 s apart, before the start command's own
+    retrying delete; `sol-bench-pod.sh`'s cap retries each minute; `pod-boot.sh`'s idle guard each 30 s idle tick,
+    `runpodctl remove pod` only when the call failed.
+
+  `scripts/gpu/tests/self-delete.test.sh` (its own workflow, `self-delete.yml`, on every path it scans: `scripts/`,
+  `control/src`, `deploy/`, `docker/`, `crates/`, `.github/`) fails when
+  - any tracked file deletes the pod's own id (`RUNPOD_POD_ID` or its alias `FV_POD_ID`) through REST, or any file
+    not on its `LOCAL` list (the launchers and fv-control code that run with the account key, the build pod, tests)
+    DELETEs a pod through REST at all, whatever the variable (`curl -X DELETE`, `rest DELETE`, `.delete(`; shell
+    lines joined across `\`, Python statements across open brackets); the rule's own cases (an alias, a multi-line
+    `requests.delete`, any variable in a pod script, a local backstop that must pass) run first;
+  - any copy of `fv_self_delete` (37 inline: the pod scripts, `pod-start.sh.in`, the `runpod-http-*.json` fixtures
+    that render `runpod-http.sh`) differs from the library or is called before it is defined;
+  - a launcher's rendered command (`print-start`, `entry`: the function `up` sends) has not exactly one copy defined
+    before its call, or its self-delete, run with a stand-in curl, `sleep` and `nvidia-smi`, does not make exactly
+    one GraphQL call on HTTP 200 and three (retries) on a 403;
+  - the function itself, against the stand-in curl: HTTP 200 + data succeeds; 200 + `"errors"`, 201, 403, 500, a
+    transport error fail; the exact endpoint, headers and mutation; the key on curl's stdin, never in argv or the log;
+    the answer file removed.
+
+  It fails, as checked by hand, on each of: the library appended after the start command, read but not sent, `up`
+  sending something other than `start_cmd`'s output, the inline definition in `family-pool-pod.sh` moved below the
+  busy-GPU call, the library after `ltx-pod.sh`'s watchdog, a `$FV_POD_ID` REST delete in `r2-fill-volume-pod.sh`, a
+  `$API/pods/$X` delete in a non-`LOCAL` script, a multi-line Python `requests.delete`, the answer file kept, the key
+  back in argv, and a start command's delete without its retry loop.
+
+  **The two other-key sites.** `control/src/cluster/payloads.ts` `WATCHDOG` (edge fronts, standalone pods) and
+  fv-boot's `delete_runpod` (`crates/fastvideo-deploy/src/boot/watchdog.rs`) use `FV_BACKSTOP_API_KEY`, which
+  fv-control sets from its own `RUNPOD_API_KEY` (`envCtx` `runpodApiKey`, `payloads.ts` `edgeEnv` / `directEnv`): the
+  account key fv-control creates pods with and deletes them through REST (`runpod.ts`). It is not pod-scoped (Runpod
+  injects only `RUNPOD_API_KEY`; fv-boot's `mode` reads `FV_BACKSTOP_API_KEY` alone; fv-deploy refuses a launch that
+  carries it), so both keep REST. Both counted any HTTP answer, a 403 included, as done; now only a 2xx, or a 404 (the
+  pod is gone), ends the three attempts and anything else is retried (logged with its status, never the key), 5 s
+  apart with no pause after the last (the shell loop names its counter `i`: bash's `$_` is the previous command's
+  last argument): `watchdog::runpod_deleted`, `boot::tests::watchdog_retries_a_refused_runpod_delete`, and
+  `edge.test.ts` "counts only a 2xx or a 404 as deleted".
+
+  Left as they are: `scripts/dev/build-pod-server.py` and `control/src/buildpod-start.ts` (the build pod: REST stop,
+  REST delete, then GraphQL `podTerminate`), the local backstops (`sleep $CAP; curl -X DELETE …/pods/$id` with the
+  caller's account key, on the caller's machine), and `artifacts/perf/h3-trim-vae-mxfp8/driver/`, committed evidence
+  that stays as run.
 - **The secret's scope.** `RUNPOD_API_KEY` is a step-level env of the three steps that call Runpod (the refusal check,
   `pod up`, `pod down`), never the job's: the cargo build scripts and the third-party actions never see it. The
   third-party actions of both workflows are pinned by commit, read from their tags with `git ls-remote` on 2026-10-24:
