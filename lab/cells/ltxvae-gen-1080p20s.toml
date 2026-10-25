@@ -1,6 +1,6 @@
 # The ltxvae family's FV_VAE_GEN=1 arms at 1080p20s (runpod-matrix.sh `ltxvae`
 # before #185 deleted its branch; restored in the `ltxvae-gen` tier,
-# ADR-0019 §11): one cold (no --warm) LTX-2.5 generation that saves its latents
+# ADR-0019 §12): one cold (no --warm) LTX-2.5 generation that saves its latents
 # (FASTVIDEO_LTX2_SAVE_LATENTS) and decodes them with the fast decoder, traced
 # (FASTVIDEO_GPU_TRACE_DECODE=1, FV_VAE_TRACE's default); then `vae-bench`
 # decodes those latents with the f32 streaming decoder, for a real-content PSNR

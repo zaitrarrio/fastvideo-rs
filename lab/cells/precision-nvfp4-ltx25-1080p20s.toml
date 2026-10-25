@@ -1,6 +1,6 @@
 # The precision family's FV_PRECISION_ARM=ltx-nvfp4 mode at 1080p20s (runpod-matrix.sh
 # `precision` before #185 deleted its branch; restored as the
-# `precision-nvfp4` tier, ADR-0019 §11): the NVFP4 video FFN (profile
+# `precision-nvfp4` tier, ADR-0019 §12): the NVFP4 video FFN (profile
 # ltx2/ltx25_distill_sol_nvfp4, sol-engine nvfp4_ffn.py; weights quantized at
 # load from the bf16 ltx25 tree, sm_100 / sm_120 only) against the bf16 default
 # (ltx2/ltx25_distill_sol): Sol stage 2, same prompt and seed, warm process,

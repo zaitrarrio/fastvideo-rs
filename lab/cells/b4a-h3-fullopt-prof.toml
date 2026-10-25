@@ -1,0 +1,71 @@
+# The b4a family's b4a-h3-fullopt-prof pair (runpod-matrix.sh `b4a`, plan B4a,
+# docs/adr/0020-step-cache.md): the baseline binary (FV_BASELINE_SHA's runtime image,
+# fetch-baseline.sh) and this build with the same command line and environment, every arm encoding
+# its prompt (--no-text-cache), then compare-clips --off-identity and the cell's verdict
+# (docs/adr/0019-fv-lab.md §11, D1d): both arms exit 0, each reused at least one forward, the
+# --off-identity compare passed, and the arms' step-cache evidence lines (the install line, every
+# `h3 teacache step` decision, the load plan's `fuse step cache`) are equal.
+# The same route from the profile (H3Techniques::teacache_state, the profile log line), MXFP8
+# linears as in the `techniques` -prof arm.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "b4a-h3-fullopt-prof"
+description = "The same route from the profile (H3Techniques::teacache_state), MXFP8 linears as in the techniques -prof arm; baseline vs this build, byte identity and the same step-cache decisions"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+width = 832
+height = 480
+note = "runpod-matrix.sh's default PROMPT and SEED; 480p / 5 s, the auto text encoder, each arm encoding its prompt"
+
+[lists]
+h3_b4a = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--height", "{height}", "--width",
+  "{width}", "--seconds", "{seconds}", "--prompt", "{prompt}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--no-text-cache", "--no-mp4"]
+
+[[arm]]
+name = "b4a-h3-fullopt-prof-base"
+gate = "h3-base"
+trees = ["h3-base"]
+bin = "baseline"
+env = ["FASTVIDEO_H3_QUANT=mxfp8"]
+argv = ["{@h3_b4a}", "--techniques", "h3/rtx5090_fullopt", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "b4a-h3-fullopt-prof-pr"
+gate = "h3-base"
+trees = ["h3-base"]
+env = ["FASTVIDEO_H3_QUANT=mxfp8"]
+argv = ["{@h3_b4a}", "--techniques", "h3/rtx5090_fullopt", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "b4a-h3-fullopt-prof-base"
+candidate = "b4a-h3-fullopt-prof-pr"
+args = ["--off-identity"]
+
+[verdict]
+family = "b4a"
+arms = ["b4a-h3-fullopt-prof-base", "b4a-h3-fullopt-prof-pr"]
+describe = "verdict also needs both arms exit 0 (summary.json) and the --off-identity compare passed"
+
+# The script's b4a_evidence: the step cache's lines of the arm's stderr.log without the bracketed
+# prefixes a log line starts with; the two arms' files must be equal.
+[[verdict.evidence]]
+file = "cache-evidence.log"
+lines = ["h3 sol teacache", "h3 teacache:", "h3 teacache step", "fuse step cache"]
+strip = "bracket-prefixes"
+diff = "evidence.diff"
+
+# A cell whose arms reused no forward did not exercise the cache.
+[[verdict.count]]
+what = "teacache reused forwards"
+lines = ["h3 teacache step *REUSE"]
+min = 1
+why = "no-reuse"
+
+[[verdict.identical]]
+baseline = "b4a-h3-fullopt-prof-base"
+candidate = "b4a-h3-fullopt-prof-pr"

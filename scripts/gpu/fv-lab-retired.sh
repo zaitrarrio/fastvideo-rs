@@ -17,7 +17,7 @@
 # was already gone, so they start frozen.
 FV_LAB_RETIRED="rtx6000 techniques b6 rtx5090 fastvideo h3arms trace ltxfps ltxvae precision precision-nvfp4 ltxvae-gen"
 
-# Script modes restored as tiers (ADR-0019 §11, owner decision 2026-10-25):
+# Script modes restored as tiers (ADR-0019 §12, owner decision 2026-10-25):
 # `<tier>:<family>:<K=V>` is the mode `FV_EXTRA_ENV=<K=V> runpod-matrix.sh
 # <family>` ran before #185 deleted the branch. The tier's fixtures are that
 # mode's dry run, gates and `runpod-http.sh plan` body as the script wrote them

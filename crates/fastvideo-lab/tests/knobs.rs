@@ -1,4 +1,4 @@
-//! fv-lab and the scripts refuse the same settings (ADR-0019 §11): the keys
+//! fv-lab and the scripts refuse the same settings (ADR-0019 §12): the keys
 //! `fv-lab pod up --extra-env` refuses are `runpod-http.sh`'s
 //! `FV_LAB_NOT_READ`, and the restored modes are `fv-lab-retired.sh`'s
 //! `FV_LAB_RESTORED`, each a tier of `lab/tiers.toml`.

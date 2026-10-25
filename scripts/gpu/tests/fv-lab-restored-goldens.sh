@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The goldens of the restored script modes (docs/adr/0019-fv-lab.md §11): for
+# The goldens of the restored script modes (docs/adr/0019-fv-lab.md §12): for
 # each `<tier>:<family>:<K=V>` of FV_LAB_RESTORED (scripts/gpu/fv-lab-retired.sh),
 # what runpod-matrix.sh and runpod-http.sh did in that mode at the last commit
 # that had the family's branch, written as the tier's fixtures:

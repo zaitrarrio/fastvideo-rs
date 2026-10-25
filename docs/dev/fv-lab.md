@@ -6,9 +6,10 @@ Design: [ADR-0019](../adr/0019-fv-lab.md). Today it carries ten tiers that were 
 passed its GPU gate (fv-lab's run and the script's of one commit, frames byte-identical), so its script branch is
 deleted and the tier is fv-lab only ([The families](#the-families), [ADR-0019 §10](../adr/0019-fv-lab.md)). Each is
 held to the script's last dry run by a frozen golden ([below](#keeping-it-equal-to-the-scripts)). The other families
-stay in the script and move in later slices. `gold` is fv-lab's own: every gold variant's canonical
-cell (ADR-0023). `precision-nvfp4` and `ltxvae-gen` are two modes of retired families, restored as tiers
-([ADR-0019 §11](../adr/0019-fv-lab.md)).
+stay in the script and move in later slices. An eleventh, `gold`, is fv-lab's own: every gold variant's canonical
+cell (ADR-0023). A twelfth, `b4a` (D1d), is moved but not yet retired: its cells carry a verdict step, and its
+script branch stays until its GPU gate ([Verdicts and `fv-lab gate`](#verdicts-and-fv-lab-gate)). `precision-nvfp4` and
+`ltxvae-gen` are two modes of retired families, restored as tiers ([ADR-0019 §12](../adr/0019-fv-lab.md)).
 
 ## Build
 
@@ -53,18 +54,19 @@ dry run show what will run.
 | `ltxfps` | `ltxfps-{ltx25,h3}` | 5 | LTX-2.5 at 25 / 48 / 50 fps and silent, the frame-sink checks | |
 | `ltxvae` | `ltxvae-*` (4) | 12 | the LTX-2.5 VAE decode alone (`vae-bench`) | |
 | `precision` | `precision-{h3,ltx25}` | 8 | precision switches against f32 activations | the script's default mode only |
-| `precision-nvfp4` | `precision-nvfp4-ltx25-{4k5s,1080p20s}` | 4 | NVFP4 video FFN against bf16, LTX-2.5 Sol, compare + lossy gate | was `precision`'s `FV_PRECISION_ARM=ltx-nvfp4` mode; restored (§11) |
-| `ltxvae-gen` | `ltxvae`'s 4 + `ltxvae-gen-{4k5s,1080p20s}` | 16 | `ltxvae`, plus per workload a cold gen saving its latents and the streaming decoder on them | was `ltxvae`'s `FV_VAE_GEN=1`; restored (§11); shares `ltxvae`'s cells |
+| `b4a` | `b4a-h3-*` (3) | 6 | the H3 TeaCache step cache, baseline binary vs this build: byte identity and equal cache decisions, a verdict per cell | D1d; needs `--baseline-sha`; **not retired** (script branch kept until its GPU gate) |
+| `precision-nvfp4` | `precision-nvfp4-ltx25-{4k5s,1080p20s}` | 4 | NVFP4 video FFN against bf16, LTX-2.5 Sol, compare + lossy gate | was `precision`'s `FV_PRECISION_ARM=ltx-nvfp4` mode; restored (§12) |
+| `ltxvae-gen` | `ltxvae`'s 4 + `ltxvae-gen-{4k5s,1080p20s}` | 16 | `ltxvae`, plus per workload a cold gen saving its latents and the streaming decoder on them | was `ltxvae`'s `FV_VAE_GEN=1`; restored (§12); shares `ltxvae`'s cells |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)) |
 
-All ten are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10): their `runpod-matrix.sh`
+All ten above `b4a` are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10): their `runpod-matrix.sh`
 branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps the other families.
 ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is not on the EU volume (`h3-8step`)
 is recorded as skipped (`weights incomplete`), as the script recorded it.
 
 What the retired branches had and the tiers do not, dropped with the branches: the `FV_VAE_*`, `FV_LTXFPS*`,
 `FV_TECH_CELLS`, `FV_B6_CELLS` knobs (ADR-0019 §9.4) and the summaries the branches copied into `live.log`. The two
-modes dropped with them are tiers again (owner decision 2026-10-25, [ADR-0019 §11](../adr/0019-fv-lab.md)):
+modes dropped with them are tiers again (owner decision 2026-10-25, [ADR-0019 §12](../adr/0019-fv-lab.md)):
 
 ```sh
 ./fv-lab run precision-nvfp4 --dry-run      # was FV_PRECISION_ARM=ltx-nvfp4 runpod-matrix.sh precision
@@ -163,6 +165,68 @@ gate = { kind = "lossy" }   # this pair's gate, right after the compare
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family b6 --baseline-sha <base7> --yes --wait
 ./fv-lab run rtx5090 --dry-run --cells h3-480p-fullopt,h3-480p-fullopt-taeh3   # a subset, by arm
 ```
+
+## Verdicts and `fv-lab gate`
+
+A cell may carry a `[verdict]` (D1d, [ADR-0019 §11](../adr/0019-fv-lab.md)): what the script's `b4a` family did
+around its arms, as data. The verdict's arms start from an empty directory; right after each, its exit (`summary.json`),
+its evidence files (the `stderr.log` lines matching patterns, the log's `[…]` prefixes stripped) and its line counts
+are checked; after the cell's compares, its `--off-identity` pairs and its evidence diffs. The run directory then
+holds `<family>-<cell>.verdict.json` (`{"cell","verdict":"pass|fail","why"}`) and, at the end, `<family>.verdict.json`
+over the cells that ran; the log says `<family> <cell>: pass|fail (<reasons>)`.
+
+```toml
+[verdict]
+family = "b4a"
+arms = ["b4a-h3-4step-tea-base", "b4a-h3-4step-tea-pr"]     # <cell>-<label>; reasons say "pr:exit"
+describe = "verdict also needs both arms exit 0 (summary.json) and the --off-identity compare passed"
+
+[[verdict.evidence]]
+file = "cache-evidence.log"
+lines = ["h3 sol teacache", "h3 teacache:", "h3 teacache step", "fuse step cache"]   # substrings, * = anything
+strip = "bracket-prefixes"
+diff = "evidence.diff"            # the two arms' files must be equal
+
+[[verdict.count]]
+what = "teacache reused forwards"
+lines = ["h3 teacache step *REUSE"]
+min = 1
+why = "no-reuse"
+
+[[verdict.identical]]
+baseline = "b4a-h3-4step-tea-base"
+candidate = "b4a-h3-4step-tea-pr"
+```
+
+A verdict cell runs only when one of its verdict arms is selected (`--cells`); `fv-lab run b4a --cells
+b4a-h3-4step-tea-base,b4a-h3-4step-tea-pr` is the script's `FV_B4A_CELLS=b4a-h3-4step-tea`.
+
+```sh
+./fv-lab run b4a --dry-run --baseline-sha <7>          # the script's dry run, verdict lines included
+./fv-lab gate artifacts/runpod/b4a/<tag>               # verdicts and gates again, offline, into <tag>.regate
+./fv-lab gate artifacts/runpod/b4a/<tag> --check --out /tmp/regate   # and compare with the run's own files
+./fv-lab gate artifacts/runpod/fastvideo/<tag> --gpucheck ./fv-gpucheck --out /tmp/regate   # a tier with gates
+```
+
+`fv-lab gate <run dir>` evaluates a finished run's promotion gates (`fv-gpucheck gate`, CPU only, so any build of
+fv-gpucheck) and verdicts again from its files, with no GPU and without running an arm or a compare
+([ADR-0019 §11.3](../adr/0019-fv-lab.md)):
+
+- the tier is `--family` or the directory's parent;
+- the arms are `--cells`, else the run's `<tier>.arms.json` (the selection `fv-lab run` records), else all of the
+  tier's when the run holds them all; a run without the record that holds fewer (a script run with `FV_B4A_CELLS`, or
+  one cut short) is refused until `--cells` names its selection, because a guess would pass the cells it never
+  finished;
+- the output goes to `--out`, default `<run dir>.regate`, never into the run directory;
+- `--check` compares each derived file with the run's own (gate reports by status) and exits 1 on any difference,
+  whether or not the verdicts pass;
+- a gate whose arms did not both run is skipped and counted; one whose arms ran without a `benchmark.json` fails.
+
+Exit 0 when all passed, 1 when one failed or nothing could be evaluated. `pod fetch` takes the verdict files
+(`*.verdict.json`, `*.diff`, `<tier>.arms.json`, `<arm>/*-evidence.log`); `runpod-http.sh` only with
+`FV_FETCH_TREE=1`. `fv-lab-compare-runs.sh` compares them byte for byte when either run has them (a family verdict's
+cell list as a set), and `--expect-verdicts N` fails unless at least N compared the same. `FV_B4A_CELLS` is refused
+by `fv-lab run` and `pod up --extra-env`: select a pair by its arms (`--cells <cell>-base <cell>-pr`).
 
 ## On a GPU box: `fv-lab run`
 
@@ -275,9 +339,10 @@ before the branch went and are fv-lab's own goldens from then on: the goldens sc
 checks that they exist, that the tier is in `lab/tiers.toml` and that its branch is gone (and that every other script
 tier still has one); `tests/dry_run.rs` checks the same. The Rust tests still compare fv-lab's dry run, gates and pod
 body with them, so a change to a frozen tier's commands or pod is deliberate: edit the cell (or `pod-start.sh.in`)
-and the fixture in the same PR, and say why in the PR. The ten tiers above are all frozen today, and so are the two
+and the fixture in the same PR, and say why in the PR. The ten retired tiers are frozen, and so are the two
 restored modes (`precision-nvfp4`, `ltxvae-gen`), whose fixtures come from the script at `5987e6a4` in that mode
-(`FV_LAB_RESTORED` in `fv-lab-retired.sh`; `fv-lab-restored-goldens.sh --check` reproduces them); `gold` was never a
+(`FV_LAB_RESTORED` in `fv-lab-retired.sh`; `fv-lab-restored-goldens.sh --check` reproduces them); `b4a`'s fixtures
+are still written from its script branch until its GPU gate; `gold` was never a
 script family (only its pod body comes from `runpod-http.sh plan`). The `gold` tier is no script family: only its pod body is written there, and its dry run is fv-lab's own golden
 (`fixtures/gold-dry-run.txt`, `tests/gold_tier.rs`). Once, there is also its `frames_digest` of a sample. A new tier fails
 `--check` until its fixtures are written; `tests/{dry_run,payload_golden,frames_digest,fv_lab_bin}.rs` hold fv-lab to

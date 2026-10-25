@@ -10,7 +10,7 @@
 # are gone; they are tiers of lab/ (`fv-lab run <tier>` on the box,
 # `runpod-http.sh run` / `fv-lab pod up` from a host). This script refuses
 # them (exit 2), and `headline` runs its cells of them through fv-lab. Two
-# modes of them are fv-lab tiers too (§11, FV_LAB_RESTORED):
+# modes of them are fv-lab tiers too (§12, FV_LAB_RESTORED):
 # FV_PRECISION_ARM=ltx-nvfp4 is `precision-nvfp4`, FV_VAE_GEN=1 `ltxvae-gen`;
 # the refusal names the tier.
 #
@@ -1653,10 +1653,13 @@ Audio: male speech, clear voice, quiet room"
     [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS"/b4a-*.verdict.json "$RUNS/b4a.verdict.json"
     # b4a_evidence <cell>-<arm>: the step cache's lines of that arm's
     # stderr.log (what was installed, every H3 decision), without the
-    # timestamp a log line starts with, into cache-evidence.log.
+    # timestamp a log line starts with, into cache-evidence.log. On bytes
+    # (LC_ALL=C, grep -a): a log line that is not valid UTF-8, or holds a NUL,
+    # is still a line, whatever the pod's locale (fv-lab's [verdict] reads
+    # the same bytes, docs/adr/0019-fv-lab.md §11.5).
     b4a_evidence() {
-      grep -h 'h3 sol teacache\|h3 teacache:\|h3 teacache step\|fuse step cache' "$RUNS/$1/stderr.log" \
-        | sed -E 's/^(\[[^]]*\] *)+//' >"$RUNS/$1/cache-evidence.log" || true
+      LC_ALL=C grep -ah 'h3 sol teacache\|h3 teacache:\|h3 teacache step\|fuse step cache' "$RUNS/$1/stderr.log" \
+        | LC_ALL=C sed -E 's/^(\[[^]]*\] *)+//' >"$RUNS/$1/cache-evidence.log" || true
     }
     # b4a_pair <cell> <weight cell> <env K=V ... or -> <fv-gpucheck args ...>:
     # <cell>-base (the baseline binary) and <cell>-pr (this build), the
@@ -1686,7 +1689,7 @@ Audio: male speech, clear voice, quiet room"
           continue
         fi
         b4a_evidence "$cell-$arm"
-        reuses="$(grep -c 'h3 teacache step .*REUSE' "$RUNS/$cell-$arm/stderr.log" || true)"
+        reuses="$(LC_ALL=C grep -ac 'h3 teacache step .*REUSE' "$RUNS/$cell-$arm/stderr.log" || true)"
         log "[$cell-$arm] teacache reused forwards: ${reuses:-0}"
         (( ${reuses:-0} > 0 )) || { verdict=fail; why+=" $arm:no-reuse"; }
       done
@@ -1698,7 +1701,9 @@ Audio: male speech, clear voice, quiet room"
       fi
       b4_identical "$cell-base" "$cell-pr" || { verdict=fail; why+=" not-identical"; }
       if [[ -f "$RUNS/$cell-base/cache-evidence.log" && -f "$RUNS/$cell-pr/cache-evidence.log" ]]; then
-        if ! diff "$RUNS/$cell-base/cache-evidence.log" "$RUNS/$cell-pr/cache-evidence.log" \
+        # -a: evidence holding a NUL is still diffed as text, so the file
+        # never names the run directory ("Binary files <path> and ...").
+        if ! LC_ALL=C diff -a "$RUNS/$cell-base/cache-evidence.log" "$RUNS/$cell-pr/cache-evidence.log" \
           >"$RUNS/$cell.evidence.diff"; then
           verdict=fail why+=" evidence-differs"
         fi
@@ -3191,7 +3196,7 @@ Audio: male speech, clear voice, quiet room"
     ;;
   *)
     # A restored mode (fv-lab-retired.sh FV_LAB_RESTORED, docs/adr/0019-fv-lab.md
-    # §11): asked for as its family plus its setting, or by its tier's name.
+    # §12): asked for as its family plus its setting, or by its tier's name.
     restored_tier="" restored_why=""
     for r in $FV_LAB_RESTORED; do
       IFS=: read -r r_tier r_fam r_mode <<<"$r"

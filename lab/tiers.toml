@@ -171,7 +171,7 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["ltxfps-ltx25", "ltxfps-h3"]
 
-# Was runpod-matrix.sh `ltxvae` (FV_VAE_TRACE=1, FV_VAE_UNTRACED=1, FV_VAE_GEN=0: its defaults; retired, ADR-0019 §10). Its FV_VAE_GEN=1 arms are the `ltxvae-gen` tier (§11).
+# Was runpod-matrix.sh `ltxvae` (FV_VAE_TRACE=1, FV_VAE_UNTRACED=1, FV_VAE_GEN=0: its defaults; retired, ADR-0019 §10). Its FV_VAE_GEN=1 arms are the `ltxvae-gen` tier (§12).
 [[tier]]
 name = "ltxvae"
 description = "The LTX-2.5 conv VAE decode alone: fast vs streaming decoder, traced and untraced, mp4 writer, tuned algorithms"
@@ -190,7 +190,7 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["ltxvae-4k5s", "ltxvae-4k5s-untraced", "ltxvae-1080p20s", "ltxvae-1080p20s-untraced"]
 
-# Was runpod-matrix.sh `precision`, its default mode (retired, ADR-0019 §10). Its FV_PRECISION_ARM=ltx-nvfp4 mode is the `precision-nvfp4` tier (§11).
+# Was runpod-matrix.sh `precision`, its default mode (retired, ADR-0019 §10). Its FV_PRECISION_ARM=ltx-nvfp4 mode is the `precision-nvfp4` tier (§12).
 [[tier]]
 name = "precision"
 description = "Precision switches against f32 activations: FastH3 8-step (bf16 act, W8A8, MXFP8) and LTX-2.5 4k5s Sol (bf16 act, FP8)"
@@ -208,6 +208,29 @@ weights = "volume"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["precision-h3", "precision-ltx25"]
+
+# ---- D1d (docs/adr/0019-fv-lab.md §11): runpod-matrix.sh `b4a` (plan B4a, docs/adr/0020-step-cache.md), the
+# first family with a verdict step: one cell per b4a_pair, the baseline binary against this build,
+# compare-clips --off-identity, then the cell's [verdict] (b4a-<cell>.verdict.json) and the family's
+# (b4a.verdict.json). The rtx6000 tier's pod; the script's FV_GEN_TIMEOUT_S default of 900 never applies
+# under runpod-http.sh (which passes 3600), so cell_timeout_s is 3600 here as there.
+[[tier]]
+name = "b4a"
+description = "Plan B4a: byte identity of the H3 TeaCache step-cache paths after the controllers' unification, baseline binary against this build, with the step-cache evidence verdict (needs --baseline-sha)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["b4a-h3-fullopt-env", "b4a-h3-fullopt-prof", "b4a-h3-4step-tea"]
 
 # ---- D4 (docs/adr/0023-lab-report-and-ci-bridge.md §3): the gold runs. Not a
 # runpod-matrix.sh family: one cell per gold file (lab/gold/<variant>.toml), each
@@ -268,7 +291,7 @@ cells = [
   "gold-wan22-ti2v-5b",
 ]
 
-# ---- Restored script modes (docs/adr/0019-fv-lab.md §11, owner decision
+# ---- Restored script modes (docs/adr/0019-fv-lab.md §12, owner decision
 # 2026-10-25 "restore dropped test modes"). Two modes of retired families that
 # #185 dropped with their branches, each a tier of its own, held to that mode's
 # dry run and pod body at 5987e6a4 (scripts/gpu/fv-lab-restored-goldens.sh;

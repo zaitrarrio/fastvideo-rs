@@ -1,4 +1,4 @@
-//! The restored script modes (docs/adr/0019-fv-lab.md §11): `FV_LAB_RESTORED`
+//! The restored script modes (docs/adr/0019-fv-lab.md §12): `FV_LAB_RESTORED`
 //! of `scripts/gpu/fv-lab-retired.sh`, `<tier>:<family>:<K=V>`. Their
 //! fixtures are what the script wrote in that mode at 5987e6a4
 //! (`scripts/gpu/tests/fv-lab-restored-goldens.sh`), so they carry the

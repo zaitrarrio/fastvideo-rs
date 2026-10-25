@@ -48,6 +48,17 @@
       "format": "uint32",
       "minimum": 0
     },
+    "verdict": {
+      "description": "The cell's verdict (D1d): evidence read after each of its arms and a\npass / fail file after its compares ([`Verdict`]).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Verdict"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "workload": {
       "$ref": "#/$defs/Workload"
     }
@@ -182,6 +193,39 @@
         "candidate"
       ]
     },
+    "Evidence": {
+      "description": "One evidence file per arm: the `stderr.log` lines that match any pattern.",
+      "type": "object",
+      "properties": {
+        "diff": {
+          "description": "The two arms' files must be equal: `diff <first> <second>` is written to\n`<runs>/<cell>.<diff>` (`evidence.diff`), and a difference fails the\nverdict (`evidence-differs`). Needs exactly two arms.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "description": "The file, in each arm's directory (`cache-evidence.log`); the name ends\nin `-evidence.log`, which `fv-lab pod fetch` takes.",
+          "type": "string"
+        },
+        "lines": {
+          "description": "Line patterns: a line matches when it contains the pattern, `*` standing\nfor any run of characters (`h3 teacache step *REUSE`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "strip": {
+          "description": "How each kept line is cut (default `none`).",
+          "$ref": "#/$defs/LineStrip"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "lines"
+      ]
+    },
     "GateKind": {
       "description": "The gate's kind (`fv-gpucheck gate --kind`).",
       "type": "string",
@@ -218,6 +262,79 @@
         "candidate"
       ]
     },
+    "Identical": {
+      "description": "A compare of the cell (`[[compare]]` with `--off-identity`) whose report\nmust exist, not be a skip, and pass both identity checks\n(`off_identity`, `off_identity_frame_count`); else `why`.",
+      "type": "object",
+      "properties": {
+        "baseline": {
+          "description": "The compare's baseline arm (one of the verdict's arms).",
+          "type": "string"
+        },
+        "candidate": {
+          "description": "The compare's candidate arm.",
+          "type": "string"
+        },
+        "why": {
+          "description": "The reason a failed or missing compare adds (default `not-identical`).",
+          "type": "string",
+          "default": "not-identical"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "baseline",
+        "candidate"
+      ]
+    },
+    "LineCount": {
+      "description": "A count of matching `stderr.log` lines per arm (`grep -c`), logged as\n`[<arm>] <what>: <n>`; under `min` fails the verdict (`<label>:<why>`).",
+      "type": "object",
+      "properties": {
+        "lines": {
+          "description": "Line patterns, as [`Evidence::lines`].",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "min": {
+          "description": "The fewest lines that pass.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "what": {
+          "description": "What is counted, as the log line names it.",
+          "type": "string"
+        },
+        "why": {
+          "description": "The reason a smaller count adds, after the arm's label (`no-reuse`).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "what",
+        "lines",
+        "min",
+        "why"
+      ]
+    },
+    "LineStrip": {
+      "description": "How an evidence line is cut before it is written.",
+      "oneOf": [
+        {
+          "description": "As logged.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Without the leading `[…]` groups (and the spaces after each) a log line\nstarts with: its timestamp, level and target (`sed -E\n's/^(\\[[^]]*\\] *)+//'`), so two runs' lines compare.",
+          "type": "string",
+          "const": "bracket-prefixes"
+        }
+      ]
+    },
     "PairedGate": {
       "description": "The gate of a compare's own pair (`Compare::gate`).",
       "type": "object",
@@ -235,6 +352,54 @@
         }
       },
       "additionalProperties": false
+    },
+    "Verdict": {
+      "description": "A cell's verdict (docs/adr/0019-fv-lab.md §11, D1d): what the script's\nbyte-identity families (`b4a`) do besides arms and compares, as data.\n\nThe verdict's arms start from an empty directory (`<runs>/<arm>` is\nremoved before each, so no earlier run's output stands in for this one's).\nAfter each of them, in order: its `summary.json` must record exit 0 (else\n`<label>:exit`); its `stderr.log` must exist (else `<label>:no-run`, and\nnothing more is read for it); each [`Evidence`] file is written; each\n[`LineCount`] is logged and checked. After the cell's compares: each\n[`Identical`] pair, then each evidence `diff`. The verdict is\n`<runs>/<family>-<cell>.verdict.json`,\n`{\"cell\":\"<cell>\",\"verdict\":\"pass|fail\",\"why\":\"<reasons>\"}`; and every run\nwith verdicts ends with `<runs>/<family>.verdict.json` over the cells it\nran (`runpod-matrix.sh`'s `b4_family_verdict`). A verdict passes only on\npositive evidence: a missing file fails it.",
+      "type": "object",
+      "properties": {
+        "arms": {
+          "description": "The arms the verdict reads, in order, each named `<cell>-<label>`; the\nlabel names the arm in the reasons (`base:exit`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "count": {
+          "description": "Matching `stderr.log` lines counted per arm, with a minimum.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LineCount"
+          }
+        },
+        "describe": {
+          "description": "The dry run's line for the verdict: `dry-run <cell>: <describe>`.",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "Files of matching `stderr.log` lines, written into each arm's directory.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          }
+        },
+        "family": {
+          "description": "The verdict files' prefix and the log's (`b4a`: `b4a-<cell>.verdict.json`,\n`b4a.verdict.json`); the name of the tier listing the cell.",
+          "type": "string"
+        },
+        "identical": {
+          "description": "`--off-identity` compares of this cell that must have passed.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Identical"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "arms",
+        "describe"
+      ]
     },
     "Workload": {
       "description": "What every arm of a cell generates. Each value is referenced from the\narms' command lines as a placeholder (`{prompt}`, `{seed}`, …), so the\ndeclared workload is the one that runs; a value no arm uses is an error.\nAn absent value is the pipeline's (or the recipe's) default.",

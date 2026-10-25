@@ -11,7 +11,7 @@
 //! goldens since. A change to such a tier's commands updates its fixture in
 //! the same PR; these tests hold fv-lab to it all the same.
 //!
-//! The restored modes (ADR-0019 §11, `FV_LAB_RESTORED`) started frozen: their
+//! The restored modes (ADR-0019 §12, `FV_LAB_RESTORED`) started frozen: their
 //! fixtures are the script's dry run in that mode at 5987e6a4, and fv-lab's
 //! equal them with the family's name read as the tier's (`common`).
 
@@ -92,16 +92,20 @@ fn dry_run_equals_runpod_matrix_sh_for_every_tier() {
             assert_eq!(a, b, "{family}: line {i} differs");
         }
         assert_eq!(ours.len(), theirs.len(), "{family}: line count");
+        let (_, cells) = lab.resolve(&family, None).expect("tier");
+        let names: BTreeSet<&str> = cells
+            .iter()
+            .flat_map(|c| &c.arms)
+            .map(|a| a.name.as_str())
+            .collect();
+        // `dry-run <arm>: <command>`; a verdict arm's `rm -rf` line aside.
         let arms = ours
             .iter()
-            .filter(|l| l.contains("] dry-run ") && !l.contains("] dry-run compare "))
+            .filter_map(|l| l.split_once("] dry-run ").map(|(_, r)| r))
+            .filter_map(|r| r.split_once(": "))
+            .filter(|(arm, cmd)| names.contains(arm) && !cmd.starts_with("rm -rf "))
             .count();
-        let (_, cells) = lab.resolve(&family, None).expect("tier");
-        assert_eq!(
-            arms,
-            cells.iter().map(|c| c.arms.len()).sum::<usize>(),
-            "{family}: one dry-run line per arm"
-        );
+        assert_eq!(arms, names.len(), "{family}: one dry-run line per arm");
     }
     // D1a's family, as pinned then.
     let cfg = config("rtx6000");
@@ -117,13 +121,14 @@ fn dry_run_equals_runpod_matrix_sh_for_every_tier() {
 #[test]
 fn baseline_arms_run_the_fetched_binary() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
-    for family in ["techniques", "b6"] {
+    for family in ["techniques", "b6", "b4a"] {
         let (_, cells) = lab.resolve(family, None).expect("tier");
         assert!(Lab::needs_baseline(&cells), "{family}");
         let cfg = config(family);
         let base = format!("/fvscratch/baseline-{BASELINE_SHA}/fv-gpucheck");
         let mut pairs = 0;
-        for s in steps(&lab, &cfg) {
+        let steps = steps(&lab, &cfg);
+        for s in Step::flatten(&steps) {
             if let Step::Arm {
                 name,
                 command,
@@ -131,12 +136,12 @@ fn baseline_arms_run_the_fetched_binary() {
                 ..
             } = s
             {
-                assert_eq!(baseline, name.ends_with("-base"), "{family}: {name}");
-                assert_eq!(command.contains(&base), baseline, "{family}: {name}");
-                pairs += usize::from(baseline);
+                assert_eq!(*baseline, name.ends_with("-base"), "{family}: {name}");
+                assert_eq!(command.contains(&base), *baseline, "{family}: {name}");
+                pairs += usize::from(*baseline);
             }
         }
-        assert!(pairs >= 4, "{family}: {pairs} baseline arms");
+        assert!(pairs >= 3, "{family}: {pairs} baseline arms");
         // Without the baseline commit the tier does not render.
         let mut no = config(family);
         no.baseline_sha = None;
@@ -171,7 +176,7 @@ fn gate_row(s: &Step) -> Option<Vec<String>> {
             kind.as_str().to_owned(),
             off.clone().unwrap_or_else(|| "-".into()),
         ]),
-        Step::Compare { .. } => None,
+        Step::Compare { .. } | Step::Verdict { .. } | Step::FamilyVerdict { .. } => None,
     }
 }
 
@@ -185,10 +190,11 @@ fn arms_and_gates_are_the_scripts_and_arms_name_their_trees() {
     let mut gates_seen = 0;
     for family in families(&lab) {
         let cfg = config(&family);
-        let steps = steps(&lab, &cfg);
+        let rendered = steps(&lab, &cfg);
+        let steps = Step::flatten(&rendered);
         let fixture = fixture(&format!("{family}-gates.tsv"));
         let rows: Vec<Vec<&str>> = fixture.lines().map(|l| l.split('\t').collect()).collect();
-        let ours: Vec<Vec<String>> = steps.iter().filter_map(gate_row).collect();
+        let ours: Vec<Vec<String>> = steps.iter().copied().filter_map(gate_row).collect();
         assert_eq!(ours.len(), rows.len(), "{family}: rows");
         for (o, row) in ours.iter().zip(&rows) {
             let width = o.len().min(row.len());
@@ -302,7 +308,7 @@ fn retired_families_are_frozen_tiers_without_a_branch() {
     ] {
         assert!(retired.iter().any(|r| r == f), "{f} retired");
     }
-    // A restored mode (§11) is a mode of a retired family, frozen from the
+    // A restored mode (§12) is a mode of a retired family, frozen from the
     // start: its family's branch is gone too, and it never had one of its own.
     let restored = common::restored();
     assert_eq!(

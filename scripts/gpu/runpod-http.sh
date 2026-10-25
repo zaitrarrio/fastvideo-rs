@@ -9,7 +9,7 @@
 #                                b6, rtx5090, fastvideo, h3arms, trace, ltxfps,
 #                                ltxvae, precision; the restored modes precision-nvfp4,
 #                                ltxvae-gen) runs `fv-lab pod up --yes --wait`
-#                                instead (docs/adr/0019-fv-lab.md §10, §11); FV_DRY_RUN=1
+#                                instead (docs/adr/0019-fv-lab.md §10, §12); FV_DRY_RUN=1
 #                                prints the route and the command, creates nothing
 #   runpod-http.sh weights       weight gate only (verify-weights.sh), no cells
 #   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
@@ -514,7 +514,7 @@ tier_value() {
 
 # What `run` reads from FV_EXTRA_ENV on the script path but no tier reads: the
 # dropped modes' knobs (ADR-0019 §9.4, §10.4; the two modes restored as tiers,
-# §11, are named by fv_lab_route), the prompts fv-lab ignores (§7), and what
+# §12, are named by fv_lab_route), the prompts fv-lab ignores (§7), and what
 # the start command sets after FV_EXTRA_ENV anyway.
 FV_LAB_NOT_READ="FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_GEN FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS
   FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_PROMPTS FV_PROMPT FV_SEED
@@ -534,7 +534,7 @@ fv_lab_route() {
   # same <var> <what fv-lab does>: refused when set, non-empty and different.
   same() { [[ -z "${!1:-}" || "${!1}" == "$2" ]] || refuse "uses $1=$2, not ${!1}"; }
   # A restored mode's setting first (fv-lab-retired.sh FV_LAB_RESTORED,
-  # ADR-0019 §11): the mode is a tier of its own, named, not routed (the run
+  # ADR-0019 §12): the mode is a tier of its own, named, not routed (the run
   # would land in another run directory than FV_FAMILY's, under another pod
   # name). Checked before any other refusal, so the hint is the first answer.
   local r r_tier r_fam r_mode extra_in=()
@@ -544,8 +544,8 @@ fv_lab_route() {
       IFS=: read -r r_tier r_fam r_mode <<<"$r"
       [[ "$e" == "$r_mode" ]] || continue
       [[ "$FAMILY" == "$r_tier" ]] \
-        && die "FV_FAMILY=$r_tier is the $r_fam family's $r_mode mode already: drop $r_mode from FV_EXTRA_ENV (ADR-0019 §11)"
-      die "$r_mode was a mode of runpod-matrix.sh $r_fam; it is the fv-lab tier $r_tier now: use FV_FAMILY=$r_tier (without $r_mode in FV_EXTRA_ENV; ADR-0019 §11, docs/dev/fv-lab.md)"
+        && die "FV_FAMILY=$r_tier is the $r_fam family's $r_mode mode already: drop $r_mode from FV_EXTRA_ENV (ADR-0019 §12)"
+      die "$r_mode was a mode of runpod-matrix.sh $r_fam; it is the fv-lab tier $r_tier now: use FV_FAMILY=$r_tier (without $r_mode in FV_EXTRA_ENV; ADR-0019 §12, docs/dev/fv-lab.md)"
     done
   done
   local cap cell_s disk cloud gpu tae max_dph
@@ -612,7 +612,7 @@ fv_lab_route() {
     case "$k" in
       FV_NVFP4_WORKLOADS|FV_VAE_WORKLOADS|FV_VAE_UNTRACED)
         keys+=("$k")
-        why+=("$k: the restored tiers (precision-nvfp4, ltxvae-gen) have one cell per workload; narrow them by arm with FV_CELLS (ADR-0019 §11)") ;;
+        why+=("$k: the restored tiers (precision-nvfp4, ltxvae-gen) have one cell per workload; narrow them by arm with FV_CELLS (ADR-0019 §12)") ;;
       *)
         if [[ " $(echo $FV_LAB_NOT_READ) " == *" $k "* ]]; then
           keys+=("$k")

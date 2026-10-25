@@ -17,7 +17,7 @@
 //! body is the one the script sent before its branch went, and fv-lab's pod
 //! must stay it unless a PR changes both on purpose.
 //!
-//! A restored mode (ADR-0019 §11, `FV_LAB_RESTORED`) is the body
+//! A restored mode (ADR-0019 §12, `FV_LAB_RESTORED`) is the body
 //! `FV_FAMILY=<family> FV_EXTRA_ENV=<K=V> runpod-http.sh plan` sent at
 //! 5987e6a4, read with the family's name as the tier's (pod name, run
 //! directory, runner) and without the mode's `FV_EXTRA_ENV` (`common`).

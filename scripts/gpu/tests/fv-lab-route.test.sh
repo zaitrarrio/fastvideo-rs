@@ -4,7 +4,7 @@
 #   - runpod-http.sh `run` / `plan` for a retired family: the settings mapped
 #     across, the ones fv-lab would not honour refused (not dropped), the
 #     dropped modes' knobs refused in FV_EXTRA_ENV (the two restored modes
-#     naming their tier, ADR-0019 §11), lists split without globbing, and a
+#     naming their tier, ADR-0019 §12), lists split without globbing, and a
 #     fake FV_LAB_BIN receiving exactly the command;
 #   - `gold` refused for run / all (its plan still the script's body);
 #   - runpod-matrix.sh `headline` on a fake box: its cells through a fake
@@ -80,7 +80,7 @@ for k in FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE
   FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_PROMPTS FV_GEN_TIMEOUT_S FV_CELLS; do
   dry "refused in FV_EXTRA_ENV: $k" 1 "reads no $k from FV_EXTRA_ENV" FV_FAMILY=precision FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1"
 done
-# The two modes restored as tiers (ADR-0019 §11): refused, naming the tier, on
+# The two modes restored as tiers (ADR-0019 §12): refused, naming the tier, on
 # any retired family (not routed: the run directory and pod name are the tier's).
 for fam in precision ltxvae rtx6000; do
   dry "restored mode named: FV_PRECISION_ARM=ltx-nvfp4 ($fam)" 1 \

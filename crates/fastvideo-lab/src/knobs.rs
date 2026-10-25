@@ -1,5 +1,5 @@
 //! Script settings fv-lab does not read, refused instead of ignored
-//! (docs/adr/0019-fv-lab.md §9.4, §10, §11).
+//! (docs/adr/0019-fv-lab.md §9.4, §10, §12).
 //!
 //! `runpod-matrix.sh` families read knobs from the environment that change
 //! their arms (`FV_PRECISION_ARM`, `FV_VAE_*`, …). No tier reads them: a
@@ -8,11 +8,11 @@
 //! (its environment) and `fv-lab pod up --extra-env` refuse them, as
 //! `runpod-http.sh` does for its `FV_EXTRA_ENV` (`FV_LAB_NOT_READ` there;
 //! `tests/knobs.rs` holds the two lists equal). Two of the dropped modes are
-//! tiers of their own since §11 ([`RESTORED_MODES`], `FV_LAB_RESTORED` of
+//! tiers of their own since §12 ([`RESTORED_MODES`], `FV_LAB_RESTORED` of
 //! `scripts/gpu/fv-lab-retired.sh`): their setting is answered with the tier.
 
 /// A mode of a retired `runpod-matrix.sh` family that is an fv-lab tier now
-/// (ADR-0019 §11).
+/// (ADR-0019 §12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestoredMode {
     /// The tier that is the mode.
@@ -59,6 +59,13 @@ pub const MODE_KNOBS: [&str; 10] = [
 /// per workload in the tier, so `--cells` / `FV_CELLS` by arm replaces them.
 const BY_ARM: [&str; 3] = ["FV_NVFP4_WORKLOADS", "FV_VAE_WORKLOADS", "FV_VAE_UNTRACED"];
 
+/// Knobs of a family that is a tier *and* still a script family (D1d,
+/// ADR-0019 §11.5: `b4a`), where the script reads them: fv-lab refuses
+/// them, `runpod-http.sh` passes them to the script path, so they are not in
+/// [`not_read`] until the family retires. With `FV_B4A_CELLS` ignored, every
+/// `b4a` cell would run, at three times the cost of the one asked for.
+pub const SCRIPT_KNOBS: [&str; 1] = ["FV_B4A_CELLS"];
+
 /// What `--extra-env` may not carry besides [`MODE_KNOBS`]: the prompts
 /// (a cell's workload, ADR-0019 §7) and what the pod's start command sets
 /// after `FV_EXTRA_ENV` (so the entry would never reach the run).
@@ -93,19 +100,25 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
     if let Some(m) = restored_mode(key, value) {
         return Some(if tier == Some(m.tier) {
             format!(
-                "{key}={value}: the tier {} is the {} family's {key}={value} mode already; drop the setting (ADR-0019 §11)",
+                "{key}={value}: the tier {} is the {} family's {key}={value} mode already; drop the setting (ADR-0019 §12)",
                 m.tier, m.family
             )
         } else {
             format!(
-                "{key}={value} was a mode of runpod-matrix.sh {}; it is the fv-lab tier {} now: run {} (fv-lab run {} / pod up --family {}), without {key}={value} (ADR-0019 §11)",
+                "{key}={value} was a mode of runpod-matrix.sh {}; it is the fv-lab tier {} now: run {} (fv-lab run {} / pod up --family {}), without {key}={value} (ADR-0019 §12)",
                 m.family, m.tier, m.tier, m.tier, m.tier
             )
         });
     }
+    if key == "FV_B4A_CELLS" {
+        return Some(
+            "FV_B4A_CELLS: fv-lab selects by arm: pass --cells <cell>-base <cell>-pr (FV_CELLS), not FV_B4A_CELLS"
+                .to_owned(),
+        );
+    }
     if BY_ARM.contains(&key) {
         return Some(format!(
-            "{key}: the restored tiers (precision-nvfp4, ltxvae-gen) have one cell per workload; narrow them by arm with --cells / FV_CELLS (ADR-0019 §11)"
+            "{key}: the restored tiers (precision-nvfp4, ltxvae-gen) have one cell per workload; narrow them by arm with --cells / FV_CELLS (ADR-0019 §12)"
         ));
     }
     if MODE_KNOBS.contains(&key) {
@@ -154,11 +167,13 @@ pub fn check_extra_env(tier: &str, entries: &[String]) -> Result<(), String> {
     message(found)
 }
 
-/// `fv-lab run`: the [`MODE_KNOBS`] set (non-empty) in its environment.
+/// `fv-lab run`: the [`MODE_KNOBS`] and [`SCRIPT_KNOBS`] set (non-empty) in
+/// its environment.
 /// `get` reads one variable (the process environment in the binary).
 pub fn check_run_env(tier: &str, get: impl Fn(&str) -> Option<String>) -> Result<(), String> {
     let found = MODE_KNOBS
         .iter()
+        .chain(&SCRIPT_KNOBS)
         .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (*k, v)))
         .filter_map(|(k, v)| {
             why(Some(tier), k, &v, false).map(|w| (restored_mode(k, &v).is_some(), w))
@@ -235,6 +250,16 @@ mod tests {
             e.starts_with("refused, fv-lab would not read them: FV_VAE_GEN=1 was a mode"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn b4a_cells_is_refused_by_arm() {
+        let e = check_extra_env("b4a", &["FV_B4A_CELLS=b4a-h3-4step-tea".into()]).unwrap_err();
+        assert!(e.contains("not FV_B4A_CELLS"), "{e}");
+        let env = |k: &str| (k == "FV_B4A_CELLS").then(|| "x".to_owned());
+        let e = check_run_env("b4a", env).unwrap_err();
+        assert!(e.contains("not FV_B4A_CELLS"), "{e}");
+        assert!(!not_read().any(|k| k == "FV_B4A_CELLS"));
     }
 
     #[test]

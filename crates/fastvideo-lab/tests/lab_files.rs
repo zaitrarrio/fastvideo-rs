@@ -145,7 +145,7 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
 
 #[test]
 fn every_cell_file_belongs_to_exactly_one_tier() {
-    // But one: `ltxvae-gen` (ADR-0019 §11) is FV_VAE_GEN=1 runpod-matrix.sh
+    // But one: `ltxvae-gen` (ADR-0019 §12) is FV_VAE_GEN=1 runpod-matrix.sh
     // ltxvae, the ltxvae tier's cells with a gen cell after each workload's,
     // in the script's order. It shares exactly ltxvae's cells, and no other
     // tier shares any.
