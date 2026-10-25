@@ -408,7 +408,7 @@ settings (labels, verify cells, Spot, idle stop, the firewall's source ranges, S
 | create | `POST /pods` (or template + endpoint) | `POST /bundles/` search with the launch's filter (cap and disk included), `PUT /asks/<cheapest>/` | the weights disk must exist; `POST firewalls`, then `POST instances`, each operation waited on; a refused insert removes its rule |
 | quote (price cap) | GraphQL, live (`runpod-price.sh`) | the cheapest offer per GPU name, live (`dph_total`) | the price table of `scripts/gcp/lib.sh` (`GCP_PRICES`, read from the file at run time): **not live** |
 | billed price checked after create | `costPerHr` | the rented offer's `dph_total` | no (Compute Engine reports none at create; the table quote is the cap) |
-| balance floor | `clientBalance` + `currentSpendPerHr` | the account's `credit` | **the run's budget** (`FV_GCP_BUDGET_USD` / `--budget-usd`; no budget, no create): GCP bills an account with no prepaid balance |
+| balance floor | `clientBalance` + `currentSpendPerHr` | the account's `credit`, signed (a debt fails the floor) | **the run's budget** (`FV_GCP_BUDGET_USD` / `--budget-usd`, per `up`; no budget, no create) less what this run's creates committed (each VM's table price × the cap), with our live `fv-owner` VMs' table prices as the current spend: GCP bills an account with no prepaid balance. The smallest budget that creates one VM is $8 + price × cap (G4 at $4.95/hr: $10.48 for 1800 s, $12.95 for 3600 s) |
 | wall clock | detached backstop | detached backstop (the script's `nohup … curl -X DELETE`) | detached backstop **and** Compute Engine's `maxRunDuration` = the cap with `instanceTerminationAction: DELETE`, the VM's idle stop (`fv-idle-s`) and the `fv-deadline` label `vm.sh reap` reads |
 | weights | the EU volume `bz0ofkfx45` | **none** (the fake-engine smoke only, below) | the zone's read-only weights disk `fv-weights-hdml-<zone>` (none for the `fake` row); never written or deleted |
 | config at boot (ADR-0011) | `FV_WORKER_TOML_B64` | `FV_WORKER_TOML_B64` in the env object; the onstart starts fv-boot without `--config` | the launch's `FV_WORKER_TOML_B64` becomes the `fv-config` metadata item (`startup.sh` passes it as `--config`), and is left out of `fv-env` |
@@ -433,8 +433,17 @@ filter (only used when `--gpu` names Vast GPU names; the script filters no GPU n
 gone; a 2xx `{"success": false}` meaning a refused ask (read as no capacity: nothing created). Script-verified and used
 as the script uses them: the search filter and `.offers[].{id,dph_total}`, `PUT /asks/<id>/` answering
 `.new_contract`, `GET /instances/<id>/` (`.instances.{actual_status,public_ipaddr,ports}`), `DELETE /instances/<id>/`.
-A wrong guess fails safe: an unread balance or listing is an error before any create or a failed sweep that is
-reported; a gone instance read as present makes the backstop delete at the deadline instead of standing down.
+A wrong guess fails safe: an unread balance is an error before any create; a listing without an `instances` array of
+entries with an id and a `label` is an error, never "nothing left" (after a lost create answer this sweep is Vast's
+only protection: no id, so no backstop, and Vast has no cloud-side cap), and the lifecycle repeats that sweep 6 times
+18 s apart until it finds the instance; a gone instance read as present makes the backstop delete at the deadline
+instead of standing down; a `{"success": false}` to a DELETE is done only when the instance then answers 404.
+
+The search `up` sends is the script's exactly when `--gpu` names nothing (the quote is then "any GPU", and the launch
+is created unnarrowed); only `--gpu` adds the UNVERIFIED `gpu_name` filter. The billed price is the instance's own
+`dph_total` when Vast reports it (it includes the disk), else the rented offer's; the floor's projection uses the quote
+without the disk filter, which can under-project by the disk's share (cents an hour). **Open (owner):** Vast offers are
+worldwide; fv-deploy, like `vast.sh`, puts no region constraint on them.
 
 #### 8.3 GCP
 
@@ -444,11 +453,20 @@ each priced) and verify cells, the zone of the region (`eu` → `europe-west4-b`
 script's container env plus the image identity, the channel and the weights source. Auth: the access token comes from
 `GCP_ACCESS_TOKEN` or from the reviewed `scripts/gcp/auth.sh gcp_token` (openssl RS256, cached mode 600), asked before
 every request; no RSA code and no new dependency in Rust. The detached backstop is told the zone, the project, the
-budget and the repository root.
+budget and the repository root. Commands on an existing VM (`status`, `logs`, `smoke`, `down`) use the zone `up`
+recorded, else `--zone`, never `GCP_ZONE` (a wrong zone would read a live VM as gone); a `down` that finds nothing says
+"not found". A fixed `GCP_ACCESS_TOKEN` (about an hour of life) refuses a cap over 50 min, since the backstop deletes
+with the token it inherited; with `auth.sh` minting, tokens are fresh at every request. The firewall rule refuses an
+empty source list (an ingress rule without one may admit everyone, UNVERIFIED), and an empty or separator-only
+`FV_GCP_SOURCE_CIDR` counts as unset. Known and fail-safe: a replacement VM reuses the run's name, so the first
+cycle's backstop can delete the second's VM early; a firewall rule can outlive its VM when both sweeps hit a read
+error (`vm.sh reap` removes orphan rules).
 
 `vm.sh` itself did not run on main: its metadata items (about 135 KB: `startup.sh`, the verify scripts and their
 tables) went to jq as one argument, over Linux's 128 KiB per-argument limit (`E2BIG`); fixed here by passing them
-through a file descriptor (`scripts/gcp/tests/vm.test.sh`: 21 failed before, 38 passed after). The goldens run the
+through a file, and a metadata list that is not one non-empty array (a failing `metadata_items`) fails the payload
+before anything is created: a VM without its `startup-script` would have no idle stop (`scripts/gcp/tests/vm.test.sh`:
+21 failed before, 42 passed after, on jq 1.6 and 1.7). The goldens run the
 script's own `firewall_payload` / `instance_payload` (what `vm.sh up` sends) in its dry-run mode; the file items are
 compared with the files themselves.
 
@@ -467,8 +485,11 @@ removing its rule, a VM without `fv-owner=fastvideo-rs` never deleted, keys and 
 
 **No live resource was created for C3b**: the owner allows GPU instances only on the EU Runpod volume, which Vast and
 GCP cannot mount. The live gates are the owner's: one `fv-deploy up --kind vast --family fake --preset fake` (cents)
-and one `fv-deploy up --kind gcp --family h3 --preset h3-turbo` with `FV_GCP_BUDGET_USD` (about $2.50 for 30 min of a
-G4 VM; the weights disk `fv-weights-hdml-europe-west4-b` must exist), each run from a host that outlives `--cap-s`.
+and one `fv-deploy up --kind gcp --family h3 --preset h3-turbo --cap-s 3600 --force-guards --ready-timeout-s 2700`
+with `FV_GCP_BUDGET_USD=25` and a service-account key (a G4 VM is $4.95/hr: one VM commits $4.95 of the budget, three
+cycles at most $14.85, then the floor stops a fourth; `--force-guards` because a cold GCP boot (driver, Docker, image
+pull, weights verify) takes longer than the shared 600 s bound, `vm.sh wait` allows 2700 s; the weights disk
+`fv-weights-hdml-europe-west4-b` must exist), each run from a host that outlives `--cap-s`.
 Until then the scripts stay; each is deleted after its gate shows `fv-deploy` equal.
 
 ### 9. C3b: the autoscaler's Runpod code on fv-deploy's
@@ -486,7 +507,11 @@ used by fv-deploy's blocking `RunpodApi` / `Pod` and by the autoscaler's `Runpod
 `fastvideo-autoscale`'s `RunpodApi::send` executes a shared `Request` on reqwest; its test sends each request to a local
 fake and asserts the method, path and header are fv-deploy's. Behaviour changes, all toward the guards: a `costPerHr`
 given as a numeric string is now read (it was read as 0, so never over the cap), a DELETE of a pod already gone counts
-as deleted (it was an error), error text is scrubbed of the key.
+as deleted (it was an error), error text is scrubbed of the key. Also intended, from sending fv-deploy's requests: the
+REST timeout is 60 s (was the client's 30 s), every request carries `content-type: application/json` (GETs too), the
+balance query also asks `currentSpendPerHr`, GraphQL `errors` fail the balance read (they were ignored when a
+`clientBalance` came with them), error snippets are 400 characters (were 300). `boot::sys::Request`'s `Debug` redacts
+the `authorization` header.
 
 **What remains** (not moved, and why): (1) the autoscaler does not call `Pod::create` / `Serverless` through the
 `Provider` trait: its pods come from a Runpod **template** (`templateId`, no image), which a `Launch` cannot name
@@ -512,7 +537,8 @@ create that the autoscaler runs through `spawn_blocking`, and the live quote rep
 - **C3b, the owner's**: the Vast and GCP live gates (§8.4); whether Vast serves at all (plan §1); r2 weights on Vast
   (the fv-control weights plan in Rust); GCP's quote (the static table, or the Cloud Billing catalog, UNVERIFIED here)
   and its budget as the floor's balance; GCP's readiness timeout (the shared 600 s bound; `vm.sh wait` allows 2700 s:
-  a slow first boot needs `--force-guards --ready-timeout-s`); whether a pod whose create reports no price stays in an
+  a cold boot needs `--force-guards --ready-timeout-s 2700`, or a GCP bound of its own); Vast's missing region
+  constraint; whether a pod whose create reports no price stays in an
   autoscaler pool (§9 (3)).
 - The autoscaler's full move onto the trait (§9 "What remains"), templates / release / the D1 ledger (C3d). C3c
   follow-ups (§7.3): a CPU section and `gmi` / `brev` kinds in `Launch`; the guards' numbers as options (null = not
@@ -546,7 +572,7 @@ create that the autoscaler runs through `spawn_blocking`, and the live quote rep
   key; the US volume is refused), `scripts/serve/tests/fv-deploy-goldens.sh --check` in `control.yml`.
 
 - C3b is pinned by `vast_search_and_create_equal_vast_sh`, `gcp_firewall_and_instance_equal_vm_sh`, the preset-diff
-  goldens, `provider/tests_c3b.rs` (14 tests), `runpod::shared_tests`, `runpod::template::tests`, the autoscaler's
+  goldens, `provider/tests_c3b.rs` (21 tests, the review's included), `runpod::shared_tests`, `runpod::template::tests`, the autoscaler's
   `the_async_client_sends_the_shared_requests`, and `scripts/gcp/tests/vm.test.sh`.
 
 ## Validation

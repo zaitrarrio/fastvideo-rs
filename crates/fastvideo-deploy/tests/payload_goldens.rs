@@ -492,7 +492,7 @@ fn gcp_firewall_and_instance_equal_vm_sh() {
         fixture("gcp-instance.json")
     );
     assert_eq!(
-        firewall_body(&l.name, &o, "golden-project"),
+        firewall_body(&l.name, &o, "golden-project").unwrap_or_else(|e| panic!("{e}")),
         fixture("gcp-firewall.json")
     );
     assert_eq!(guard::check_region(&l), Ok(()));
@@ -542,7 +542,10 @@ fn preset_gcp_is_the_script_vm_plus_the_channel() {
     let mut fw = fixture("gcp-firewall.json");
     fw["name"] = json!(format!("fv-serve-{name}"));
     fw["targetTags"] = json!([name]);
-    assert_eq!(firewall_body(&l.name, &o, "golden-project"), fw);
+    assert_eq!(
+        firewall_body(&l.name, &o, "golden-project").unwrap_or_else(|e| panic!("{e}")),
+        fw
+    );
 }
 
 /// Every `[[gcp]]` row builds for its family (a model family through

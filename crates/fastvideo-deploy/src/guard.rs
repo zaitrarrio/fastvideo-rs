@@ -42,6 +42,22 @@ pub const US_DELETED_VOLUME_NAME: &str = "fv-weights-b200-us";
 pub const US_GONE: &str =
     "US weights volume deleted 2026-10; EU only, see docs/ops/runpod-volumes.md";
 
+/// `x >= floor`, false when either is NaN: every floor fails closed.
+pub fn at_least(x: f64, floor: f64) -> bool {
+    matches!(
+        x.partial_cmp(&floor),
+        Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+    )
+}
+
+/// `x <= cap`, false when either is NaN: every cap fails closed.
+pub fn at_most(x: f64, cap: f64) -> bool {
+    matches!(
+        x.partial_cmp(&cap),
+        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+    )
+}
+
 /// The default guards.
 pub fn default_guards() -> Guards {
     Guards {
@@ -263,7 +279,7 @@ pub fn check_projection(
         .filter(|x| x.is_finite() && *x > 0.0)
         .unwrap_or(0.0);
     let projected = a.balance_usd - (usd_per_hr + spend) * cap_s as f64 / 3600.0;
-    if projected < floor {
+    if !at_least(projected, floor) {
         return Err(GuardError::BalanceWouldDropBelowFloor {
             balance: a.balance_usd,
             projected,
@@ -292,7 +308,7 @@ pub fn check_env(l: &Launch, leaks: impl Fn(&str) -> bool) -> Result<(), GuardEr
 
 /// The balance floor.
 pub fn check_balance(a: &Account, floor: f64) -> Result<(), GuardError> {
-    if a.balance_usd < floor {
+    if !at_least(a.balance_usd, floor) {
         return Err(GuardError::BalanceBelowFloor {
             balance: a.balance_usd,
             floor,
@@ -308,7 +324,7 @@ pub fn check_quote(o: &Offer, cap: f64) -> Result<f64, GuardError> {
         None => Err(GuardError::NoQuote {
             gpu: o.gpu_type.clone(),
         }),
-        Some(p) if p > cap => Err(GuardError::OverCap {
+        Some(p) if !at_most(p, cap) => Err(GuardError::OverCap {
             gpu: o.gpu_type.clone(),
             usd: p,
             cap,
@@ -321,7 +337,7 @@ pub fn check_quote(o: &Offer, cap: f64) -> Result<f64, GuardError> {
 /// bills at create): over the cap, or no readable price, fails.
 pub fn check_billed(i: &Instance, cap: f64) -> Result<(), GuardError> {
     match i.usd_per_hr {
-        Some(p) if p > cap => Err(GuardError::BilledOverCap {
+        Some(p) if !at_most(p, cap) => Err(GuardError::BilledOverCap {
             id: i.id.to_string(),
             usd: p,
             cap,

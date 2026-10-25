@@ -174,14 +174,39 @@ impl Method {
     }
 }
 
-/// One HTTP request.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One HTTP request. `Debug` redacts the `authorization` header (a
+/// provider key or token is only ever there).
+#[derive(Clone, PartialEq, Eq)]
 pub struct Request {
     pub method: Method,
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
     pub timeout: Duration,
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let headers: Vec<(&str, &str)> = self
+            .headers
+            .iter()
+            .map(|(k, v)| {
+                let v = if k.eq_ignore_ascii_case("authorization") {
+                    "<redacted>"
+                } else {
+                    v.as_str()
+                };
+                (k.as_str(), v)
+            })
+            .collect();
+        f.debug_struct("Request")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("headers", &headers)
+            .field("body", &self.body.as_ref().map(|b| b.len()))
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 impl Request {
@@ -460,6 +485,22 @@ pub fn is_executable(p: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn request_debug_redacts_the_authorization_header() {
+        let r = super::Request::new(
+            super::Method::Get,
+            "https://x.test/a",
+            Duration::from_secs(1),
+        )
+        .bearer("SECRET_TOKEN_1")
+        .header("x-other", "shown");
+        let d = format!("{r:?}");
+        assert!(
+            !d.contains("SECRET_TOKEN_1") && d.contains("<redacted>") && d.contains("shown"),
+            "{d}"
+        );
+    }
+
     use super::*;
 
     #[test]

@@ -401,33 +401,128 @@ fn down_on_vast_and_a_foreign_gcp_vm() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let mut c = Command::new(BIN);
-    c.args(["down", "fv-other", "--kind", "gcp"])
-        .arg("--state-dir")
-        .arg(&state)
-        .arg("--root")
-        .arg(repo_root());
-    fake_env(&mut c, &base);
-    c.env("GCP_ACCESS_TOKEN", GCP_TOKEN)
-        .env("GCP_PROJECT", "p")
-        .env("FV_GCP_COMPUTE_API", format!("{base}/compute/v1"));
-    let out = c.output().unwrap_or_else(|e| panic!("run: {e}"));
-    let se = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(!out.status.success() && se.contains("refusing"), "{se}");
+    let gcp_down = |id: &str, zone: Option<&str>| {
+        let mut c = Command::new(BIN);
+        c.args(["down", id, "--kind", "gcp"])
+            .arg("--state-dir")
+            .arg(&state)
+            .arg("--root")
+            .arg(repo_root());
+        if let Some(z) = zone {
+            c.args(["--zone", z]);
+        }
+        fake_env(&mut c, &base);
+        c.env("GCP_ACCESS_TOKEN", GCP_TOKEN)
+            .env("GCP_PROJECT", "p")
+            .env("GCP_ZONE", "europe-west4-b")
+            .env("FV_GCP_COMPUTE_API", format!("{base}/compute/v1"));
+        let out = c.output().unwrap_or_else(|e| panic!("run: {e}"));
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    // No record, no --zone: refused before any request (never GCP_ZONE).
+    let (ok, se) = gcp_down("fv-other", None);
+    assert!(!ok && se.contains("pass --zone"), "{se}");
+    assert!(!seen
+        .lock()
+        .map(|g| g.iter().any(|r| r.contains("/compute/")))
+        .unwrap_or(true));
+    // The zone `up` recorded wins over GCP_ZONE.
+    std::fs::create_dir_all(state.join("instances")).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(
+        state.join("instances/fv-other.json"),
+        r#"{"instance":{"id":"fv-other","provider":"gcp","name":"fv-other","state":"running","data_center":"europe-west1-c"},"launch":"fv-other"}"#,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let (ok, se) = gcp_down("fv-other", None);
+    // The fake answers `{}`: no fv-owner label, so the delete is refused.
+    assert!(!ok && se.contains("refusing"), "{se}");
     assert!(!se.contains(GCP_TOKEN));
+    // --zone without a record.
+    let (ok, _) = gcp_down("fv-third", Some("europe-west2-a"));
+    assert!(!ok);
     let reqs = seen.lock().map(|g| g.clone()).unwrap_or_default();
     assert!(
         reqs.iter()
             .any(|r| r == &format!("DELETE /vast/instances/4242/ Bearer {VAST_KEY}")),
         "{reqs:?}"
     );
-    let get = format!(
-        "GET /compute/v1/projects/p/zones/europe-west4-b/instances/fv-other Bearer {GCP_TOKEN}"
+    for (zone, vm) in [
+        ("europe-west1-c", "fv-other"),
+        ("europe-west2-a", "fv-third"),
+    ] {
+        let get =
+            format!("GET /compute/v1/projects/p/zones/{zone}/instances/{vm} Bearer {GCP_TOKEN}");
+        assert!(reqs.contains(&get), "{reqs:?}");
+    }
+    assert!(
+        !reqs.iter().any(|r| r.contains("/zones/europe-west4-b/")),
+        "{reqs:?}"
     );
-    assert!(reqs.contains(&get), "{reqs:?}");
     assert!(
         !reqs.iter().any(|r| r.starts_with("DELETE /compute")),
         "{reqs:?}"
     );
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+/// Review 5, 7, 8: a NaN budget is refused; a separator-only
+/// FV_GCP_SOURCE_CIDR is unset (never an empty source list); a fixed
+/// GCP_ACCESS_TOKEN refuses a cap the token would not outlive. No request.
+#[test]
+fn gcp_cli_refuses_nan_budgets_empty_ranges_and_long_static_tokens() {
+    let (base, seen) = fake_runpod(20.0);
+    let run = |args: &[&str], cidr: &str| {
+        let mut c = Command::new(BIN);
+        c.args(args).arg("--root").arg(repo_root());
+        fake_env(&mut c, &base);
+        c.env("GCP_ACCESS_TOKEN", GCP_TOKEN)
+            .env("GCP_PROJECT", "p")
+            .env("FV_GCP_SOURCE_CIDR", cidr)
+            .env("FV_GCP_COMPUTE_API", format!("{base}/compute/v1"));
+        let out = c.output().unwrap_or_else(|e| panic!("run: {e}"));
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let gcp = ["--kind", "gcp", "--family", "h3", "--preset", "h3-turbo"];
+    let mut nan = vec!["plan"];
+    nan.extend(gcp);
+    nan.extend(["--budget-usd", "nan"]);
+    let (ok, _, se) = run(&nan, "203.0.113.1/32");
+    assert!(!ok && se.contains("--budget-usd NaN"), "{se}");
+    let mut plan = vec!["plan"];
+    plan.extend(gcp);
+    let (ok, so, se) = run(&plan, " , ");
+    assert!(ok, "{se}");
+    let v: serde_json::Value = serde_json::from_str(&so).unwrap_or_else(|e| panic!("{e}: {so}"));
+    assert_eq!(
+        v["requests"][0]["body"]["sourceRanges"],
+        serde_json::json!(["198.51.100.7/32"])
+    );
+    let state = std::env::temp_dir().join(format!("fv-deploy-tok-{}", std::process::id()));
+    let state_s = state.display().to_string();
+    let image = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    let mut up = vec!["up"];
+    up.extend(gcp);
+    up.extend([
+        "--yes",
+        "--cap-s",
+        "3600",
+        "--image",
+        image,
+        "--state-dir",
+        state_s.as_str(),
+        "--budget-usd",
+        "50",
+    ]);
+    let (ok, _, se) = run(&up, "203.0.113.1/32");
+    assert!(!ok && se.contains("outlive the token"), "{se}");
+    assert!(!se.contains(GCP_TOKEN));
+    assert!(seen.lock().map(|g| g.is_empty()).unwrap_or(false));
     let _ = std::fs::remove_dir_all(&state);
 }

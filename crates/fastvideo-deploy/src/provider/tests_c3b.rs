@@ -16,7 +16,7 @@ use super::gcp::{GcpApi, GcpAssets, GcpOptions, GcpPrices, GcpVm, PriceRow, Stat
 use super::tests::{FakeClock, Lines, RecBackstop, IMAGE};
 use super::vast::{Vast, VastApi};
 use super::*;
-use crate::boot::sys::{Http, Method, Request, Response, SysError};
+use crate::boot::sys::{Clock, Http, Method, Request, Response, SysError};
 use crate::guard::{self, GuardError};
 use crate::launch::{script_gcp, script_vast, ScriptGcp, ScriptVast};
 use crate::lifecycle::{DeployError, Deployer, SmokeOptions, UpOptions};
@@ -95,6 +95,16 @@ impl FakeServe {
     }
 }
 
+/// Numbers compared as numbers (the fixtures are written by jq).
+fn num(v: &Value) -> Value {
+    match v {
+        Value::Number(n) => json!(n.as_f64().unwrap_or(f64::NAN)),
+        Value::Array(a) => Value::Array(a.iter().map(num).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), num(v))).collect()),
+        other => other.clone(),
+    }
+}
+
 fn never() -> bool {
     false
 }
@@ -142,6 +152,14 @@ struct FakeVast {
     lose_create: Cell<bool>,
     /// Every ask answers `{"success": false}`.
     refuse_asks: Cell<bool>,
+    /// The instance's own `dph_total` (absent: none reported).
+    inst_dph: Cell<Option<f64>>,
+    /// This many listings leave out every instance (a create not listed yet).
+    hide_listings: Cell<u32>,
+    /// The listing's entries carry no `label`.
+    unlabelled: Cell<bool>,
+    /// Every DELETE answers `{"success": false}`.
+    refuse_deletes: Cell<bool>,
     seq: Cell<u64>,
     serve: FakeServe,
     log: RefCell<Vec<Request>>,
@@ -159,6 +177,10 @@ impl FakeVast {
             credit: Cell::new(25.0),
             lose_create: Cell::new(false),
             refuse_asks: Cell::new(false),
+            inst_dph: Cell::new(None),
+            hide_listings: Cell::new(0),
+            unlabelled: Cell::new(false),
+            refuse_deletes: Cell::new(false),
             seq: Cell::new(0),
             serve: FakeServe::new(&[502, 204, 200]),
             log: RefCell::new(Vec::new()),
@@ -224,18 +246,35 @@ impl FakeVast {
                 let Some(e) = inst.get_mut(*id) else {
                     return resp(404, json!({"error": "no such instance"}));
                 };
-                let out = json!({"instances": {
+                let mut out = json!({"instances": {
                     "id": id, "label": e.0, "actual_status": e.1,
                     "public_ipaddr": VAST_IP,
                     "ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "41000"}]}
                 }});
+                if let Some(d) = self.inst_dph.get() {
+                    out["instances"]["dph_total"] = json!(d);
+                }
                 e.1 = "running".into();
                 resp(200, out)
             }
-            (Method::Get, ["instances"]) => resp(
-                200,
-                json!({"instances": self.instances.borrow().iter().map(|(id, (l, s))| json!({"id": id.parse::<u64>().unwrap_or(0), "label": l, "actual_status": s})).collect::<Vec<_>>()}),
-            ),
+            (Method::Get, ["instances"]) => {
+                if self.hide_listings.get() > 0 {
+                    self.hide_listings.set(self.hide_listings.get() - 1);
+                    return resp(200, json!({"instances": []}));
+                }
+                let unl = self.unlabelled.get();
+                resp(
+                    200,
+                    json!({"instances": self.instances.borrow().iter().map(|(id, (l, s))| {
+                        let mut e = json!({"id": id.parse::<u64>().unwrap_or(0), "label": l, "actual_status": s});
+                        if unl { if let Some(o) = e.as_object_mut() { o.remove("label"); } }
+                        e
+                    }).collect::<Vec<_>>()}),
+                )
+            }
+            (Method::Delete, ["instances", _]) if self.refuse_deletes.get() => {
+                resp(200, json!({"success": false, "msg": "no_such_instance"}))
+            }
             (Method::Delete, ["instances", id]) => match self.instances.borrow_mut().remove(*id) {
                 Some(_) => resp(200, json!({"success": true})),
                 None => resp(404, json!({"error": "no such instance"})),
@@ -351,7 +390,8 @@ fn vast_up_rents_the_cheapest_offer_under_the_cap_then_smokes_and_deletes() {
         .unwrap_or(Value::Null);
     assert_eq!(put["label"], "fv-deploy-fake-1025120000");
     assert_eq!(put["env"]["-p 8000:8000"], "1");
-    // The create's search names the quoted GPU and the cap.
+    // The create's search is the script's, exactly (no `gpu_name`: no
+    // --gpu; the UNVERIFIED filter is never sent unasked).
     let search = fv
         .log
         .borrow()
@@ -360,8 +400,11 @@ fn vast_up_rents_the_cheapest_offer_under_the_cap_then_smokes_and_deletes() {
         .map(body_of)
         .nth(1)
         .unwrap_or(Value::Null);
-    assert_eq!(search["gpu_name"]["in"], json!(["RTX 3090"]));
-    assert_eq!(search["dph_total"]["lte"], json!(0.6));
+    assert!(search.get("gpu_name").is_none(), "{search}");
+    let golden: Value =
+        serde_json::from_str(include_str!("../../fixtures/deploy/vast-offers.json"))
+            .unwrap_or(Value::Null);
+    assert_eq!(num(&search), num(&golden));
     // The key is a header only.
     for r in fv.log.borrow().iter() {
         assert!(!r.url.contains(VAST_KEY));
@@ -458,6 +501,10 @@ fn vast_status_logs_and_refusals() {
     // An instance that reports no address yet is down, then reachable.
     let inst = p.create(&vast_launch()).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(inst.usd_per_hr, Some(0.21));
+    // (The create read the instance's price; it is loading again.)
+    if let Some(e) = fv.instances.borrow_mut().get_mut(inst.id.as_str()) {
+        e.1 = "loading".into();
+    }
     let mut r = p
         .reach(
             &inst,
@@ -537,6 +584,10 @@ impl FakeGcp {
                     resp(200, json!({"status": "DONE"}))
                 }
             }
+            (Method::Get, ["projects", "p", "aggregated", "instances"]) => resp(
+                200,
+                json!({"items": {format!("zones/{ZONE}"): {"instances": self.instances.borrow().values().cloned().collect::<Vec<_>>()}}}),
+            ),
             (Method::Get, ["projects", "p", "zones", _, "disks", d]) => {
                 if self.disk.get() && d.starts_with("fv-weights-hdml-") {
                     resp(
@@ -569,6 +620,7 @@ impl FakeGcp {
                 let n = b["name"].as_str().unwrap_or("").to_owned();
                 let mut inst = b.clone();
                 inst["status"] = json!("RUNNING");
+                inst["zone"] = json!(format!("{COMPUTE}/projects/p/zones/{ZONE}"));
                 inst["networkInterfaces"][0]["accessConfigs"][0]["natIP"] = json!(GCP_IP);
                 self.instances.borrow_mut().insert(n, inst);
                 self.op(false)
@@ -738,9 +790,11 @@ fn gcp_up_creates_rule_and_vm_smokes_and_deletes_both() {
             )
         })
         .collect();
+    // The account (budget less committed, our live VMs' spend) first.
     assert_eq!(
-        &calls[..4],
+        &calls[..5],
         [
+            "GET instances?filter=labels.fv-owner%3Dfastvideo-rs",
             "GET fv-weights-hdml-europe-west4-b",
             "POST firewalls",
             "POST instances",
@@ -978,4 +1032,173 @@ fn gcp_a_refused_address_lookup_after_the_insert_is_not_a_failed_create() {
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(inst.url, None);
     assert!(fg.instances.borrow().contains_key(&inst.name));
+}
+
+// ------------------------------------------------------------------ review of #193
+
+/// Review 3: an unexpected listing is an error, never "nothing left" (the
+/// sweep is Vast's only protection after a lost create answer).
+#[test]
+fn vast_sweep_refuses_a_listing_it_cannot_read() {
+    let fv = FakeVast::new();
+    let clock = FakeClock::at(0.0);
+    let p = Vast::new(VastApi::new(&fv, &clock, VAST_KEY, VAST));
+    p.create(&vast_launch()).unwrap_or_else(|e| panic!("{e}"));
+    fv.unlabelled.set(true);
+    let e = p.sweep("fv-deploy-fake-1025120000", None);
+    assert!(matches!(e, Err(ProviderError::Decode { .. })), "{e:?}");
+    assert_eq!(fv.live().len(), 1);
+}
+
+/// Review 3: a lost answer whose instance shows in the listing only later
+/// is still found: the sweep is retried (6 times, 18 s apart).
+#[test]
+fn vast_lost_answer_listed_late_is_swept_by_a_later_sweep() {
+    let fv = FakeVast::new();
+    fv.lose_create.set(true);
+    fv.hide_listings.set(3);
+    let clock = FakeClock::at(0.0);
+    let p = Vast::new(VastApi::new(&fv, &clock, VAST_KEY, VAST));
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let e = deployer(&p, &clock, &log, &bs, &vast_leaks).up(&vast_launch(), &up_opts());
+    match e {
+        Err(DeployError::CreateUncertain { swept, .. }) => assert!(swept.contains("90"), "{swept}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(fv.live().is_empty(), "{:?}", fv.live());
+    assert!(clock.now() >= 3.0 * 18.0, "{}", clock.now());
+}
+
+/// Review 4: `--gpu` names narrow the search (the UNVERIFIED filter is
+/// sent only then).
+#[test]
+fn vast_names_gpus_only_when_asked() {
+    let fv = FakeVast::new();
+    let clock = FakeClock::at(0.0);
+    let p = Vast::new(VastApi::new(&fv, &clock, VAST_KEY, VAST));
+    let any = p.offers(&OfferQuery::default()).unwrap_or_default();
+    assert_eq!(any.len(), 1);
+    assert_eq!(
+        (any[0].gpu_type.as_str(), any[0].usd_per_hr),
+        (super::vast::ANY_GPU, Some(0.21))
+    );
+    let mut l = vast_launch();
+    l.gpu.types = vec!["RTX 4090".into()];
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let r = deployer(&p, &clock, &log, &bs, &vast_leaks)
+        .up(&l, &up_opts())
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(r.instance.and_then(|i| i.gpu).as_deref(), Some("RTX 4090"));
+    let search = fv
+        .log
+        .borrow()
+        .iter()
+        .filter(|r| r.url.ends_with("/bundles/"))
+        .map(body_of)
+        .next_back()
+        .unwrap_or(Value::Null);
+    assert_eq!(search["gpu_name"]["in"], json!(["RTX 4090"]));
+}
+
+/// Review 9, 10, 11: the instance's own price when reported; a debt fails
+/// the floor; a refused delete of a gone instance is done, of a live one an
+/// error.
+#[test]
+fn vast_billed_price_debt_and_refused_deletes() {
+    let fv = FakeVast::new();
+    fv.inst_dph.set(Some(0.27));
+    let clock = FakeClock::at(0.0);
+    let p = Vast::new(VastApi::new(&fv, &clock, VAST_KEY, VAST));
+    let inst = p.create(&vast_launch()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(inst.usd_per_hr, Some(0.27));
+    fv.credit.set(-3.0);
+    let a = p.account().unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(a.balance_usd, -3.0);
+    assert!(guard::check_balance(&a, 8.0).is_err());
+    fv.refuse_deletes.set(true);
+    assert!(
+        p.destroy(&inst.id).is_err(),
+        "a live instance is not deleted"
+    );
+    assert!(p.destroy(&InstanceId::new("424242")).is_ok(), "gone");
+}
+
+/// Review 2: the budget is per run and shrinks by what each create
+/// committed (price × cap): the second VM of a $28 run at a 4 h cap is
+/// refused by the floor (28 − 19.8 = 8.2 left, less 19.8 more < 8).
+#[test]
+fn gcp_budget_shrinks_with_each_create() {
+    let fg = FakeGcp::new();
+    let clock = FakeClock::at(0.0);
+    let tok = StaticToken(GCP_TOKEN.into());
+    let vm = gcp_vm(&fg, &clock, &tok, Some(28.0));
+    let mut l = gcp_launch(true);
+    l.guards = gcp_guards();
+    l.guards.cap_s = 14_400;
+    let a0 = vm.account().unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((a0.balance_usd, a0.spend_per_hr_usd), (28.0, Some(0.0)));
+    assert!(guard::check_projection(&a0, 4.9499, l.guards.cap_s, 8.0).is_ok());
+    vm.create(&l).unwrap_or_else(|e| panic!("{e}"));
+    let a1 = vm.account().unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        (a1.balance_usd - (28.0 - 4.9499 * 4.0)).abs() < 1e-9,
+        "{a1:?}"
+    );
+    // The live VM is the account's current spend.
+    assert_eq!(a1.spend_per_hr_usd, Some(4.9499));
+    assert!(guard::check_projection(&a1, 4.9499, l.guards.cap_s, 8.0).is_err());
+}
+
+/// Review 1: `down` of an instance the provider does not know (a wrong
+/// zone) is "not found", never "deleted".
+#[test]
+fn down_of_an_unknown_instance_is_not_found() {
+    let fg = FakeGcp::new();
+    let clock = FakeClock::at(0.0);
+    let tok = StaticToken(GCP_TOKEN.into());
+    let vm = gcp_vm(&fg, &clock, &tok, Some(50.0));
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let d = deployer(&vm, &clock, &log, &bs, &gcp_leaks);
+    let e = d.down(&InstanceId::new("fv-elsewhere"));
+    assert!(matches!(e, Err(DeployError::NotFound(_))), "{e:?}");
+    let inst = vm
+        .create(&gcp_launch(true))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(d.down(&inst.id).is_ok());
+    assert!(fg.instances.borrow().is_empty());
+}
+
+/// Review 5, 7: NaN never passes a floor or a cap; an empty source range is
+/// refused before any request.
+#[test]
+fn nan_fails_closed_and_an_empty_source_range_is_refused() {
+    let a = Account {
+        provider: ProviderKind::Gcp,
+        balance_usd: f64::NAN,
+        spend_per_hr_usd: None,
+    };
+    assert!(guard::check_balance(&a, 8.0).is_err());
+    let ok = Account {
+        balance_usd: 100.0,
+        ..a.clone()
+    };
+    assert!(guard::check_projection(&ok, f64::NAN, 1800, 8.0).is_err());
+    assert!(guard::check_projection(&a, 1.0, 1800, 8.0).is_err());
+    let o = Offer {
+        provider: ProviderKind::Gcp,
+        gpu_type: "m".into(),
+        data_center: None,
+        cloud: CloudType::Secure,
+        usd_per_hr: Some(f64::NAN),
+        stock: None,
+    };
+    assert!(guard::check_quote(&o, 6.0).is_err());
+    let fg = FakeGcp::new();
+    let clock = FakeClock::at(0.0);
+    let tok = StaticToken(GCP_TOKEN.into());
+    let mut vm = gcp_vm(&fg, &clock, &tok, Some(50.0));
+    vm.options.source_ranges = vec![" ".into()];
+    assert!(vm.create(&gcp_launch(true)).is_err());
+    assert!(vm.payload(&gcp_launch(true)).is_err());
+    assert!(fg.log.borrow().is_empty());
 }

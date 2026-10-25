@@ -209,6 +209,10 @@ struct IdArgs {
     state_dir: Option<PathBuf>,
     #[arg(long)]
     root: Option<PathBuf>,
+    /// GCP: the VM's zone (default: what `up` recorded; required without a
+    /// record, never GCP_ZONE: a wrong zone would read a live VM as gone).
+    #[arg(long)]
+    zone: Option<String>,
 }
 
 fn fail(msg: impl std::fmt::Display) -> ExitCode {
@@ -256,8 +260,19 @@ fn print_json(v: &impl serde::Serialize) {
     }
 }
 
+/// The longest cap with a fixed `GCP_ACCESS_TOKEN` (a token lives an hour;
+/// the backstop deletes at the cap with the token it inherited).
+const STATIC_TOKEN_MAX_CAP_S: u64 = 50 * 60;
+
 fn request(a: &LaunchArgs, key_hash: &str) -> Result<PresetRequest, String> {
     let kind = kind_of(&a.kind)?;
+    if let Some(b) = a.gcp.budget_usd {
+        if !(b.is_finite() && b >= 0.0) {
+            return Err(format!(
+                "--budget-usd {b}: a finite amount of dollars, at least 0"
+            ));
+        }
+    }
     Ok(PresetRequest {
         family: a.family.clone(),
         preset: a.preset.clone(),
@@ -449,8 +464,13 @@ fn source_cidrs(
     if !given.is_empty() {
         return Ok(given);
     }
-    if let Some(e) = env.get("FV_GCP_SOURCE_CIDR") {
-        return Ok(split(e));
+    // Empty or separators only: unset (as lib.sh), never an empty list.
+    if let Some(e) = env
+        .get("FV_GCP_SOURCE_CIDR")
+        .map(split)
+        .filter(|v| !v.is_empty())
+    {
+        return Ok(e);
     }
     let Some(http) = http else {
         return Ok(vec!["198.51.100.7/32".into()]);
@@ -611,6 +631,17 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let stamp = launch::utc_stamp(clock.now());
     let req = request(&u.launch, &launch::key_hash(&key))?;
     let mut l = launch::from_preset(&repo, &req, &stamp).map_err(|e| e.to_string())?;
+    if l.provider == ProviderKind::Gcp
+        && ctx.env.get(gcp::TOKEN_VAR).is_some()
+        && l.guards.cap_s > STATIC_TOKEN_MAX_CAP_S
+    {
+        return Err(format!(
+            "--cap-s {}: with a fixed {} the backstop's delete at the cap would outlive the token (about an hour); at most {STATIC_TOKEN_MAX_CAP_S} s, or let scripts/gcp/auth.sh mint tokens (GCP_SA_KEY_JSON / GCP_SA_KEY_FILE, {} unset)",
+            l.guards.cap_s,
+            gcp::TOKEN_VAR,
+            gcp::TOKEN_VAR
+        ));
+    }
     let opts = if l.provider == ProviderKind::Gcp {
         let cidrs = source_cidrs(&u.launch, &ctx.env, Some(ctx.http.as_ref()))?;
         gcp_options(&u.launch, &repo, &req, &stamp, cidrs)?
@@ -762,7 +793,22 @@ fn with_provider<T>(
         usd_per_hr: None,
         created_at: None,
     });
-    let p = ctx.provider(kind, true, None, None, None)?;
+    // GCP: the zone `up` recorded, else --zone; never a default.
+    let zone = match kind {
+        ProviderKind::Gcp => Some(
+            a.zone
+                .clone()
+                .or_else(|| inst.data_center.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "no local record of the GCP VM {}: pass --zone (the zone it runs in)",
+                        a.id
+                    )
+                })?,
+        ),
+        _ => None,
+    };
+    let p = ctx.provider(kind, true, None, None, zone.as_deref())?;
     f(p.as_ref(), inst, &state, clock)
 }
 

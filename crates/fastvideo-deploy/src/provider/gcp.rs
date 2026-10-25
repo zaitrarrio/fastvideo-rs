@@ -714,9 +714,16 @@ pub fn instance_body(
 
 /// The VM's firewall rule (`vm.sh firewall_payload`,
 /// `fixtures/deploy/gcp-firewall.json`): fv-serve's 8000 and ICE-TCP 40000,
-/// ICE-UDP 40010, from `source_ranges` only, to this VM's tag.
-pub fn firewall_body(name: &str, o: &GcpOptions, project: &str) -> Value {
-    json!({
+/// ICE-UDP 40010, from `source_ranges` only, to this VM's tag. No source
+/// range is refused: an ingress rule without one may admit everyone
+/// (UNVERIFIED), and this rule opens fv-serve.
+pub fn firewall_body(name: &str, o: &GcpOptions, project: &str) -> Result<Value, ProviderError> {
+    if o.source_ranges.iter().all(|r| r.trim().is_empty()) {
+        return Err(ProviderError::Unsupported(
+            "GCP: the firewall rule has no source range (pass --source-cidr)".into(),
+        ));
+    }
+    Ok(json!({
         "name": format!("fv-serve-{name}"),
         "network": format!("projects/{project}/global/networks/{NETWORK}"),
         "direction": "INGRESS", "priority": 1000,
@@ -724,7 +731,7 @@ pub fn firewall_body(name: &str, o: &GcpOptions, project: &str) -> Value {
         "targetTags": [name],
         "sourceRanges": o.source_ranges,
         "allowed": [{"IPProtocol": "tcp", "ports": ["8000", "40000"]}, {"IPProtocol": "udp", "ports": [UDP_PORTS]}],
-    })
+    }))
 }
 
 /// For printing a plan: file items shortened to their length and first line
@@ -770,6 +777,10 @@ pub struct GcpVm<'a> {
     pub options: GcpOptions,
     pub assets: GcpAssets,
     pub prices: GcpPrices,
+    /// What this run's creates have committed of the budget: each VM's
+    /// table price × the cap (the most it can cost before Compute Engine
+    /// deletes it), whatever became of it.
+    committed_usd: std::cell::Cell<f64>,
 }
 
 impl std::fmt::Debug for GcpVm<'_> {
@@ -788,7 +799,71 @@ impl<'a> GcpVm<'a> {
             options,
             assets,
             prices,
+            committed_usd: std::cell::Cell::new(0.0),
         }
+    }
+
+    /// What this run has committed of the budget so far.
+    pub fn committed_usd(&self) -> f64 {
+        self.committed_usd.get()
+    }
+
+    /// The table price per hour of our live VMs (`fv-owner=fastvideo-rs`,
+    /// any zone, not stopped): the account's current spend, which the
+    /// floor's projection adds to the quote. A machine the table does not
+    /// list counts at the table's highest price.
+    fn live_spend_per_hr(&self) -> Result<f64, ProviderError> {
+        let url = format!(
+            "{}/projects/{}/aggregated/instances?filter=labels.fv-owner%3D{OWNER_LABEL}",
+            self.api.compute, self.api.project
+        );
+        let v = self
+            .api
+            .ok(Method::Get, &url, None, "GET instances (spend)")?;
+        let top = self
+            .prices
+            .0
+            .iter()
+            .map(|r| r.on_demand.max(r.spot))
+            .fold(0.0, f64::max);
+        let mut sum = 0.0;
+        for scope in v
+            .get("items")
+            .and_then(Value::as_object)
+            .map(|m| m.values().collect::<Vec<_>>())
+            .unwrap_or_default()
+        {
+            for i in scope
+                .get("instances")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+            {
+                if !is_ours(i)
+                    || instance_state(i.get("status").and_then(Value::as_str).unwrap_or(""))
+                        == InstanceState::Exited
+                {
+                    continue;
+                }
+                let tail = |k: &str| {
+                    i.get(k)
+                        .and_then(Value::as_str)
+                        .and_then(|s| s.rsplit('/').next())
+                        .unwrap_or("")
+                        .to_owned()
+                };
+                let (machine, zone) = (tail("machineType"), tail("zone"));
+                let spot = i
+                    .pointer("/scheduling/provisioningModel")
+                    .and_then(Value::as_str)
+                    == Some("SPOT");
+                sum += self
+                    .prices
+                    .price(&machine, spot, region_of(&zone))
+                    .unwrap_or(top);
+            }
+        }
+        Ok(sum)
     }
 
     fn deadline(&self, l: &Launch) -> u64 {
@@ -831,7 +906,7 @@ impl Provider for GcpVm<'_> {
             ApiCall {
                 method: "POST".into(),
                 url: self.api.firewalls_url(),
-                body: firewall_body(&launch.name, &self.options, project),
+                body: firewall_body(&launch.name, &self.options, project)?,
             },
             ApiCall {
                 method: "POST".into(),
@@ -851,6 +926,8 @@ impl Provider for GcpVm<'_> {
     /// instance (each operation waited on; a failed instance removes its
     /// rule); its external address is the URL.
     fn create(&self, launch: &Launch) -> Result<Instance, ProviderError> {
+        // Both bodies are built (and refused) before any request.
+        let fw = firewall_body(&launch.name, &self.options, &self.api.project)?;
         let zone = zone_of(launch);
         let body = instance_body(
             launch,
@@ -877,11 +954,7 @@ impl Provider for GcpVm<'_> {
         let op = self.api.ok(
             Method::Post,
             &self.api.firewalls_url(),
-            Some(&firewall_body(
-                &launch.name,
-                &self.options,
-                &self.api.project,
-            )),
+            Some(&fw),
             "POST firewall",
         )?;
         self.api.wait(&op, "POST firewall")?;
@@ -915,6 +988,13 @@ impl Provider for GcpVm<'_> {
                     .map(str::to_owned)
             });
         let spot = provisioning(&machine, self.options.spot) == "SPOT";
+        let price = self.prices.price(&machine, spot, region_of(zone));
+        // Unknown (it was quoted, so not expected): the cap counts instead.
+        self.committed_usd.set(
+            self.committed_usd.get()
+                + price.unwrap_or(launch.guards.max_usd_per_hr) * launch.guards.cap_s as f64
+                    / 3600.0,
+        );
         Ok(Instance {
             id: InstanceId::new(launch.name.clone()),
             provider: self.kind(),
@@ -923,7 +1003,7 @@ impl Provider for GcpVm<'_> {
             url: ip.map(|ip| format!("http://{ip}:8000")),
             gpu: Some(machine.clone()),
             data_center: Some(zone.to_owned()),
-            usd_per_hr: self.prices.price(&machine, spot, region_of(zone)),
+            usd_per_hr: price,
             created_at: Some(self.api.clock.now()),
         })
     }
@@ -967,7 +1047,9 @@ impl Provider for GcpVm<'_> {
     }
 
     /// GCP bills an account with no prepaid balance: the floor is checked
-    /// on the run's budget (`FV_GCP_BUDGET_USD`); without one, nothing is
+    /// on the run's budget (`FV_GCP_BUDGET_USD`, per `up`) less what this
+    /// run has committed (each created VM's price × the cap), with our live
+    /// VMs' table prices as the current spend; without a budget, nothing is
     /// created.
     fn account(&self) -> Result<Account, ProviderError> {
         let b = self
@@ -976,8 +1058,8 @@ impl Provider for GcpVm<'_> {
             .ok_or(ProviderError::MissingKey(BUDGET_VAR))?;
         Ok(Account {
             provider: self.kind(),
-            balance_usd: b,
-            spend_per_hr_usd: None,
+            balance_usd: b - self.committed_usd.get(),
+            spend_per_hr_usd: Some(self.live_spend_per_hr()?),
         })
     }
 

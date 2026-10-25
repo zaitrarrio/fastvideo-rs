@@ -39,9 +39,11 @@ RUNPOD_API_KEY=… ./fv-deploy up --family h3 --preset h3-turbo --kind serverles
 # Vast (ADR-0018 §8.2): the fake-engine smoke only (no weights volume on Vast; r2 not in fv-deploy yet).
 VAST_API_KEY=… ./fv-deploy up --kind vast --family fake --preset fake --channel latest --yes
 
-# GCP (ADR-0018 §8.3): a deploy/deploy.toml [[gcp]] row; the floor is checked on the run's budget.
-GCP_SA_KEY_FILE=… FV_GCP_BUDGET_USD=20 ./fv-deploy up --kind gcp --family h3 --preset h3-turbo --channel latest --yes
-./fv-deploy down <vm name> --kind gcp
+# GCP (ADR-0018 §8.3): a deploy/deploy.toml [[gcp]] row; the floor is checked on the run's budget, less $4.95
+# (a G4 hour) per VM created. A cold GCP boot outlasts the shared 600 s readiness bound: hence --force-guards.
+GCP_SA_KEY_FILE=… FV_GCP_BUDGET_USD=25 ./fv-deploy up --kind gcp --family h3 --preset h3-turbo --channel latest \
+  --cap-s 3600 --force-guards --ready-timeout-s 2700 --yes
+./fv-deploy down <vm name> --kind gcp [--zone europe-west4-b]   # the zone up recorded, else --zone
 
 # The JSON Schemas (fv-control's types are generated from them, plan C3c):
 ./fv-deploy schema launch      # also: instance, offer, account
@@ -67,9 +69,9 @@ provider GPU names / machine types (Vast: any GPU with a CUDA 13 driver when non
 | `RUNPOD_API_BASE`, `RUNPOD_GRAPHQL`, `RUNPOD_QUEUE_API`, `RUNPOD_HAPI`, `FV_RUNPOD_PROXY` | API overrides (tests, fakes) |
 | `VAST_API_KEY` | Vast (`--kind vast`): as `RUNPOD_API_KEY`; secrets are Vast account env vars, never in a launch |
 | `VAST_API_BASE` | Vast API override |
-| `GCP_SA_KEY_JSON` / `GCP_SA_KEY_FILE`, or `GCP_ACCESS_TOKEN` | GCP (`--kind gcp`): the token is minted by `scripts/gcp/auth.sh` from the key (or given), asked before every request, only a header |
-| `GCP_PROJECT`, `GCP_ZONE` | the project (default: the key's `project_id`) and the zone of id commands (default `europe-west4-b`) |
-| `FV_GCP_BUDGET_USD` | GCP's "balance": the run's budget the $8 floor and the projection are checked on; without it `up` creates nothing |
+| `GCP_SA_KEY_JSON` / `GCP_SA_KEY_FILE`, or `GCP_ACCESS_TOKEN` | GCP (`--kind gcp`): the token is minted by `scripts/gcp/auth.sh` from the key (or given), asked before every request, only a header; a given token (about an hour of life) allows `--cap-s` up to 3000 |
+| `GCP_PROJECT`, `GCP_ZONE` | the project (default: the key's `project_id`); `GCP_ZONE` is not used by commands on an existing VM (they take the recorded zone or `--zone`) |
+| `FV_GCP_BUDGET_USD` | GCP's "balance": the budget of one `up`, less each created VM's price × the cap, that the $8 floor and the projection are checked on; at least $8 + price × cap (G4, 1800 s: $10.48); without it `up` creates nothing |
 | `FV_GCP_COMPUTE_API` | Compute API override (tests, fakes) |
 
 ## Guards (all on by default; the numbers are flags)

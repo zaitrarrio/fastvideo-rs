@@ -199,10 +199,12 @@ metadata_items() {
 
 # instance_payload <name> <family> <machine> <image> <keyhash> <run> <deadline>
 # The metadata items (startup.sh, the verify scripts and their tables: about
-# 135 KB) reach jq through a file descriptor: as one argument they exceed
-# Linux's 128 KiB limit on a single argument (E2BIG).
+# 135 KB) reach jq through a file: as one argument they exceed Linux's
+# 128 KiB limit on a single argument (E2BIG). A failing metadata_items, or a
+# file that is not one non-empty array, fails the payload (a VM without its
+# startup-script would have no idle stop).
 instance_payload() {
-  local name="$1" family="$2" machine="$3" image="$4" keyhash="$5" run="$6" deadline="$7" prov boot disks
+  local name="$1" family="$2" machine="$3" image="$4" keyhash="$5" run="$6" deadline="$7" prov boot disks items_f rc
   prov="$(gcp_provisioning "$machine")"
   boot="$(gcp_boot_disk_type "$machine")"
   disks="$(jq -nc --arg zone "$ZONE" --arg img "$GCP_IMAGE" --arg bt "$boot" --argjson l "$(gcp_labels serve "$run")" '[{
@@ -213,10 +215,18 @@ instance_payload() {
     disks="$(jq -c --arg src "projects/$PROJECT/zones/$ZONE/disks/$WEIGHTS_DISK" \
       '. + [{source: $src, mode: "READ_ONLY", autoDelete: false, deviceName: "fv-weights"}]' <<<"$disks")"
   fi
+  items_f="$(mktemp)"
+  if ! metadata_items "$family" "$image" "$keyhash" >"$items_f"; then
+    rm -f "$items_f"
+    log "instance payload: the metadata items failed"
+    return 1
+  fi
   jq -n --arg name "$name" --arg zone "$ZONE" --arg mt "$machine" --arg prov "$prov" --argjson cap "$(cap_s)" \
     --arg net "projects/$PROJECT/global/networks/$NETWORK" --arg sa "$(vm_sa_email)" \
     --argjson labels "$(gcp_labels "$VM_ROLE" "$run" "$(jq -nc --arg f "$family" --arg r "$VM_ROLE" --arg d "$deadline" '{"fv-family": $f, "fv-role": $r, "fv-deadline": $d}')")" \
-    --argjson disks "$disks" --slurpfile items <(metadata_items "$family" "$image" "$keyhash") '{
+    --argjson disks "$disks" --slurpfile items "$items_f" '
+    ($items | if length == 1 and (.[0] | type) == "array" and (.[0] | length) > 0 then .[0]
+      else error("metadata items: not one non-empty array") end) as $meta | {
       name: $name,
       description: "fastvideo-rs fv-serve (fv-owner=fastvideo-rs)",
       machineType: ("zones/" + $zone + "/machineTypes/" + $mt),
@@ -234,8 +244,11 @@ instance_payload() {
       }],
       serviceAccounts: [{email: $sa, scopes: ["https://www.googleapis.com/auth/cloud-platform"]}],
       shieldedInstanceConfig: {enableSecureBoot: false, enableVtpm: true, enableIntegrityMonitoring: true},
-      metadata: {items: $items[0]}
+      metadata: {items: $meta}
     }'
+  rc=$?
+  rm -f "$items_f"
+  return "$rc"
 }
 
 # TCP ports the firewall rule opens: 8000 (fv-serve) unless TLS fronts it;
@@ -266,7 +279,7 @@ VM_NAME="" VM_IP="" VM_KEY="" VM_DPH="" VM_MACHINE="" VM_PROV="" VM_URL=""
 # vm_up <family> [image]: sets VM_NAME/VM_IP/VM_KEY/VM_DPH/VM_URL (for e2e.sh,
 # which sources this file); prints nothing on stdout.
 vm_up() {
-  local family="$1" image machine prov dph run cidrs key="" keyhash="" resp deadline
+  local family="$1" image machine prov dph run cidrs key="" keyhash="" resp deadline body
   family_config "$family" >/dev/null || die "unknown family $family ($(gcp_families | tr '\n' ' '))"
   require_tools curl jq openssl sha256sum
   load_secrets_file
@@ -299,11 +312,14 @@ vm_up() {
     resp="$(gce GET "$COMPUTE/projects/$PROJECT/zones/$ZONE/disks/$WEIGHTS_DISK")" \
       || die "weight disk $WEIGHTS_DISK not found in $ZONE: scripts/gcp/weights.sh disk-up (or set FV_GCP_WEIGHTS_DISK)"
   fi
+  # The instance body first: a payload that cannot be built creates nothing.
+  body="$(instance_payload "$VM_NAME" "$family" "$machine" "$image" "$keyhash" "$run" "$deadline")" \
+    || die "instance payload could not be built (see above): nothing created"
   resp="$(gce POST "$COMPUTE/projects/$PROJECT/global/firewalls" "$(firewall_payload "$VM_NAME" "$run" "$cidrs")")" \
     || die "firewall create: $(jq -c '.error.message // .' <<<"$resp" 2>/dev/null | head -c 400)"
   gce_wait "$resp" || die "firewall create failed"
   gcp_ledger "firewall-created fv-serve-$VM_NAME"
-  if ! resp="$(gce POST "$COMPUTE/projects/$PROJECT/zones/$ZONE/instances" "$(instance_payload "$VM_NAME" "$family" "$machine" "$image" "$keyhash" "$run" "$deadline")")" \
+  if ! resp="$(gce POST "$COMPUTE/projects/$PROJECT/zones/$ZONE/instances" "$body")" \
     || ! gce_wait "$resp"; then
     log "instance create failed: $(jq -c '.error.message // .error // empty' <<<"$resp" 2>/dev/null | head -c 600)"
     firewall_delete "$VM_NAME" || true

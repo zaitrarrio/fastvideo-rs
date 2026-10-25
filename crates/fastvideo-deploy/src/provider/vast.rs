@@ -45,6 +45,8 @@ pub const MIN_RELIABILITY: f64 = 0.95;
 pub const OFFER_LIMIT: u32 = 20;
 /// How many offers a quote reads (one quote per GPU name among them).
 pub const QUOTE_LIMIT: u32 = 64;
+/// The quote of "any GPU" (a launch that names none).
+pub const ANY_GPU: &str = "any";
 /// The script's offer placeholder in `plan`.
 pub const OFFER_PLACEHOLDER: &str = "<offer id>";
 
@@ -366,12 +368,27 @@ impl Provider for Vast<'_> {
         ProviderKind::Vast
     }
 
-    /// The cheapest offer of each GPU name among the matching offers (any
-    /// GPU when the query names none), its `dph_total` the quote.
+    /// The quotes, each the cheapest matching offer's `dph_total`: with
+    /// named GPUs (`--gpu`), one per name; with none, one for [`ANY_GPU`]
+    /// (the lifecycle then creates the launch as it is, unnarrowed: the
+    /// script's search, no `gpu_name` filter).
     fn offers(&self, q: &OfferQuery) -> Result<Vec<Offer>, ProviderError> {
         let found = self
             .api
             .search(&search_query(&q.gpu_types, 1, None, None, QUOTE_LIMIT))?;
+        if q.gpu_types.is_empty() {
+            return Ok(vec![Offer {
+                provider: self.kind(),
+                gpu_type: ANY_GPU.into(),
+                data_center: None,
+                cloud: CloudType::Community,
+                usd_per_hr: found
+                    .iter()
+                    .filter_map(|o| super::parse_usd(o.get("dph_total")))
+                    .reduce(f64::min),
+                stock: None,
+            }]);
+        }
         let mut out: Vec<Offer> = Vec::new();
         for o in &found {
             // UNVERIFIED: `gpu_name` on an offer.
@@ -462,6 +479,16 @@ impl Provider for Vast<'_> {
                 what: "PUT ask".into(),
                 why: format!("no new_contract in {}", scrub(&v.to_string(), "", 300)),
             })?;
+        // The billed price: the instance's own `dph_total` when Vast reports
+        // it (it includes the disk; UNVERIFIED field on the instance), else
+        // the rented offer's.
+        let billed = self
+            .api
+            .instance(&id)
+            .ok()
+            .flatten()
+            .and_then(|i| super::parse_usd(i.get("dph_total")))
+            .or_else(|| super::parse_usd(o.get("dph_total")));
         Ok(Instance {
             id: InstanceId::new(id),
             provider: self.kind(),
@@ -477,7 +504,7 @@ impl Provider for Vast<'_> {
                 .get("geolocation")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            usd_per_hr: super::parse_usd(o.get("dph_total")),
+            usd_per_hr: billed,
             created_at: Some(self.api.clock().now()),
         })
     }
@@ -501,16 +528,24 @@ impl Provider for Vast<'_> {
         )))
     }
 
+    /// Gone (404) is done; a refusal (`{"success": false}`) is done only
+    /// when the instance is gone too (a delete of an instance already
+    /// deleted may answer so: UNVERIFIED).
     fn destroy(&self, id: &InstanceId) -> Result<(), ProviderError> {
-        self.api
-            .call(
-                Method::Delete,
-                &format!("/instances/{id}/"),
-                None,
-                "DELETE instance",
-                true,
-            )
-            .map(|_| ())
+        match self.api.call(
+            Method::Delete,
+            &format!("/instances/{id}/"),
+            None,
+            "DELETE instance",
+            true,
+        ) {
+            Ok(_) => Ok(()),
+            Err(e @ ProviderError::NoCapacity(_)) => match self.api.instance(id.as_str()) {
+                Ok(None) => Ok(()),
+                _ => Err(e),
+            },
+            Err(e) => Err(e),
+        }
     }
 
     /// UNVERIFIED path: `GET /users/current/` (what `vastai show user`
@@ -520,8 +555,18 @@ impl Provider for Vast<'_> {
         let v = self
             .api
             .json(Method::Get, "/users/current/", None, "GET user")?;
-        let balance = super::parse_usd(v.get("credit"))
-            .or_else(|| super::parse_usd(v.get("balance")))
+        // Signed: a debt (negative credit) must fail the floor, not fall
+        // through to another field.
+        let signed = |k: &str| {
+            v.get(k)
+                .and_then(|x| {
+                    x.as_f64()
+                        .or_else(|| x.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+                })
+                .filter(|x| x.is_finite())
+        };
+        let balance = signed("credit")
+            .or_else(|| signed("balance"))
             .ok_or_else(|| ProviderError::Decode {
                 what: "GET user".into(),
                 why: "no credit / balance".into(),
@@ -560,14 +605,30 @@ impl Provider for Vast<'_> {
         let v = self
             .api
             .json(Method::Get, "/instances/", None, "GET instances")?;
-        let mut gone = Vec::new();
-        let mut last = None;
-        for i in v
+        // This sweep is the only protection after a lost create answer: an
+        // unexpected listing is an error, never "nothing left".
+        let list = v
             .get("instances")
             .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
+            .ok_or_else(|| ProviderError::Decode {
+                what: "GET instances".into(),
+                why: "no instances array".into(),
+            })?;
+        if let Some(bad) = list
+            .iter()
+            .find(|i| offer_id(i).is_none() || i.get("label").is_none())
         {
+            return Err(ProviderError::Decode {
+                what: "GET instances".into(),
+                why: format!(
+                    "an instance without an id or a label: {}",
+                    scrub(&bad.to_string(), "", 200)
+                ),
+            });
+        }
+        let mut gone = Vec::new();
+        let mut last = None;
+        for i in list {
             let Some(id) = offer_id(i) else { continue };
             if i.get("label").and_then(Value::as_str) != Some(name)
                 || keep.is_some_and(|k| k.as_str() == id)
