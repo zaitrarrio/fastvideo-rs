@@ -719,7 +719,12 @@ fv-serve:
   and the `FV_POOL_*` / `FV_RUNPOD_*` env parsing. The `[gateway]` table
   keeps only what a worker reads: `internal_token`, `pool`, `register`,
   `direct`, `watch_poll_ms`. fv-serve no longer depends on
-  `fastvideo-autoscale`.
+  `fastvideo-autoscale`. (Plan F3b, 2026-10-25: the table is `[cluster]`,
+  `[gateway]` its deprecated name, still read; the shipped configs keep
+  the old name until every image reads the new one,
+  [ADR-0011](../adr/0011-deploy-section.md) "Renaming a worker-config
+  section". The worker no longer creates `gw_dispatch` / `gw_sessions`;
+  `gw_workers` keeps its name.)
 - Kept: the worker's internal routes, the Runpod queue handler (an
   executor worker still trusts its caller's auth), worker registration in
   `gw_workers`, the per-pool DO routes (`/pools/…`) and pool-scope worker

@@ -36,6 +36,9 @@ describe("boot and generated configs", () => {
     writeFileSync(join(dir, "img.toml"), "[gateway]\npool = \"a\"\n");
     const out2 = execFileSync("bash", ["-c", boot], { env: { PATH: process.env.PATH!, RUNPOD_POD_ID: "abc", FV_WORKER_CONFIG: join(dir, "img.toml") } }).toString();
     expect(out2).toBe('[gateway]\nregister = false\npool = "a"\n');
+    // `[cluster]` (the table's name since plan F3b): edited in place, never a second `[gateway]` beside it.
+    const out3 = execFileSync("bash", ["-c", boot], { env: { PATH: process.env.PATH!, RUNPOD_POD_ID: "abc", FV_WORKER_TOML_B64: Buffer.from('[cluster]\npool = "a"\n').toString("base64") } }).toString();
+    expect(out3).toBe('[cluster]\nregister = false\npool = "a"\n');
     // Neither: the boot stops (`set -u`), never serving a default (the images bake none).
     let failed = false;
     try {

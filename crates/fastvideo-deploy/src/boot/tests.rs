@@ -355,7 +355,7 @@ fn cluster_worker_on_the_volume_with_an_inline_config() {
     );
     assert_eq!(
         std::fs::read_to_string(&img.paths.worker_toml).unwrap(),
-        format!("{toml}\n[gateway]\nregister = false\n")
+        format!("{toml}\n[cluster]\nregister = false\n")
     );
     assert_eq!(plan.program, img.paths.serve_bin);
     assert_eq!(
@@ -418,7 +418,7 @@ fn the_config_forms_and_explicit_arguments() {
         "[server]\n"
     );
 
-    // 2. named: a controller worker's FV_WORKER_CONFIG, copied with the gateway off
+    // 2. named: a controller worker's FV_WORKER_CONFIG, copied with registration off (its `[gateway]`)
     let p = go(
         base(&[
             ("FV_SERVE_ROLE", s("worker")),
@@ -1212,7 +1212,7 @@ fn gmi_pod_hub_weights_tunnel_watchdog() {
     );
     assert_eq!(
         std::fs::read_to_string(&img.paths.worker_toml).unwrap(),
-        "[server]\n\n[gateway]\nregister = false\n"
+        "[server]\n\n[cluster]\nregister = false\n"
     );
     let w = sp.ran("watchdog");
     assert_eq!(w.len(), 1);

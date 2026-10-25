@@ -49,7 +49,7 @@ What each step did per boot (✓ does it, – does not):
 | config: inline `FV_WORKER_TOML_B64` | – | ✓ → `/fv-worker.toml` | ✓ | ✓ (no gateway edit) | – | – |
 | config: named file | args `--config` | `FV_WORKER_CONFIG` copied | `FV_WORKER_CONFIG` copied | `FV_CONFIG` | args | args |
 | config: baked `FV_CONFIG` | ✓ (fv-serve reads it) | – | – | ✓ | via 1 | – |
-| `[gateway] register = false` | – | ✓ | ✓ | – | – | – |
+| `register = false` under `[cluster]` / `[gateway]` | – | ✓ | ✓ | – | – | – |
 | `fv-serve --print-config` preflight | – | – | ✓ | – | – | – |
 | missing-tree warning (old `weights =` form) | ✓ | – | – | – | GCP: verify cells | – |
 | weights volume | ✓ | ✓ | – | ✓ | GCP disk, CloudRift volume | – |
@@ -148,7 +148,10 @@ rollback switch fv-control's shell preamble and fv-boot itself read.
 | `FV_CONFIG` | baked (3rd) | images (`ENV`), fv-control (serverless `spec.config`) |
 
 A controller worker's (cluster or provider) inline or `FV_WORKER_CONFIG` copy gets `register = false` under
-`[gateway]` (idempotent). A controller worker with neither (and no `--config` argument) fails, as the shell boots did
+`[gateway]` (idempotent). **Amended 2026-10-25 (plan F3b):** the table is fv-serve's `[cluster]`, `[gateway]` its
+deprecated name; the edit goes under whichever the config has, and a config with neither gets `[cluster]` from
+fv-boot (its own image's fv-serve reads it) and `[gateway]` from the shell boots (an image without fv-boot may
+predate `[cluster]`); ADR-0011 "Renaming a worker-config section". A controller worker with neither (and no `--config` argument) fails, as the shell boots did
 (`set -u` on the unset `FV_WORKER_CONFIG`); it never falls back to the baked `FV_CONFIG` without the edit.
 
 **Amended 2026-10-25** (ADR-0011 "One image with boot-time config", owner decision): the images bake no

@@ -277,7 +277,7 @@ pub fn handler(app: &App, boot: Boot, ready_after: Arc<std::sync::OnceLock<f64>>
     if app.config.server.role == crate::config::Role::Worker {
         h.with_header(
             "x-fv-internal-token",
-            app.config.gateway.internal_token.expose(),
+            app.config.cluster.internal_token.expose(),
         )
     } else {
         h

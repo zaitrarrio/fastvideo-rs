@@ -8,7 +8,7 @@ import { DC_ANY, DEFAULT_ALLOWED_CUDA, noVolumePod } from "../enums";
 import { R2_RUNPOD_SH, r2DiskGb, r2PodEnv } from "../r2weights";
 import { DRIVER_CHECK_SH } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH, upsamplerDiskGb, upsamplerPodEnv } from "../upsampler";
-import { PREFER_FV_BOOT_SH } from "../fv-boot";
+import { PREFER_FV_BOOT_SH, REGISTER_OFF_SH } from "../fv-boot";
 import { workerConfigEnv } from "../worker-config";
 
 /** Runpod secret references (values live in Runpod, never here). */
@@ -38,12 +38,7 @@ if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then
 else
   cp "$FV_WORKER_CONFIG" /fv-worker.toml
 fi
-if grep -q "^\\[gateway\\]" /fv-worker.toml; then
-  sed -i "/^\\[gateway\\]/a register = false" /fv-worker.toml
-else
-  printf "\\n[gateway]\\nregister = false\\n" >> /fv-worker.toml
-fi
-export FV_WORKER_ID="\${RUNPOD_POD_ID}"
+${REGISTER_OFF_SH}export FV_WORKER_ID="\${RUNPOD_POD_ID}"
 exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
 
 // The backstop watchdog (a subshell in the background): at the deadline or

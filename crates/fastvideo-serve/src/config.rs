@@ -35,9 +35,9 @@
 //! | `FV_LOG_FORMAT` (`text` \| `json`), `RUST_LOG` | logging |
 //! | `FV_OTEL` (`0` \| `1`), `FV_OTEL_ENDPOINT`, `FV_OTEL_PROTOCOL` (`http/protobuf`), `FV_OTEL_SERVICE_NAME`, `FV_OTEL_SAMPLE_RATIO` (0..=1), `FV_OTEL_TIMEOUT_MS` | `[otel]`: OpenTelemetry (OTLP) export of the request traces; needs the `otel` cargo feature, off by default (docs/serve/tracing.md "OpenTelemetry export") |
 //! | `FV_SERVE_ROLE` (`standalone` \| `worker`) | `server.role` (a worker of a cluster: an edge front, a direct worker or an executor; docs/serve/edge-control-plane.md) |
-//! | `FV_INTERNAL_TOKEN` | `gateway.internal_token` (edge ↔ worker; never a user key) |
-//! | `FV_GATEWAY_POOL` | `gateway.pool` (a worker's pool: its `gw_workers` row, the per-pool object socket) |
-//! | `FV_WORKER_DIRECT` (`0` \| `1`) | `gateway.direct` (clients call the worker with API keys; docs/control/gateway-less-auth.md) |
+//! | `FV_INTERNAL_TOKEN` | `cluster.internal_token` (edge ↔ worker; never a user key) |
+//! | `FV_GATEWAY_POOL` | `cluster.pool` (a worker's pool: its registration row in D1 `gw_workers`, the per-pool object socket; the variable keeps the retired gateway's name) |
+//! | `FV_WORKER_DIRECT` (`0` \| `1`) | `cluster.direct` (clients call the worker with API keys; docs/control/gateway-less-auth.md) |
 //! | `FV_DISPATCH_DO_URL`, `FV_DISPATCH_CAPACITY` | `dispatch.do_url` / `dispatch.capacity` (a worker's socket to its pool's Durable Object) |
 //! | `FV_DISPATCH_FAMILIES`, `FV_DISPATCH_SESSIONS`, `FV_DISPATCH_DIRECT_UPLOAD`, `FV_DISPATCH_UPLOAD_PART_MIB` | `dispatch.families` / `sessions` / `direct_upload` / `upload_part_mib` (family Durable Objects, docs/serve/dispatch-do-family.md) |
 //! | `FV_DISPATCH_FRONT` (`0` \| `1`), `FV_DISPATCH_ENDPOINT`, `FV_DISPATCH_MODEL_FAMILIES` (`model=family,…`), `FV_DISPATCH_MAX_QUEUED` | `dispatch.front` / `endpoint` / `model_families` / `max_queued` (and `FV_DISPATCH_STATUS_S`: `dispatch.status_s`): an API front behind the edge Worker (docs/serve/edge-control-plane.md) |
@@ -57,6 +57,13 @@
 //!
 //! `auto` picks D1 when the three D1 values are set (else the file store)
 //! and S3/R2 when bucket, endpoint and both keys are set (else local).
+//!
+//! `[cluster]` was named `[gateway]` until plan F3b (2026-10-25): a file
+//! that still says `[gateway]` is read as `[cluster]` and noted in
+//! [`Config::deprecations`]; a file with both is refused. The configs
+//! fv-control and the other launchers send keep `[gateway]` until every
+//! image they can boot reads `[cluster]` (docs/adr/0011-deploy-section.md,
+//! "Renaming a worker-config section").
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -142,20 +149,20 @@ pub struct ServerCfg {
     /// `https://app.example.com`; `[]` turns CORS off. Credentials
     /// (cookies) are never allowed: the APIs authenticate with headers.
     pub cors_origins: Vec<String>,
-    /// `worker`: a GPU worker behind the gateway (docs/serve/gateway.md):
-    /// mounts `/fv/v1/internal/*`, requires the internal token on every
-    /// API route, trusts the gateway's authentication.
+    /// `worker`: a GPU worker of a cluster (docs/serve/edge-control-plane.md):
+    /// mounts `/fv/v1/internal/*`; its `[cluster]` table says how clients
+    /// reach it (behind the edge, or `direct`).
     pub role: Role,
 }
 
-/// What this process is in a gateway deployment.
+/// What this process is in a cluster.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
-    /// A server of its own (also the gateway, `engine.backend = "remote"`).
+    /// A server of its own.
     #[default]
     Standalone,
-    /// A pool worker behind a gateway.
+    /// A worker of a cluster (`[cluster]`).
     Worker,
 }
 
@@ -1112,19 +1119,23 @@ impl Default for ReactorCfg {
     }
 }
 
-/// `[gateway]`: a worker's cluster settings (`server.role = "worker"`). The
-/// name is the retired gateway's (docs/serve/edge-control-plane.md §9); its
-/// gateway-only keys are gone.
+/// `[cluster]`: a worker's cluster settings (`server.role = "worker"`).
+/// Named `[gateway]` until plan F3b, after the retired gateway
+/// (docs/serve/edge-control-plane.md §9); that name is still read
+/// ([`Config::from_toml`]).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct GatewayCfg {
+pub struct ClusterCfg {
     /// The cluster's shared secret (`FV_INTERNAL_TOKEN`): the edge's and
     /// fv-control's calls to the worker.
     pub internal_token: Secret,
     /// Worker: its pool (`FV_GATEWAY_POOL`); pod workers with a public base
-    /// URL upsert their `gw_workers` row.
+    /// URL upsert their row in D1 `gw_workers` (the table keeps the retired
+    /// gateway's name: fv-autoscale's pod pools read it, and images of
+    /// every age write it).
     pub pool: Option<String>,
-    /// Worker: register in `gw_workers` (pods; needs D1).
+    /// Worker: register in `gw_workers` (pods; needs D1). fv-control's
+    /// workers turn it off at boot (fv-boot, the shell boots).
     pub register: bool,
     /// A direct worker (fv-control `control_plane: "direct"`,
     /// `FV_WORKER_DIRECT`): clients call it directly, so `auth.mode`
@@ -1136,7 +1147,7 @@ pub struct GatewayCfg {
     pub watch_poll_ms: u64,
 }
 
-impl Default for GatewayCfg {
+impl Default for ClusterCfg {
     fn default() -> Self {
         Self {
             internal_token: Secret::default(),
@@ -1162,7 +1173,7 @@ pub struct DispatchCfg {
     pub status_s: u64,
     /// The families whose Durable Objects this worker serves (protocol 2:
     /// credits, the arbiter, sessions, direct uploads); empty: the single
-    /// per-pool socket of `gateway.pool`.
+    /// per-pool socket of `cluster.pool`.
     pub families: Vec<String>,
     /// Streaming sessions this worker admits through the family objects
     /// (0: none).
@@ -1423,9 +1434,28 @@ pub struct Config {
     pub otel: OtelCfg,
     /// Ed25519 seed for fal webhooks (normally `FV_WEBHOOK_ED25519_KEY`).
     pub webhook_key: Secret,
-    pub gateway: GatewayCfg,
+    /// `[cluster]` (read from `[gateway]` too, its name before plan F3b).
+    #[serde(alias = "gateway")]
+    pub cluster: ClusterCfg,
     /// A worker's socket to its pool's Durable Object (docs/serve/gateway-cloudflare.md).
     pub dispatch: DispatchCfg,
+    /// The deprecated forms the file used, one note each (`[gateway]`):
+    /// fv-serve logs them once tracing is up. Not part of the config.
+    #[serde(skip)]
+    pub deprecations: Vec<String>,
+}
+
+/// The `[cluster]` section's name before plan F3b.
+const CLUSTER_OLD_NAME: &str = "gateway";
+
+/// `[cluster]` and its deprecated name `[gateway]`: a file with both is
+/// refused; one with the old name only gets a note (`Some`).
+fn cluster_section(raw: &toml::Table) -> Result<Option<String>, String> {
+    match (raw.contains_key("cluster"), raw.contains_key(CLUSTER_OLD_NAME)) {
+        (true, true) => Err("[cluster] and [gateway] are both set: [gateway] is the deprecated name of [cluster] (plan F3b); keep only [cluster]".to_owned()),
+        (false, true) => Ok(Some("[gateway] is read as [cluster], its new name (plan F3b): the launchers keep sending [gateway] until every image reads [cluster] (docs/adr/0011-deploy-section.md, \"Renaming a worker-config section\"); a config only for this image or newer can say [cluster]".to_owned())),
+        _ => Ok(None),
+    }
 }
 
 /// The config forms plan A3 retired, each with what replaces it: the
@@ -1511,10 +1541,17 @@ impl Config {
     pub fn from_toml(text: &str, origin: &str) -> Result<Self, ConfigError> {
         // The pre-A3 forms get a message naming their replacement before
         // serde's generic "unknown field" / "missing field" could.
+        let mut deprecations = Vec::new();
         if let Ok(raw) = text.parse::<toml::Table>() {
             retired_forms(&raw).map_err(|m| ConfigError::Invalid(format!("{origin}: {m}")))?;
+            let note = cluster_section(&raw)
+                .map_err(|m| ConfigError::Invalid(format!("{origin}: {m}")))?;
+            deprecations.extend(note.map(|n| format!("{origin}: {n}")));
         }
-        toml::from_str(text).map_err(|e| ConfigError::Parse(origin.to_owned(), e))
+        let mut c: Self =
+            toml::from_str(text).map_err(|e| ConfigError::Parse(origin.to_owned(), e))?;
+        c.deprecations = deprecations;
+        Ok(c)
     }
 
     /// Defaults < file < environment, then validation.
@@ -1789,13 +1826,13 @@ impl Config {
             self.server.role = parse_enum("FV_SERVE_ROLE", &v)?;
         }
         if let Some(v) = env.var("FV_INTERNAL_TOKEN") {
-            self.gateway.internal_token = Secret(v.trim().to_owned());
+            self.cluster.internal_token = Secret(v.trim().to_owned());
         }
         if let Some(v) = env.var("FV_GATEWAY_POOL") {
-            self.gateway.pool = Some(v);
+            self.cluster.pool = Some(v);
         }
         if let Some(v) = env.var("FV_WORKER_DIRECT") {
-            self.gateway.direct = matches!(v.trim(), "1" | "true" | "on" | "yes");
+            self.cluster.direct = matches!(v.trim(), "1" | "true" | "on" | "yes");
         }
         if let Some(v) = env.var("FV_DISPATCH_DO_URL") {
             self.dispatch.do_url = Some(v.trim().to_owned()).filter(|s| !s.is_empty());
@@ -2108,36 +2145,36 @@ impl Config {
                 "director.chunk_seconds must be positive".into(),
             ));
         }
-        self.validate_gateway()
+        self.validate_cluster()
     }
 
-    /// `[gateway]`, `[dispatch]` and `server.role` checks.
-    fn validate_gateway(&self) -> Result<(), ConfigError> {
+    /// `[cluster]`, `[dispatch]` and `server.role` checks.
+    fn validate_cluster(&self) -> Result<(), ConfigError> {
         let bad = |m: String| Err(ConfigError::Invalid(m));
-        if self.gateway.direct {
+        if self.cluster.direct {
             if self.server.role != Role::Worker {
-                return bad("gateway.direct (FV_WORKER_DIRECT) is for server.role = worker".into());
+                return bad("cluster.direct (FV_WORKER_DIRECT) is for server.role = worker".into());
             }
             if matches!(self.auth.mode, AuthMode::TrustGateway | AuthMode::TrustEdge) {
-                return bad("gateway.direct: nothing in front authenticates the clients, so auth.mode must be keys or none (not trust-gateway or trust-edge)".into());
+                return bad("cluster.direct: nothing in front authenticates the clients, so auth.mode must be keys or none (not trust-gateway or trust-edge)".into());
             }
             if self.auth.admin_token.is_empty() {
-                return bad("gateway.direct needs auth.admin_token (FV_ADMIN_TOKEN): every worker of the cluster shares it".into());
+                return bad("cluster.direct needs auth.admin_token (FV_ADMIN_TOKEN): every worker of the cluster shares it".into());
             }
         }
         if self.server.role == Role::Worker {
-            if self.gateway.internal_token.is_empty() {
+            if self.cluster.internal_token.is_empty() {
                 return bad(
-                    "server.role = worker needs gateway.internal_token (FV_INTERNAL_TOKEN)".into(),
+                    "server.role = worker needs cluster.internal_token (FV_INTERNAL_TOKEN)".into(),
                 );
             }
             if let Some(u) = &self.dispatch.do_url {
                 url::Url::parse(u)
                     .map_err(|e| ConfigError::Invalid(format!("dispatch.do_url `{u}`: {e}")))?;
                 if self.dispatch.families.is_empty()
-                    && self.gateway.pool.as_deref().unwrap_or("").is_empty()
+                    && self.cluster.pool.as_deref().unwrap_or("").is_empty()
                 {
-                    return bad("dispatch.do_url needs gateway.pool (FV_GATEWAY_POOL, the pool whose Durable Object this worker connects to) or dispatch.families (FV_DISPATCH_FAMILIES)".into());
+                    return bad("dispatch.do_url needs cluster.pool (FV_GATEWAY_POOL, the pool whose Durable Object this worker connects to) or dispatch.families (FV_DISPATCH_FAMILIES)".into());
                 }
             }
             for f in &self.dispatch.families {
@@ -2154,8 +2191,8 @@ impl Config {
                 if self.dispatch.families.is_empty() || self.dispatch.do_url.is_none() {
                     return bad("dispatch.front (FV_DISPATCH_FRONT) needs dispatch.do_url and dispatch.families: a front enqueues on the family objects".into());
                 }
-                if self.gateway.direct {
-                    return bad("dispatch.front and gateway.direct exclude each other: behind the edge, the edge authenticates clients".into());
+                if self.cluster.direct {
+                    return bad("dispatch.front and cluster.direct exclude each other: behind the edge, the edge authenticates clients".into());
                 }
                 for (m, f) in &self.dispatch.model_families {
                     if !self.dispatch.families.contains(f) {
@@ -2626,7 +2663,7 @@ body_max_mb = 64
     fn a_workers_object_socket_needs_its_pool_or_families() {
         let mut w = Config::default();
         w.server.role = Role::Worker;
-        w.gateway.internal_token = Secret("t".into());
+        w.cluster.internal_token = Secret("t".into());
         w.apply_env(&env(&[
             ("FV_DISPATCH_DO_URL", "https://edge.example"),
             ("FV_DISPATCH_CAPACITY", "3"),
@@ -2637,7 +2674,7 @@ body_max_mb = 64
             (Some("https://edge.example"), 3)
         );
         assert!(w.validate().is_err(), "a worker's socket needs its pool");
-        w.gateway.pool = Some("h3".into());
+        w.cluster.pool = Some("h3".into());
         w.validate().unwrap();
     }
 
@@ -2652,7 +2689,7 @@ body_max_mb = 64
             ("FV_WORKER_DIRECT", "1"),
         ]))
         .unwrap();
-        assert!(w.gateway.direct);
+        assert!(w.cluster.direct);
         let e = w.validate().unwrap_err();
         assert!(e.to_string().contains("FV_ADMIN_TOKEN"), "{e}");
         w.apply_env(&env(&[("FV_ADMIN_TOKEN", "fvadm_x")])).unwrap();
@@ -2672,6 +2709,153 @@ body_max_mb = 64
             .contains("server.role = worker"));
         let mut d = Config::default();
         d.apply_env(&env(&[("FV_WORKER_DIRECT", "0")])).unwrap();
-        assert!(!d.gateway.direct);
+        assert!(!d.cluster.direct);
+    }
+
+    /// Serializes `c` and parses the text back. A secret serializes as a
+    /// placeholder, never its value, so the placeholders of unset secrets
+    /// are dropped first (a file without secrets has none).
+    fn round_trip(c: &Config, origin: &str) -> Config {
+        let text = toml::to_string(c).unwrap_or_else(|e| panic!("{origin}: serialize: {e}"));
+        let text: String = text
+            .lines()
+            .filter(|l| !l.ends_with("= \"<unset>\""))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert!(
+            !text.contains("[gateway]"),
+            "{origin}: serialized under the old name\n{text}"
+        );
+        Config::from_toml(&text, origin)
+            .unwrap_or_else(|e| panic!("{origin}: re-parse: {e}\n{text}"))
+    }
+
+    fn value(c: &Config) -> toml::Value {
+        toml::Value::try_from(c).unwrap()
+    }
+
+    /// `[cluster]` and its old name `[gateway]` (plan F3b): both parse to
+    /// the same config, which serializes as `[cluster]` and parses back
+    /// equal; only the old name leaves a deprecation note.
+    #[test]
+    fn cluster_and_its_old_name_gateway_round_trip() {
+        let new = "[server]\nrole = \"worker\"\n\n[cluster]\npool = \"h3\"\nregister = false\ndirect = false\nwatch_poll_ms = 250\n";
+        let old = new.replace("[cluster]", "[gateway]");
+        let n = Config::from_toml(new, "new").unwrap();
+        let o = Config::from_toml(&old, "old").unwrap();
+        assert!(n.deprecations.is_empty(), "{:?}", n.deprecations);
+        assert_eq!(o.deprecations.len(), 1, "{:?}", o.deprecations);
+        assert!(
+            o.deprecations[0].starts_with("old: [gateway] is read as [cluster]"),
+            "{}",
+            o.deprecations[0]
+        );
+        assert_eq!(value(&o), value(&n));
+        assert_eq!(
+            (
+                n.cluster.pool.as_deref(),
+                n.cluster.register,
+                n.cluster.watch_poll_ms
+            ),
+            (Some("h3"), false, 250)
+        );
+        for (c, origin) in [(&n, "new"), (&o, "old")] {
+            let back = round_trip(c, origin);
+            assert_eq!(value(&back), value(c), "{origin}");
+            assert!(
+                back.deprecations.is_empty(),
+                "{origin}: {:?}",
+                back.deprecations
+            );
+        }
+        // The defaults round-trip too (no section at all).
+        let d = Config::default();
+        assert_eq!(value(&round_trip(&d, "default")), value(&d));
+    }
+
+    /// Every key of the old table is read, and its schema is unchanged:
+    /// an unknown key is refused under either name.
+    #[test]
+    fn the_old_name_reads_every_key_and_refuses_unknown_ones() {
+        let c = Config::from_toml(
+            "[gateway]\ninternal_token = \"t\"\npool = \"p\"\nregister = false\ndirect = true\nwatch_poll_ms = 7\n",
+            "t",
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                c.cluster.internal_token.expose(),
+                c.cluster.pool.as_deref(),
+                c.cluster.register,
+                c.cluster.direct,
+                c.cluster.watch_poll_ms
+            ),
+            ("t", Some("p"), false, true, 7)
+        );
+        for name in ["cluster", "gateway"] {
+            let e = Config::from_toml(&format!("[{name}]\nreactor_model = \"x\"\n"), "t")
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("reactor_model"), "{name}: {e}");
+        }
+    }
+
+    /// A file with both names is refused (whichever spelling sets them).
+    #[test]
+    fn cluster_and_gateway_together_are_refused() {
+        for text in [
+            "[cluster]\npool = \"a\"\n\n[gateway]\npool = \"b\"\n",
+            "[gateway]\nregister = false\n\n[cluster]\n",
+            "gateway.pool = \"a\"\n\n[cluster]\nregister = false\n",
+        ] {
+            let e = Config::from_toml(text, "t").unwrap_err();
+            assert!(
+                matches!(&e, ConfigError::Invalid(m) if m.contains("[cluster] and [gateway] are both set")),
+                "{text}: {e}"
+            );
+        }
+    }
+
+    /// Every shipped config (configs/serve) round-trips, and reads the same
+    /// with its `[gateway]` renamed to `[cluster]`. Stage 1 of the rename
+    /// (docs/adr/0011-deploy-section.md, "Renaming a worker-config section"):
+    /// they are sent to images built before it, whose fv-serve refuses an
+    /// unknown `[cluster]`, so none says `[cluster]` yet.
+    #[test]
+    fn shipped_configs_round_trip_under_both_names() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs/serve");
+        let mut n = 0;
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("toml"))
+            .collect();
+        entries.sort();
+        for p in entries {
+            let f = p.file_name().unwrap().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(&p).unwrap();
+            let raw: toml::Table = text.parse().unwrap();
+            assert!(
+                !raw.contains_key("cluster"),
+                "{f}: says [cluster]; the shipped configs keep [gateway] until every image reads [cluster] (ADR-0011, \"Renaming a worker-config section\")"
+            );
+            let c = Config::from_toml(&text, &f).unwrap();
+            assert_eq!(value(&round_trip(&c, &f)), value(&c), "{f}");
+            let renamed: String = text
+                .lines()
+                .map(|l| {
+                    if l.trim_end() == "[gateway]" {
+                        "[cluster]\n".to_owned()
+                    } else {
+                        format!("{l}\n")
+                    }
+                })
+                .collect();
+            let r = Config::from_toml(&renamed, &f).unwrap();
+            assert!(r.deprecations.is_empty(), "{f}: {:?}", r.deprecations);
+            assert_eq!(value(&r), value(&c), "{f}: [cluster] vs [gateway]");
+            n += 1;
+        }
+        assert!(n >= 2, "configs/serve has {n} configs");
     }
 }

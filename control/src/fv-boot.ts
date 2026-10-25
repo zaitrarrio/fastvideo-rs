@@ -13,6 +13,20 @@
 /** fv-boot's path in the serve images (crates/fastvideo-deploy/fixtures/boot-protocol.json `fv_boot_bin`). */
 export const FV_BOOT_BIN = "/opt/fastvideo-rs/bin/fv-boot";
 
+/** The shell boots' registration edit (fv-boot's boot/config.rs `register_off`): `register = false` under the worker
+ * config's `[cluster]` table, or under `[gateway]`, the name it had before plan F3b and the one the shipped configs
+ * still use; a config with neither gets a `[gateway]` table, since a shell boot runs on an image without fv-boot,
+ * whose fv-serve may predate `[cluster]` (docs/adr/0011-deploy-section.md, "Renaming a worker-config section").
+ * Never both names: fv-serve refuses a config with both. */
+export const REGISTER_OFF_SH = `if grep -q "^\\[cluster\\]" /fv-worker.toml; then
+  sed -i "/^\\[cluster\\]/a register = false" /fv-worker.toml
+elif grep -q "^\\[gateway\\]" /fv-worker.toml; then
+  sed -i "/^\\[gateway\\]/a register = false" /fv-worker.toml
+else
+  printf "\\n[gateway]\\nregister = false\\n" >> /fv-worker.toml
+fi
+`;
+
 /** The first line of every shell boot (POSIX sh: the serverless boot runs under /bin/sh). */
 export const PREFER_FV_BOOT_SH = `if [ "\${FV_BOOT_LEGACY:-0}" != 1 ] && [ -x ${FV_BOOT_BIN} ]; then exec ${FV_BOOT_BIN}; fi
 `;

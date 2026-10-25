@@ -38,9 +38,9 @@ execution log at the end records what ran where and what it cost.
 - **Pinned public formats.** `fastvideo-manifest` layer 1 is the registry's
   contract; widenings happen before the first publish, with ADRs and
   fixtures; afterwards a change is a versioned schema.
-- **Owner decisions still open** (review §7.10): Vast serving, Runpod LB
-  mode (`multiworker.rs`), one image with boot-time config versus seven
-  variant images, GMI/Brev in Rust or TS. Work packages that depend on one
+- **Owner decisions still open** (review §7.10): Vast serving, GMI/Brev in
+  Rust or TS. Decided: one image with boot-time config (2026-10-25); Runpod
+  LB mode kept (2026-10-25, F3b reduced to the renames). Work packages that depend on one
   are marked and wait.
 
 ## 2. Work packages
@@ -57,7 +57,7 @@ parallel agents.
 | F2 | One formatting commit; fix the 27 clippy lints; `task check` runs `cargo fmt --check` and `clippy -D warnings` as real gates; `gpucheck-t0` runs them | `cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` green | pod | F1 (to avoid churn) | merged (#142) |
 | F3a | Serving hardening from review §7.7: per-job deadline in `StepControl`, bounded engine event channel, per-model duration and queue-wait histograms, residency gauges, `otel` feature implemented | tests in `fastvideo-engine-service` and `fastvideo-serve`; `scripts/serve/check.sh` green | pod | none | merged (#140; `otel` deferred to F3c) |
 | F3c | Implement the `otel` feature (OpenTelemetry export of the trace recorder's spans) | spans visible in an OTLP collector | pod | F3a | merged (#150; live-collector check pending) |
-| F3b | Delete `multiworker.rs` and `server.workers_max`; rename `[gateway]` to `[cluster]`, drop `gw_workers` | config round-trip tests | pod | owner decision (Runpod LB mode) | blocked |
+| F3b | ~~Delete `multiworker.rs` and `server.workers_max`~~ (owner 2026-10-25: keep the Runpod LB endpoints, so both stay); rename `[gateway]` to `[cluster]` (`[gateway]` read as a deprecated alias; the shipped configs keep it until every image reads `[cluster]`, ADR-0011 "Renaming a worker-config section"); `gw_workers` kept (fv-autoscale's pod pools read it), the dead `gw_dispatch` / `gw_sessions` no longer created | config round-trip tests | pod | owner decision (Runpod LB mode: keep) | pr |
 
 ### Phase 1: the manifest (Workstream A)
 
@@ -1164,3 +1164,12 @@ ran (pod id, $/hr), result, cost.
   after a host vCPU shortage). No GPU cost. Open with the owner: LB keep or
   retire; whether `precision`'s `ltx-nvfp4` mode or `ltxvae`'s `FV_VAE_GEN`
   arms come back as tiers; C4's live steps.
+- 2026-10-25, F3b (sub-agent of the coordinating session, worktree
+  `claude/f3b-cluster-renames`): owner decision "keep LB endpoints; F3b
+  reduced to the renames". `[gateway]` → `[cluster]` in fv-serve (old name
+  read with a warning, both refused, round-trip tests over every shipped
+  config), fv-boot's and the shell boots' registration edit under either
+  name; shipped configs unchanged (stage 1 of ADR-0011 "Renaming a
+  worker-config section": images built before it refuse `[cluster]`);
+  `gw_workers` kept. Gates on build pod `k66zz15an4sktc`; control checks
+  local. No GPU cost.

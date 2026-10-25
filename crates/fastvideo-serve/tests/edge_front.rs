@@ -151,7 +151,7 @@ impl Env {
         c.webrtc.ice_servers = vec![toml::toml! { urls = ["stun:127.0.0.1:9"] }.into()];
         c.reactor.short_edge = Some(96);
         c.reactor.h264 = "off".into();
-        c.gateway.watch_poll_ms = 200;
+        c.cluster.watch_poll_ms = 200;
         c
     }
 
