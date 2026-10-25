@@ -123,7 +123,9 @@ pub async fn sleepers(clock: &Arc<ManualClock>, n: usize) {
 }
 
 /// Advances the manual clock by 1 s whenever someone sleeps on it, until
-/// dropped.
+/// dropped. A sleeper an advance released no longer counts in
+/// [`ManualClock::sleepers`], even before its thread runs, so each 1 s
+/// sleep sees exactly one advance however late the sleeper wakes up.
 pub struct Driver {
     stop: Arc<AtomicBool>,
     t: Option<std::thread::JoinHandle<()>>,
