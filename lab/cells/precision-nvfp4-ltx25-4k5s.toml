@@ -1,0 +1,42 @@
+# The precision family's FV_PRECISION_ARM=ltx-nvfp4 mode at 4k5s (runpod-matrix.sh
+# `precision` before #185 deleted its branch; restored as the
+# `precision-nvfp4` tier, ADR-0019 §12): the NVFP4 video FFN (profile
+# ltx2/ltx25_distill_sol_nvfp4, sol-engine nvfp4_ffn.py; weights quantized at
+# load from the bf16 ltx25 tree, sm_100 / sm_120 only) against the bf16 default
+# (ltx2/ltx25_distill_sol): Sol stage 2, same prompt and seed, warm process,
+# every run encoding its prompt (--no-text-cache, so both arms feed the DiT the
+# same contexts). The lossy gate of the pair runs right after its compare, as
+# the script's loop did. FV_NVFP4_WORKLOADS picked workloads: here, one cell per
+# workload (`--cells` by arm). The script then deleted both arms' frames (disk
+# only, after their frames.sha256.json); fv-lab keeps them on the pod.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "precision-nvfp4-ltx25-4k5s"
+description = "LTX-2.5 Sol two-stage at 4k5s: NVFP4 video FFN against the bf16 profile, compare and lossy gate"
+
+[workload]
+model = "ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; the reference's 4k5s workload (--workload)"
+
+[[arm]]
+name = "ltx25-4k5s-sol-bf16"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--techniques", "ltx2/ltx25_distill_sol", "--mode", "fast", "ltx2", "gen", "--model-version", "2.5",
+  "--weights", "{weights}/ltx25", "--dit", "{weights}/ltx25", "--workload", "4k5s", "--prompt", "{prompt}", "--seed",
+  "{seed}", "--two-stage", "--text", "streamed", "--warm", "--no-text-cache", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-4k5s-sol-nvfp4"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--techniques", "ltx2/ltx25_distill_sol_nvfp4", "--mode", "fast", "ltx2", "gen", "--model-version", "2.5",
+  "--weights", "{weights}/ltx25", "--dit", "{weights}/ltx25", "--workload", "4k5s", "--prompt", "{prompt}", "--seed",
+  "{seed}", "--two-stage", "--text", "streamed", "--warm", "--no-text-cache", "--clip", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "ltx25-4k5s-sol-bf16"
+candidate = "ltx25-4k5s-sol-nvfp4"
+gate = { kind = "lossy" }

@@ -26,6 +26,9 @@
 //!   cell generated from its gold file (`fv-lab run gold --all`).
 //! - [`report`]: `fv-lab report tiers`, `docs/perf/tiers.md` from the gold
 //!   files and one run set (plan D3).
+//! - [`knobs`]: the script settings no tier reads (the retired families'
+//!   mode knobs, the restored modes' settings), refused by `fv-lab run` and
+//!   `pod up --extra-env` instead of ignored.
 //! - [`quote`]: bash's `printf %q`, for the dry-run equality.
 //! - [`schema`]: the JSON Schema export, committed under `schemas/` and
 //!   drift-checked.
@@ -37,6 +40,7 @@
 pub mod gold;
 pub mod goldcell;
 pub mod goldcheck;
+pub mod knobs;
 pub mod plan;
 pub mod pod;
 pub mod profiles;

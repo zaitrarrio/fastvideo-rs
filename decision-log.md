@@ -1709,7 +1709,7 @@ Project code: FVID
 - Reason: equality with the script needs the same files, which a typed step gives by construction and a test can hold (the script's own branch and fv-lab on one fake box); typed data is validated by `fv-lab check` and can be re-evaluated offline; the frame generalises to `determinism` / `oracle` by adding checks, not steps
 - Reversibility: high (an optional table; the script branch is untouched until the GPU gate)
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
-- ADR: docs/adr/0019-fv-lab.md §11
+- ADR: docs/adr/0019-fv-lab.md §12
 - Verification: `tests/verdict.rs` (script vs fv-lab verdicts, evidence and diffs byte-identical on fakes; FV_B4A_CELLS vs --cells; stale verdicts; `fv-lab gate` offline), `tests/{dry_run,payload_golden,fv_lab_bin,schema}.rs` with the `b4a` fixtures, `fv-lab-goldens.sh --check`; GPU gate (§11.6) pending, the coordinator's
 
 ### FVID · 2026-10-25 · FVID-2026-10-25-fv-lab-verdict-step-review
@@ -1731,3 +1731,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0018-fv-deploy.md §7
 - Verification: `control/test/unit/payload-corpus.test.ts` (fv-control's bodies = main's at 2258aec2), `control/test/unit/launch-goldens.test.ts` (the C3a payload goldens from TS; h3-turbo, h3-max, ltx, ltx-pro field by field against fv-deploy with the intended differences of ADR-0018 §7.4; schema drift fails `--check` on a copy of the tree; stored specs launch), `node gen-configs.mjs --check`, `npm run typecheck`, `npx vitest run test/unit`; `cargo test --locked -p fastvideo-deploy` (schemas current)
+
+### FVID · 2026-10-25 · FVID-2026-10-25-restore-dropped-test-modes
+- Trigger: #185 (ADR-0019 §10.4) dropped two modes of retired families with their `runpod-matrix.sh` branches: `precision`'s `FV_PRECISION_ARM=ltx-nvfp4` (NVFP4 video FFN against bf16, LTX-2.5 Sol) and `ltxvae`'s `FV_VAE_GEN=1` arms (a cold gen saving its latents, the streaming decoder on them); the coordinator asked the owner whether they come back
+- Options: leave them in git history; restore each as an fv-lab tier; restore the script branches
+- Decision: (owner, 2026-10-25, "restore dropped test modes") restore them as fv-lab tiers `precision-nvfp4` (4 arms, its own cells) and `ltxvae-gen` (`ltxvae`'s cells plus a gen cell per workload, 16 arms; the one pair of tiers sharing cells), on the `rtx6000` tier's pod (the PRO 6000, sm_120, which NVFP4 needs); no cell-schema change; fixtures are the script's dry run, gates and plan body in that mode at `5987e6a4`, frozen from the start (`FV_LAB_RETIRED`, `FV_LAB_RESTORED` in `scripts/gpu/fv-lab-retired.sh`, `fv-lab-restored-goldens.sh`); `runpod-http.sh` refuses the modes' settings in `FV_EXTRA_ENV` and names the tier (not routed: another run directory and pod name than `FV_FAMILY`'s)
+- Reason: both modes produced recorded evidence (FVID-2026-09-27-ltx-nvfp4-ffn-cublaslt; the VAE's real-content PSNR) that no tier could re-measure after #185
+- Reversibility: cheap (delete the two tiers, their cells and fixtures)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §12
+- Verification: CPU: `tests/dry_run.rs` (dry run and gates equal the 5987e6a4 script's in the mode, the family read as the tier), `tests/payload_golden.rs` (pod body likewise, the mode's `FV_EXTRA_ENV` gone), `tests/fv_lab_bin.rs::restored_modes_dry_run_as_the_script_did`, `tests/lab_files.rs::every_cell_file_belongs_to_exactly_one_tier` (the one shared set pinned), `fv-lab-restored-goldens.sh --check`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`; GPU: pending, the coordinator's check of ADR-0019 §12 (fv-lab at the PR's commit vs the script at `5987e6a4`, image `sha-5987e6a` published, about $3.35); review of #191: `fv-lab run` / `pod up --extra-env` refuse the settings no tier reads (`knobs.rs`, the set of `runpod-http.sh`'s `FV_LAB_NOT_READ`, `tests/knobs.rs`), the mode's setting answered first with its tier, every refused key in one message; `runpod-matrix.sh` names the restored tier
