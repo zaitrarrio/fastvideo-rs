@@ -127,11 +127,14 @@ DISK="$(df -h "$W" 2>/dev/null | awk 'NR==2 {print $4 " free of " $2}')"
 OS="$( (. /etc/os-release 2>/dev/null; echo "\${ID:-?} \${VERSION_ID:-?}") )"
 BOOTS="$W/fv/boots.log"; echo "$(date -u +%FT%TZ) $(hostname) $R_POD" >> "$BOOTS"
 hreport host "user=$(whoami) uid=$(id -u) sudo=$SUDO docker=$DK info=[$DI] gpu=[$GPU] toolkit=[$CTK] disk=[$DISK] kernel=$(uname -r) os=[$OS] ws=$W boots=$(wc -l < "$BOOTS")"
-die() { echo "[fv-host] FAILED: $1"; hreport host_failed "$1: $(tail20 "$W/fv/host.log")"; exit 1; }
+die() { echo "[fv-host] FAILED: $1"; hreport host_failed "$1: $(tail20 "\${2:-$W/fv/host.log}")"; exit 1; }
+# A step's output also goes to step.out, complete when the pipe ends: host.log comes through the async tee above
+# and can lag, so a failing step's report tails step.out, not host.log.
 step() { # what, command...
   what="$1"; shift
   echo "[fv-host] $what"
-  "$@" || die "$what (exit $?)"
+  "$@" 2>&1 | tee "$W/fv/step.out"; rc=\${PIPESTATUS[0]}
+  [ "$rc" = 0 ] || die "$what (exit $rc)" "$W/fv/step.out"
 }
 [ "$SUDO" = NO ] && die "not root and sudo -n needs a password (user $(whoami))"
 ${INSTALL_DOCKER}if [ "$DK" = none ]; then
