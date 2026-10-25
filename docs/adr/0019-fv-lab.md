@@ -495,9 +495,13 @@ rows give each one's evidence) are fv-lab only.
    fv-lab commands.
 2. **`runpod-http.sh`.** `run` (`FV_FAMILY`, default `rtx6000`) for a retired family runs `fv-lab pod up --sha
    <sha> --family <f> --root <repo> [--tag …] [--cells $FV_CELLS] [--baseline-sha $FV_BASELINE_SHA] [--extra-env
-   $FV_EXTRA_ENV] [--lpips] --yes --wait`; `plan` runs the same without `--yes --wait` (fv-lab's plan). Settings
-   fv-lab has no equivalent for are refused rather than dropped (docs/dev/fv-lab.md lists them); `all` is refused
-   for a retired family. The binary is `FV_LAB_BIN`, else `fv-lab` on `PATH`, else `<repo>/fv-lab`, else an error
+   $FV_EXTRA_ENV] [--lpips] [--wall-cap-s $FV_POD_CAP_S] --yes --wait`; `plan` runs the same without `--yes --wait`
+   (fv-lab's plan). `pod up --wall-cap-s` (new) lowers the tier's cap, never raises it. Every other setting of the
+   script path that fv-lab would not honour is refused rather than dropped, unless fv-lab does the same anyway (the
+   tier's value read from `lab/tiers.toml`, such as `cell_timeout_s` for `FV_GEN_TIMEOUT_S`, or fv-lab's fixed one);
+   so are `FV_EXTRA_ENV` entries no tier reads (§9.4's knobs, the prompts, what the start command sets after them).
+   docs/dev/fv-lab.md lists them. `all` is refused for a retired family, and `run` / `all` for `gold` (never a
+   script family; its `plan` stays the payload golden). Lists are split without globbing. The binary is `FV_LAB_BIN`, else `fv-lab` on `PATH`, else `<repo>/fv-lab`, else an error
    that says how to build it. `FV_DRY_RUN=1` prints the route and the fv-lab command line and creates nothing (and
    needs no key); for a script family it says what it would run. `kernels`, `weights`, `upstream`, `attach`,
    `status`, `down` are unchanged. `runpod.sh rtx6000` (`cmd_rtx6000`, the SSH driver of the `rtx6000` branch) is
@@ -518,7 +522,13 @@ rows give each one's evidence) are fv-lab only.
    running the script recursively with `FV_RUNS_DIR`. It now runs `fv-lab run <tier> --cells …` into its run
    directory, so `fv-lab run` gained `--runs-dir` / `FV_RUNS_DIR` (the script's switch; default
    `<scratch>/runs/<tier>/<tag>`), with this run's `FV_WORK`, `FV_SCRATCH` and per-cell cap (the script's 300 s
-   default when unset). Its dry run is fv-lab's when the binary is there, else the fv-lab command line.
+   default when unset). Its dry run is fv-lab's when the binary is there, else the fv-lab command line. Outside a
+   dry run a missing fv-lab, or `FV_PROMPTS` / `FV_PROMPT` / `FV_SEED` (fv-lab would only warn), is FATAL (exit
+   2); a failed tier is logged (`FAIL fv-lab run <tier> exit=<n>`) and the next runs, as the recursive
+   `runpod-matrix.sh <family> || true` did (it never set `headline`'s own exit).
+
+`scripts/gpu/tests/fv-lab-route.test.sh` (CI: `control.yml`) checks items 2 and 5 without a network, a key or a GPU:
+the mapping, every refusal, `gold`, a fake `FV_LAB_BIN` for `runpod-http.sh` and for `headline` on a fake box.
 
 Why one list file and not "no branch means fv-lab": a typo in `FV_FAMILY` must not create an fv-lab pod, and the
 `gold` tier (no branch, never a script family) keeps its `runpod-http.sh plan` golden.

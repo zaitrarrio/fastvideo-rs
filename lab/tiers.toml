@@ -171,7 +171,7 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["ltxfps-ltx25", "ltxfps-h3"]
 
-# runpod-matrix.sh `ltxvae` (FV_VAE_TRACE=1, FV_VAE_UNTRACED=1, FV_VAE_GEN=0: its defaults).
+# Was runpod-matrix.sh `ltxvae` (FV_VAE_TRACE=1, FV_VAE_UNTRACED=1, FV_VAE_GEN=0: its defaults; retired, ADR-0019 §10, the FV_VAE_GEN arms dropped).
 [[tier]]
 name = "ltxvae"
 description = "The LTX-2.5 conv VAE decode alone: fast vs streaming decoder, traced and untraced, mp4 writer, tuned algorithms"
@@ -190,7 +190,7 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["ltxvae-4k5s", "ltxvae-4k5s-untraced", "ltxvae-1080p20s", "ltxvae-1080p20s-untraced"]
 
-# runpod-matrix.sh `precision`, its default mode (the FV_PRECISION_ARM=ltx-nvfp4 mode stays in the script).
+# Was runpod-matrix.sh `precision`, its default mode (retired, ADR-0019 §10; the FV_PRECISION_ARM=ltx-nvfp4 mode was dropped with the branch).
 [[tier]]
 name = "precision"
 description = "Precision switches against f32 activations: FastH3 8-step (bf16 act, W8A8, MXFP8) and LTX-2.5 4k5s Sol (bf16 act, FP8)"

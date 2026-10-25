@@ -69,12 +69,28 @@ Either variant comes back as its own tier when wanted (git history has the comma
 `runpod-http.sh run [sha]` with `FV_FAMILY` (default `rtx6000`) set to a retired tier runs
 `fv-lab pod up --sha <sha> --family <tier> --root <repo> [--cells …] [--baseline-sha …] [--extra-env …] [--lpips] --yes --wait`
 instead of its own pod, mapping `FV_CELLS`, `FV_BASELINE_SHA`, `FV_EXTRA_ENV` and `FV_LPIPS=1` across; `plan [sha]
-[tag]` prints fv-lab's plan (no `--yes`). The other families keep the script path. Settings fv-lab has no equivalent
-for (`FV_POD_FILES`, `FV_POD_SCRIPT`, `FV_POD_FILE`, `FV_PROMPTS`, `FV_PROMPT`, `FV_SEED`, `RUNPOD_IMAGE`,
-`RUNPOD_GPU_TYPE`, `FV_KEEP_POD=1`, `FV_FETCH_TREE=1`, `RUNPOD_NO_VOLUME=1`, an `FV_GEN_TIMEOUT_S` other than the
-tier's 3600) are refused, not dropped; `all` mode is refused (run `kernels`, then `run`). The binary is `FV_LAB_BIN`,
-else `fv-lab` on `PATH`, else `./fv-lab` at the repository root ([Build](#build)); without one the driver says how to
-build it.
+[tag]` prints fv-lab's plan (no `--yes`). The other families keep the script path. `FV_POD_CAP_S` below the tier's
+`wall_cap_s` maps to `pod up --wall-cap-s` (a cap is lowered, never raised). Every other setting of the script path
+that fv-lab would not honour is refused, not dropped, unless fv-lab does the same thing anyway:
+
+- no equivalent, refused when set: `FV_POD_FILES`, `FV_POD_SCRIPT`, `FV_POD_FILE`, `FV_PROMPTS`, `FV_PROMPT`,
+  `FV_SEED`, `FV_AVOID_MACHINES`, `FV_CREATE_WAIT_S`, `FV_FETCH_SKIP`, `FV_FETCH_MAX_MB`, `RUNPOD_ALLOWED_CUDA`,
+  `FV_KEEP_POD=1`, `FV_FETCH_TREE=1`, `RUNPOD_NO_VOLUME=1`;
+- refused unless equal to the tier's value in `lab/tiers.toml`: `FV_GEN_TIMEOUT_S` (`cell_timeout_s`),
+  `FV_CONTAINER_DISK_GB`, `RUNPOD_CLOUD_TYPE`, `RUNPOD_GPU_TYPE`, `FV_SKIP_TAE=1` on a `tae = true` tier, and
+  `RUNPOD_GPU_MAX_DPH` below the tier's `max_usd_per_hr` (above it is moot: fv-deploy holds the tier's);
+- refused unless equal to fv-lab's fixed value: `FV_IDLE_GPU_MIN` 10, `FV_IDLE_GPU_GRACE_MIN` 30,
+  `FV_IDLE_NET_BYTES` 262144, `FV_MIN_DRIVER` 580, `FV_BOOT_WAIT_S` 600, `RUNPOD_VOLUME_ID` / `RUNPOD_VOLUME_NAME` /
+  `FV_PLAN_VOLUME` the EU volume, `RUNPOD_IMAGE` the commit's runtime image, `FV_POD_PREFIX` `fv-lab`;
+- `FV_EXTRA_ENV` entries no tier reads: the dropped modes' knobs (`FV_PRECISION_ARM`, `FV_NVFP4_WORKLOADS`,
+  `FV_VAE_*`, `FV_LTXFPS*`, `FV_TECH_CELLS`, `FV_B6_CELLS`), `FV_PROMPTS` / `FV_PROMPT` / `FV_SEED`, and what the
+  start command sets after them (`FV_WORK`, `FV_SCRATCH`, `FV_RUN_TAG`, `FV_CELLS`, `FV_GEN_TIMEOUT_S`).
+
+`FV_CELLS` and `FV_EXTRA_ENV` are split on spaces (and `FV_CELLS` on commas) without globbing. `all` mode is refused
+(run `kernels`, then `run`), and `FV_FAMILY=gold` is refused for `run` / `all` (no script family: `fv-lab pod up
+--family gold`; its `plan` stays the script's body, the payload golden). The binary is `FV_LAB_BIN`, else `fv-lab`
+on `PATH`, else `./fv-lab` at the repository root ([Build](#build)); without one the driver says how to build it.
+`scripts/gpu/tests/fv-lab-route.test.sh` (CI: `control.yml`) holds all of this, with a fake `FV_LAB_BIN`.
 
 ```sh
 FV_DRY_RUN=1 FV_FAMILY=b6 FV_BASELINE_SHA=e93e357 bash scripts/gpu/runpod-http.sh run <7>   # prints the fv-lab command
@@ -84,7 +100,9 @@ FV_DRY_RUN=1 FV_FAMILY=b4a bash scripts/gpu/runpod-http.sh run <7>   # a script 
 `FV_DRY_RUN=1` never creates a pod and needs no key. `runpod.sh rtx6000` is retired with the branch (the Taskfile's
 `rtx6000` task runs `runpod-http.sh run`). The script's `headline` family runs its cells of `fastvideo`, `rtx6000`,
 `rtx5090` and `precision` through `fv-lab run <tier> --cells …` into its own run directory (`--runs-dir` /
-`FV_RUNS_DIR`).
+`FV_RUNS_DIR`). Outside a dry run it stops (exit 2) when fv-lab is missing or `FV_PROMPTS` / `FV_PROMPT` / `FV_SEED`
+is set (the cells carry their own), and logs `FAIL fv-lab run <tier> exit=<n>` for a failed tier and goes on, as it
+did with the recursive script.
 
 Cell fields beyond D1a ([ADR-0019 §9.2](../adr/0019-fv-lab.md)):
 

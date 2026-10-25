@@ -672,7 +672,18 @@ Audio: male speech, clear voice, quiet room"
     # `fv-lab run <tier> --cells …` runs them, into this run dir
     # (FV_RUNS_DIR), with this run's work, scratch and per-cell cap.
     lab="${FV_LAB_BIN:-$(command -v fv-lab || echo /opt/fastvideo-rs/target/release/fv-lab)}"
-    sub() { local fam="$1"; shift
+    if [[ "$DRY_RUN" != 1 ]]; then
+      # A tier's cells carry their own prompt and seed; fv-lab only warns, so
+      # refuse here rather than run something other than what was asked.
+      for v in FV_PROMPTS FV_PROMPT FV_SEED; do
+        if [[ -n "${!v:-}" ]]; then
+          log "FATAL: $v is set, and headline's cells run through fv-lab, which takes prompts and seeds only from the cells (docs/adr/0019-fv-lab.md §7, §10)"
+          exit 2
+        fi
+      done
+      [[ -x "$lab" ]] || { log "FATAL: fv-lab missing at $lab (FV_LAB_BIN); headline's cells run through it"; exit 2; }
+    fi
+    sub() { local fam="$1" rc=0; shift
       # A dry run is fv-lab's (the tier's lines), or without fv-lab its command line.
       if [[ "$DRY_RUN" == 1 ]]; then
         if [[ -x "$lab" ]]; then
@@ -683,7 +694,12 @@ Audio: male speech, clear voice, quiet room"
         return 0
       fi
       FV_RUNS_DIR="$RUNS" FV_WORK="$WORK" FV_SCRATCH="$SCRATCH" FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-300}" \
-        "$lab" run "$fam" --cells "$*" || true; }
+        "$lab" run "$fam" --cells "$*" || rc=$?
+      # As the recursive `runpod-matrix.sh <family> || true` before it: a
+      # failed tier is logged and the next one runs; its arms' summaries carry
+      # their exits, and it never set headline's own exit (matrix_exit).
+      (( rc == 0 )) || log "FAIL fv-lab run $fam exit=$rc"
+      return 0; }
     sub fastvideo ${FV_HEADLINE_FASTVIDEO:-fasth3-4step-vsa-480p fasth3-8step-480p fasth3-4step-vsa-768p fasth3-8step-768p}
     sub rtx6000 ${FV_HEADLINE_SOLH3:-sol-h3}
     sub rtx5090 ${FV_HEADLINE_ROUTES:-h3-768p-fullopt ltx25-4k5s-sol}

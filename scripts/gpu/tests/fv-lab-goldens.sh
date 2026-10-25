@@ -58,8 +58,13 @@ FAMILIES="$(awk '/^\[\[tier\]\]/ { t = 1; next } t && /^name = "/ { gsub(/^name 
 # shellcheck source=scripts/gpu/fv-lab-retired.sh
 . "$ROOT/scripts/gpu/fv-lab-retired.sh"
 MATRIX="$ROOT/scripts/gpu/runpod-matrix.sh"
-# A family's `case` branch in runpod-matrix.sh.
-has_branch() { grep -qE "^  $1\)" "$MATRIX"; }
+# A family's `case` branch in runpod-matrix.sh: a label of the top-level
+# `case "$FAMILY" in` (two-space indent; `name)`, `name )`, `a|name)`, a
+# trailing comment all count; nested cases' labels do not).
+has_branch() {
+  sed -n '/^case "\$FAMILY" in$/,/^esac$/p' "$MATRIX" \
+    | grep -qE "^  ([A-Za-z0-9_-]+ *\| *)*$1( *\| *[A-Za-z0-9_-]+)* *\)"
+}
 for f in $FV_LAB_RETIRED; do
   grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: retired family $f is no tier of lab/tiers.toml" >&2; exit 2; }
 done

@@ -230,6 +230,39 @@ fn retired() -> Vec<String> {
     line.split_whitespace().map(str::to_owned).collect()
 }
 
+/// A label of runpod-matrix.sh's top-level `case "$FAMILY" in` naming `f`:
+/// two-space indent, `f)`, `f )`, `a|f)` and a trailing comment all count;
+/// nested cases' labels (deeper indent) do not (fv-lab-goldens.sh `has_branch`).
+fn has_branch(matrix: &str, f: &str) -> bool {
+    matrix
+        .lines()
+        .skip_while(|l| *l != "case \"$FAMILY\" in")
+        .take_while(|l| *l != "esac")
+        .filter_map(|l| l.strip_prefix("  "))
+        .filter(|l| !l.starts_with(' '))
+        .filter_map(|l| l.split_once(')').map(|(head, _)| head))
+        .any(|head| {
+            let alts: Vec<&str> = head.split('|').map(str::trim).collect();
+            alts.iter().all(|a| {
+                !a.is_empty()
+                    && a.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            }) && alts.contains(&f)
+        })
+}
+
+#[test]
+fn branch_labels_are_read_as_bash_reads_them() {
+    let m = |label: &str| format!("x\ncase \"$FAMILY\" in\n{label}\n    ;;\nesac\n");
+    for yes in ["  trace)", "  trace )", "  x|trace) # c", "  trace | y)"] {
+        assert!(has_branch(&m(yes), "trace"), "{yes}");
+    }
+    for no in ["    trace)", "  tracex)", "  x$(trace)"] {
+        assert!(!has_branch(&m(no), "trace"), "{no}");
+    }
+    assert!(!has_branch("  trace)\n", "trace"), "outside the case");
+}
+
 #[test]
 fn retired_families_are_frozen_tiers_without_a_branch() {
     // The families whose GPU gate passed (ADR-0019 §10): each a tier with its
@@ -238,7 +271,7 @@ fn retired_families_are_frozen_tiers_without_a_branch() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let matrix = std::fs::read_to_string(repo_root().join("scripts/gpu/runpod-matrix.sh"))
         .expect("runpod-matrix.sh");
-    let branch = |f: &str| matrix.lines().any(|l| l == format!("  {f})"));
+    let branch = |f: &str| has_branch(&matrix, f);
     let retired = retired();
     for f in [
         "rtx6000",

@@ -61,6 +61,45 @@ fn dry_run_prints_the_scripts_lines() {
     assert!(out.lines().all(|l| l.as_bytes().get(9) == Some(&b']')));
 }
 
+/// `pod up --wall-cap-s` lowers the tier's cap (runpod-http.sh maps
+/// FV_POD_CAP_S to it): the guard's deadline and the pod's own cap watchdog;
+/// 0 and anything above the tier's 14400 s are refused.
+#[test]
+fn wall_cap_can_only_be_lowered() {
+    let up = [
+        "pod",
+        "up",
+        "--sha",
+        "1234567",
+        "--family",
+        "rtx6000",
+        "--tag",
+        "1234567-10241200",
+    ];
+    let plan = stdout(fv_lab().args(up).args(["--wall-cap-s", "1800"]));
+    let v: serde_json::Value = serde_json::from_str(&plan).expect("json plan");
+    assert_eq!(v["launch"]["guards"]["cap_s"], 1800, "{plan}");
+    let cmd = v["requests"][0]["body"]["dockerStartCmd"][2]
+        .as_str()
+        .unwrap_or("");
+    assert!(cmd.contains("sleep 1800\n"), "{cmd}");
+    assert!(!cmd.contains("sleep 14400"), "{cmd}");
+    let default = stdout(fv_lab().args(up));
+    assert!(default.contains("sleep 14400"), "the tier's cap by default");
+    for bad in ["0", "14401"] {
+        let o = fv_lab()
+            .args(up)
+            .args(["--wall-cap-s", bad])
+            .output()
+            .unwrap();
+        assert!(!o.status.success(), "--wall-cap-s {bad}");
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains("can only be lowered"),
+            "{bad}"
+        );
+    }
+}
+
 /// `--runs-dir` / `FV_RUNS_DIR` replace the run directory (`{runs}`): how
 /// runpod-matrix.sh `headline` runs a retired tier's cells into its own.
 #[test]

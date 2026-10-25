@@ -32,6 +32,8 @@ on:
       - "scripts/gpu/tests/fv-lab-goldens.sh"
       - "scripts/gpu/fv-lab-compare-runs.sh"
       - "scripts/gpu/fv-lab-retired.sh"
+      - "scripts/gpu/tests/fv-lab-route.test.sh"
+      - "scripts/gpu/runpod.sh"
       - "lab/tiers.toml"
       - "crates/fastvideo-lab/fixtures/**"
       - "scripts/gpu/runpod-cuda.sh"
@@ -71,6 +73,8 @@ on:
       - "scripts/gpu/tests/fv-lab-goldens.sh"
       - "scripts/gpu/fv-lab-compare-runs.sh"
       - "scripts/gpu/fv-lab-retired.sh"
+      - "scripts/gpu/tests/fv-lab-route.test.sh"
+      - "scripts/gpu/runpod.sh"
       - "lab/tiers.toml"
       - "crates/fastvideo-lab/fixtures/**"
       - "scripts/gpu/runpod-cuda.sh"
@@ -125,3 +129,6 @@ jobs:
       - name: fv-lab goldens are what runpod-matrix.sh / runpod-http.sh do for every lab/tiers.toml tier, frozen for the retired ones (ADR-0019 §9.3, §10)
         working-directory: .
         run: bash scripts/gpu/tests/fv-lab-goldens.sh --check
+      - name: runpod-http.sh routes the retired families to fv-lab, refusing what fv-lab would not honour (ADR-0019 §10)
+        working-directory: .
+        run: bash scripts/gpu/tests/fv-lab-route.test.sh

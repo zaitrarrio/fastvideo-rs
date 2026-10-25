@@ -9,6 +9,7 @@
 //! fv-lab schema tiers|cell
 //! fv-lab pod up --sha <7> --family <tier> [--yes] [--wait] [--cells …] [--extra-env K=V …]
 //!                 [--baseline-sha <7>]   (required by a tier with `bin = "baseline"` arms)
+//!                 [--wall-cap-s S]       (lower the tier's wall cap)
 //!                 one pod of the tier on fv-deploy's guards: price cap, $8 floor, EU
 //!                 volume, backstop at the tier's wall cap, ready within 600 s (3 cycles);
 //!                 without --yes it prints the plan; --wait also waits, fetches and deletes
@@ -277,6 +278,11 @@ struct UpArgs {
     /// The run tag (default <sha>-<MMDDHHMMSS>-<4 random hex>).
     #[arg(long)]
     tag: Option<String>,
+    /// A wall cap in seconds below the tier's `wall_cap_s` (runpod-http.sh's
+    /// FV_POD_CAP_S): the backstop's deadline and the pod's own cap. Never 0
+    /// and never above the tier's.
+    #[arg(long)]
+    wall_cap_s: Option<u64>,
     #[arg(long)]
     root: Option<PathBuf>,
     /// Ledger, pod records, backstop logs (default <root>/artifacts/fv-lab).
@@ -532,6 +538,23 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let root = find_root(u.root.as_ref())?;
     let lab = Lab::load(&root).map_err(|e| e.to_string())?;
     let t = tier(&lab, &u.family)?;
+    let capped;
+    let t = match u.wall_cap_s {
+        None => t,
+        Some(c) if c == 0 || c > t.wall_cap_s => {
+            return Err(format!(
+                "--wall-cap-s {c}: a tier's cap can only be lowered (1..={} s for `{}`)",
+                t.wall_cap_s, t.name
+            ));
+        }
+        Some(c) => {
+            capped = Tier {
+                wall_cap_s: c,
+                ..t.clone()
+            };
+            &capped
+        }
+    };
     let clock = RealClock;
     let tag = match &u.tag {
         Some(t) => t.clone(),

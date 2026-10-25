@@ -500,29 +500,100 @@ fv_lab_bin() {
   fi
 }
 
+# tier_value <tier> <key>: a top-level value of that [[tier]] in
+# lab/tiers.toml (quotes and a trailing comment stripped), empty if absent.
+tier_value() {
+  awk -v t="$1" -v k="$2" '
+    /^\[\[/ { in_t = 0; named = 0; next }
+    /^name = "/ && !named { n = $0; gsub(/^name = "|"[[:space:]]*(#.*)?$/, "", n); in_t = (n == t); named = 1; next }
+    in_t && $1 == k && $2 == "=" {
+      v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]+#.*$/, "", v); gsub(/^"|"$/, "", v); print v; exit
+    }' "$ROOT/lab/tiers.toml"
+}
+
+# What `run` reads from FV_EXTRA_ENV on the script path but no tier reads: the
+# dropped modes' knobs (ADR-0019 §9.4, §10.4), the prompts fv-lab ignores
+# (§7), and what the start command sets after FV_EXTRA_ENV anyway.
+FV_LAB_NOT_READ="FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_GEN FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS
+  FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_PROMPTS FV_PROMPT FV_SEED
+  FV_WORK FV_SCRATCH FV_RUN_TAG FV_CELLS FV_GEN_TIMEOUT_S"
+
 # fv_lab_route run|plan <sha> [tag]: `fv-lab pod up` for $FAMILY with this
 # driver's settings mapped across (FV_CELLS -> --cells, FV_BASELINE_SHA ->
-# --baseline-sha, FV_EXTRA_ENV -> --extra-env, FV_LPIPS=1 -> --lpips, the tag
-# -> --tag); `run` adds --yes --wait, `plan` prints fv-lab's plan (no request).
-# Settings fv-lab has no equivalent for are refused, not dropped: the run would
-# silently differ from what was asked. FV_DRY_RUN=1 prints the command only.
+# --baseline-sha, FV_EXTRA_ENV -> --extra-env, FV_LPIPS=1 -> --lpips,
+# FV_POD_CAP_S below the tier's -> --wall-cap-s, the tag -> --tag); `run` adds
+# --yes --wait, `plan` prints fv-lab's plan (no request). A setting fv-lab
+# would not honour is refused, not dropped, unless fv-lab does the same thing
+# anyway (the tier's value, fv-lab's fixed one): the run would silently differ
+# from what was asked. FV_DRY_RUN=1 prints the command only.
 fv_lab_route() {
-  local what="$1" sha="$2" tag="${3:-}" lab v
-  for v in FV_POD_FILES FV_POD_SCRIPT FV_POD_FILE FV_PROMPTS FV_PROMPT FV_SEED RUNPOD_IMAGE RUNPOD_GPU_TYPE; do
-    [[ -z "${!v:-}" ]] || die "$FAMILY runs through fv-lab (fv-lab-retired.sh), which has no $v; unset it (docs/dev/fv-lab.md)"
+  local what="$1" sha="$2" tag="${3:-}" lab v k e
+  refuse() { die "$FAMILY runs through fv-lab (fv-lab-retired.sh), which $*; unset it (docs/dev/fv-lab.md)"; }
+  # same <var> <what fv-lab does>: refused when set, non-empty and different.
+  same() { [[ -z "${!1:-}" || "${!1}" == "$2" ]] || refuse "uses $1=$2, not ${!1}"; }
+  local cap cell_s disk cloud gpu tae max_dph
+  cap="$(tier_value "$FAMILY" wall_cap_s)"
+  cell_s="$(tier_value "$FAMILY" cell_timeout_s)"
+  disk="$(tier_value "$FAMILY" container_disk_gb)"
+  cloud="$(tier_value "$FAMILY" cloud)"
+  gpu="$(tier_value "$FAMILY" gpu)"
+  tae="$(tier_value "$FAMILY" tae)"
+  max_dph="$(tier_value "$FAMILY" max_usd_per_hr)"
+  [[ -n "$cap" && -n "$cell_s" && -n "$disk" && -n "$cloud" && -n "$gpu" && -n "$tae" && -n "$max_dph" ]] \
+    || die "$FAMILY: no complete [[tier]] in lab/tiers.toml"
+  # No equivalent at all.
+  for v in FV_POD_FILES FV_POD_SCRIPT FV_POD_FILE FV_PROMPTS FV_PROMPT FV_SEED FV_AVOID_MACHINES \
+    FV_CREATE_WAIT_S FV_FETCH_SKIP FV_FETCH_MAX_MB RUNPOD_ALLOWED_CUDA; do
+    [[ -z "${!v:-}" ]] || refuse "has no $v"
   done
   for v in FV_KEEP_POD FV_FETCH_TREE RUNPOD_NO_VOLUME; do
-    [[ "${!v:-0}" != 1 ]] || die "$FAMILY runs through fv-lab (fv-lab-retired.sh), which has no $v=1; unset it (docs/dev/fv-lab.md)"
+    [[ "${!v:-0}" != 1 ]] || refuse "has no $v=1"
   done
-  [[ "${FV_GEN_TIMEOUT_S:-3600}" == 3600 ]] \
-    || die "$FAMILY runs through fv-lab: the per-arm cap is the tier's cell_timeout_s (lab/tiers.toml), not FV_GEN_TIMEOUT_S=$FV_GEN_TIMEOUT_S"
+  # The tier's values (lab/tiers.toml).
+  same FV_GEN_TIMEOUT_S "$cell_s"
+  same FV_CONTAINER_DISK_GB "$disk"
+  same RUNPOD_CLOUD_TYPE "$cloud"
+  same RUNPOD_GPU_TYPE "$gpu"
+  [[ "${FV_SKIP_TAE:-0}" == 1 && "$tae" == true ]] && refuse "fetches the TAE files for this tier (tae = true), FV_SKIP_TAE=1"
+  # A higher price cap than the tier's is moot (fv-deploy holds the tier's);
+  # a lower one would be exceeded.
+  if [[ -n "${RUNPOD_GPU_MAX_DPH:-}" ]] && awk -v a="$RUNPOD_GPU_MAX_DPH" -v b="$max_dph" 'BEGIN { exit !(a + 0 < b + 0) }'; then
+    refuse "caps the price at the tier's \$$max_dph/hr, above RUNPOD_GPU_MAX_DPH=$RUNPOD_GPU_MAX_DPH"
+  fi
+  # fv-lab's fixed values (StartOptions::for_tier, fv-deploy's readiness rule,
+  # the EU volume, the image of the commit, its pod names).
+  same FV_IDLE_GPU_MIN 10
+  same FV_IDLE_GPU_GRACE_MIN 30
+  same FV_IDLE_NET_BYTES 262144
+  same FV_MIN_DRIVER 580
+  same FV_BOOT_WAIT_S 600
+  same RUNPOD_VOLUME_ID "$FV_EU_VOLUME_ID"
+  same RUNPOD_VOLUME_NAME "$FV_EU_VOLUME_NAME"
+  same FV_PLAN_VOLUME "$FV_EU_VOLUME_ID $FV_EU_DC"
+  same RUNPOD_IMAGE "ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha"
+  same FV_POD_PREFIX fv-lab
+  # (FV_EU_VOLUME_NAME needs no check: volumes.sh sets it on both paths.)
   local args=(pod up --sha "$sha" --family "$FAMILY" --root "$ROOT")
   [[ -n "$tag" ]] && args+=(--tag "$tag")
-  # shellcheck disable=SC2206 # space-separated lists, as the script path reads them
-  [[ -n "${FV_CELLS:-}" ]] && args+=(--cells ${FV_CELLS})
+  # The wall cap: lowered with --wall-cap-s, never raised.
+  if [[ -n "${FV_POD_CAP_S:-}" && "$FV_POD_CAP_S" != "$cap" ]]; then
+    [[ "$FV_POD_CAP_S" =~ ^[1-9][0-9]*$ ]] && (( FV_POD_CAP_S < cap )) \
+      || refuse "caps the pod at the tier's ${cap} s (lowered with FV_POD_CAP_S, never raised), not FV_POD_CAP_S=$FV_POD_CAP_S"
+    args+=(--wall-cap-s "$FV_POD_CAP_S")
+  fi
+  # Space- or comma-separated lists, split without globbing.
+  local cells=() extra=() cells_list
+  cells_list="${FV_CELLS:-}"
+  read -r -a cells <<<"${cells_list//,/ }"
+  (( ${#cells[@]} )) && args+=(--cells "${cells[@]}")
   [[ -n "${FV_BASELINE_SHA:-}" ]] && args+=(--baseline-sha "$FV_BASELINE_SHA")
-  # shellcheck disable=SC2206
-  [[ -n "${FV_EXTRA_ENV:-}" ]] && args+=(--extra-env ${FV_EXTRA_ENV})
+  read -r -a extra <<<"${FV_EXTRA_ENV:-}"
+  for e in ${extra[@]+"${extra[@]}"}; do
+    k="${e%%=*}"
+    [[ " $(echo $FV_LAB_NOT_READ) " != *" $k "* ]] \
+      || refuse "reads no $k from FV_EXTRA_ENV (ADR-0019 §9.4, §10: dropped with the branch, or set by the start command)"
+  done
+  (( ${#extra[@]} )) && args+=(--extra-env "${extra[@]}")
   [[ "${FV_LPIPS:-0}" == 1 ]] && args+=(--lpips)
   [[ "$what" == run ]] && args+=(--yes --wait)
   if [[ "${FV_DRY_RUN:-0}" == 1 ]]; then
@@ -540,6 +611,10 @@ fv_lab_route() {
 cmd_run() {
   local mode="$1" sha="${2:-}" image tag id rc=0 attempt
   sha="${sha:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
+  # The `gold` tier was never a script family: its pod is fv-lab's only.
+  if [[ "$FAMILY" == gold && ( "$mode" == run || "$mode" == all ) ]]; then
+    die "gold is no runpod-matrix.sh family (docs/adr/0023-lab-report-and-ci-bridge.md): fv-lab pod up --sha $sha --family gold --yes --wait"
+  fi
   if [[ "$mode" == run || "$mode" == all ]] && fv_lab_retired "$FAMILY"; then
     [[ "$mode" == run ]] || die "\`all\` runs runpod-matrix.sh $FAMILY after the kernels, and $FAMILY is fv-lab only (fv-lab-retired.sh): run \`kernels\`, then \`run\`"
     fv_lab_route run "$sha"
@@ -627,5 +702,5 @@ case "${1:-}" in
     pod_payload "${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}" "$tag" run "$vol" "$dc" ;;
   status) proxy "${2:?pod}" "$FAMILY/" ;;
   down) rest DELETE "/pods/${2:?pod}" >/dev/null && echo "deleted ${2}" ;;
-  *) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 2 ;;
 esac
