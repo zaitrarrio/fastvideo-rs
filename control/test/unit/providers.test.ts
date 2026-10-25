@@ -211,7 +211,7 @@ describe("the pod env and start command", () => {
     expect(() => brevRun("img", { X: "a\nb" })).toThrow(/line break/);
   });
   describe("Brev host script, run in bash with stub commands (docker, nvidia-smi, curl, shutdown)", () => {
-    const run = (o: { docker?: "ok" | "missing" | "runfail" | "exits"; install?: boolean } = {}) => {
+    const run = (o: { docker?: "ok" | "missing" | "runfail" | "exits"; install?: boolean; slowTee?: boolean } = {}) => {
       const dir = mkdtempSync(join(tmpdir(), "fvhost-"));
       const bin = join(dir, "bin");
       mkdirSync(bin);
@@ -222,6 +222,9 @@ describe("the pod env and start command", () => {
 while [ $# -gt 0 ]; do case "$1" in -d) printf '%s\\n' "$2" >> ${sent}; shift 2 ;; -H) case "$2" in @*) cat "\${2#@}" >> ${join(dir, "headers.txt")} ;; esac; shift 2 ;; *) shift ;; esac; done`);
       stub("nvidia-smi", 'echo "GPU 0: NVIDIA RTX PRO 6000 (UUID: GPU-x)"');
       stub("shutdown", "exit 0");
+      // A tee that lags (as the script's \`exec > >(tee -a host.log)\` may on a busy host): each line reaches the log
+      // 0.3 s late, so a report read straight from host.log would miss the failing step's last words.
+      if (o.slowTee) stub("tee", 'a=0; [ "$1" = -a ] && { a=1; shift; }; [ "$a" = 1 ] || : > "$1"; while IFS= read -r l; do sleep 0.3; printf "%s\\n" "$l"; printf "%s\\n" "$l" >> "$1"; done');
       // Passwordless sudo, as the Brev images promise: the host script runs `sudo -n true` and prefixes
       // Docker with `sudo -n` when it is not root. Stubbed so the test does not depend on the user
       // running it (root in the containers, `runner` without sudo on the PATH in CI).
@@ -298,6 +301,12 @@ while [ $# -gt 0 ]; do case "$1" in -d) printf '%s\\n' "$2" >> ${sent}; shift 2 
       const f = r.reports.find((x) => x.phase === "host_failed");
       expect(f.detail).toMatch(/^docker run \(exit 125\): .*could not select device driver/);
       expect(r.reports.some((x) => x.phase === "container_started")).toBe(false);
+    });
+    it("docker run fails behind a lagging log: host_failed still carries the step's own output", () => {
+      const r = run({ docker: "runfail", slowTee: true });
+      expect(r.code).toBe(1);
+      const f = r.reports.find((x) => x.phase === "host_failed");
+      expect(f.detail).toMatch(/^docker run \(exit 125\): .*could not select device driver/);
     });
   });
   it("only quick-tunnel URLs are accepted as a pod's endpoint", () => {
