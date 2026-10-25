@@ -9,7 +9,7 @@ import { tunnelSettings, tunnelsView, tunnelSweep } from "./tunnels";
 import { accessMode, clientIp, login, logout, mintApiToken, requireAuth, requireConsoleAuth, whoami } from "./auth";
 import { cancelOp, currentOp, startOp } from "./cluster/control";
 import { adminAll, adminOne, adminTargets, adminToken, desiredEnv, edgeCfg, edgeFamilies, edgePublic, edgeWorkers, envCtx, projectSpend, workerHealth } from "./cluster/ops";
-import { isDirect, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
+import { assertPoolLaunches, isDirect, workerSystemEnv, type ClusterSecrets, type ClusterState, type PodRec } from "./cluster/payloads";
 import { assertRegionsAvailable, defaultSpec, isEdge, normalizeSpec, POOL_PRESETS, presetById, presetPool, STANDARD_POOLS, TEMPLATES } from "./cluster/spec";
 import { assertPoolConfigs } from "./worker-config";
 import { allPods, deleteClusterRow, emptyState, getCluster, insertCluster, isStandalone, listClusters, livePods, newSecrets, STANDALONE, type Cluster } from "./cluster/store";
@@ -556,6 +556,7 @@ app.post("/api/v1/deploy/apply", async (c) => {
   if (start && !p.target.running) {
     assertRegionsAvailable(cl.spec);
     assertPoolConfigs(cl.spec);
+    assertPoolLaunches(cl.spec, c.env);
     const r = await startOp(c.env, cl.id, "up", { skip_price_check: false }, actor(c));
     operation = r.id;
     await auditC(c, { action: "cluster.up", target: cl.name, after: { operation: r.id } });
@@ -858,7 +859,7 @@ for (const [path, def] of Object.entries(OPS)) {
     const cl = await getCluster(c.env, c.req.param("id"));
     const params = def.params(await body(c));
     // Ops that create pods refuse a stored spec that still names an unavailable region (us: no weights volume).
-    if (["up", "scale", "roll", "restart"].includes(def.kind)) assertRegionsAvailable(cl.spec), assertPoolConfigs(cl.spec);
+    if (["up", "scale", "roll", "restart"].includes(def.kind)) assertRegionsAvailable(cl.spec), assertPoolConfigs(cl.spec), assertPoolLaunches(cl.spec, c.env);
     for (const p of def.kind === "scale" ? [params.pool] : def.kind === "roll" ? params.pools || [] : [])
       if (!cl.spec.pools.some((x) => x.id === p)) throw new HttpError(400, `pool: ${cl.name} has no pool ${p} (${cl.spec.pools.map((x) => x.id).join(", ")})`, { issues: [{ path: ["pool"], message: `no pool ${p}` }] });
     if (def.kind === "scale" && isStandalone(cl) && params.count > 1) throw new HttpError(400, `${cl.name} is a standalone pod: one pod (launch another for more)`);
@@ -1071,6 +1072,7 @@ app.post("/api/v1/standalone/:id/start", async (c) => {
   if ((cl.state.workers[STANDALONE_POOL] || []).length) throw new HttpError(409, `${cl.name} has a pod already`);
   assertRegionsAvailable(cl.spec);
   assertPoolConfigs(cl.spec);
+  assertPoolLaunches(cl.spec, c.env);
   const b = await body<{ skip_image_check?: boolean }>(c);
   const r = await startOp(c.env, cl.id, "up", { skip_price_check: false, skip_image_check: !!b.skip_image_check }, actor(c));
   await auditC(c, { action: "standalone.start", target: cl.name });
