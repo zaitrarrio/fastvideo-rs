@@ -1170,7 +1170,7 @@ ran (pod id, $/hr), result, cost.
   `crates/fastvideo-deploy/schemas/*.v1.json` (`--check` in `control.yml`,
   which now runs on schema changes); cluster workers, edge fronts, standalone
   pods and GPU serverless endpoints are schema-checked `Launch` values whose
-  Runpod bodies follow `pod.rs` / `serverless.rs`; 2776 payload cases equal
+  Runpod bodies follow `pod.rs` / `serverless.rs`; 4162 payload cases equal
   before and after; `launch-goldens.test.ts` holds the TS builders to the C3a
   goldens and h3-turbo / h3-max / ltx / ltx-pro to fv-deploy field by field
   (intended differences listed). CPU pods / endpoints, GMI / Brev and the v2

@@ -1706,7 +1706,7 @@ Project code: FVID
 - Trigger: plan C3 slice C3c (fv-control on the shared `Launch` schema), coordinator's work package
 - Options: hand-written TS types kept in sync by review; TS types + zod validators generated from fv-deploy's committed JSON Schemas, with fv-control's Runpod bodies derived from a `Launch` by the Rust builders' rules; or extending the Rust schema first for CPU / GMI / Brev
 - Decision: generate `control/src/launch-gen.ts` (types + zod) from `crates/fastvideo-deploy/schemas/*.v1.json` in `gen-configs.mjs` (`--check` in CI); every Runpod GPU pod and GPU serverless endpoint of fv-control is a schema-checked `Launch` whose bodies come from `control/src/launch.ts` (the port of `pod.rs create_body`, `serverless.rs template_body` / `endpoint_body`); CPU pods / endpoints, GMI / Brev, the REST v2 envelope and build pods stay outside Launch v1 (no CPU compute or provider kind in it); no Rust change (the schema extension is proposed for after C3b, which edits the same types)
-- Reason: one source for the launch shape, drift fails CI, no new dependency (zod was already fv-control's); payloads unchanged (2776 cases equal before and after)
+- Reason: one source for the launch shape, drift fails CI, no new dependency (zod was already fv-control's); payloads unchanged (4162 cases equal before and after)
 - Reversibility: high (code only; no live resource, stored shape or API response changed)
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0018-fv-deploy.md §7

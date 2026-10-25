@@ -281,10 +281,11 @@ least of `assertFloor`'s floor + margin) and 0 for the price cap, readiness and 
 fv-control" (Runpod reports no serverless price: §5.3's known gap; Runpod replaces workers). `source` is not set
 (a standalone pod's pool no longer names its preset; the stored spec is fv-control's record).
 
-The refactor changed no payload: 2776 cases (every cluster template on both control planes, every pool preset as a
+The refactor changed no payload: 4162 cases (every cluster template on both control planes, every pool preset as a
 standalone pod on each weights source with r2 data centres, the upsampler, a CUDA filter, a disk and GPU list, every
 placement attempt, edge contexts with and without the outputs bucket, and every serverless preset on each weights
-source and mode plus the custom ones, through template create / update, endpoint create / update and the v2 create)
+source and mode plus the custom ones, each GPU one also stored without `compute` (read as GPU, as before), through
+template create / update, endpoint create / update and the v2 create)
 gave the same bodies before and after by value (only the key order inside a JSON body moved). The existing unit tests
 pass unchanged.
 

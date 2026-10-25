@@ -85,7 +85,7 @@ export function endpointGuards(spec: Pick<EndpointSpec, "deadline_min">): Guards
  * env: what the endpoint itself carries (its GPU types and count, the CUDA minimum, the volume and data centres, the
  * scaling). `endpointLaunch` adds the template's part. */
 function endpointLaunchBase(spec: EndpointSpec, guards: Guards): Launch {
-  if (spec.compute !== "GPU") throw new Error(`endpoint ${spec.name}: a CPU endpoint is not a Launch (fv-deploy's schema has no CPU compute)`);
+  if (spec.compute === "CPU") throw new Error(`endpoint ${spec.name}: a CPU endpoint is not a Launch (fv-deploy's schema has no CPU compute)`);
   const ws = spec.weights_source ?? (spec.network_volume ? "volume" : "none");
   return {
     schema: LAUNCH_SCHEMA,
@@ -129,7 +129,7 @@ export function endpointLaunch(spec: EndpointSpec, image: string, weights: Recor
  * an explicit empty start command (so a PATCH clears an older template's). A CPU endpoint's from its spec. */
 export function templateCreatePayload(spec: EndpointSpec, image: string, name: string, weights: Record<string, string> = {}) {
   const readme = `fv-control serverless endpoint ${spec.name} (${imageOf(spec)}); docs/control/serverless.md`;
-  if (spec.compute === "GPU") return { ...runpodTemplateBody({ ...endpointLaunch(spec, image, weights), name }), category: "NVIDIA", dockerStartCmd: [] as string[], readme };
+  if (spec.compute !== "CPU") return { ...runpodTemplateBody({ ...endpointLaunch(spec, image, weights), name }), category: "NVIDIA", dockerStartCmd: [] as string[], readme };
   return {
     name,
     imageName: image,
@@ -171,7 +171,7 @@ export function endpointFields(spec: EndpointSpec) {
 
 /** REST v1 POST /endpoints (a queue endpoint on a template): a GPU endpoint's from its Launch (runpodEndpointBody). */
 export function endpointCreatePayload(spec: EndpointSpec, templateId: string) {
-  if (spec.compute === "GPU") return runpodEndpointBody(checkLaunch(endpointLaunchBase(spec, endpointGuards(spec))), templateId);
+  if (spec.compute !== "CPU") return runpodEndpointBody(checkLaunch(endpointLaunchBase(spec, endpointGuards(spec))), templateId);
   return { name: endpointName(spec), templateId, ...endpointFields(spec), ...(spec.network_volume ? { networkVolumeId: spec.network_volume } : {}) };
 }
 
@@ -199,7 +199,7 @@ export function endpointUpdatePayload(spec: EndpointSpec, prev?: EndpointSpec) {
 export function v2CreatePayload(spec: EndpointSpec, image: string, pools: string[] = [], weights: Record<string, string> = {}) {
   const lb = spec.mode === "lb";
   const scaling = spec.scaler_type === "REQUEST_COUNT" ? { type: "REQUEST_COUNT", requestCount: spec.scaler_value } : { type: "QUEUE_DELAY", queueDelay: spec.scaler_value };
-  if (spec.compute === "GPU") {
+  if (spec.compute !== "CPU") {
     const l = endpointLaunch(spec, image, weights);
     const s = l.serverless!;
     const vol = l.placement.volume;
