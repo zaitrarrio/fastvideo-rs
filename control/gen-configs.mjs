@@ -25,6 +25,9 @@
 //   ../configs/autoscale.toml       region: the [[autoscale.pools]] (copied with their comments)
 //   ../docs/serve/images.md         region: the image table
 //   ../scripts/gcp/families.tsv     the whole file, from the [[gcp]] rows (weight_trees / served from the twin config)
+// and fv-deploy's types (plan C3c, docs/adr/0018-fv-deploy.md §7):
+//   src/launch-gen.ts               Launch, Instance, Offer, Account (and their parts) as TypeScript types and zod
+//                                   validators, from crates/fastvideo-deploy/schemas/*.v1.json
 //   node gen-configs.mjs            rewrite them (after the cross-checks below pass)
 //   node gen-configs.mjs --check    exit 1 when they are stale or a cross-check fails
 //                                   (test/unit/payloads.test.ts and families-gen.test.ts run the same)
@@ -875,6 +878,143 @@ export function deployChecks(set = loadFamilies()) {
   return out;
 }
 
+// ---------------------------------------------------------------- fv-deploy's types (plan C3c, ADR-0018 §7)
+// crates/fastvideo-deploy/schemas/*.v1.json are the JSON Schemas schemars writes for fv-deploy's `Launch`, `Instance`,
+// `Offer` and `Account` (the crate's tests/schema.rs fails when they drift from the Rust types). src/launch-gen.ts is
+// their TypeScript: one interface or union per schema and $defs entry, and a zod validator for each (the same name +
+// `Z`), so a Rust change that is not regenerated here fails `--check` (and CI). The translation covers exactly what
+// schemars emits for these types (objects with required / optional fields, `additionalProperties: false` or a string
+// map, `$ref`, nullable `anyOf` / `type: [T, "null"]`, string enums and `oneOf` consts, strings, booleans, unsigned
+// integers and doubles, arrays); anything else stops the generator, so a new construct is translated on purpose.
+export const DEPLOY_SCHEMA_DIR = join(HERE, "../crates/fastvideo-deploy/schemas");
+export const DEPLOY_SCHEMAS = ["launch", "instance", "offer", "account"];
+
+const jsdoc = (d, pad = "") => (d ? `${pad}/** ${d.trim().replace(/\*\//g, "*\\/").split("\n").join(`\n${pad} * `)} */\n` : "");
+
+/** `{ ts, zod }` of one JSON Schema node (a property's or a $defs entry's), refs by name. */
+function schemaNode(n, at) {
+  const bad = (why) => {
+    throw new Error(`${at}: ${why} (gen-configs.mjs schemaNode translates what schemars emits for fv-deploy's types)`);
+  };
+  if (!n || typeof n !== "object") bad("not a schema");
+  if (n.$ref) {
+    const m = /^#\/\$defs\/([A-Za-z0-9_]+)$/.exec(n.$ref);
+    if (!m) bad(`unsupported $ref ${n.$ref}`);
+    return { ts: m[1], zod: `${m[1]}Z` };
+  }
+  if (n.anyOf) {
+    const parts = n.anyOf.filter((x) => x.type !== "null");
+    if (parts.length !== 1 || n.anyOf.length !== 2) bad("anyOf other than [T, null]");
+    const t = schemaNode(parts[0], at);
+    return { ts: `${t.ts} | null`, zod: `${t.zod}.nullable()` };
+  }
+  if (n.oneOf) {
+    const vals = n.oneOf.map((x) => (x.type === "string" && typeof x.const === "string" ? x.const : bad("oneOf other than string consts")));
+    return { ts: vals.map((v) => JSON.stringify(v)).join(" | "), zod: `z.enum([${vals.map((v) => JSON.stringify(v)).join(", ")}])` };
+  }
+  if (Array.isArray(n.type)) {
+    const rest = n.type.filter((t) => t !== "null");
+    if (rest.length !== 1 || n.type.length !== 2) bad(`type ${JSON.stringify(n.type)}`);
+    const t = schemaNode({ ...n, type: rest[0] }, at);
+    return { ts: `${t.ts} | null`, zod: `${t.zod}.nullable()` };
+  }
+  if (n.enum) {
+    if (n.type !== "string" || !n.enum.every((v) => typeof v === "string")) bad("non-string enum");
+    return { ts: n.enum.map((v) => JSON.stringify(v)).join(" | "), zod: `z.enum([${n.enum.map((v) => JSON.stringify(v)).join(", ")}])` };
+  }
+  switch (n.type) {
+    case "string":
+      return { ts: "string", zod: "z.string()" };
+    case "boolean":
+      return { ts: "boolean", zod: "z.boolean()" };
+    case "number":
+      if (n.format !== "double") bad(`number format ${n.format}`);
+      return { ts: "number", zod: "z.number()" };
+    case "integer":
+      if (n.format === "uint32" && n.minimum === 0) return { ts: "number", zod: "z.number().int().min(0).max(4294967295)" };
+      if (n.format === "uint64" && n.minimum === 0) return { ts: "number", zod: "z.number().int().min(0)" };
+      return bad(`integer format ${n.format}`);
+    case "array": {
+      const t = schemaNode(n.items, `${at}[]`);
+      return { ts: /[ |]/.test(t.ts) ? `(${t.ts})[]` : `${t.ts}[]`, zod: `z.array(${t.zod})` };
+    }
+    case "object": {
+      if (!n.properties) {
+        if (n.additionalProperties?.type !== "string") bad("an object without properties is a string map only");
+        return { ts: "Record<string, string>", zod: "z.record(z.string(), z.string())" };
+      }
+      if (n.additionalProperties !== false) bad("an object with properties must deny unknown fields");
+      const req = new Set(n.required || []);
+      for (const r of req) if (!(r in n.properties)) bad(`required ${r} is not a property`);
+      const ts = [];
+      const zod = [];
+      for (const [k, p] of Object.entries(n.properties)) {
+        const t = schemaNode(p, `${at}.${k}`);
+        const opt = !req.has(k);
+        ts.push(`${jsdoc(p.description, "  ")}  ${k}${opt ? "?" : ""}: ${t.ts};`);
+        zod.push(`  ${k}: ${t.zod}${opt ? ".optional()" : ""},`);
+      }
+      return { ts: `{\n${ts.join("\n")}\n}`, zod: `z.strictObject({\n${zod.join("\n")}\n})`, object: true };
+    }
+    default:
+      return bad(`type ${JSON.stringify(n.type)}`);
+  }
+}
+
+/** The named types of the committed schemas: every $defs entry (shared ones must agree) and each schema's root (its title). */
+export function deploySchemaTypes(dir = DEPLOY_SCHEMA_DIR) {
+  const named = new Map();
+  const add = (name, node, from) => {
+    const key = JSON.stringify(node);
+    const prev = named.get(name);
+    if (prev && prev.key !== key) throw new Error(`${from}: $defs ${name} differs from ${prev.from}'s`);
+    if (!prev) named.set(name, { node, key, from });
+  };
+  for (const s of DEPLOY_SCHEMAS) {
+    const file = `${s}.v1.json`;
+    const j = JSON.parse(readFileSync(join(dir, file), "utf8"));
+    if (!j.title) throw new Error(`${file}: no title`);
+    for (const [k, v] of Object.entries(j.$defs || {})) add(k, v, file);
+    const { $schema: _s, $defs: _d, title: _t, ...root } = j;
+    add(j.title, root, file);
+  }
+  return named;
+}
+
+/** src/launch-gen.ts: fv-deploy's types as TypeScript and zod. */
+export function launchGenTs(dir = DEPLOY_SCHEMA_DIR) {
+  const named = deploySchemaTypes(dir);
+  // zod consts in dependency order (a const is used after its definition).
+  const deps = (node) => [...JSON.stringify(node).matchAll(/"#\/\$defs\/([A-Za-z0-9_]+)"/g)].map((m) => m[1]);
+  const order = [];
+  const seen = new Set();
+  const visit = (name, path = []) => {
+    if (seen.has(name)) return;
+    if (path.includes(name)) throw new Error(`launch schemas: a $ref cycle through ${name}`);
+    if (!named.has(name)) throw new Error(`launch schemas: ${path.at(-1)} refers to an unknown $defs ${name}`);
+    for (const d of deps(named.get(name).node)) visit(d, [...path, name]);
+    seen.add(name);
+    order.push(name);
+  };
+  for (const name of [...named.keys()].sort()) visit(name);
+  const out = [];
+  for (const name of order) {
+    const { node } = named.get(name);
+    const t = schemaNode(node, name);
+    out.push(`${jsdoc(node.description)}export ${t.object ? `interface ${name} ${t.ts}` : `type ${name} = ${t.ts};`}
+export const ${name}Z: z.ZodType<${name}> = ${t.zod};
+`);
+  }
+  return `// Generated by control/gen-configs.mjs from crates/fastvideo-deploy/schemas/{${DEPLOY_SCHEMAS.join(",")}}.v1.json (the
+// JSON Schemas of fv-deploy's Rust types, docs/adr/0018-fv-deploy.md §3 and §7): do not edit; change the Rust types,
+// commit their schemas (cargo test -p fastvideo-deploy --test schema) and run \`node gen-configs.mjs\`. CI runs
+// \`--check\`. Each type has a zod validator of the same name + Z (unknown fields refused, as serde's
+// deny_unknown_fields). fv-control builds its Runpod launches as a Launch (src/launch.ts).
+import { z } from "zod";
+
+${out.join("\n")}`;
+}
+
 export const OUTPUTS = {
   "src/cluster/worker-configs.ts": workerConfigsTs,
   "src/serverless/console-assets.ts": consoleAssetsTs,
@@ -890,6 +1030,7 @@ export const OUTPUTS = {
   "../scripts/serve/variants.sh": () => variantsSh(),
   "../configs/autoscale.toml": autoscaleToml,
   "../docs/serve/images.md": () => imagesMd(),
+  "src/launch-gen.ts": () => launchGenTs(),
 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

@@ -113,7 +113,7 @@ describe("deploy/deploy.toml refusals", () => {
 
 describe("the hand-written serve stages are held to the data (gen-configs.mjs on a copy of the tree)", () => {
   // Everything the generator reads or writes, copied; control/node_modules linked.
-  const PATHS = ["control/gen-configs.mjs", "control/package.json", "control/src", "families", "deploy", "configs", "docker", "docs/serve/images.md", "scripts/gpu", "scripts/serve/variants.sh", "scripts/gcp", ".github/workflows/serve-image.yml", "crates/fastvideo-serve/console"];
+  const PATHS = ["control/gen-configs.mjs", "control/package.json", "control/src", "families", "deploy", "configs", "docker", "docs/serve/images.md", "scripts/gpu", "scripts/serve/variants.sh", "scripts/gcp", ".github/workflows/serve-image.yml", "crates/fastvideo-serve/console", "crates/fastvideo-deploy/schemas"];
   it("the committed stages: serve-cuda and serve-cpu carry the smoke config, bake no FV_CONFIG, name their image", () => {
     const st = serveStages();
     expect(Object.keys(st).sort()).toEqual(["cpu", "cuda"]);
