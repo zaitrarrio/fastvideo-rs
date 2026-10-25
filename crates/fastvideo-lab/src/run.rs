@@ -324,7 +324,113 @@ pub fn compare_identical(report: &Path) -> bool {
 pub struct Outcome {
     /// `gate <b>--<c>`, `verdict <cell>`, `family <family>`.
     pub what: String,
-    pub pass: bool,
+    pub decision: Decision,
+}
+
+/// A gate's or verdict's decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    Pass,
+    Fail,
+    /// Nothing to decide: a gate whose arms did not both run (skipped or
+    /// unselected), as the script's `skip gate … (benchmark.json missing)`.
+    Skipped,
+}
+
+impl Decision {
+    fn of(pass: bool) -> Self {
+        if pass {
+            Decision::Pass
+        } else {
+            Decision::Fail
+        }
+    }
+}
+
+/// Every file the gates and verdicts of `steps` may write, relative to the
+/// output directory: gate reports, verdict files, evidence files and diffs.
+pub fn outputs(steps: &[Step]) -> Vec<String> {
+    let mut out = Vec::new();
+    for s in Step::flatten(steps) {
+        match s {
+            Step::Gate {
+                baseline,
+                candidate,
+                ..
+            } => out.push(format!("gate/gate-{baseline}--{candidate}.json")),
+            Step::Verdict { cell, verdict, .. } => {
+                out.push(format!("{}-{cell}.verdict.json", verdict.family));
+                for e in &verdict.evidence {
+                    for a in &verdict.arms {
+                        out.push(format!("{a}/{}", e.file));
+                    }
+                    if let Some(d) = &e.diff {
+                        out.push(format!("{cell}.{d}"));
+                    }
+                }
+            }
+            Step::FamilyVerdict { family, .. } => out.push(format!("{family}.verdict.json")),
+            Step::Arm { .. } | Step::Compare { .. } => {}
+        }
+    }
+    out
+}
+
+/// The run directory's record of the arms a run selected (`FV_CELLS`), which
+/// `fv-lab run` writes before its first arm and `pod fetch` takes, so
+/// `fv-lab gate` knows the run's cells even when some never wrote anything.
+pub fn selection_file(family: &str) -> String {
+    format!("{family}.arms.json")
+}
+
+/// The arms `fv-lab gate` evaluates a finished run with (ADR-0019 §11.3):
+/// `cells` when given; else the run's selection record; else, for a run
+/// without one (a script run, or fv-lab before the record), every arm of the
+/// tier when the run holds them all, and an error otherwise: a run holding
+/// fewer arms may have been cut short, and guessing its selection from what
+/// it holds would pass the cells it never finished.
+pub fn gate_selection(
+    family: &str,
+    tier_arms: &[String],
+    run_dir: &Path,
+    cells: Option<Vec<String>>,
+) -> Result<Vec<String>, String> {
+    let known = |list: Vec<String>, from: &str| match list.iter().find(|a| !tier_arms.contains(a)) {
+        Some(a) => Err(format!("{from}: `{a}` is not an arm of tier `{family}`")),
+        None => Ok(list),
+    };
+    if let Some(c) = cells {
+        return known(c, "--cells");
+    }
+    let record = run_dir.join(selection_file(family));
+    if record.is_file() {
+        let text = fs::read_to_string(&record).map_err(|e| format!("{}: {e}", record.display()))?;
+        let v: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", record.display()))?;
+        let arms = v
+            .get("arms")
+            .and_then(|a| a.as_array())
+            .ok_or_else(|| format!("{}: no `arms` list", record.display()))?
+            .iter()
+            .map(|a| a.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| format!("{}: `arms` holds a non-string", record.display()))?;
+        return known(arms, &record.display().to_string());
+    }
+    let present: Vec<&String> = tier_arms
+        .iter()
+        .filter(|a| run_dir.join(a).join("summary.json").is_file())
+        .collect();
+    if present.len() == tier_arms.len() {
+        return Ok(tier_arms.to_vec());
+    }
+    Err(format!(
+        "{} holds {} of the {} arms of `{family}` and no {} (a script run, or an fv-lab run before the record): pass --cells with the arms the run selected",
+        run_dir.display(),
+        present.len(),
+        tier_arms.len(),
+        selection_file(family)
+    ))
 }
 
 /// `cat <bin>.build-id`, or `unknown`.
@@ -627,6 +733,7 @@ impl Runner {
             self.fetch_baseline()?;
         }
         self.clear_verdicts(steps);
+        self.write_selection(steps);
         for s in steps {
             self.step(s);
         }
@@ -672,12 +779,23 @@ impl Runner {
                 kind,
                 off,
             } => {
-                if let Some(rc) = self.gate_cells(baseline, candidate, *kind, off.as_deref()) {
-                    self.outcomes.push(Outcome {
-                        what: format!("gate {baseline}--{candidate}"),
-                        pass: rc == 0,
-                    });
-                }
+                let what = format!("gate {baseline}--{candidate}");
+                let decision = match self.gate_cells(baseline, candidate, *kind, off.as_deref()) {
+                    Some(rc) => Decision::of(rc == 0),
+                    // Both arms ran (an exit recorded) and still no
+                    // benchmark.json: a crashed arm, not a pair with
+                    // nothing to gate.
+                    None if self.arm_ran(baseline) && self.arm_ran(candidate) => {
+                        if self.offline {
+                            self.log(&format!(
+                                "FAIL {what}: both arms ran and a benchmark.json is missing"
+                            ));
+                        }
+                        Decision::Fail
+                    }
+                    None => Decision::Skipped,
+                };
+                self.outcomes.push(Outcome { what, decision });
             }
             Step::Verdict {
                 cell,
@@ -688,15 +806,88 @@ impl Runner {
         }
     }
 
+    /// `<runs>/<family>.arms.json` ([`selection_file`]): the arms this run
+    /// selected, in run order, before the first of them runs.
+    fn write_selection(&self, steps: &[Step]) {
+        let arms: Vec<&str> = Step::flatten(steps)
+            .into_iter()
+            .filter_map(|s| match s {
+                Step::Arm { name, .. } if self.cfg.selected(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        self.write_json(
+            &self.runs.join(selection_file(&self.cfg.family)),
+            &serde_json::json!({ "family": self.cfg.family, "arms": arms }).to_string(),
+        );
+    }
+
+    /// Whether an arm ran: its `summary.json` records an exit (not a skip).
+    fn arm_ran(&self, arm: &str) -> bool {
+        fs::read_to_string(self.runs.join(arm).join("summary.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .is_some_and(|v| v.get("exit").is_some_and(serde_json::Value::is_number))
+    }
+
     /// `fv-lab gate`: the gates (`fv-gpucheck gate`, CPU only) and verdicts
-    /// of a finished run, evaluated again from its files; the outcomes.
-    pub fn regate(&mut self, steps: &[Step]) -> &[Outcome] {
+    /// of a finished run, evaluated again from its files into `out`, which is
+    /// never the run directory or inside it (the run's own files stay what
+    /// the pod wrote); the outcomes. What an earlier evaluation left in `out`
+    /// is removed first.
+    pub fn regate(&mut self, steps: &[Step]) -> Result<&[Outcome], RunError> {
         self.offline = true;
-        let _ = fs::create_dir_all(&self.out);
+        // Checked before anything is created: not even an empty directory
+        // goes into the run.
+        if resolved(&self.out).starts_with(resolved(&self.runs)) {
+            return Err(RunError::Fatal(format!(
+                "{} is the run directory or inside it: fv-lab gate writes elsewhere (--out)",
+                self.out.display()
+            )));
+        }
+        fs::create_dir_all(&self.out).map_err(io(&self.out))?;
+        for rel in outputs(steps) {
+            let p = self.out.join(&rel);
+            let _ = fs::remove_file(&p);
+        }
         for s in steps {
             self.step(s);
         }
-        &self.outcomes
+        Ok(&self.outcomes)
+    }
+
+    /// `fv-lab gate --check`: each file the evaluation writes against the
+    /// run's own, one line per difference (none: the run wrote what fv-lab
+    /// derives). Verdict files, evidence files and diffs byte for byte; a
+    /// gate report by its `status` (it also holds timings).
+    pub fn differences(&self, steps: &[Step]) -> Vec<String> {
+        let mut out = Vec::new();
+        for rel in outputs(steps) {
+            let (ours, theirs) = (self.out.join(&rel), self.runs.join(&rel));
+            match (ours.is_file(), theirs.is_file()) {
+                (false, false) => {}
+                (true, false) => out.push(format!("{rel}: not in the run")),
+                (false, true) => out.push(format!("{rel}: in the run, not derived from it")),
+                (true, true) if rel.starts_with("gate/") => {
+                    let status = |p: &Path| {
+                        fs::read_to_string(p)
+                            .ok()
+                            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                            .and_then(|v| v.get("status").cloned())
+                    };
+                    let (a, b) = (status(&ours), status(&theirs));
+                    if a.is_none() || a != b {
+                        out.push(format!("{rel}: status {a:?} derived, {b:?} in the run"));
+                    }
+                }
+                (true, true) => {
+                    if fs::read(&ours).ok() != fs::read(&theirs).ok() {
+                        out.push(format!("{rel}: differs (diff the two files)"));
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// The script's `rm -f "$RUNS"/b4a-*.verdict.json "$RUNS/b4a.verdict.json"`
@@ -763,7 +954,11 @@ impl Runner {
                 continue;
             }
             let same = File::create(self.out.join(format!("{cell}.{d}"))).is_ok_and(|f| {
+                // As the script: on bytes, and as text even with a NUL, so
+                // the file never names a path (`Binary files … differ`).
                 self.cmd("diff")
+                    .env("LC_ALL", "C")
+                    .arg("-a")
                     .arg(&fa)
                     .arg(&fb)
                     .stdout(f)
@@ -789,7 +984,7 @@ impl Runner {
         self.log(&format!("{} {cell}: {verdict}{shown}", v.family));
         self.outcomes.push(Outcome {
             what: format!("verdict {cell}"),
-            pass: verdict == "pass",
+            decision: Decision::of(verdict == "pass"),
         });
     }
 
@@ -870,7 +1065,7 @@ impl Runner {
         self.log(&format!("{family} family: {verdict}{shown}"));
         self.outcomes.push(Outcome {
             what: format!("family {family}"),
-            pass: verdict == "pass",
+            decision: Decision::of(verdict == "pass"),
         });
     }
 
@@ -1333,6 +1528,19 @@ impl Runner {
         self.log(&format!("gate {tag} exit={rc} {verdict}"));
         Some(rc)
     }
+}
+
+/// `p` with its longest existing ancestor canonicalized (symlinks, `..`)
+/// and the rest appended: where `p` is or would be created.
+fn resolved(p: &Path) -> PathBuf {
+    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    for base in abs.ancestors() {
+        if let Ok(c) = fs::canonicalize(base) {
+            let rest = abs.strip_prefix(base).unwrap_or(Path::new(""));
+            return c.join(rest);
+        }
+    }
+    abs
 }
 
 fn append(p: &Path) -> Result<File, RunError> {

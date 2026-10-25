@@ -988,6 +988,7 @@ impl CellFile {
             }
         }
         let mut files = BTreeSet::new();
+        let mut diffs = BTreeSet::new();
         for (i, e) in v.evidence.iter().enumerate() {
             let at = |f: &str| format!("verdict.evidence[{i}].{f}");
             if !token(&e.file) || !e.file.ends_with("-evidence.log") {
@@ -1011,6 +1012,11 @@ impl CellFile {
                 }
                 if v.arms.len() != 2 {
                     return Err(field(file, at("diff"), "a diff needs exactly two arms"));
+                }
+                // Two evidence files diffed into one file: the second
+                // overwrites the first's, and a difference would go unseen.
+                if !diffs.insert(d.as_str()) {
+                    return Err(field(file, at("diff"), format!("`{d}` twice")));
                 }
             }
         }
@@ -1808,6 +1814,11 @@ candidate = "v1-pr"
             "-evidence.log",
         );
         bad("diff = \"evidence.diff\"", "diff = \"evidence\"", ".diff");
+        bad(
+            "[[verdict.count]]",
+            "[[verdict.evidence]]\nfile = \"other-evidence.log\"\nlines = [\"x\"]\ndiff = \"evidence.diff\"\n\n[[verdict.count]]",
+            "`evidence.diff` twice",
+        );
         bad(
             "lines = [\"h3 teacache step *REUSE\"]",
             "lines = [\"**\"]",

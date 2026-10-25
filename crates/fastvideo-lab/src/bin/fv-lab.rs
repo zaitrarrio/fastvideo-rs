@@ -5,9 +5,10 @@
 //!                 [--baseline-sha <7>] [--runs-dir D]
 //!                 the on-pod runner (runpod-matrix.sh's frame, the cells of lab/);
 //!                 --dry-run prints each arm's command line and writes nothing
-//! fv-lab gate <run dir> [--family T] [--cells a,b] [--out D] [--gpucheck B] [--policy F]
+//! fv-lab gate <run dir> [--family T] [--cells a,b] [--out D] [--check] [--gpucheck B] [--policy F]
 //!                 a finished run's promotion gates and verdicts, evaluated again from
-//!                 its files (no GPU): exit 0 all passed, 1 a failure or nothing evaluated
+//!                 its files into <run dir>.regate (no GPU): exit 0 all passed, 1 a failure
+//!                 or nothing evaluated; --check: 1 when the run's files differ from those
 //! fv-lab check    parse and validate lab/tiers.toml and lab/cells/*.toml
 //! fv-lab schema tiers|cell
 //! fv-lab pod up --sha <7> --family <tier> [--yes] [--wait] [--cells …] [--extra-env K=V …]
@@ -59,7 +60,7 @@ use fastvideo_lab::pod::{
     random_suffix, reap_account, reap_recorded, run_dir, run_tag, undeleted_in_ledger, wait_done,
     Done, LabPod, PodRecord, StartOptions,
 };
-use fastvideo_lab::run::{dry_run_lines, RunConfig, RunError, Runner};
+use fastvideo_lab::run::{dry_run_lines, gate_selection, Decision, RunConfig, RunError, Runner};
 use fastvideo_lab::schema;
 use fastvideo_lab::{goldcell, goldcheck, report};
 
@@ -224,14 +225,20 @@ struct GateArgs {
     /// The tier (default: the run directory's parent's name).
     #[arg(long)]
     family: Option<String>,
-    /// Only these arms (default: the arms the run directory holds a
-    /// summary.json for, i.e. the arms the run selected).
+    /// Only these arms (default: the run's `<tier>.arms.json`, which `fv-lab
+    /// run` writes; without it, every arm of the tier when the run holds them
+    /// all, else an error: pass the arms the run selected).
     #[arg(long)]
     cells: Option<String>,
-    /// Where the re-evaluated gate reports and verdicts go (default: the run
-    /// directory, the names the run wrote).
+    /// Where the re-evaluated gate reports and verdicts go (default: a sibling
+    /// `<run dir>.regate`); never the run directory or inside it.
     #[arg(long)]
     out: Option<PathBuf>,
+    /// Compare the derived files with the run's own (verdicts, evidence and
+    /// diffs byte for byte, gate reports by status): exit 1 on any
+    /// difference, whether the verdicts pass or not.
+    #[arg(long)]
+    check: bool,
     /// fv-gpucheck for the promotion gates (FV_GPUCHECK; any build, the gate
     /// is CPU only); needed only when the tier has gates.
     #[arg(long)]
@@ -388,7 +395,20 @@ fn split_list(s: &str) -> Vec<String> {
 
 // ------------------------------------------------------------------ run
 
+/// A script setting fv-lab would silently ignore, refused instead (ADR-0019
+/// §11.5): with `FV_B4A_CELLS` ignored, every `b4a` cell would run, at three
+/// times the cost of the one asked for.
+fn refused_knob(key: &str) -> Option<String> {
+    (key == "FV_B4A_CELLS").then(|| {
+        "fv-lab selects by arm: pass --cells <cell>-base <cell>-pr (FV_CELLS), not FV_B4A_CELLS"
+            .to_owned()
+    })
+}
+
 fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
+    if let (Some(v), Some(why)) = (env_nonempty("FV_B4A_CELLS"), refused_knob("FV_B4A_CELLS")) {
+        return Err(format!("FV_B4A_CELLS={v}: {why}"));
+    }
     let root = find_root(a.root.as_ref())?;
     let lab = Lab::load(&root).map_err(|e| e.to_string())?;
     let (tier, cells) = lab
@@ -493,20 +513,19 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
 fn cmd_gate(a: &GateArgs) -> Result<ExitCode, String> {
     let root = find_root(a.root.as_ref())?;
     let lab = Lab::load(&root).map_err(|e| e.to_string())?;
-    if !a.run_dir.is_dir() {
+    let run_dir = a
+        .run_dir
+        .canonicalize()
+        .map_err(|e| format!("{}: not a run directory ({e})", a.run_dir.display()))?;
+    if !run_dir.is_dir() {
         return Err(format!("{}: not a run directory", a.run_dir.display()));
     }
     let family = match &a.family {
         Some(f) => f.clone(),
-        None => a
-            .run_dir
-            .canonicalize()
-            .ok()
-            .and_then(|d| {
-                d.parent()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-            })
+        None => run_dir
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
             .filter(|n| lab.tier(n).is_some())
             .ok_or_else(|| {
                 format!(
@@ -517,7 +536,7 @@ fn cmd_gate(a: &GateArgs) -> Result<ExitCode, String> {
     };
     let (tier, cells) = lab.resolve(&family, None).map_err(|e| e.to_string())?;
     let mut cfg = RunConfig::new(&tier.name, &root);
-    cfg.runs_dir = Some(a.run_dir.clone());
+    cfg.runs_dir = Some(run_dir.clone());
     if let Some(b) = a
         .gpucheck
         .clone()
@@ -534,14 +553,12 @@ fn cmd_gate(a: &GateArgs) -> Result<ExitCode, String> {
         .flat_map(|c| &c.arms)
         .map(|arm| arm.name.clone())
         .collect();
-    cfg.only = Some(match &a.cells {
-        Some(c) => split_list(c),
-        None => arms
-            .iter()
-            .filter(|n| a.run_dir.join(n).join("summary.json").is_file())
-            .cloned()
-            .collect(),
-    });
+    cfg.only = Some(gate_selection(
+        &tier.name,
+        &arms,
+        &run_dir,
+        a.cells.as_deref().map(split_list),
+    )?);
     // The commands are rendered but never run here: a baseline arm needs
     // some binary path to render.
     let mut paths: Paths = cfg.paths();
@@ -561,30 +578,59 @@ fn cmd_gate(a: &GateArgs) -> Result<ExitCode, String> {
             cfg.bin.display()
         ));
     }
-    let out = a.out.clone().unwrap_or_else(|| a.run_dir.clone());
+    // Never into the run directory: its files are the evidence of what the
+    // pod wrote, and a comparison after an overwrite compares fv-lab with
+    // itself (Runner::regate refuses it too).
+    let out = match &a.out {
+        Some(o) => o.clone(),
+        None => {
+            let mut name = run_dir.file_name().unwrap_or_default().to_owned();
+            name.push(".regate");
+            run_dir.with_file_name(name)
+        }
+    };
     let mut runner = Runner::offline(cfg, &out);
-    let outcomes = runner.regate(&steps).to_vec();
+    let outcomes = runner.regate(&steps).map_err(|e| e.to_string())?.to_vec();
+    let count = |d: Decision| outcomes.iter().filter(|o| o.decision == d).count();
     let failed: Vec<&str> = outcomes
         .iter()
-        .filter(|o| !o.pass)
+        .filter(|o| o.decision == Decision::Fail)
         .map(|o| o.what.as_str())
         .collect();
+    let decided = outcomes.len() - count(Decision::Skipped);
     println!(
-        "fv-lab gate {}: {} evaluated, {} failed{}",
+        "fv-lab gate {}: {decided} evaluated, {} failed{}, {} skipped (a gate whose arms did not both run); written to {}",
         tier.name,
-        outcomes.len(),
         failed.len(),
         if failed.is_empty() {
             String::new()
         } else {
             format!(" ({})", failed.join(", "))
-        }
+        },
+        count(Decision::Skipped),
+        out.display()
     );
-    if outcomes.is_empty() {
-        println!(
-            "nothing to evaluate: no gate with both benchmark.json files and no verdict cell ran"
-        );
+    if decided == 0 {
+        println!("nothing to evaluate: no gate whose arms ran and no verdict cell in the run");
         return Ok(ExitCode::from(1));
+    }
+    if a.check {
+        // The judge's question: are the run's own files what fv-lab derives
+        // from it? Not whether the verdicts pass.
+        let diffs = runner.differences(&steps);
+        for d in &diffs {
+            println!("DIFF {d}");
+        }
+        println!(
+            "fv-lab gate --check: {} difference(s) between {} and the run",
+            diffs.len(),
+            out.display()
+        );
+        return Ok(if diffs.is_empty() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        });
     }
     Ok(if failed.is_empty() {
         ExitCode::SUCCESS
@@ -709,6 +755,12 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let mut so = StartOptions::for_tier(t, &tag);
     so.cells = u.cells.iter().flat_map(|c| split_list(c)).collect();
     so.extra_env = u.extra_env.clone();
+    for e in so.extra_env.iter().flat_map(|e| e.split_whitespace()) {
+        let key = e.split_once('=').map_or(e, |(k, _)| k);
+        if let Some(why) = refused_knob(key) {
+            return Err(format!("--extra-env {e}: {why}"));
+        }
+    }
     let cells: Vec<_> = t.cells.iter().filter_map(|c| lab.cells.get(c)).collect();
     check_cells(
         &t.name,

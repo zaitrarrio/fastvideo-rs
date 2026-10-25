@@ -709,7 +709,7 @@ pub const RUN_FILES: [&str; 10] = [
 /// directories fetched.
 ///
 /// Beyond the script's fetch (ADR-0019 §11, D1d), the verdict step's files:
-/// the run directory's `*.verdict.json` and `*.diff`, and each directory's
+/// the run directory's `*.verdict.json`, `*.diff` and `<tier>.arms.json`, and each directory's
 /// `*-evidence.log` ([`is_verdict_file`]). `runpod-http.sh` takes them only
 /// with `FV_FETCH_TREE=1`.
 pub fn fetch_run(
@@ -788,11 +788,14 @@ pub fn fetch_run(
 }
 
 /// A file of the verdict step (`plan::Verdict`) the fetch takes: in the run
-/// directory (`top`) a verdict (`*.verdict.json`) or an evidence diff
-/// (`*.diff`); in an arm's directory an evidence file (`*-evidence.log`).
+/// directory (`top`) a verdict (`*.verdict.json`), an evidence diff (`*.diff`)
+/// or the run's arm selection (`*.arms.json`); in an arm's directory an
+/// evidence file (`*-evidence.log`).
 pub fn is_verdict_file(name: &str, top: bool) -> bool {
     if top {
-        name.ends_with(".verdict.json") || name.ends_with(".diff")
+        // `<tier>.arms.json`: the arms the run selected (`run::selection_file`),
+        // which `fv-lab gate` reads.
+        name.ends_with(".verdict.json") || name.ends_with(".diff") || name.ends_with(".arms.json")
     } else {
         name.ends_with("-evidence.log")
     }
@@ -1252,7 +1255,7 @@ cells = ["c"]
             (format!("{run}/matrix.out"), "matrix_exit=0\n"),
             (
                 format!("{run}/"),
-                "<a href=\"a/\">a/</a><a href=\"live.log\">l</a><a href=\"fam-c.verdict.json\">v</a><a href=\"c.evidence.diff\">d</a><a href=\"baseline-fetch.log\">b</a>",
+                "<a href=\"a/\">a/</a><a href=\"live.log\">l</a><a href=\"fam-c.verdict.json\">v</a><a href=\"c.evidence.diff\">d</a><a href=\"baseline-fetch.log\">b</a><a href=\"rtx6000.arms.json\">s</a>",
             ),
             (
                 format!("{run}/a/"),
@@ -1261,6 +1264,7 @@ cells = ["c"]
             (format!("{run}/fam-c.verdict.json"), "{\"verdict\":\"pass\"}"),
             (format!("{run}/c.evidence.diff"), ""),
             (format!("{run}/baseline-fetch.log"), "x"),
+            (format!("{run}/rtx6000.arms.json"), "{\"arms\":[\"a\"]}"),
             (format!("{run}/a/cache-evidence.log"), "h3 teacache step 0\n"),
             (format!("{run}/a/other.log"), "x"),
             (format!("{run}/a/summary.json"), "{\"exit\":0}"),
@@ -1294,6 +1298,7 @@ cells = ["c"]
             "fam-c.verdict.json",
             "c.evidence.diff",
             "a/cache-evidence.log",
+            "rtx6000.arms.json",
         ] {
             assert!(dest.join(f).is_file(), "{f}");
         }
