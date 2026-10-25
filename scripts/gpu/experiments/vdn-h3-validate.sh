@@ -8,6 +8,7 @@
 #   vdn-h3-validate.sh status <pod>     status.tsv, the log tail, DONE
 #   vdn-h3-validate.sh fetch <pod> DIR  the results (logs, JSON, comparisons, clips) into DIR
 #   vdn-h3-validate.sh down <pod>       delete the pod, check it is gone, drop the staged bundle
+#   vdn-h3-validate.sh print-start      the pod's start command (what up sends)
 #
 # The pod: the runtime image (FV_RUNTIME_IMAGE), RTX PRO 6000 Server or Workstation Edition, secure cloud. With stock
 # in EU-RO-1 it mounts the EU weight volume (h3-base, the turbo LoRA and its pre-quantized DiT) at /workspace and
@@ -43,8 +44,20 @@ rest() {
 gql() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$RUNPOD_API_KEY") -H 'content-type: application/json' "$GQL" --data-binary @-; }
 balance() { gql <<<'{"query":"{ myself { clientBalance } }"}' | jq -r '.data.myself.clientBalance // empty'; }
 
+# The pod's start command, as `up` sends it (`print-start` prints it): the
+# self-delete library first (fv_self_delete, docs/adr/0023-lab-report-and-ci-bridge.md §4),
+# then the run; 20 min after DONE the pod deletes itself, retried each minute.
+start_cmd() {
+  printf '%s\n' "$(<"$HERE/../lib/self-delete.sh")"
+  printf '%s' 'mkdir -p /opt/fv /srv && cd /opt/fv && curl -fsSL --retry 5 -o b.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  b.tgz" | sha256sum -c - >/srv/log.txt 2>&1 && tar xzf b.tgz && { [ ! -f fv-gpucheck ] || chmod +x fv-gpucheck; } \
+&& (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
+&& export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
+&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/vdn-h3-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
+sleep 1200; if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then until fv_self_delete /tmp/self-delete.log; do sleep 60; done; fi; sleep infinity'
+}
 cmd="${1:-}"
 case "$cmd" in
+  print-start) start_cmd ;;
   up)
     bin="${2:?release fv-gpucheck}"
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
@@ -113,11 +126,7 @@ PYEOF
     log "balance \$$bal; bundle ${sha:0:12} ($(du -h "$tmp/bundle.tgz" | cut -f1)) staged"
     # The runtime image has curl and sha256sum but no Python: uv brings one. The pod deletes itself 20 min after
     # DONE (Runpod injects a pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the local backstop deletes it regardless.
-    start='mkdir -p /opt/fv /srv && cd /opt/fv && curl -fsSL --retry 5 -o b.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  b.tgz" | sha256sum -c - >/srv/log.txt 2>&1 && tar xzf b.tgz && { [ ! -f fv-gpucheck ] || chmod +x fv-gpucheck; } \
-&& (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
-&& export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
-&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/vdn-h3-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
-sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
+    start="$(start_cmd)"
     export FVX_URL="$url"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"

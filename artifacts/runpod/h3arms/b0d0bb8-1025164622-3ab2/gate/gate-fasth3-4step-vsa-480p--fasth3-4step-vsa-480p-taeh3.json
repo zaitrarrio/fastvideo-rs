@@ -1,0 +1,396 @@
+{
+  "checks": [
+    {
+      "limits": {
+        "required": [
+          "benchmark.json"
+        ]
+      },
+      "name": "artifact/benchmark_json",
+      "ok": true,
+      "values": {
+        "baseline": "/fvscratch/runs/h3arms/b0d0bb8-1025164622-3ab2/fasth3-4step-vsa-480p/benchmark.json",
+        "baseline_error": null,
+        "candidate": "/fvscratch/runs/h3arms/b0d0bb8-1025164622-3ab2/fasth3-4step-vsa-480p-taeh3/benchmark.json",
+        "candidate_error": null
+      }
+    },
+    {
+      "limits": {
+        "min": 1
+      },
+      "name": "artifact/compare_reports",
+      "ok": true,
+      "values": {
+        "reports": [
+          "/fvscratch/runs/h3arms/b0d0bb8-1025164622-3ab2/compare/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3.json"
+        ]
+      }
+    },
+    {
+      "limits": {
+        "clip_status": "completed",
+        "report_status": "pass"
+      },
+      "name": "artifact/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3",
+      "ok": true,
+      "values": {
+        "baseline_clip": "completed",
+        "candidate_clip": "completed",
+        "report_status": "pass"
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "official_config/prompts",
+      "ok": true,
+      "values": {
+        "baseline": [
+          "default"
+        ],
+        "candidate": [
+          "default"
+        ]
+      }
+    },
+    {
+      "limits": {
+        "same": [
+          "workload.height",
+          "workload.width",
+          "workload.num_frames",
+          "workload.seed",
+          "workload.prompt_sha256",
+          "workload.measured_steps"
+        ]
+      },
+      "name": "official_config/workload",
+      "ok": true,
+      "values": {
+        "differences": []
+      }
+    },
+    {
+      "limits": {
+        "min_speedup_for_experimental": 1.03,
+        "min_speedup_for_promotion": 1.1
+      },
+      "name": "performance/speedup",
+      "ok": false,
+      "values": {
+        "aggregate": "single",
+        "baseline": 6.215003972,
+        "candidate": 6.203352043,
+        "metric": "denoise_s",
+        "secondary_metric": "total_s",
+        "secondary_speedup": 1.24607451896016,
+        "speedup": 1.0018783278651981,
+        "warm": true
+      }
+    },
+    {
+      "limits": {
+        "warmup_required_for_promotion": true
+      },
+      "name": "performance/warm",
+      "ok": true,
+      "values": {
+        "baseline": true,
+        "candidate": true
+      }
+    },
+    {
+      "limits": {
+        "required_for_kinds": [
+          "exact"
+        ]
+      },
+      "name": "off_identity/report",
+      "ok": true,
+      "values": {
+        "kind": "lossy",
+        "off_reports": 0
+      }
+    },
+    {
+      "limits": {
+        "equal": true
+      },
+      "name": "quality/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/frame_count_equal",
+      "ok": true,
+      "values": {
+        "baseline": 124,
+        "candidate": 124
+      }
+    },
+    {
+      "limits": {
+        "max": 1.08,
+        "min": 0.95
+      },
+      "name": "quality/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/sharpness_ratio",
+      "ok": false,
+      "values": {
+        "sharpness_ratio_mean": 0.9106186625274276
+      }
+    },
+    {
+      "limits": {
+        "max": 1.2,
+        "min": 0.85
+      },
+      "name": "quality/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/temporal_jitter_ratio",
+      "ok": true,
+      "values": {
+        "temporal_jitter_ratio_mean": 1.0394734901699791
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/psnr",
+      "ok": true,
+      "values": {
+        "limits": {
+          "psnr_mean_min_db": 20.0
+        },
+        "ok": true,
+        "telemetry": true,
+        "values": {
+          "psnr_mean": 31.05147224355886,
+          "psnr_min": 28.00098416848008
+        }
+      }
+    },
+    {
+      "limits": {
+        "status": "complete"
+      },
+      "name": "quality/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/lpips_available",
+      "ok": false,
+      "values": {
+        "reason": "disabled (pass --lpips <weights dir>)",
+        "status": "deferred"
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/lpips_mean",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_mean_max": 0.2
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_mean": null
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "quality/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/lpips_max",
+      "ok": true,
+      "values": {
+        "limits": {
+          "lpips_max_max": 0.4
+        },
+        "ok": false,
+        "telemetry": true,
+        "values": {
+          "lpips_max": null
+        }
+      }
+    },
+    {
+      "limits": {
+        "required": false
+      },
+      "name": "visual_artifact/judge",
+      "ok": true,
+      "values": {
+        "judge": "none in this runtime",
+        "reason": "no multimodal judge in the fastvideo-rs runtime (sol-engine: gcp/google/gemini-3.5-flash via NVIDIA_API_KEY)"
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "mode": "exact",
+    "policy": {
+      "id": "fastvideo-rs-default",
+      "kind": "lossy",
+      "path": "/opt/fastvideo-rs/scripts/gpu/gate-policy.toml",
+      "source": "sol-engine@6c2f582 evals/README.md + evals/profiles/official_video_t2v.toml + evals/tiers.toml"
+    },
+    "verdict": {
+      "gates": {
+        "artifact": {
+          "detail": {
+            "compare_reports": 1
+          },
+          "status": "pass"
+        },
+        "off_identity": {
+          "detail": {
+            "reason": "no --off-compare report"
+          },
+          "status": "not_applicable"
+        },
+        "official_config": {
+          "detail": {
+            "fields": [
+              "workload.height",
+              "workload.width",
+              "workload.num_frames",
+              "workload.seed",
+              "workload.prompt_sha256",
+              "workload.measured_steps"
+            ]
+          },
+          "status": "pass"
+        },
+        "performance": {
+          "detail": {
+            "aggregate": "single",
+            "baseline": 6.215003972,
+            "candidate": 6.203352043,
+            "metric": "denoise_s",
+            "secondary_metric": "total_s",
+            "secondary_speedup": 1.24607451896016,
+            "speedup": 1.0018783278651981,
+            "warm": true
+          },
+          "status": "fail"
+        },
+        "quantitative_quality": {
+          "detail": {
+            "checks": [
+              {
+                "check": "frame_count_equal",
+                "hard": true,
+                "limits": {
+                  "equal": true
+                },
+                "ok": true,
+                "report": "compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3",
+                "values": {
+                  "baseline": 124,
+                  "candidate": 124
+                }
+              },
+              {
+                "check": "sharpness_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.08,
+                  "min": 0.95
+                },
+                "ok": false,
+                "report": "compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3",
+                "values": {
+                  "sharpness_ratio_mean": 0.9106186625274276
+                }
+              },
+              {
+                "check": "temporal_jitter_ratio",
+                "hard": true,
+                "limits": {
+                  "max": 1.2,
+                  "min": 0.85
+                },
+                "ok": true,
+                "report": "compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3",
+                "values": {
+                  "temporal_jitter_ratio_mean": 1.0394734901699791
+                }
+              },
+              {
+                "check": "psnr",
+                "hard": false,
+                "limits": {
+                  "psnr_mean_min_db": 20.0
+                },
+                "ok": true,
+                "report": "compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3",
+                "values": {
+                  "psnr_mean": 31.05147224355886,
+                  "psnr_min": 28.00098416848008
+                }
+              },
+              {
+                "check": "lpips_available",
+                "hard": true,
+                "limits": {
+                  "status": "complete"
+                },
+                "ok": false,
+                "report": "compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3",
+                "values": {
+                  "reason": "disabled (pass --lpips <weights dir>)",
+                  "status": "deferred"
+                }
+              },
+              {
+                "check": "lpips_mean",
+                "hard": false,
+                "limits": {
+                  "lpips_mean_max": 0.2
+                },
+                "ok": false,
+                "report": "compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3",
+                "values": {
+                  "lpips_mean": null
+                }
+              },
+              {
+                "check": "lpips_max",
+                "hard": false,
+                "limits": {
+                  "lpips_max_max": 0.4
+                },
+                "ok": false,
+                "report": "compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3",
+                "values": {
+                  "lpips_max": null
+                }
+              }
+            ],
+            "lpips_max_max": null,
+            "lpips_mean_max": null,
+            "lpips_mean_median": null,
+            "psnr_mean_median": 31.05147224355886,
+            "reports": 1
+          },
+          "status": "fail"
+        },
+        "visual_artifact": {
+          "detail": {
+            "reason": "no multimodal judge in the fastvideo-rs runtime (sol-engine: gcp/google/gemini-3.5-flash via NVIDIA_API_KEY)"
+          },
+          "status": "deferred"
+        }
+      },
+      "kind": "lossy",
+      "promotion_blockers": [
+        "performance:fail",
+        "quantitative_quality:fail"
+      ],
+      "speedup": 1.0018783278651981,
+      "tier": null,
+      "verdict": "fail"
+    }
+  },
+  "elapsed_s": 0.00100198,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": "check failed: 3 check(s) failed: gate-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/performance/speedup: {\"aggregate\":\"single\",\"baseline\":6.215003972,\"candidate\":6.203352043,\"metric\":\"denoise_s\",\"secondary_metric\":\"total_s\",\"secondary_speedup\":1.24607451896016,\"speedup\":1.0018783278651981,\"warm\":true} vs limits {\"min_speedup_for_experimental\":1.03,\"min_speedup_for_promotion\":1.1}; gate-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/quality/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/sharpness_ratio: {\"sharpness_ratio_mean\":0.9106186625274276} vs limits {\"max\":1.08,\"min\":0.95}; gate-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/quality/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3/lpips_available: {\"reason\":\"disabled (pass --lpips <weights dir>)\",\"status\":\"deferred\"} vs limits {\"status\":\"complete\"}",
+  "git_sha": null,
+  "stage": "gate-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3",
+  "status": "fail"
+}

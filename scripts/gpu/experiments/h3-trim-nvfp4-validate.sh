@@ -9,6 +9,7 @@
 #   h3-trim-nvfp4-validate.sh status <pod>    status.tsv, the log tail, DONE
 #   h3-trim-nvfp4-validate.sh fetch <pod> DIR results.tgz (logs, reports, benchmark.json, parity clips) into DIR
 #   h3-trim-nvfp4-validate.sh down <pod>      delete the pod and check it is gone
+#   h3-trim-nvfp4-validate.sh print-start     the pod's start command (what up sends)
 #
 # Nothing is written to R2 or a volume: the R2 plan (presigned GETs from the read-only key, valid 3 h) reaches the pod
 # gzip + base64 in its env (FV_PLAN_GZ_B64_0.._3, 60 kB each), and the scripts and binary are the image's. With stock in EU-RO-1 the
@@ -41,8 +42,20 @@ rest() {
 gql() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$RUNPOD_API_KEY") -H 'content-type: application/json' "$GQL" --data-binary @-; }
 balance() { gql <<<'{"query":"{ myself { clientBalance } }"}' | jq -r '.data.myself.clientBalance // empty'; }
 
+# The pod's start command, as `up` sends it (`print-start` prints it): the
+# self-delete library first (fv_self_delete, docs/adr/0023-lab-report-and-ci-bridge.md §4),
+# then the run; 20 min after DONE the pod deletes itself, retried each minute.
+start_cmd() {
+  printf '%s\n' "$(<"$HERE/../lib/self-delete.sh")"
+  printf '%s' 'mkdir -p /opt/fv /srv && printf %s "${FV_PLAN_GZ_B64_0:-}" "${FV_PLAN_GZ_B64_1:-}" "${FV_PLAN_GZ_B64_2:-}" "${FV_PLAN_GZ_B64_3:-}" | base64 -d | gunzip >/opt/fv/plan.json && chmod 600 /opt/fv/plan.json \
+&& (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
+&& export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
+&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && unset FV_PLAN_GZ_B64_0 FV_PLAN_GZ_B64_1 FV_PLAN_GZ_B64_2 FV_PLAN_GZ_B64_3 && bash /opt/fastvideo-rs/scripts/gpu/experiments/h3-trim-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
+sleep 1200; if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then until fv_self_delete /tmp/self-delete.log; do sleep 60; done; fi; sleep infinity'
+}
 cmd="${1:-}"
 case "$cmd" in
+  print-start) start_cmd ;;
   up)
     image="${2:?runtime image built from this branch}"
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
@@ -76,11 +89,7 @@ case "$cmd" in
     python3 "$HERE/h3-trim-nvfp4-plan.py" "$tmp/plan.json" "$mode" "$tmp/plan.b64"
     # The runtime image has curl and coreutils but no Python: uv brings one (r2-fetch.py, the prompt files). The pod
     # deletes itself 20 min after DONE (Runpod's pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the backstop regardless.
-    start='mkdir -p /opt/fv /srv && printf %s "${FV_PLAN_GZ_B64_0:-}" "${FV_PLAN_GZ_B64_1:-}" "${FV_PLAN_GZ_B64_2:-}" "${FV_PLAN_GZ_B64_3:-}" | base64 -d | gunzip >/opt/fv/plan.json && chmod 600 /opt/fv/plan.json \
-&& (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
-&& export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
-&& (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && unset FV_PLAN_GZ_B64_0 FV_PLAN_GZ_B64_1 FV_PLAN_GZ_B64_2 FV_PLAN_GZ_B64_3 && bash /opt/fastvideo-rs/scripts/gpu/experiments/h3-trim-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
-sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
+    start="$(start_cmd)"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
     payload="$(jq -n --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" --arg name "fv-h3trim-nvfp4-$(date -u +%m%d%H%M)" --arg image "$image" --arg vol "$FV_EU_VOLUME_ID" \

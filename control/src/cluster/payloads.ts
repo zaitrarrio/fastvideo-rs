@@ -46,13 +46,20 @@ exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
 // The backstop watchdog (a subshell in the background): at the deadline or
 // below the balance floor the pod deletes itself (fv-control's cron enforces
 // the deadline too). Edge fronts and standalone pods run it.
+// FV_BACKSTOP_API_KEY is fv-control's own account key (envCtx runpodApiKey =
+// RUNPOD_API_KEY, the key it creates and deletes pods with over REST), not
+// the pod-scoped RUNPOD_API_KEY Runpod injects, which REST refuses with a 403
+// (docs/adr/0023-lab-report-and-ci-bridge.md §4). Only a 2xx or a 404 (the pod
+// is already gone) ends the attempts; any other answer is retried.
 const WATCHDOG = `(
   command -v curl >/dev/null 2>&1 || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl; } >/fvstate/watchdog-apt.log 2>&1
   bye() {
     echo "[watchdog] $1: deleting \${RUNPOD_POD_ID}" >&2
-    for _ in 1 2 3; do
-      curl -sS --max-time 30 -X DELETE -H "Authorization: Bearer $FV_BACKSTOP_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" >/dev/null && break
-      sleep 5
+    for i in 1 2 3; do
+      c=$(curl -sS --max-time 30 -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: Bearer $FV_BACKSTOP_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID")
+      case "$c" in 2??|404) break ;; esac
+      echo "[watchdog] delete: HTTP \${c:-none}" >&2
+      [ "$i" = 3 ] || sleep 5
     done
   }
   n=0

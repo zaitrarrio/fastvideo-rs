@@ -127,6 +127,44 @@ describe("the edge boot", () => {
     expect(l).toContain("graphql");
     expect(l).toContain("-X DELETE -H Authorization: Bearer rpa_K https://rest.runpod.io/v1/pods/pod42");
   });
+  it("counts only a 2xx or a 404 as deleted and retries anything else (a 403 included)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fvwd-"));
+    const log = join(dir, "curl.log");
+    // A curl stand-in: records the DELETEs and answers each with $FAKE_CODE (curl's -w).
+    writeFileSync(join(dir, "curl"), `#!/bin/sh\ncase "$*" in *DELETE*) echo "$*" >> ${log}; [ -n "$FAKE_CODE" ] && printf %s "$FAKE_CODE"; exit $FAKE_RC;; esac\n`);
+    chmodSync(join(dir, "curl"), 0o755);
+    // One deadline round, then out; the 5 s pauses between attempts are counted.
+    const sleeps = join(dir, "sleeps");
+    const once = watchdog
+      .replaceAll("/fvstate", dir)
+      .replace("bye deadline; sleep 60; continue", "bye deadline; exit 0")
+      .replace('[ "$i" = 3 ] || sleep 5', `[ "$i" = 3 ] || echo 5 >> ${sleeps}`)
+      .replace(/sleep (30|60|5)/g, "sleep 0.01");
+    expect(once).toContain("bye deadline; exit 0");
+    expect(once).toContain(`|| echo 5 >> ${sleeps}`);
+    const pauses = () => readFileSync(sleeps, "utf8").trim().split("\n").filter(Boolean).length;
+    const attempts = (code: string, rc = "0") => {
+      writeFileSync(log, "");
+      writeFileSync(sleeps, "");
+      const r = spawnSync("bash", ["-c", once], {
+        env: { PATH: `${dir}:${process.env.PATH}`, RUNPOD_POD_ID: "pod42", FV_BACKSTOP_API_KEY: "rpa_K", FV_CLUSTER_DEADLINE: "0", FV_MIN_BALANCE: "8.25", FAKE_CODE: code, FAKE_RC: rc },
+        timeout: 5000,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stderr.toString()).not.toContain("rpa_K");
+      return readFileSync(log, "utf8").trim().split("\n").filter(Boolean).length;
+    };
+    expect(attempts("200")).toBe(1);
+    expect(pauses()).toBe(0);
+    expect(attempts("204")).toBe(1);
+    expect(attempts("404")).toBe(1);
+    expect(attempts("403")).toBe(3);
+    // A pause between attempts, none after the last (as watchdog.rs).
+    expect(pauses()).toBe(2);
+    expect(attempts("500")).toBe(3);
+    expect(attempts("000", "7")).toBe(3);
+    expect(attempts("", "6")).toBe(3);
+  });
 });
 
 describe("the families view", () => {

@@ -1091,6 +1091,45 @@ ran (pod id, $/hr), result, cost.
   clippy, `cargo test -p fastvideo-engine-service` (141),
   `cargo test --workspace --lib` (2109) and `scripts/serve/check.sh` green.
   No GPU cost.
+- 2026-10-25 17:20Z, coordinator: D1b GPU comparisons for the remaining
+  five tiers, runtime image `sha-b0d0bb8` (main), fv-lab built from main.
+  RTX PRO 6000 pods in EU-RO-1 with `bz0ofkfx45`, each family once through
+  `fv-lab pod up --wait` and once through `runpod-http.sh run`, same cells
+  (ADR-0019 §9.5), then `fv-lab-compare-runs.sh`, all exit 0:
+  - `fastvideo`: 4 arms the same (2 ran, 248 frames each byte-identical; 2 skipped in both, `h3-8step` not on
+    the EU volume); 8 reports and the gate report the same;
+  - `h3arms`: 13 arms the same (2 ran byte-identical, 11 `h3-8step` arms skipped in both); 14 reports the same;
+  - `trace`: 2 arms the same (1 ran, 248 frames byte-identical; 1 skipped in both);
+  - `ltxfps`: 2 arms the same (1 ran, 121 frames byte-identical; 1 skipped in both);
+  - `ltxvae`: 2 arms the same (both ran, 121 frames each byte-identical); the compare the same.
+  All nine D1b tiers now match the script, so their `runpod-matrix.sh`
+  branches can go (ADR-0019 §9.5). fv-deploy's floor projection refused one
+  launch while five pods were up, as designed. About 75 GPU-minutes, ~$3.
+  Evidence: `artifacts/runpod/{fastvideo,h3arms,trace,ltxfps,ltxvae}/b0d0bb8-*`,
+  comparison outputs in `artifacts/runpod/d1b-compare/`.
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): every remaining
+  in-pod REST self-delete (ADR-0023 §4's 25 sites: scripts/serve/e2e,
+  family-pool, sol-bench, the experiments) now calls GraphQL `podTerminate`
+  through one `fv_self_delete` (`scripts/gpu/lib/self-delete.sh`, embedded by
+  the launchers, inline and checked in the pod scripts,
+  `scripts/gpu/tests/self-delete.test.sh` in `control.yml`); fv-control's and
+  fv-boot's watchdogs keep REST with the account key but retry anything but
+  a 2xx or 404. Branch `claude/pod-self-delete-graphql` (draft PR); build
+  pod gates green (`cargo test --workspace --lib` 2123, fastvideo-deploy
+  138); no GPU cost. Live check by the coordinator pending.
+- 2026-10-25, coordinator: #183's self-delete verified live on a CPU pod
+  (`inuqqmjr86ah47`, the library then `sleep 60; until fv_self_delete …`:
+  gone on the first attempt, 17:01:57Z). Review fixes, Claude
+  (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): launchers render through
+  `start_cmd` / `print-start`, the check runs each rendered self-delete and
+  checks order, aliases and every path (`self-delete.yml`); the key goes to
+  curl on stdin, `.resp` removed, `_fvsd_code`; goldens regenerated. Build
+  pod: fmt, clippy, fastvideo-deploy (138), fastvideo-lab all features (100),
+  `cargo test --workspace --lib` (2123) green. No GPU cost.
+- 2026-10-25 17:32Z, coordinator: the shipped `fv_self_delete` (c22aef8a,
+  key on stdin through `-H @-`) re-checked live on a CPU pod
+  (`xtsg3gdqwf4gny`, python:3.12-slim with Debian curl): gone on the first
+  attempt, 17:31:57Z. No GPU cost.
 - 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): the ten gated
   families leave `runpod-matrix.sh` on `claude/d1c-retire-script-branches`
   (draft PR, ADR-0019 §10): their `case` branches and `tae_gated_cell`
