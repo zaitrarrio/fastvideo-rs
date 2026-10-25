@@ -1057,6 +1057,11 @@ ran (pod id, $/hr), result, cost.
   tokio's paused clock never gets past (first block at a wheel slot
   boundary, then f64 deadline a few ulps after the clock); it now ticks
   within 1 µs of the deadline, and the paused-time tests run under a 60 s
-  real-time guard. Build pod `l3d75u8a8zhw47` answered 404, so the
-  200-iteration loop and the gates were not run; analysis and a Python
-  replay of the paused clock only. No cost.
+  real-time guard. Verified by the coordinator on the replacement build
+  pod `awavskcvtbs0ub` (`l3d75u8a8zhw47`'s host had no free vCPU; cloned onto
+  the same `fv-build` volume and the old pod deleted): the regression test
+  passes and fails with the slack set to 0 (anchor 3 ms: a 2.2e-16 s wait);
+  20 of 20 repeated runs of the session-limit tests pass; fmt, workspace
+  clippy, `cargo test -p fastvideo-engine-service` (141),
+  `cargo test --workspace --lib` (2109) and `scripts/serve/check.sh` green.
+  No GPU cost.

@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: none
-- Verification: `metronome_waits_always_move_a_millisecond_clock` (replays the paused clock for 1003 anchors; fails before the fix, e.g. at the 1.984 s anchor); a Python replay of tokio 1.53.1's millisecond wheel and Rust's float conversions: 6370 of 20000 whole-ms anchors spun before, 0 after, 0 of 20000 slow-first-block runs after; build-pod gates and the loop pending (pod 404 at 2026-10-24)
+- Verification: `metronome_waits_always_move_a_millisecond_clock` (replays the paused clock for 1003 anchors; fails before the fix, e.g. at the 1.984 s anchor); a Python replay of tokio 1.53.1's millisecond wheel and Rust's float conversions: 6370 of 20000 whole-ms anchors spun before, 0 after, 0 of 20000 slow-first-block runs after; on the build pod the test fails with the slack set to 0 and passes with it, 20 of 20 repeated runs of the session-limit tests pass, and fmt, workspace clippy, the engine-service tests, the workspace lib tests and `scripts/serve/check.sh` are green
 
 ### FVID · 2026-10-24 · FVID-2026-10-24-gold-tier-gpu-and-settings
 - Trigger: review of PR #151 (plan D2): two gold files carried oracle numbers measured on an H100 for an RTX PRO 6000 tier (`fasth3-4step-vsa` PSNR / LPIPS, `ltx25-ref2v` PSNR), and H3 latencies measured before the MXFP8 video-decoder default (2026-10-14) sat in the fields while `fasth3-trim-nvfp4` gapped its numbers for the same reason
