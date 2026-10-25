@@ -11,6 +11,11 @@
 //! 3. (`up` only, not in a plan) the image is pinned to its digest.
 //!
 //! The name is equal because the golden is made with `FV_POD_PREFIX=fv-lab`.
+//!
+//! For the tiers of `scripts/gpu/fv-lab-retired.sh` the fixture is frozen
+//! (ADR-0019 §10): `runpod-http.sh run` hands them to `fv-lab pod up`, so the
+//! body is the one the script sent before its branch went, and fv-lab's pod
+//! must stay it unless a PR changes both on purpose.
 
 use std::path::PathBuf;
 

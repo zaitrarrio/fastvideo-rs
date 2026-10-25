@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan | b200 | ... | trace
+# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan | b200 | ... | b4a
 # One process per family. Continues to the next cell on failure.
-# Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) except in
-# the rtx6000 parity family, which runs the full Spark bridge.
+# Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) unless a
+# cell sets it.
 #
-# Evaluation layer (precision, fastvideo and eval families):
+# Retired to fv-lab (docs/adr/0019-fv-lab.md §10): the families of
+# fv-lab-retired.sh (rtx6000, techniques, b6, rtx5090, fastvideo, h3arms,
+# trace, ltxfps, ltxvae, precision) passed their GPU gate and their branches
+# are gone; they are tiers of lab/ (`fv-lab run <tier>` on the box,
+# `runpod-http.sh run` / `fv-lab pod up` from a host). This script refuses
+# them (exit 2), and `headline` runs its cells of them through fv-lab.
+#
+# Evaluation layer (eval family and the gen cells):
 #   every H3 / LTX-2 gen cell writes <cell>/benchmark.json (timings per stage
 #   and step, peak memory, TeaCache / Sol-Attn / VSA / FFN-chunk / quantized
 #   linear counters; see crates/fastvideo-gpucheck/src/benchmark.rs).
@@ -20,13 +27,14 @@
 # FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
-# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b6 (or b4a, b4b, b4c, b4c2). A
-# dry run neither fetches the baseline binary nor the TAE files, and with
+# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b4a (or b4b, b4c, b4c2). A
+# dry run does not fetch the baseline binary, and with
 # FV_DRY_RUN_GATES=<file> it appends one line per gated cell ("arm", its
-# verify-weights.sh cell, its TAE file or -) and per promotion gate ("gate",
-# kind, OFF arm or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh).
+# verify-weights.sh cell, -) and per promotion gate ("gate", kind, OFF arm
+# or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh) when a
+# family moves to lab/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|b6|b4a|b4b|b4c|b4c2|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|precision-debug|fuse|oracle|writer|eval|ltxoffload|b4a|b4b|b4c|b4c2|h3attn (retired to fv-lab: fv-lab-retired.sh)}"
 DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
@@ -47,6 +55,8 @@ mkdir -p "$RUNS" "$SCRATCH/gpucheck-out/logs" "$SCRATCH/fv-libs"
 . "$(dirname "${BASH_SOURCE[0]}")/cuda-13.pins"
 # shellcheck source=scripts/gpu/b4-verdict.sh
 . "$(dirname "${BASH_SOURCE[0]}")/b4-verdict.sh"
+# shellcheck source=scripts/gpu/fv-lab-retired.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fv-lab-retired.sh"
 # cudarc looks for libcudnn.so (unversioned). The image ships the pinned SONAME.
 if [[ ! -e $SCRATCH/fv-libs/libcudnn.so ]]; then
   bash /opt/fastvideo-rs/scripts/gpu/remote.sh env >/tmp/fv-env.json 2>/tmp/fv-env.err || true
@@ -220,10 +230,11 @@ gated_cell() {
     return 0
   fi
   # FV_DRY_RUN_GATES=<file> (dry run only): one "arm\t<name>\t<weight
-  # cell>\t<TAE file or ->" line per gated cell, for the goldens of fv-lab
+  # cell>\t-" line per gated cell, for the goldens of fv-lab
   # (scripts/gpu/tests/fv-lab-goldens.sh); gate_cells adds its "gate" lines.
+  # The last column was the TAE file of a tae_gated_cell (none left here).
   if [[ "$DRY_RUN" == 1 && -n "${FV_DRY_RUN_GATES:-}" ]]; then
-    printf 'arm\t%s\t%s\t%s\n' "$name" "$wcell" "${dry_tae:--}" >>"$FV_DRY_RUN_GATES"
+    printf 'arm\t%s\t%s\t-\n' "$name" "$wcell" >>"$FV_DRY_RUN_GATES"
   fi
   if [[ "$DRY_RUN" != 1 ]] && ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
     mkdir -p "$RUNS/$name"
@@ -238,41 +249,15 @@ gated_cell() {
 # Tiny-autoencoder weights (madebyollin/taehv): the volume copy
 # ($W/auxiliary/tae, complete and hash-checked by verify-weights.sh aux) is
 # read in place. Without it they live on the container disk: runpod-http's
-# start command fetches them, and this fetches again only when a file is
-# missing (fetch-tae.sh copies from the volume first, then downloads). TAE
-# cells do not gate on verify-weights.sh; a TAE cell whose file is absent is
-# recorded as skipped.
+# start command fetches them (taeh3, taeltx2_3_wide; the Wan families fetch
+# their own with fetch_taehv.sh). The TAE-gated arms (tae_gated_cell) left
+# with the families retired to fv-lab (fv-lab-retired.sh; a cell's `tae`,
+# docs/adr/0019-fv-lab.md §9.2).
 if [[ -z "${FV_TAE_DIR:-}" && -f "$AUX/tae/.complete" ]]; then
   TAE="$AUX/tae"
 else
   TAE="${FV_TAE_DIR:-$SCRATCH/tae}"
 fi
-TAEH3="$TAE/taeh3.safetensors"
-TAELTX="$TAE/taeltx2_3_wide.safetensors"
-tae_fetched=""
-dry_tae=""
-tae_gated_cell() {
-  local name="$1" file="$2"
-  shift 2
-  if [[ -n "${FV_CELLS:-}" && " $FV_CELLS " != *" $name "* ]]; then
-    log "skip $name (not in FV_CELLS)"
-    return 0
-  fi
-  # A dry run neither fetches nor checks the file: it logs the command.
-  if [[ "$DRY_RUN" != 1 && ! -f "$file" && -z "$tae_fetched" ]]; then
-    tae_fetched=1
-    bash "$(dirname "${BASH_SOURCE[0]}")/fetch-tae.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 || true
-  fi
-  if [[ "$DRY_RUN" != 1 && ! -f "$file" ]]; then
-    mkdir -p "$RUNS/$name"
-    log "SKIP $name: $file missing (see tae-fetch.log)"
-    write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"tae weights missing"}' "$name" "$FAMILY")"
-    return 0
-  fi
-  dry_tae="$file"
-  gated_cell "$name" "$@"
-  dry_tae=""
-}
 
 # Paired-clip quality gate (`fv-gpucheck compare-clips`): the candidate
 # cell's frames against the baseline cell's, sol-engine collect_run.py
@@ -683,8 +668,38 @@ Audio: male speech, clear voice, quiet room"
   headline)
     # The headline configurations on one pod (a new GPU type, one run):
     # cells borrowed from other families, all written into this run dir.
-    sub() { local fam="$1"; shift
-      FV_RUNS_DIR="$RUNS" FV_CELLS="$*" bash "${BASH_SOURCE[0]}" "$fam" || true; }
+    # Its four source families are retired to fv-lab (fv-lab-retired.sh), so
+    # `fv-lab run <tier> --cells …` runs them, into this run dir
+    # (FV_RUNS_DIR), with this run's work, scratch and per-cell cap.
+    lab="${FV_LAB_BIN:-$(command -v fv-lab || echo /opt/fastvideo-rs/target/release/fv-lab)}"
+    if [[ "$DRY_RUN" != 1 ]]; then
+      # A tier's cells carry their own prompt and seed; fv-lab only warns, so
+      # refuse here rather than run something other than what was asked.
+      for v in FV_PROMPTS FV_PROMPT FV_SEED; do
+        if [[ -n "${!v:-}" ]]; then
+          log "FATAL: $v is set, and headline's cells run through fv-lab, which takes prompts and seeds only from the cells (docs/adr/0019-fv-lab.md §7, §10)"
+          exit 2
+        fi
+      done
+      [[ -x "$lab" ]] || { log "FATAL: fv-lab missing at $lab (FV_LAB_BIN); headline's cells run through it"; exit 2; }
+    fi
+    sub() { local fam="$1" rc=0; shift
+      # A dry run is fv-lab's (the tier's lines), or without fv-lab its command line.
+      if [[ "$DRY_RUN" == 1 ]]; then
+        if [[ -x "$lab" ]]; then
+          FV_RUNS_DIR="$RUNS" FV_WORK="$WORK" FV_SCRATCH="$SCRATCH" "$lab" run "$fam" --cells "$*" --dry-run || true
+        else
+          log "dry-run fv-lab: $(printf '%q ' "$lab" run "$fam" --cells "$*")"
+        fi
+        return 0
+      fi
+      FV_RUNS_DIR="$RUNS" FV_WORK="$WORK" FV_SCRATCH="$SCRATCH" FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-300}" \
+        "$lab" run "$fam" --cells "$*" || rc=$?
+      # As the recursive `runpod-matrix.sh <family> || true` before it: a
+      # failed tier is logged and the next one runs; its arms' summaries carry
+      # their exits, and it never set headline's own exit (matrix_exit).
+      (( rc == 0 )) || log "FAIL fv-lab run $fam exit=$rc"
+      return 0; }
     sub fastvideo ${FV_HEADLINE_FASTVIDEO:-fasth3-4step-vsa-480p fasth3-8step-480p fasth3-4step-vsa-768p fasth3-8step-768p}
     sub rtx6000 ${FV_HEADLINE_SOLH3:-sol-h3}
     sub rtx5090 ${FV_HEADLINE_ROUTES:-h3-768p-fullopt ltx25-4k5s-sol}
@@ -1377,280 +1392,6 @@ Audio: male speech, clear voice, quiet room"
         --warm \
         --clip "$RUNS/ltx20-distilled-8step/frames"
     ;;
-  rtx6000)
-    # RTX PRO 6000 parity baseline: H3, FastH3 and LTX-2.5 on the sol-engine
-    # single-GPU contracts. Every cell first proves its weight tree complete
-    # (verify-weights.sh); an incomplete tree is recorded, not run.
-    h3_common=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder auto
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-      --warm
-    )
-    gated_cell fasth3-8step fasth3-8step \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
-        --adaln-cache "$RUNS/fasth3-8step-adaln.cache" \
-        --clip-dir "$RUNS/fasth3-8step/frames" "${h3_common[@]}"
-    gated_cell fasth3-4step-vsa fasth3-4step-vsa \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
-        --adaln-cache "$RUNS/fasth3-4step-vsa-adaln.cache" \
-        --clip-dir "$RUNS/fasth3-4step-vsa/frames" "${h3_common[@]}"
-    # Sol-H3 4-step on one GPU is dense upstream (engine.py refuses Sol at world_size 1).
-    gated_cell sol-h3 sol-h3 \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3 \
-        --adaln-cache "$RUNS/sol-h3-adaln.cache" \
-        --clip-dir "$RUNS/sol-h3/frames" "${h3_common[@]}"
-    # The upstream single-GPU Sol-Attn + TeaCache route (RTX4090/5090 profile).
-    gated_cell sol-h3-rtx h3-base \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
-        --adaln-cache "$RUNS/sol-h3-rtx-adaln.cache" \
-        --clip-dir "$RUNS/sol-h3-rtx/frames" "${h3_common[@]}"
-    # The RTX 5090 `fullopt` arm: the same Sol route plus TeaCache 0.10 / 5 / 1.
-    gated_cell sol-h3-rtx-teacache h3-base \
-      env FASTVIDEO_H3_SOL_CACHE=teacache \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
-        --adaln-cache "$RUNS/sol-h3-rtx-adaln.cache" \
-        --clip-dir "$RUNS/sol-h3-rtx-teacache/frames" "${h3_common[@]}"
-    # Upstream Spark stage 1 is W8A8 FP8 (stage1.py `W8A8_FP8_after_BF16_LoRA_merge`).
-    gated_cell sol-h3-spark sol-h3-spark \
-      env FASTVIDEO_LTX2_WEIGHTS="$W/ltx25" \
-        FASTVIDEO_H3_QUANT=w8a8 FASTVIDEO_BF16_ACT=1 \
-        FASTVIDEO_H3_UPSCALER="$W/upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors" \
-        FASTVIDEO_H3_LTX_ADAPTER="$W/h3-to-ltx" \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-spark \
-        --adaln-cache "$RUNS/sol-h3-spark-adaln.cache" \
-        --clip-dir "$RUNS/sol-h3-spark/frames" "${h3_common[@]}"
-    gated_cell ltx25-two-stage ltx25-two-stage \
-      "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-        --weights "$W/ltx25" --dit "$W/ltx25" \
-        --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-        --clip "$RUNS/ltx25-two-stage/frames"
-    ;;
-  rtx5090)
-    # The sol-engine RTX 5090 single-GPU suite (config/minimax_h3/rtx5090_*.toml,
-    # models/ltx25/RTX5090) plus 480p. On a 32 GB card the DiT streams from
-    # pinned host memory (FASTVIDEO_DIT_OFFLOAD=auto picks it); the same cells
-    # run resident on larger cards for a like-for-like comparison.
-    h3_common=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder auto
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-      --warm
-    )
-    for res in 768p 480p; do
-      geo=()
-      [[ "$res" == 480p ]] && geo=(--height 480 --width 832)
-      # dense: rtx5090_dense.toml; sol: rtx5090_sol.toml; fullopt: + TeaCache.
-      gated_cell "h3-$res-dense" h3-base \
-        env FASTVIDEO_H3_SOL_ATTN=off \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
-          --adaln-cache "$RUNS/h3-$res-adaln.cache" \
-          --clip-dir "$RUNS/h3-$res-dense/frames" "${h3_common[@]}"
-      gated_cell "h3-$res-sol" h3-base \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
-          --adaln-cache "$RUNS/h3-$res-adaln.cache" \
-          --clip-dir "$RUNS/h3-$res-sol/frames" "${h3_common[@]}"
-      gated_cell "h3-$res-fullopt" h3-base \
-        env FASTVIDEO_H3_SOL_CACHE=teacache \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
-          --adaln-cache "$RUNS/h3-$res-adaln.cache" \
-          --clip-dir "$RUNS/h3-$res-fullopt/frames" "${h3_common[@]}"
-      # fullopt with the TAEH3 video decoder (sol-engine super_acceleration
-      # stage 1 decodes with TAEH3 instead of the official video VAE).
-      tae_gated_cell "h3-$res-fullopt-taeh3" "$TAEH3" h3-base \
-        env FASTVIDEO_H3_SOL_CACHE=teacache \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
-          --taeh3-weights "$TAEH3" \
-          --adaln-cache "$RUNS/h3-$res-adaln.cache" \
-          --clip-dir "$RUNS/h3-$res-fullopt-taeh3/frames" "${h3_common[@]}"
-      # Each technique against the step before it, and fullopt against dense.
-      compare_cells "h3-$res-dense" "h3-$res-sol"
-      compare_cells "h3-$res-sol" "h3-$res-fullopt"
-      compare_cells "h3-$res-dense" "h3-$res-fullopt"
-      compare_cells "h3-$res-fullopt" "h3-$res-fullopt-taeh3"
-    done
-    # LTX-2.5 distilled two-stage: the reference's 4k5s and 1080p20s workloads,
-    # dense vs Sol stage 2, plus 480p-class (768x512, two-stage needs /64).
-    for wl in 4k5s 1080p20s 512p; do
-      geo=(--workload "$wl")
-      [[ "$wl" == 512p ]] && geo=(--height 512 --width 768 --num-frames 121)
-      for arm in sol dense; do
-        flag=()
-        [[ "$arm" == dense ]] && flag=(--dense-stage2)
-        gated_cell "ltx25-$wl-$arm" ltx25-two-stage \
-          "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-            --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" "${flag[@]}" \
-            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-            --clip "$RUNS/ltx25-$wl-$arm/frames"
-      done
-      # Sol stage 2, decoded by the wide LTX tiny autoencoder (sol-engine
-      # models/ltx2.5-refiner: taeltx2_3_wide replaces the conv VAE decode).
-      tae_gated_cell "ltx25-$wl-sol-taehv" "$TAELTX" ltx25-two-stage \
-        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-          --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" \
-          --ltx-tae-weights "$TAELTX" \
-          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-          --clip "$RUNS/ltx25-$wl-sol-taehv/frames"
-      compare_cells "ltx25-$wl-dense" "ltx25-$wl-sol"
-      compare_cells "ltx25-$wl-sol" "ltx25-$wl-sol-taehv"
-    done
-    ;;
-  fastvideo)
-    # Our optimized stack with no sol-engine technique (no Sol-Attn, no
-    # TeaCache): base H3 on the dense flash kernel, the FastH3 distilled VSA
-    # recipes, and LTX-2.5 distilled two-stage with a dense stage 2.
-    h3_common=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder auto
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-      --warm
-      "${PROMPT_ARGS[@]}"
-    )
-    for res in 768p 480p; do
-      geo=()
-      [[ "$res" == 480p ]] && geo=(--height 480 --width 832)
-      gated_cell "h3-base-$res" h3-base \
-        env FASTVIDEO_H3_SOL_ATTN=off \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
-          --adaln-cache "$RUNS/h3-base-$res-adaln.cache" \
-          --clip-dir "$RUNS/h3-base-$res/frames" "${h3_common[@]}"
-      gated_cell "fasth3-8step-$res" fasth3-8step \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step "${geo[@]}" \
-          --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-8step-$res/frames" "${h3_common[@]}"
-      gated_cell "fasth3-4step-vsa-$res" fasth3-4step-vsa \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa "${geo[@]}" \
-          --adaln-cache "$RUNS/fasth3-4step-vsa-$res-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-4step-vsa-$res/frames" "${h3_common[@]}"
-      # The same FastH3 recipes decoded by TAEH3 instead of the official VAE.
-      tae_gated_cell "fasth3-8step-$res-taeh3" "$TAEH3" fasth3-8step \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step "${geo[@]}" \
-          --taeh3-weights "$TAEH3" \
-          --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-8step-$res-taeh3/frames" "${h3_common[@]}"
-      tae_gated_cell "fasth3-4step-vsa-$res-taeh3" "$TAEH3" fasth3-4step-vsa \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa "${geo[@]}" \
-          --taeh3-weights "$TAEH3" \
-          --adaln-cache "$RUNS/fasth3-4step-vsa-$res-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-4step-vsa-$res-taeh3/frames" "${h3_common[@]}"
-      compare_cells "fasth3-8step-$res" "fasth3-8step-$res-taeh3"
-      compare_cells "fasth3-4step-vsa-$res" "fasth3-4step-vsa-$res-taeh3"
-      gate_cells "fasth3-8step-$res" "fasth3-8step-$res-taeh3" lossy
-      gate_cells "fasth3-4step-vsa-$res" "fasth3-4step-vsa-$res-taeh3" lossy
-    done
-    gated_cell fasth3-4step-dense-768p fasth3-4step-dense \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
-        --adaln-cache "$RUNS/fasth3-4step-dense-768p-adaln.cache" \
-        --clip-dir "$RUNS/fasth3-4step-dense-768p/frames" "${h3_common[@]}"
-    for wl in 4k5s 1080p20s 512p; do
-      geo=(--workload "$wl")
-      [[ "$wl" == 512p ]] && geo=(--height 512 --width 768 --num-frames 121)
-      gated_cell "ltx25-$wl" ltx25-two-stage \
-        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-          --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" --dense-stage2 \
-          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-          --clip "$RUNS/ltx25-$wl/frames" "${PROMPT_ARGS[@]}"
-      tae_gated_cell "ltx25-$wl-taehv" "$TAELTX" ltx25-two-stage \
-        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-          --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" --dense-stage2 \
-          --ltx-tae-weights "$TAELTX" \
-          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-          --clip "$RUNS/ltx25-$wl-taehv/frames" "${PROMPT_ARGS[@]}"
-      compare_cells "ltx25-$wl" "ltx25-$wl-taehv"
-      gate_cells "ltx25-$wl" "ltx25-$wl-taehv" lossy
-    done
-    ;;
-  precision)
-    if [[ "${FV_PRECISION_ARM:-all}" == ltx-nvfp4 ]]; then
-      # NVFP4 video FFN (sol-engine nvfp4_ffn.py; profile
-      # ltx2/ltx25_distill_sol_nvfp4) against the bf16 default
-      # (ltx2/ltx25_distill_sol): Sol stage 2, same prompt / seed, warm
-      # process, every run encoding its prompt (no text cache, so both arms
-      # feed the DiT the same contexts). FV_NVFP4_WORKLOADS picks workloads.
-      for wl in ${FV_NVFP4_WORKLOADS:-4k5s 1080p20s}; do
-        for v in bf16 nvfp4; do
-          prof=ltx2/ltx25_distill_sol
-          [[ "$v" == nvfp4 ]] && prof=ltx2/ltx25_distill_sol_nvfp4
-          gated_cell "ltx25-$wl-sol-$v" ltx25-two-stage \
-            "$BIN" --techniques "$prof" --mode fast ltx2 gen --model-version 2.5 \
-              --weights "$W/ltx25" --dit "$W/ltx25" --workload "$wl" \
-              --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-              --no-text-cache --clip "$RUNS/ltx25-$wl-sol-$v/frames" "${PROMPT_ARGS[@]}"
-        done
-        compare_cells "ltx25-$wl-sol-bf16" "ltx25-$wl-sol-nvfp4"
-        gate_cells "ltx25-$wl-sol-bf16" "ltx25-$wl-sol-nvfp4" lossy
-        rm -rf "$RUNS/ltx25-$wl-sol-bf16/frames" "$RUNS/ltx25-$wl-sol-nvfp4/frames"
-      done
-      log "matrix done"
-      write_json "$RUNS/done.json" "$(printf '{"family":"%s","ended":"%s"}' "$FAMILY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
-      exit 0
-    fi
-    # Re-measure the precision switches on the current build against the
-    # baselines of the fastvideo / rtx5090 families (same prompt, seed, warm).
-    h3_common=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder auto
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-      --warm
-    )
-    # The reference recipes replace the retired per-tensor switches
-    # (FASTVIDEO_H3_FFN_FP8 / FASTVIDEO_FP8 on H3): w8a8 = Spark stage 1,
-    # mxfp8 = Sol-H3 blocks 2..=46; both run bf16 activations.
-    for v in f32act bf16act w8a8 mxfp8; do
-      envs=()
-      case "$v" in
-        f32act) envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off) ;;
-        bf16act) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off) ;;
-        w8a8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=w8a8) ;;
-        mxfp8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=mxfp8) ;;
-      esac
-      gated_cell "fasth3-8step-768p-$v" fasth3-8step \
-        env "${envs[@]}" \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
-          --adaln-cache "$RUNS/fasth3-8step-768p-$v-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-8step-768p-$v/frames" "${h3_common[@]}" "${PROMPT_ARGS[@]}"
-    done
-    for v in bf16act w8a8 mxfp8; do
-      compare_cells fasth3-8step-768p-f32act "fasth3-8step-768p-$v"
-      gate_cells fasth3-8step-768p-f32act "fasth3-8step-768p-$v" lossy
-    done
-    # Both FP8 recipes run bf16 activations: against bf16act alone, the
-    # pairs isolate what the weight/activation quantization changes.
-    for v in w8a8 mxfp8; do
-      compare_cells fasth3-8step-768p-bf16act "fasth3-8step-768p-$v"
-    done
-    for v in f32act bf16act fp8 bf16act-fp8; do
-      envs=()
-      case "$v" in
-        f32act) envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off) ;;
-        bf16act) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off) ;;
-        fp8) envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_FP8=1 FASTVIDEO_H3_QUANT=off) ;;
-        bf16act-fp8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_FP8=1 FASTVIDEO_H3_QUANT=off) ;;
-      esac
-      gated_cell "ltx25-4k5s-sol-$v" ltx25-two-stage \
-        env "${envs[@]}" \
-        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-          --weights "$W/ltx25" --dit "$W/ltx25" --workload 4k5s \
-          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-          --clip "$RUNS/ltx25-4k5s-sol-$v/frames" "${PROMPT_ARGS[@]}"
-    done
-    for v in bf16act fp8 bf16act-fp8; do
-      compare_cells ltx25-4k5s-sol-f32act "ltx25-4k5s-sol-$v"
-      gate_cells ltx25-4k5s-sol-f32act "ltx25-4k5s-sol-$v" lossy
-    done
-    ;;
   precision-debug)
     # Two precision-run findings, measured cheaply.
     # (1) LTX-2.5 FASTVIDEO_FP8 at 512p, with and without bf16 activations,
@@ -1712,55 +1453,6 @@ Audio: male speech, clear voice, quiet room"
     compare_cells fasth3-8step-768p-f32act fasth3-8step-768p-bf16act
     compare_cells fasth3-8step-768p-bf16act fasth3-8step-768p-w8a8
     rm -rf "$RUNS"/h3dump-*
-    ;;
-  trace)
-    # FASTVIDEO_GPU_TRACE=1: a CUPTI activity trace of one warm denoise step
-    # (the timed pass's second step; the `[INFO] h3/gpu_trace` line in
-    # stderr.log and `gpu_trace` in gpucheck-out/*.json). Does the GPU go
-    # idle inside a step (CUDA-graph replay worth building), and which
-    # kernels hold the time? Command lines are the fastvideo family's.
-    h3_common=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder auto
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-      --warm
-    )
-    gated_cell fasth3-4step-vsa-768p fasth3-4step-vsa \
-      env FASTVIDEO_GPU_TRACE=1 \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
-        --adaln-cache "$RUNS/fasth3-4step-vsa-768p-adaln.cache" \
-        --clip-dir "$RUNS/fasth3-4step-vsa-768p/frames" "${h3_common[@]}"
-    gated_cell fasth3-8step-768p fasth3-8step \
-      env FASTVIDEO_GPU_TRACE=1 \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
-        --adaln-cache "$RUNS/fasth3-8step-768p-adaln.cache" \
-        --clip-dir "$RUNS/fasth3-8step-768p/frames" "${h3_common[@]}"
-    gated_cell fasth3-4step-dense-768p fasth3-4step-dense \
-      env FASTVIDEO_GPU_TRACE=1 \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
-        --adaln-cache "$RUNS/fasth3-4step-dense-768p-adaln.cache" \
-        --clip-dir "$RUNS/fasth3-4step-dense-768p/frames" "${h3_common[@]}"
-    # LTX-2.5 Sol two-stage: steps count across both stages (8 stage-1, then
-    # 3 stage-2), so step 9 is the second full-resolution stage-2 step.
-    gated_cell ltx25-4k5s-sol ltx25-two-stage \
-      env FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_STEP=9 \
-      "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-        --weights "$W/ltx25" --dit "$W/ltx25" --workload 4k5s \
-        --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-        --clip "$RUNS/ltx25-4k5s-sol/frames"
-    # The long-sequence Sol workload (481 frames), same traced step.
-    gated_cell ltx25-1080p20s-sol ltx25-two-stage \
-      env FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_STEP=9 \
-      "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-        --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s \
-        --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-        --clip "$RUNS/ltx25-1080p20s-sol/frames"
-    for cell in fasth3-4step-vsa-768p fasth3-8step-768p fasth3-4step-dense-768p ltx25-4k5s-sol ltx25-1080p20s-sol; do
-      grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
-    done
     ;;
   attn3)
     # sm_120 dense attention A/B (FVID-2026-09-27-attention-sm120): flash_mma_fwd2
@@ -1918,206 +1610,6 @@ Audio: male speech, clear voice, quiet room"
     gate_cells ltx25-512p-f32act ltx25-512p-bf16act lossy
     for f in "$RUNS"/gate/gate-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
-    done
-    ;;
-  techniques)
-    # The technique composition layer (docs/techniques.md) against the build
-    # before it. Each cell runs three times on this card:
-    #   <cell>-base: the baseline binary (FV_BASELINE_SHA's runtime image,
-    #                scripts/gpu/fetch-baseline.sh) with the legacy flags;
-    #   <cell>-env:  this build, the same command line;
-    #   <cell>-prof: this build, the matching --techniques profile.
-    # compare-clips --off-identity: base vs env and base vs prof must be
-    # byte-identical; benchmark.json carries the timings of each arm.
-    # Every H3 arm has its own text cache and AdaLN cache (keyed by the arm):
-    # its warm-up encodes the prompt and computes the AdaLN projections with
-    # its own binary, its timed pass reads them back. Before 2026-10-24 the
-    # arms shared both caches, so the candidate build's -env / -prof arms read
-    # embeddings and projections the baseline binary wrote, and the identity
-    # did not cover the candidate's H3 text-encoder or AdaLN paths
-    # (docs/techniques.md, docs/adr/0019-fv-lab.md §9.4).
-    # FV_TECH_CELLS narrows the cells (default: all four).
-    base_sha="${FV_BASELINE_SHA:?techniques family needs FV_BASELINE_SHA (the pre-refactor commit)}"
-    BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
-    if [[ "$DRY_RUN" != 1 ]]; then
-      if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
-        log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
-        tee -a "$LOG" <"$RUNS/baseline-fetch.log"
-        exit 2
-      fi
-      log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
-    fi
-    tech_cells="${FV_TECH_CELLS:-fasth3-8step-768p fasth3-4step-vsa-768p h3-480p-fullopt ltx25-512p-sol}"
-    want() { [[ " $tech_cells " == *" $1 "* ]]; }
-    # tech_h3 <cell> <weight cell> <weights dir> <profile> <env for base/env arms> -- <recipe args>
-    tech_h3() {
-      local cell="$1" wcell="$2" weights="$3" profile="$4" envs="$5" prof_envs="$6"
-      shift 6
-      local arm bin extra
-      for arm in base env prof; do
-        bin="$BIN"; extra=("$@")
-        [[ "$arm" == base ]] && bin="$BASE"
-        # shellcheck disable=SC2206
-        local e=($envs)
-        if [[ "$arm" == prof ]]; then
-          # shellcheck disable=SC2206
-          e=($prof_envs)
-          extra=(--techniques "$profile")
-          # Keep the geometry arguments (everything after the recipe pair).
-          local a skip=0
-          for a in "$@"; do
-            if (( skip )); then skip=0; continue; fi
-            [[ "$a" == --h3-recipe ]] && { skip=1; continue; }
-            extra+=("$a")
-          done
-        fi
-        gated_cell "$cell-$arm" "$wcell" \
-          env ${e[@]+"${e[@]}"} \
-          "$bin" --mode fast h3 gen --weights "$W/$weights" "${extra[@]}" \
-            --adaln-cache "$RUNS/$cell-$arm-adaln.cache" \
-            --clip-dir "$RUNS/$cell-$arm/frames" \
-            --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto \
-            --text-cache "$SCRATCH/h3-text-cache-$cell-$arm" --text-weights "$W/h3-base" --warm
-      done
-      compare_cells "$cell-base" "$cell-env" --off-identity
-      compare_cells "$cell-base" "$cell-prof" --off-identity
-    }
-    if want fasth3-8step-768p; then
-      tech_h3 fasth3-8step-768p fasth3-8step h3-8step h3/fasth3_8step "" "" --h3-recipe 8step
-    fi
-    if want fasth3-4step-vsa-768p; then
-      tech_h3 fasth3-4step-vsa-768p fasth3-4step-vsa h3-base h3/fasth3_4step_vsa "" "" --h3-recipe 4step-vsa
-    fi
-    if want h3-480p-fullopt; then
-      # The rtx5090 family's fullopt cell (MXFP8 by default on this card).
-      # The profile mirrors sol-engine's BF16 config, so its arm keeps the
-      # matrix cell's precision with the env override FASTVIDEO_H3_QUANT=mxfp8
-      # (env flags override a profile).
-      tech_h3 h3-480p-fullopt h3-base h3-base h3/rtx5090_fullopt \
-        "FASTVIDEO_H3_SOL_CACHE=teacache" "FASTVIDEO_H3_QUANT=mxfp8" \
-        --h3-recipe sol-h3-rtx --height 480 --width 832
-    fi
-    if want ltx25-512p-sol; then
-      # The rtx5090 family's 512p Sol cell; -prof runs it from the
-      # ltx2/ltx25_distill_sol profile (Sol stage 2 from the profile).
-      # Every arm encodes its prompt (--no-text-cache): a conditioning-cache
-      # hit feeds the DiT the stored f32 connector output instead of the
-      # freshly encoded device tensor, which is not the same clip, so a
-      # shared cache would compare hit against miss. -cache is this build
-      # with the cache on (its warmup writes, its timed pass hits), compared
-      # with -env to show exactly that.
-      for arm in base env prof cache; do
-        bin="$BIN"; extra=(); tc=(--no-text-cache)
-        [[ "$arm" == base ]] && bin="$BASE"
-        [[ "$arm" == prof ]] && extra=(--techniques ltx2/ltx25_distill_sol)
-        [[ "$arm" == cache ]] && tc=(--text-cache "$SCRATCH/ltx2-text-cache-$arm")
-        gated_cell "ltx25-512p-sol-$arm" ltx25-two-stage \
-          "$bin" ${extra[@]+"${extra[@]}"} --mode fast ltx2 gen --model-version 2.5 \
-            --weights "$W/ltx25" --dit "$W/ltx25" --height 512 --width 768 --num-frames 121 \
-            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm "${tc[@]}" \
-            --clip "$RUNS/ltx25-512p-sol-$arm/frames"
-      done
-      compare_cells ltx25-512p-sol-base ltx25-512p-sol-env --off-identity
-      compare_cells ltx25-512p-sol-base ltx25-512p-sol-prof --off-identity
-      compare_cells ltx25-512p-sol-env ltx25-512p-sol-cache
-    fi
-    for f in "$RUNS"/compare/compare-clips-*.json; do
-      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
-    done
-    for c in "$RUNS"/*-base "$RUNS"/*-env "$RUNS"/*-prof; do
-      [[ -d "$c" ]] || continue
-      log "$(basename "$c") $(grep -ho '"denoise_s":[0-9.]*\|"total_s":[0-9.]*' "$c/stderr.log" 2>/dev/null | tail -2 | tr '\n' ' ')"
-    done
-    ;;
-  b6)
-    # Plan B6 (docs/adr/0017-loader-stages.md): byte identity of the load
-    # paths the plan / open / place / fuse split moved, beyond the
-    # `techniques` cells. Each cell runs the baseline binary (FV_BASELINE_SHA's
-    # runtime image, fetch-baseline.sh) and this build with the same command
-    # line and environment, then compare-clips --off-identity. Short on
-    # purpose (480p / 5 s H3 at 4 forwards, 49- to 121-frame LTX); every arm
-    # encodes its prompt (--no-text-cache), so no arm compares a cache hit
-    # with a fresh encode. Only trees of the EU volume (volumes.sh
-    # FV_EU_VOLUME_TREES); the NVFP4 and VDN loads have no tree there.
-    # FV_B6_CELLS narrows the cells (default: all eight).
-    base_sha="${FV_BASELINE_SHA:?b6 family needs FV_BASELINE_SHA (the commit before the loader split)}"
-    BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
-    if [[ "$DRY_RUN" != 1 ]]; then
-      if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
-        log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
-        tee -a "$LOG" <"$RUNS/baseline-fetch.log"
-        exit 2
-      fi
-      log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
-    fi
-    # A cold H3 load reads ~70 GB from the volume before its first step.
-    export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-900}"
-    fx="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
-    b6_cells="${FV_B6_CELLS:-b6-solh3-tree b6-solh3-merge b6-4stepvsa-merge b6-h3-streamed b6-h3-ref2va b6-ltx25-ref2v b6-ltx25-a2v-guided b6-ltx25-offload-cpu}"
-    # b6_pair <cell> <weight cell> <env K=V ... or -> <fv-gpucheck args ...>:
-    # <cell>-base (the baseline binary) and <cell>-pr (this build), the
-    # frames under <cell>-<arm>/frames, then the byte-identity compare.
-    b6_pair() {
-      local cell="$1" wcell="$2" envs="$3" arm bin
-      shift 3
-      [[ " $b6_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B6_CELLS)"; return 0; }
-      # shellcheck disable=SC2206
-      local e=($envs)
-      [[ "$envs" == - ]] && e=()
-      for arm in base pr; do
-        bin="$BIN"
-        [[ "$arm" == base ]] && bin="$BASE"
-        gated_cell "$cell-$arm" "$wcell" \
-          env ${e[@]+"${e[@]}"} "$bin" "$@" "$RUNS/$cell-$arm/frames"
-        # What the load decided, for the report: the stage logs both arms write.
-        grep -h 'h3 dit\|h3 text encoder: auto\|h3 dit offload\|h3 i2v encoder\|h3 sol-h3\|h3 fasth3-preview\|h3 lora merge\|ltx2 dit offload\|ltx2 offload\|ltx2 ic-lora\|ltx2 lora\|load/io' \
-          "$RUNS/$cell-$arm/stderr.log" 2>/dev/null | sed "s/^/[$cell-$arm] /" | tee -a "$LOG" >/dev/null || true
-      done
-      compare_cells "$cell-base" "$cell-pr" --off-identity
-    }
-    # H3 at 480p / 5 s, the auto text encoder (resident FP8 on this card),
-    # each arm encoding its prompt. b6_pair appends the clip directory.
-    h3_b6=(--mode fast h3 gen --weights "$W/h3-base" --height 480 --width 832 --seconds 5
-      --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-text-cache --no-mp4)
-    # 1. sol-h3 from h3-base/transformer_prequant_sol-h3_mxfp8 (the served
-    #    tree; selection keyed on the linear route and the quant mode).
-    b6_pair b6-solh3-tree sol-h3 - "${h3_b6[@]}" --h3-recipe sol-h3 --clip-dir
-    # 2. sol-h3 without the tree: the Sol-H3 adapter merged in place.
-    b6_pair b6-solh3-merge sol-h3 "FASTVIDEO_H3_DIT_TREE=off" "${h3_b6[@]}" --h3-recipe sol-h3 --clip-dir
-    # 3. FastH3 4-step VSA without the tree: the Preview LoRA merged at load.
-    b6_pair b6-4stepvsa-merge fasth3-4step-vsa "FASTVIDEO_H3_DIT_TREE=off" "${h3_b6[@]}" --h3-recipe 4step-vsa --clip-dir
-    # 4. Streamed: a 32 GiB budget on this card (the auto encoder streams,
-    #    the DiT streams, the decoders load for the decode only).
-    b6_pair b6-h3-streamed fasth3-4step-vsa "FASTVIDEO_DEVICE_BUDGET_GIB=32" "${h3_b6[@]}" --h3-recipe 4step-vsa --clip-dir
-    # 5. Ref2VA: transformer_ref from h3-ref2va, one image reference, the
-    #    vision tower resident beside the auto encoder; base-4step, dense.
-    b6_pair b6-h3-ref2va h3-ref2va - "${h3_b6[@]}" --h3-recipe base-4step --dense \
-      --ref-root "$W/h3-ref2va" --ref "$fx/ti2v-beach-832x480.jpg" --clip-dir
-    # LTX-2.5 two-stage, streamed Gemma, each arm encoding its prompt.
-    ltx_b6=(--mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --seed "$SEED"
-      --two-stage --text streamed --no-text-cache)
-    # 6. Reference-to-video: the Ingredients IC-LoRA attached unfused at
-    #    load, fused at stage 1 (the oracle's sheet and bucket, 49 frames).
-    b6_pair b6-ltx25-ref2v ltx25-ref2v - "${ltx_b6[@]}" --dit "$W/ltx25" \
-      --height 896 --width 1536 --num-frames 49 --dense-stage2 \
-      --reference "$fx/ltx-ref-sheet-768x448.png" \
-      --ic-lora "$W/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors" \
-      --prompt "Reference sheet: a rocky coastline at golden hour and a cartoon orange crab. Generated video: the crab scuttles across the wet sand." \
-      --clip
-    # 7. Guided audio-to-video on the dev DiT: the distilled LoRA pipeline
-    #    (DiT loaded on the first request, base kept in host memory), 8
-    #    stage-1 steps at 512p for 49 frames.
-    b6_pair b6-ltx25-a2v-guided ltx25-a2v-guided - "${ltx_b6[@]}" --dit "$W/ltx25-dev/transformer_full" \
-      --height 512 --width 768 --num-frames 49 --dense-stage2 --guided --num-inference-steps 8 \
-      --audio "$fx/speech-flite-44k.flac" \
-      --prompt "A close-up of a woman with short dark hair talking directly to the camera in a bright living room." \
-      --clip
-    # 8. --offload cpu at 512p: the DiT and Gemma streamed, the decoders on
-    #    the device around their calls.
-    b6_pair b6-ltx25-offload-cpu ltx25-two-stage - "${ltx_b6[@]}" --dit "$W/ltx25" \
-      --height 512 --width 768 --num-frames 121 --offload cpu --prompt "$PROMPT" --clip
-    for f in "$RUNS"/compare/compare-clips-b6-*.json; do
-      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done
     ;;
   b4a)
@@ -2645,87 +2137,6 @@ Audio: male speech, clear voice, quiet room"
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done
     ;;
-  h3arms)
-    # FastH3 8-step technique arms on the technique layer (docs/techniques.md),
-    # each gated against the plain FastH3 8-step cell of the same run:
-    #   -sol     profiles/h3/fasth3_8step_sol: Sol-Attn on every step and block
-    #   -tea     profiles/h3/fasth3_8step_teacache: TeaCache free to reuse the
-    #            middle steps 3-4 of 8 (threshold 1.0, retain 3, cooldown 3)
-    #   -soltea  both
-    # at 768p and 480p; at 480p also each arm decoded by TAEH3 (compared with
-    # its own twin, isolating the decoder, and with the plain baseline), and
-    # FastH3 4-step VSA 480p against its TAEH3 twin. Meant for FV_PROMPTS=5
-    # and FV_LPIPS=1 (the gate reads the per-prompt reports). The text encoder
-    # streams: the prompts are encoded once, into the shared cache.
-    h3_common=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder streamed
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-      --warm
-      "${PROMPT_ARGS[@]}"
-    )
-    arm_profile() {
-      case "$1" in
-        sol) echo h3/fasth3_8step_sol ;;
-        tea) echo h3/fasth3_8step_teacache ;;
-        soltea) echo h3/fasth3_8step_sol_teacache ;;
-      esac
-    }
-    for res in 768p 480p; do
-      geo=()
-      [[ "$res" == 480p ]] && geo=(--height 480 --width 832)
-      base="fasth3-8step-$res"
-      gated_cell "$base" fasth3-8step \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step "${geo[@]}" \
-          --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
-          --clip-dir "$RUNS/$base/frames" "${h3_common[@]}"
-      for arm in sol tea soltea; do
-        gated_cell "$base-$arm" fasth3-8step \
-          "$BIN" --techniques "$(arm_profile "$arm")" --mode fast h3 gen --weights "$W/h3-8step" "${geo[@]}" \
-            --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
-            --clip-dir "$RUNS/$base-$arm/frames" "${h3_common[@]}"
-        grep -h "h3 teacache step" "$RUNS/$base-$arm/stderr.log" 2>/dev/null | grep -c REUSE \
-          | sed "s/^/[$base-$arm] teacache reused steps (all passes): /" | tee -a "$LOG" || true
-      done
-      if [[ "$res" == 480p ]]; then
-        for arm in sol tea soltea; do
-          tae_gated_cell "$base-$arm-taeh3" "$TAEH3" fasth3-8step \
-            "$BIN" --techniques "$(arm_profile "$arm")" --mode fast h3 gen --weights "$W/h3-8step" "${geo[@]}" \
-              --taeh3-weights "$TAEH3" \
-              --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
-              --clip-dir "$RUNS/$base-$arm-taeh3/frames" "${h3_common[@]}"
-        done
-      fi
-      for arm in sol tea soltea; do
-        compare_cells "$base" "$base-$arm"
-        gate_cells "$base" "$base-$arm" lossy
-      done
-      if [[ "$res" == 480p ]]; then
-        for arm in sol tea soltea; do
-          compare_cells "$base-$arm" "$base-$arm-taeh3"
-          compare_cells "$base" "$base-$arm-taeh3"
-          gate_cells "$base" "$base-$arm-taeh3" lossy
-        done
-      fi
-    done
-    gated_cell fasth3-4step-vsa-480p fasth3-4step-vsa \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832 \
-        --adaln-cache "$RUNS/fasth3-4step-vsa-480p-adaln.cache" \
-        --clip-dir "$RUNS/fasth3-4step-vsa-480p/frames" "${h3_common[@]}"
-    tae_gated_cell fasth3-4step-vsa-480p-taeh3 "$TAEH3" fasth3-4step-vsa \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832 \
-        --taeh3-weights "$TAEH3" \
-        --adaln-cache "$RUNS/fasth3-4step-vsa-480p-adaln.cache" \
-        --clip-dir "$RUNS/fasth3-4step-vsa-480p-taeh3/frames" "${h3_common[@]}"
-    compare_cells fasth3-4step-vsa-480p fasth3-4step-vsa-480p-taeh3
-    gate_cells fasth3-4step-vsa-480p fasth3-4step-vsa-480p-taeh3 lossy
-    for f in "$RUNS"/gate/gate-*.json; do
-      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
-    done
-    ;;
   h3attn)
     # H3 attention arms (docs/techniques.md "H3 attention arms"): each arm is
     # a profiles/h3/*.toml, gated (lossy) against the recipe's plain profile
@@ -2808,98 +2219,6 @@ Audio: male speech, clear voice, quiet room"
       rtx5090_fullopt_d6 rtx5090_fullopt_t125 rtx5090_fullopt_fp8attn
     for f in "$RUNS"/gate/gate-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
-    done
-    ;;
-  ltxfps)
-    # Serve E4: LTX-2.5 distilled two-stage at 1080p (the 1920x1088 engine
-    # canvas) at the frame rates the APIs accept beyond 24. Each cell checks
-    # the frame count and the mp4's rate and audio track with ffprobe
-    # (gen.mp4_frames_and_rate, benchmark.json "mp4_probe"). The 25 fps cell
-    # and the silent one (--skip-audio-decode) also run serve E2's frame sink
-    # beside the PNG writer and check its frames byte for byte against the
-    # PNGs of the same run (gen.sink_frames_identical). fasth3-8step-sink does
-    # the same for H3 (FV_SINK_CHECK=1).
-    frames="${FV_LTXFPS_FRAMES:-121}"
-    for fps in ${FV_LTXFPS:-25 48 50}; do
-      extra=()
-      [[ "$fps" == 25 ]] && extra=(--sink-check)
-      gated_cell "ltx25-1080p-${fps}fps" ltx25-two-stage \
-        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-          --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s \
-          --num-frames "$frames" --frame-rate "$fps" \
-          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
-          --clip "$RUNS/ltx25-1080p-${fps}fps/frames" "${extra[@]}"
-    done
-    gated_cell ltx25-1080p-50fps-silent ltx25-two-stage \
-      "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-        --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s \
-        --num-frames "$frames" --frame-rate 50 --skip-audio-decode --sink-check \
-        --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
-        --clip "$RUNS/ltx25-1080p-50fps-silent/frames"
-    gated_cell fasth3-8step-sink fasth3-8step \
-      env FV_SINK_CHECK=1 \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
-        --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto \
-        --text-cache "$SCRATCH/h3-text-cache" --text-weights "$W/h3-base" \
-        --clip-dir "$RUNS/fasth3-8step-sink/frames"
-    for cell in $(ls "$RUNS" 2>/dev/null | grep -E '^(ltx25-1080p|fasth3-8step-sink)'); do
-      grep -h 'PASS\|FAIL' "$RUNS/$cell/stderr.log" 2>/dev/null | grep -E 'sink|mp4_frames|no_wav|gen\.frames' \
-        | cut -c1-300 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
-    done
-    ;;
-  ltxvae)
-    # LTX-2.5 conv VAE decode alone (`ltx2 vae-bench`), at the sol-engine
-    # 4k5s and 1080p20s geometries on synthetic latents, tiled as gen tiles:
-    # the channels-last bf16 decoder against the f32 streaming one, each
-    # warm, CUPTI-traced (FASTVIDEO_GPU_TRACE_DECODE, set FV_VAE_TRACE=0 to
-    # time untraced) and with frames for compare-clips. The fast cell also
-    # checks its first tile against the streaming decoder
-    # (FASTVIDEO_LTX_VAE_CHECK). FV_VAE_GEN=1 adds one cold (no --warm) gen
-    # per workload that saves its latents, then decodes those with the
-    # streaming decoder, for a real-content PSNR.
-    trace="${FV_VAE_TRACE:-1}"
-    for wl in ${FV_VAE_WORKLOADS:-4k5s 1080p20s}; do
-      for dec in fast streaming; do
-        gated_cell "ltxvae-$wl-$dec" ltx25-two-stage \
-          env FASTVIDEO_GPU_TRACE_DECODE="$trace" FASTVIDEO_LTX_VAE_CHECK=1 \
-          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
-            --decoder "$dec" --warm --clip "$RUNS/ltxvae-$wl-$dec/frames"
-      done
-      compare_cells "ltxvae-$wl-streaming" "ltxvae-$wl-fast"
-      # Untraced timings (CUPTI adds per-launch cost), and the fast decoder
-      # with every cuDNN algorithm timed per shape during the warm-up.
-      if [[ "${FV_VAE_UNTRACED:-1}" == 1 ]]; then
-        for dec in fast streaming; do
-          gated_cell "ltxvae-$wl-$dec-untraced" ltx25-two-stage \
-            "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
-              --decoder "$dec" --warm
-        done
-        # With gen's writer (PNG frames + ffmpeg mp4) behind the drain, as in
-        # a generation: decode_video_s then includes writer backpressure.
-        gated_cell "ltxvae-$wl-fast-mp4" ltx25-two-stage \
-          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
-            --decoder fast --warm --mp4 --clip "$RUNS/ltxvae-$wl-fast-mp4/frames"
-        gated_cell "ltxvae-$wl-fast-tune" ltx25-two-stage \
-          env FASTVIDEO_LTX_VAE_CONV_ALGO=tune \
-          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
-            --decoder fast --warm
-      fi
-      if [[ "${FV_VAE_GEN:-0}" == 1 ]]; then
-        gated_cell "ltx25-$wl-gen" ltx25-two-stage \
-          env FASTVIDEO_LTX2_SAVE_LATENTS="$RUNS/latents-$wl" FASTVIDEO_GPU_TRACE_DECODE="$trace" \
-          "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-            --weights "$W/ltx25" --dit "$W/ltx25" --workload "$wl" --dense-stage2 \
-            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
-            --clip "$RUNS/ltx25-$wl-gen/frames"
-        gated_cell "ltx25-$wl-gen-streaming" ltx25-two-stage \
-          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
-            --latents "$RUNS/latents-$wl" --decoder streaming --warm \
-            --clip "$RUNS/ltx25-$wl-gen-streaming/frames"
-        compare_cells "ltx25-$wl-gen-streaming" "ltx25-$wl-gen"
-      fi
-    done
-    for cell in $(ls "$RUNS" 2>/dev/null | grep -E '^(ltxvae|ltx25-.*-gen)'); do
-      grep -h 'vae-bench\|vae_check\|video decode' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -3 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
     ;;
   determinism)
@@ -3868,7 +3187,12 @@ Audio: male speech, clear voice, quiet room"
     done
     ;;
   *)
-    log "FATAL: unknown family $FAMILY"
+    if fv_lab_retired "$FAMILY"; then
+      # docs/adr/0019-fv-lab.md §10: the tier runs only through fv-lab now.
+      log "FATAL: $FAMILY is retired to fv-lab (fv-lab-retired.sh): fv-lab run $FAMILY on the box, runpod-http.sh run or fv-lab pod up --family $FAMILY from a host"
+    else
+      log "FATAL: unknown family $FAMILY"
+    fi
     exit 2
     ;;
 esac

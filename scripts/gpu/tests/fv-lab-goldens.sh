@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
-# The goldens of fv-lab (docs/adr/0019-fv-lab.md §5, §6, D1b): what today's
-# scripts do for every family lab/tiers.toml carries as a tier (rtx6000 since
-# D1a, the D1b families since), from the scripts themselves, for fixed inputs.
-# fv-lab must do the same (crates/fastvideo-lab/tests/{dry_run,payload_golden}.rs).
+# The goldens of fv-lab (docs/adr/0019-fv-lab.md §5, §6, D1b, §10): what the
+# scripts do for every family lab/tiers.toml carries as a tier, from the
+# scripts themselves, for fixed inputs. fv-lab must do the same
+# (crates/fastvideo-lab/tests/{dry_run,payload_golden}.rs).
 #
 #   fv-lab-goldens.sh           regenerate crates/fastvideo-lab/fixtures/*
 #   fv-lab-goldens.sh --check   fail when a script's output differs from the fixture
 #
-# Fixtures, per family <f> (every [[tier]] name of lab/tiers.toml; for the
-# `gold` tier, generated from lab/gold/ and no script family, only the pod body):
+# Frozen since the GPU gate (ADR-0019 §10): a family of fv-lab-retired.sh
+# passed its GPU gate and lost its runpod-matrix.sh branch, so the scripts can
+# no longer produce its fixtures. Its three fixtures are fv-lab's own goldens
+# from then on: never regenerated here, only checked to be present (and the
+# family to be a tier with no branch left). A change to such a tier's commands
+# or pod is deliberate: the fixture is edited in the same PR, and the Rust
+# tests hold fv-lab to it.
+#
+# Fixtures, per family <f> (every [[tier]] name of lab/tiers.toml but the
+# frozen ones; for the `gold` tier, generated from lab/gold/ and no script
+# family, only the pod body):
 #   <f>-dry-run.txt            FV_DRY_RUN=1 runpod-matrix.sh <f>: every log line of the
 #                              family without its [HH:MM:SS] stamp, the volume at
 #                              /workspace (its auxiliary/tae complete), the container disk at /fvscratch, the
@@ -46,6 +55,19 @@ VOLUME="bz0ofkfx45 EU-RO-1"
 FAMILIES="$(awk '/^\[\[tier\]\]/ { t = 1; next } t && /^name = "/ { gsub(/^name = "|"$/, ""); print; t = 0 }' "$ROOT/lab/tiers.toml")"
 [[ -n "$FAMILIES" ]] || { echo "fv-lab-goldens: no [[tier]] in lab/tiers.toml" >&2; exit 2; }
 [[ "$ROOT" =~ ^[A-Za-z0-9/._-]+$ ]] || { echo "fv-lab-goldens: repository path $ROOT has shell-special characters" >&2; exit 2; }
+# shellcheck source=scripts/gpu/fv-lab-retired.sh
+. "$ROOT/scripts/gpu/fv-lab-retired.sh"
+MATRIX="$ROOT/scripts/gpu/runpod-matrix.sh"
+# A family's `case` branch in runpod-matrix.sh: a label of the top-level
+# `case "$FAMILY" in` (two-space indent; `name)`, `name )`, `a|name)`, a
+# trailing comment all count; nested cases' labels do not).
+has_branch() {
+  sed -n '/^case "\$FAMILY" in$/,/^esac$/p' "$MATRIX" \
+    | grep -qE "^  ([A-Za-z0-9_-]+ *\| *)*$1( *\| *[A-Za-z0-9_-]+)* *\)"
+}
+for f in $FV_LAB_RETIRED; do
+  grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: retired family $f is no tier of lab/tiers.toml" >&2; exit 2; }
+done
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -57,6 +79,7 @@ clean() { env -i PATH="$PATH" HOME="$HOME" LC_ALL=C "$@"; }
 
 list="$(clean bash "$ROOT/scripts/gpu/verify-weights.sh" --list)"
 FIXTURES=()
+FROZEN=()
 for FAMILY in $FAMILIES; do
   # The `gold` tier (docs/adr/0023-lab-report-and-ci-bridge.md §3) is no
   # runpod-matrix.sh family: its cells come from lab/gold/ and fv-lab's own dry
@@ -68,6 +91,19 @@ for FAMILY in $FAMILIES; do
     FIXTURES+=("runpod-http-$FAMILY.json")
     continue
   fi
+  # Frozen since the GPU gate: present, and no branch left to regenerate them from.
+  if fv_lab_retired "$FAMILY"; then
+    if has_branch "$FAMILY"; then
+      echo "fv-lab-goldens: $FAMILY is retired (fv-lab-retired.sh) but runpod-matrix.sh still has its branch" >&2
+      exit 2
+    fi
+    FROZEN+=("$FAMILY-dry-run.txt" "$FAMILY-gates.tsv" "runpod-http-$FAMILY.json")
+    continue
+  fi
+  has_branch "$FAMILY" || {
+    echo "fv-lab-goldens: tier $FAMILY has no runpod-matrix.sh branch and is not in fv-lab-retired.sh (freeze its fixtures there, or restore the branch)" >&2
+    exit 2
+  }
   rm -rf "$TMP/work" "$TMP/scratch" "$TMP/pairs.txt"
   # The volume's TAE copy is complete, as on bz0ofkfx45 (auxiliary/tae): the
   # script's $TAE is then /workspace/weights/auxiliary/tae, not the container
@@ -166,8 +202,12 @@ if clean bash "$CMP" "$TMP/rj" "$TMP/rk" >/dev/null; then echo "fv-lab-goldens: 
 for bad in rc rd re rf rh ri; do
   if clean bash "$CMP" "$TMP/ra" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a difference ($bad)" >&2; rc=1; fi
 done
+for f in ${FROZEN[@]+"${FROZEN[@]}"}; do
+  [[ -s "$OUT/$f" ]] || { echo "fv-lab-goldens: frozen fixture $f is missing or empty (crates/fastvideo-lab/fixtures)" >&2; rc=1; continue; }
+  [[ "$CHECK" == 1 ]] || echo "frozen ${OUT#"$ROOT"/}/$f (fv-lab-retired.sh: not regenerated)"
+done
 mkdir -p "$OUT"
-for f in "${FIXTURES[@]}" frames-sample.sha256.json; do
+for f in ${FIXTURES[@]+"${FIXTURES[@]}"} frames-sample.sha256.json; do
   [[ -s "$TMP/new/$f" ]] || { echo "fv-lab-goldens: $f came out empty" >&2; rc=1; continue; }
   if [[ "$CHECK" == 1 ]]; then
     if ! diff -u "$OUT/$f" "$TMP/new/$f"; then

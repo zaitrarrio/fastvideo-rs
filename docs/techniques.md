@@ -377,7 +377,8 @@ run as the published one. LTX-2 declares no step-cache capability, so
 
 ### On the GPU
 
-`FV_FAMILY=techniques` (`scripts/gpu/runpod-matrix.sh`) fetches the
+The `techniques` tier (`lab/cells/techniques-*.toml`; fv-lab only since its
+GPU gate, ADR-0019 §10, its `runpod-matrix.sh` branch is gone) fetches the
 pre-refactor binary from its runtime image (`scripts/gpu/fetch-baseline.sh
 <sha>`: the OCI registry API, one 13 MB layer) and runs each cell three times
 on one card: the old binary with the matrix cell's command line (`-base`),
@@ -387,8 +388,10 @@ and `-prof` byte-identical to `-base`; `benchmark.json` holds each arm's
 timings.
 
 ```bash
-FV_FAMILY=techniques FV_EXTRA_ENV="FV_BASELINE_SHA=<pre-refactor sha7>" \
-  scripts/gpu/runpod-http.sh run <this sha7>
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <this sha7> --family techniques \
+  --baseline-sha <pre-refactor sha7> --yes --wait
+# or, the same command through the old driver:
+FV_FAMILY=techniques FV_BASELINE_SHA=<pre-refactor sha7> scripts/gpu/runpod-http.sh run <this sha7>
 ```
 
 Cells: FastH3 8-step 768p (MXFP8 default), FastH3 4-step VSA 768p, the H3
