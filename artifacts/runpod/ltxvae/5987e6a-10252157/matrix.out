@@ -1,0 +1,31 @@
+[21:57:38] [ltxvae] matrix start image=2327ed48ab74bffe
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-e2ecd4d2-ce67-4c29-dfc6-8d09f5117e5f)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[21:57:38] [ltxvae] skip ltxvae-4k5s-fast (not in FV_CELLS)
+[21:57:38] [ltxvae] skip ltxvae-4k5s-streaming (not in FV_CELLS)
+[21:57:38] [ltxvae] skip compare ltxvae-4k5s-streaming--ltxvae-4k5s-fast (frames missing)
+[21:57:38] [ltxvae] skip ltxvae-4k5s-fast-untraced (not in FV_CELLS)
+[21:57:38] [ltxvae] skip ltxvae-4k5s-streaming-untraced (not in FV_CELLS)
+[21:57:38] [ltxvae] skip ltxvae-4k5s-fast-mp4 (not in FV_CELLS)
+[21:57:38] [ltxvae] skip ltxvae-4k5s-fast-tune (not in FV_CELLS)
+[21:57:39] [ltxvae] ▶ ltx25-4k5s-gen  env FASTVIDEO_LTX2_SAVE_LATENTS=/fvscratch/runs/ltxvae/5987e6a-10252157/latents-4k5s FASTVIDEO_GPU_TRACE_DECODE=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --workload 4k5s --dense-stage2 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --clip /fvscratch/runs/ltxvae/5987e6a-10252157/ltx25-4k5s-gen/frames  (wall cap 3600s; 0=none)
+[22:04:30] [ltxvae] ok ltx25-4k5s-gen  411s  
+[22:04:36] [ltxvae] ▶ ltx25-4k5s-gen-streaming  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 4k5s --latents /fvscratch/runs/ltxvae/5987e6a-10252157/latents-4k5s --decoder streaming --warm --clip /fvscratch/runs/ltxvae/5987e6a-10252157/ltx25-4k5s-gen-streaming/frames  (wall cap 3600s; 0=none)
+[22:05:38] [ltxvae] ok ltx25-4k5s-gen-streaming  62s  /fvscratch/runs/ltxvae/5987e6a-10252157/ltx25-4k5s-gen-streaming/stderr.log:ltx2 vae-bench streaming: decode 28.52s (vae 28.39s, rgb 0.77s, push 0.00s, wait 0.15s, mp4 tail 0.00s), png frames after 0.90s, peak Some(16706) MiB
+[22:05:45] [ltxvae] compare ltx25-4k5s-gen-streaming--ltx25-4k5s-gen exit=0 "psnr_mean":56.012920669820694 
+[22:05:45] [ltxvae] skip ltxvae-1080p20s-fast (not in FV_CELLS)
+[22:05:45] [ltxvae] skip ltxvae-1080p20s-streaming (not in FV_CELLS)
+[22:05:45] [ltxvae] skip compare ltxvae-1080p20s-streaming--ltxvae-1080p20s-fast (frames missing)
+[22:05:45] [ltxvae] skip ltxvae-1080p20s-fast-untraced (not in FV_CELLS)
+[22:05:45] [ltxvae] skip ltxvae-1080p20s-streaming-untraced (not in FV_CELLS)
+[22:05:45] [ltxvae] skip ltxvae-1080p20s-fast-mp4 (not in FV_CELLS)
+[22:05:45] [ltxvae] skip ltxvae-1080p20s-fast-tune (not in FV_CELLS)
+[22:05:45] [ltxvae] skip ltx25-1080p20s-gen (not in FV_CELLS)
+[22:05:45] [ltxvae] skip ltx25-1080p20s-gen-streaming (not in FV_CELLS)
+[22:05:45] [ltxvae] skip compare ltx25-1080p20s-gen-streaming--ltx25-1080p20s-gen (frames missing)
+[ltx25-4k5s-gen] [fastvideo] ltx2 video decode 13.38s: vae 12.20s, rgb 0.73s, push 1.91s, wait 1.30s
+[ltx25-4k5s-gen] [fastvideo] ltx2 video decode + mp4 14.05s (mp4 tail 0.67s); png frames after it 0.88s
+[ltx25-4k5s-gen-streaming] [fastvideo] ltx2 video decode 28.52s: vae 28.39s, rgb 0.77s, push 0.00s, wait 0.15s
+[ltx25-4k5s-gen-streaming] ltx2 vae-bench streaming: decode 28.52s (vae 28.39s, rgb 0.77s, push 0.00s, wait 0.15s, mp4 tail 0.00s), png frames after 0.90s, peak Some(16706) MiB
+[22:05:45] [ltxvae] matrix done
+matrix_exit=0

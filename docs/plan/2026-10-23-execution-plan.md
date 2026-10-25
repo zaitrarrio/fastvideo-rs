@@ -90,7 +90,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | active (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); D1b merged #176: `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` as tiers (cell schema: baseline arms, TAE arms, bare `env`, paired gates), a golden per tier, the family inventory in ADR-0019 §9; GPU fv-lab = script for all nine moved tiers (`techniques`, `b6`, `precision`, `rtx5090` 2026-10-24; `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae` 2026-10-25, #184; every arm that ran byte-identical); the ten tiers retired from the script in #185 (ADR-0019 §10: branches deleted, `runpod-http.sh run`/`plan` call `fv-lab pod up`, goldens frozen, `scripts/gpu/fv-lab-retired.sh`); D1d first slice in PR `claude/d1d-gate-verdict` (ADR-0019 §11): a typed `[verdict]` step in the cell schema, `b4a` as a tier (goldens from the script, branch kept), `fv-lab gate <run dir>` (gates and verdicts re-evaluated offline), GPU gate for `b4a` pending (§11.6, ~$1.10); two dropped modes restored as tiers `precision-nvfp4` and `ltxvae-gen` (owner decision 2026-10-25, ADR-0019 §12: goldens from the script at `5987e6a4`, frozen; GPU check vs that commit pending); next: D1c `report`, D1d `oracle`, D1e one-offs, the remaining script families) |
+| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | active (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); D1b merged #176: `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` as tiers (cell schema: baseline arms, TAE arms, bare `env`, paired gates), a golden per tier, the family inventory in ADR-0019 §9; GPU fv-lab = script for all nine moved tiers (`techniques`, `b6`, `precision`, `rtx5090` 2026-10-24; `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae` 2026-10-25, #184; every arm that ran byte-identical); the ten tiers retired from the script in #185 (ADR-0019 §10: branches deleted, `runpod-http.sh run`/`plan` call `fv-lab pod up`, goldens frozen, `scripts/gpu/fv-lab-retired.sh`); D1d first slice merged #188 (ADR-0019 §11): a typed `[verdict]` step in the cell schema, `b4a` as a tier, `fv-lab gate <run dir>` (gates and verdicts re-evaluated offline); `b4a` GPU gate passed on `e82b6b7` 2026-10-25 (fv-lab = script: frames byte-identical, 5 verdict files the same, both `fv-lab gate --check` clean) and its script branch retired in PR `claude/d1d-retire-b4a` (§11.6: `fv-lab-retired.sh`, goldens frozen, `FV_B4A_CELLS` refused, `tests/verdict.rs` on a frozen copy of the branch); two dropped modes restored as tiers `precision-nvfp4` and `ltxvae-gen` (owner decision 2026-10-25, merged #191, ADR-0019 §12: goldens from the script at `5987e6a4`, frozen; GPU check passed 2026-10-25, fv-lab at `8b18d89` vs the script at `5987e6a4`, both tiers' 4k5s arms byte-identical, evidence recorded in PR `claude/d1d-retire-b4a`); next: D1c `report`, D1d `oracle`, D1e one-offs, the remaining script families) |
 | D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | merged (#151) |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | active (CPU part in PR `claude/d3-d4-lab-report`, ADR-0023: `fv-lab report tiers [--runs <run set>] [--check]` renders one run set, a fixture run-set golden; `docs/perf/tiers.md` committed with `Run set: none`, every variant not measured, because no committed run set measured a gold cell; next: the GPU gold runs, `fv-lab pod up --family gold` or `gold-run.yml`, then the table and the gold files' `[last_validated]` from that run set) |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | active (PR `claude/d3-d4-lab-report`, ADR-0023: `fv-lab gold check` (parse, resolve against `families/`, `git cat-file -e`, the age table; warn-only, `--max-age-days` opt-in) in `gold-check.yml` with the table in the job summary; the `gold` tier (one serve-engine cell per gold file, generated by `fv-lab gold cells`, drift-tested) and `fv-lab run gold --all`; `gold-run.yml`, `workflow_dispatch` only, refuses without `RUNPOD_API_KEY`: **owner decision** to add that secret) |
@@ -1255,6 +1255,34 @@ ran (pod id, $/hr), result, cost.
   `pod up --extra-env` refuse what no tier reads (the same keys as
   `runpod-http.sh`), the mode's setting first, all keys in one message;
   `runpod-matrix.sh` names the restored tier. No GPU cost.
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): `b4a` retired from
+  the script on `claude/d1d-retire-b4a` (draft PR, ADR-0019 §11.6), after its
+  GPU gate on `e82b6b7` (base `e93e357`, cell `b4a-h3-4step-tea`; fv-lab pod
+  `j25pn9a2xc1ll8`, script pod `ik1hd9tz9cay82`; `fv-lab-compare-runs.sh
+  --expect-verdicts 5` exit 0, 124 frames per arm byte-identical, both
+  `matrix_exit=0`, both `fv-lab gate --check` 0 differences; evidence in
+  `artifacts/runpod/b4a/`): `b4a` in `FV_LAB_RETIRED`, its branch deleted
+  (the other 32 families' dry runs unchanged), its fixtures frozen,
+  `runpod-http.sh` routes it to `fv-lab pod up` and refuses `FV_B4A_CELLS`
+  (now in `FV_LAB_NOT_READ` / `knobs::MODE_KNOBS`), `tests/verdict.rs` runs a
+  frozen copy of the branch (`fixtures/b4a-script/`). Follow-up recorded: the
+  runtime image job pushed `sha-e82b6b7` before its fv-lab check failed (the
+  first digest's fv-lab predated `[verdict]`). No GPU cost in this PR (the
+  gate's two pods were the coordinator's).
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): review fixes on the
+  `b4a` retirement PR (#195, main `f74c7761` merged in): the frozen b4a
+  script copy now vendors everything it sources and fakes the frame's host
+  paths (CUDA links, the image build id); `runpod-http.sh` names `b4a` in the
+  `FV_B4A_CELLS` refusal only for `b4a`, and refuses the pair selectors
+  `FV_TECH_CELLS` / `FV_B6_CELLS` / `FV_B4A_CELLS` from the host environment
+  for every retired tier. Also recorded there: the coordinator's #191 GPU
+  check (ADR-0019 §12 "Result"): `ltxvae-gen` and `precision-nvfp4` at
+  `8b18d89` against the script at `5987e6a4`, 4k5s arms byte-identical (121
+  and 242 frames per arm), `fv-lab-compare-runs.sh` exit 0 and
+  `matrix_exit=0` on all four pods (fv-lab `wgzwvt5mjcn1nv`,
+  `ymrchzi0z3eixy`; script `64opofps1163h8`, `kxhdp1v19w151y`; all deleted);
+  the NVFP4 pair's lossy gate verdict `fail` on both sides, as in 2026-09.
+  No GPU cost in this PR.
 - 2026-10-25 21:45Z, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): serve-image
   run 286 (c3ceb96c, C4) hung in "Smoke-check the serve images" on the
   refusal check. Root cause: main's `FV_PREBUILT_STALE=latest` took the

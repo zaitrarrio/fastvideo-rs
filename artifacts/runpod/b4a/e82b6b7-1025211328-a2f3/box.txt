@@ -1,0 +1,2 @@
+image_build_id=97b760f817e10bed
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07

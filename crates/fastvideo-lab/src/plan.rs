@@ -1164,7 +1164,8 @@ pub enum Step {
     /// A cell with a verdict (D1d): its own steps (arms, compares, gates), the
     /// verdict's evidence after each of its arms, then the verdict file. Run
     /// only when one of the verdict's arms is selected (`FV_CELLS`), as the
-    /// script runs only the cells `FV_B4A_CELLS` names.
+    /// script ran only the cells `FV_B4A_CELLS` named (its `b4a` branch,
+    /// retired, ADR-0019 §11.6).
     Verdict {
         cell: String,
         verdict: Verdict,

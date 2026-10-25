@@ -1,0 +1,13 @@
+{
+  "id": "ymrchzi0z3eixy",
+  "name": "fv-lab-precision-nvfp4-8b18d89-1025215713-20dd",
+  "family": "precision-nvfp4",
+  "tag": "8b18d89-1025215713-20dd",
+  "sha": "8b18d89",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:cb91ad2a0ed66cc474622c298798eb72f4b3e967f06f60aeb1ab236ba7fc5f0a",
+  "url": "https://ymrchzi0z3eixy-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792965436.9137642,
+  "cap_s": 14400
+}

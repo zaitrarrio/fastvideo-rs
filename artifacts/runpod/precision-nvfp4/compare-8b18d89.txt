@@ -1,0 +1,6 @@
+same ltx25-4k5s-sol-bf16: {"exit":0,"skipped":null}, 242 frames byte-identical
+same ltx25-4k5s-sol-nvfp4: {"exit":0,"skipped":null}, 242 frames byte-identical
+same compare/compare-clips-ltx25-1080p20s-sol-bf16--ltx25-1080p20s-sol-nvfp4.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-4k5s-sol-bf16--ltx25-4k5s-sol-nvfp4.json: {"status":"pass","off_identity":"different"}
+same gate/gate-ltx25-4k5s-sol-bf16--ltx25-4k5s-sol-nvfp4.json: present
+2 arm(s) the same (2 ran with byte-identical frames, 0 skipped in both, 0 failed in both), 3 report(s) the same, 0 verdict file(s) the same, 0 difference(s)
