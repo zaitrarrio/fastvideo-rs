@@ -72,13 +72,22 @@ const bootFields = (spec: EndpointSpec) => {
   return bash ? { dockerEntrypoint: ["bash", "-c", bash], dockerStartCmd: [] as string[] } : { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] };
 };
 
-/** The rules fv-control holds a serverless endpoint to, as a Launch's guards (ADR-0018 §7.2). Runpod reports no
- * serverless price and fv-control checks none (fv-deploy's known gap, ADR-0018 §5.3), nor a worker's readiness
- * (Runpod replaces workers): 0 there means "not checked by fv-control". The floor: create, scale-up and invoke need
- * the account floor plus the serverless margin (ops.ts assertFloor; the $8 floor of CLAUDE.md is its least). The cap:
- * deadline_min (the cron's backstop: scale to 0 or delete), 0 without one. */
+/**
+ * The rules fv-control holds a serverless endpoint to, as a Launch's guards (ADR-0018 §7.2, §7.3).
+ *
+ * READ THIS BEFORE CONSUMING THESE GUARDS (a ledger, a plan printout, fv-deploy's guard code): fv-control checks no
+ * serverless price (Runpod reports none at create: fv-deploy's own known gap, ADR-0018 §5.3) and no worker readiness
+ * (Runpod starts and replaces the workers). Launch v1 has no way to say "not checked" (every guard is a required
+ * number; ADR-0018 §7.3 proposes `null` for it), so those fields carry the FAIL-CLOSED values of fv-deploy's own
+ * semantics: `max_usd_per_hr` 0 (no offer is under it: fv-deploy would create nothing), `ready_timeout_s` 0. Never
+ * show them as a price cap or a timeout; `SLS_GUARDS_NOT_CHECKED` names them. What is real: `ready_cycles` 1 (one
+ * endpoint per create; fv-control never replaces it), `min_balance_usd` 8 (the least of what create, scale-up and
+ * invoke need: the account floor plus the serverless margin, ops.ts assertFloor), `cap_s` = deadline_min (the cron's
+ * backstop: scale to 0 or delete; 0 without one).
+ */
+export const SLS_GUARDS_NOT_CHECKED = ["max_usd_per_hr", "ready_timeout_s"] as const;
 export function endpointGuards(spec: Pick<EndpointSpec, "deadline_min">): Guards {
-  return { max_usd_per_hr: 0, min_balance_usd: 8, cap_s: (spec.deadline_min ?? 0) * 60, ready_timeout_s: 0, ready_cycles: 0 };
+  return { max_usd_per_hr: 0, min_balance_usd: 8, cap_s: (spec.deadline_min ?? 0) * 60, ready_timeout_s: 0, ready_cycles: 1 };
 }
 
 /** A GPU endpoint as fv-deploy's Launch (plan C3c, docs/adr/0018-fv-deploy.md §7), without its template's image and

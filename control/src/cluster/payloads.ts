@@ -10,7 +10,8 @@ import { DRIVER_CHECK_SH } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH, upsamplerDiskGb, upsamplerPodEnv } from "../upsampler";
 import { PREFER_FV_BOOT_SH } from "../fv-boot";
 import { workerConfigEnv } from "../worker-config";
-import { checkLaunch, LAUNCH_SCHEMA, POD_VOLUME_MOUNT, runpodPodBody, type Guards, type Launch } from "../launch";
+import { checkLaunch, LAUNCH_SCHEMA, LaunchSchemaError, POD_VOLUME_MOUNT, runpodPodBody, type Guards, type Launch } from "../launch";
+import { HttpError } from "../util";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -423,6 +424,34 @@ export function workerCreatePayload(name: string, image: string, pool: PoolSpec,
     };
   }
   return runpodPodBody(workerLaunch(name, image, pool, pl, env, guards));
+}
+
+/** Why each Runpod GPU pool of a (stored) spec would not make a schema-valid Launch, at every placement attempt: a
+ * spec older fv-control stored can carry values the Launch schema refuses. Checked from the spec alone (the env's
+ * values are strings by construction): editor issues (liveSpecIssues) and a 409 before an op that creates pods
+ * (assertPoolLaunches), so a create never meets a LaunchSchemaError inside the operation. */
+export function poolLaunchIssues(spec: ClusterSpec, env?: Env): { path: (string | number)[]; message: string }[] {
+  const out: { path: (string | number)[]; message: string }[] = [];
+  spec.pools.forEach((pool, i) => {
+    if (isOtherPool(pool) || pool.compute === "CPU") return;
+    const ws = weightsSource(pool, env);
+    const e: Record<string, string> = ws === "r2" || ws === "hub" ? { FV_WEIGHTS_SOURCE: ws } : {};
+    for (const pl of workerPlacements(spec, pool, env)) {
+      try {
+        workerLaunch(`fvc-${pool.id}`, "check", pool, pl, e, clusterGuards(spec));
+      } catch (err) {
+        if (!(err instanceof LaunchSchemaError)) throw err;
+        out.push({ path: ["pools", i], message: err.message });
+        return;
+      }
+    }
+  });
+  return out;
+}
+/** Refuses (409, typed issues) an op that would create pods from a spec whose GPU pools make no valid Launch. */
+export function assertPoolLaunches(spec: ClusterSpec, env?: Env): void {
+  const issues = poolLaunchIssues(spec, env);
+  if (issues.length) throw new HttpError(409, `${issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}. Edit the cluster spec first.`, { issues });
 }
 
 /** Deterministic JSON (sorted keys) for env hashes. */
