@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# The b4a / b4b / b4c / b4c2 verdicts (scripts/gpu/b4-verdict.sh) on stub run
+# The b4b / b4c / b4c2 verdicts (scripts/gpu/b4-verdict.sh) on stub run
 # trees: a passing cell, and one failing case per rule (exit codes, the
 # planned hit / miss, the H3 FP8 encoder, skipped / failed / missing
 # compares, cache entries, temporary files, the fused kernels of the traced
-# step, cells without a verdict).
+# step, cells without a verdict). b4a retired to fv-lab (ADR-0019 §11.6):
+# its verdict is fv-lab's [verdict] step, held to the script's last b4a
+# branch by crates/fastvideo-lab/tests/verdict.rs.
 #   bash scripts/gpu/tests/b4-verdict.test.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -413,11 +415,12 @@ expect pass - "b4c2 family: both cells passed" b4_family_verdict b4c2 $s3 $s2
 bench $s2-pr-read hit cache; b4c2_switch_verdict $s2 >/dev/null
 expect fail "$s2:fail" "b4c2 family: a failed cell" b4_family_verdict b4c2 $s3 $s2
 
-# b4a's pieces: exit and identity.
-fresh; summary b4a-x-base 0; summary b4a-x-pr 0; compare b4a-x-base b4a-x-pr ok
-if b4_exit_ok b4a-x-base && b4_identical b4a-x-base b4a-x-pr; then echo "ok   b4a pieces pass"; else echo "FAIL b4a pieces" >&2; fails=$((fails + 1)); fi
-summary b4a-x-pr 10; compare b4a-x-base b4a-x-pr different
-if b4_exit_ok b4a-x-pr || b4_identical b4a-x-base b4a-x-pr; then echo "FAIL b4a exit 10 / different" >&2; fails=$((fails + 1)); else echo "ok   b4a exit 10 and a failed compare are caught"; fi
+# The shared pieces on their own: exit and identity (every verdict above
+# builds on them).
+fresh; summary pair-x-base 0; summary pair-x-pr 0; compare pair-x-base pair-x-pr ok
+if b4_exit_ok pair-x-base && b4_identical pair-x-base pair-x-pr; then echo "ok   exit and identity pieces pass"; else echo "FAIL exit and identity pieces" >&2; fails=$((fails + 1)); fi
+summary pair-x-pr 10; compare pair-x-base pair-x-pr different
+if b4_exit_ok pair-x-pr || b4_identical pair-x-base pair-x-pr; then echo "FAIL exit 10 / different" >&2; fails=$((fails + 1)); else echo "ok   exit 10 and a failed compare are caught"; fi
 
 if (( fails )); then
   echo "b4-verdict: $fails FAILED" >&2

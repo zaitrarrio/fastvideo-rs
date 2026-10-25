@@ -1,0 +1,9 @@
+same b4a-h3-4step-tea-base: {"exit":0,"skipped":null}, 124 frames byte-identical
+same b4a-h3-4step-tea-pr: {"exit":0,"skipped":null}, 124 frames byte-identical
+same compare/compare-clips-b4a-h3-4step-tea-base--b4a-h3-4step-tea-pr.json: {"status":"pass","off_identity":"ok"}
+same b4a-b4a-h3-4step-tea.verdict.json
+same b4a-h3-4step-tea-base/cache-evidence.log
+same b4a-h3-4step-tea-pr/cache-evidence.log
+same b4a-h3-4step-tea.evidence.diff
+same b4a.verdict.json
+2 arm(s) the same (2 ran with byte-identical frames, 0 skipped in both, 0 failed in both), 1 report(s) the same, 5 verdict file(s) the same, 0 difference(s)

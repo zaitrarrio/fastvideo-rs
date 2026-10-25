@@ -77,7 +77,7 @@ dry "refused: FV_POD_CAP_S above the tier's" 1 "never raised" FV_FAMILY=trace FV
 dry "refused: FV_POD_CAP_S not a number" 1 "never raised" FV_FAMILY=trace FV_POD_CAP_S=1h
 # 2. The dropped modes' knobs (ADR-0019 §9.4) in FV_EXTRA_ENV.
 for k in FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS \
-  FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_PROMPTS FV_GEN_TIMEOUT_S FV_CELLS; do
+  FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_PROMPTS FV_GEN_TIMEOUT_S FV_CELLS; do
   dry "refused in FV_EXTRA_ENV: $k" 1 "reads no $k from FV_EXTRA_ENV" FV_FAMILY=precision FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1"
 done
 # The two modes restored as tiers (ADR-0019 §12): refused, naming the tier, on
@@ -150,8 +150,32 @@ done
 expect "gold: plan is runpod-http.sh's body" 0 '"name": "fv-lab-gold-abc1234-t"' -- RUNPOD_API_KEY=x \
   FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=gold bash "$HTTP" plan abc1234 abc1234-t
 
+# b4a (ADR-0019 §11.6): fv-lab only, its GPU gate's cell selected by arm;
+# the script side's FV_B4A_CELLS in FV_EXTRA_ENV is refused with that answer.
+dry "b4a: fv-lab only, selected by arm" 0 \
+  "fv-lab pod up --sha abc1234 --family b4a --root $ROOT --cells b4a-h3-4step-tea-base b4a-h3-4step-tea-pr --baseline-sha e93e357 --yes --wait" \
+  FV_FAMILY=b4a FV_CELLS="b4a-h3-4step-tea-base b4a-h3-4step-tea-pr" FV_BASELINE_SHA=e93e357
+dry "b4a: FV_BASELINE_SHA in FV_EXTRA_ENV passes to --extra-env" 0 \
+  "--family b4a --root $ROOT --extra-env FV_BASELINE_SHA=e93e357 --yes --wait" \
+  FV_FAMILY=b4a FV_EXTRA_ENV="FV_BASELINE_SHA=e93e357"
+dry "b4a: FV_B4A_CELLS refused, FV_CELLS named" 1 \
+  "reads no FV_B4A_CELLS from FV_EXTRA_ENV (FV_B4A_CELLS: b4a selects by arm, as every tier: FV_CELLS=\"<cell>-base <cell>-pr\"" \
+  FV_FAMILY=b4a FV_EXTRA_ENV="FV_BASELINE_SHA=e93e357 FV_B4A_CELLS=b4a-h3-4step-tea"
+dry "FV_B4A_CELLS in FV_EXTRA_ENV of another tier: no b4a in the answer" 1 \
+  "(FV_B4A_CELLS: fv-lab selects by arm: FV_CELLS (fv-lab pod up --cells), not FV_B4A_CELLS" \
+  FV_FAMILY=rtx6000 FV_EXTRA_ENV="FV_B4A_CELLS=b4a-h3-4step-tea"
+# The pair selectors set in the host environment (not FV_EXTRA_ENV): refused,
+# not ignored (fv-lab would run every cell of the tier).
+for kv in "b4a FV_B4A_CELLS=b4a-h3-4step-tea" "techniques FV_TECH_CELLS=h3-480p-fullopt" "b6 FV_B6_CELLS=b6-solh3-tree"; do
+  read -r fam setting <<<"$kv"
+  dry "host env refused: ${setting%%=*} ($fam)" 1 "which has no ${setting%%=*}: it selects by arm, FV_CELLS" \
+    FV_FAMILY="$fam" FV_BASELINE_SHA=e93e357 "$setting"
+done
+mx "matrix: b4a is retired" "FATAL: b4a is retired to fv-lab (fv-lab-retired.sh): fv-lab run b4a " \
+  FV_BASELINE_SHA=e93e357 b4a
+
 # A script family's dry run creates nothing.
-dry "script family: dry run" 0 "on the script path, nothing created" FV_FAMILY=b4a
+dry "script family: dry run" 0 "on the script path, nothing created" FV_FAMILY=b4b
 
 # A fake fv-lab: exactly the command, its exit code back.
 cat >"$TMP/fake-fv-lab" <<'EOF'

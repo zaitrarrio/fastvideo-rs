@@ -4,8 +4,9 @@
   `lab/cells/*.toml` schemas, the dry-run and payload goldens; GPU gate passed) and D1b (nine more families as tiers,
   four additive cell-schema fields, a golden per tier, §9; GPU gate passed for all nine). The ten families' script
   branches are deleted and the tiers are fv-lab only, with frozen goldens (§10, 2026-10-25). D1d's first slice
-  (§11: a typed verdict step in the cell schema, `b4a` as a tier, `fv-lab gate`) is proposed, its GPU gate pending.
-  Two dropped modes are tiers again, frozen from the script at `5987e6a4` (§12, proposed; GPU check pending).
+  (§11: a typed verdict step in the cell schema, `b4a` as a tier, `fv-lab gate`) is accepted: its GPU gate passed on
+  `e82b6b7` and `b4a` is retired from the script like the ten (§11.6). Two dropped modes are tiers again, frozen
+  from the script at `5987e6a4` (§12, accepted; GPU check passed on `8b18d89`).
   D1c (`report`), the rest of D1d (`oracle`) and the retirement of the rest of `runpod-matrix.sh`, `runpod-http.sh`
   and the port one-offs follow (§8)
 - Date: 2026-10-24
@@ -266,7 +267,8 @@ Pass: exit 0, every arm `same`, `fasth3-8step` skipped (`weights incomplete`) in
 - **D1c**: `fv-lab report {summary,table,tiers}` replacing the `*-summary.py`, `hd_report.py`, `sol_bench_table.py`,
   `timings.sh`; the `FV_FETCH_TREE` mirror.
 - **D1d**: `gate` / `oracle` moved into or aliased by `fv-lab` (`oracle.sh`, the `oracle` family). First slice (§11):
-  the verdict step, `b4a` as a tier, `fv-lab gate` (the promotion gate aliased: `fv-gpucheck gate` driven offline).
+  the verdict step, `b4a` as a tier, `fv-lab gate` (the promotion gate aliased: `fv-gpucheck gate` driven offline);
+  `b4a`'s branch deleted after its GPU gate (§11.6).
 - **D1e**: the 24 port one-offs in `scripts/gpu/experiments/` (F1) become cells or are deleted; `runpod-http.sh`
   is deleted once nothing calls it (`upstream` mode moves with D1d).
 
@@ -295,7 +297,7 @@ wrote. ADR-0019 open decision 3 covers compares and gates placed between arms.
 | `rtx6000` | 7 | H3, LoRA, upscaler, h3-to-ltx, ltx25 yes; `h3-8step` no (1 arm skipped) | none | as is | moved (D1a) | **retired (script branch deleted, fv-lab only)**, §10: D1a gate on `492e28a`, `sol-h3` (248) and `ltx25-two-stage` (242 frames) byte-identical; `artifacts/runpod/rtx6000/492e28a-*` |
 | `techniques` | 13 in 4 cells (9 / 0) | yes, but `h3-8step` (3 arms) | a compare pair after each `tech_h3` call: one cell per call | `bin = "baseline"`, `env = []` | moved | **retired (script branch deleted, fv-lab only)**, §10: `c21d801`, base `e93e357`, `h3-480p-fullopt` base/env/prof, 3 arms × 248 frames byte-identical, 9 reports the same; `d1b-compare/techniques.txt` |
 | `b6` | 16 in 8 cells (8 / 0) | yes (h3-base, LoRA, h3-ref2va, ltx25, ltx25-dev, ic-lora) | a compare after each pair: one cell per pair; per-arm stage-log lines in live.log (log only) | `bin`, `env = []` | moved | **retired (script branch deleted, fv-lab only)**, §10: `c21d801`, base `e93e357`, `b6-solh3-tree` base/pr, 2 arms × 124 frames byte-identical, 8 reports the same; `d1b-compare/b6.txt` |
-| `b4a` | 6 in 3 cells (3 / 0) | yes | after each arm: TeaCache reuse count and `cache-evidence.log`; after each pair: the evidence diff, `b4a-<cell>.verdict.json` | `[verdict]` (D1d, §11) | moved in D1d (§11) | its GPU gate (§11.6); until then the branch stays |
+| `b4a` | 6 in 3 cells (3 / 0) | yes | after each arm: TeaCache reuse count and `cache-evidence.log`; after each pair: the evidence diff, `b4a-<cell>.verdict.json` | `[verdict]` (D1d, §11) | moved in D1d (§11) | **retired (script branch deleted, fv-lab only)**, §11.6: `e82b6b7`, base `e93e357`, `b4a-h3-4step-tea` base/pr, 2 arms × 124 frames byte-identical, the compare and 5 verdict files the same (cell and family verdict `pass` on both), `fv-lab gate --check` 0 differences on both runs; `artifacts/runpod/b4a/e82b6b7-*`, `b4a/compare-e82b6b7.txt`; `FV_B4A_CELLS` dropped |
 | `rtx5090` | 17 in 5 cells (14 / 0) | yes (h3-base, ltx25, TAE) | compares after each resolution and workload: one cell per loop iteration | `tae` | moved | **retired (script branch deleted, fv-lab only)**, §10: `c21d801`, `h3-480p` dense/sol/fullopt/fullopt-taeh3, 4 arms × 248 frames byte-identical, 14 reports the same; `d1b-compare/rtx5090.txt` |
 | `fastvideo` | 17 in 6 cells (7 / 7) | yes, but `h3-8step` (4 arms) | per iteration: one cell each | `tae`, paired gate | moved | **retired (script branch deleted, fv-lab only)**, §10: `b0d0bb8`, 4 arms the same (2 ran, 248 frames each byte-identical; 2 `h3-8step` skipped in both), 8 reports and the gate report the same; `d1b-compare/fastvideo.txt` |
 | `h3arms` | 13 in 3 cells (13 / 10) | `h3-8step` for 11 arms (skipped); 4-step VSA yes | a compare followed by its gate; per-arm reuse counts in live.log (log only) | paired gate, `tae` | moved | **retired (script branch deleted, fv-lab only)**, §10: `b0d0bb8`, 13 arms the same (2 ran byte-identical, 11 `h3-8step` skipped in both), 14 reports the same; `d1b-compare/h3arms.txt` |
@@ -485,7 +487,8 @@ both `matrix_exit=0`. That family's `case` branch is then deleted in the next D1
 ### 10. The gated families leave the script: branches deleted, goldens frozen
 
 Status: accepted 2026-10-25. The ten families whose GPU gate passed (§8 for `rtx6000`, §9.5 for the nine; the §9.1
-rows give each one's evidence) are fv-lab only.
+rows give each one's evidence) are fv-lab only. `b4a` followed the same way after its own gate (§11.6), in the next
+D1 PR.
 
 1. **The branches.** Their `case` branches are deleted from `runpod-matrix.sh` (696 lines of branches; 739 lines out, 47 in, comments included), with the one helper only
    they used (`tae_gated_cell` and its `TAEH3` / `TAELTX` paths; `FV_DRY_RUN_GATES` keeps its four columns, the
@@ -539,8 +542,8 @@ Why one list file and not "no branch means fv-lab": a typo in `FV_FAMILY` must n
 
 ### 11. D1d, first slice: a typed verdict step, `b4a` as a tier, `fv-lab gate`
 
-Status: proposed 2026-10-25. CPU gates pass; the GPU gate (§11.6) is the coordinator's. The `b4a` branch of
-`runpod-matrix.sh` stays until it passes; `b4a` is not in `fv-lab-retired.sh`.
+Status: accepted 2026-10-25. The GPU gate (§11.6) passed on `e82b6b7`; `b4a` is in `fv-lab-retired.sh`, its
+`runpod-matrix.sh` branch is deleted and its fixtures are frozen (§11.6, "Result").
 
 `b4a` (plan B4a, ADR-0020) is the first family whose branch does more than arms, compares and gates: after each arm
 it counts the TeaCache reuses and writes `cache-evidence.log`, and after each pair it diffs the two evidence files
@@ -630,12 +633,14 @@ typed lists under `[verdict]` (for example a frames-hash equality across arms, a
 `lab/cells/b4a-h3-{fullopt-env,fullopt-prof,4step-tea}.toml`, one per `b4a_pair`, two arms each (`bin = "baseline"`
 and this build), one `--off-identity` compare, the verdict above. 3 cells, 6 arms. The goldens come from the script
 as in D1b (§9.3): `fixtures/b4a-dry-run.txt` (21 lines), `b4a-gates.tsv`, `runpod-http-b4a.json`, written by
-`fv-lab-goldens.sh` while the branch exists; `tests/{dry_run,payload_golden,fv_lab_bin}.rs` hold fv-lab to them.
+`fv-lab-goldens.sh` while the branch existed and frozen since (§11.6); `tests/{dry_run,payload_golden,fv_lab_bin}.rs`
+hold fv-lab to them.
 (`fv-lab-goldens.sh`'s `has_branch` read every branch as missing under `pipefail`, `grep -q` cutting `sed` off with
 SIGPIPE; it never showed because no tier had a live branch before `b4a`. Fixed.)
 
 **Equality beyond the dry run.** `tests/verdict.rs` copies `runpod-matrix.sh` (and what it sources) into a fake root
-and runs its real `b4a` branch and `fv-lab run b4a` (the committed cells) on the same fake box: a fake fv-gpucheck
+(since §11.6 the frozen copy of the script's last `b4a` branch, `fixtures/b4a-script/`) and runs its real `b4a` branch
+and `fv-lab run b4a` (the committed cells) on the same fake box: a fake fv-gpucheck
 whose arms log step-cache lines and whose compare writes an off-identity report, a fake `nvidia-smi`,
 `verify-weights.sh` and `fetch-baseline.sh`. One cell passes, one fails on its evidence only, one fails on
 everything. Every verdict file, evidence file and evidence diff is byte-identical between the two runners, and so
@@ -703,7 +708,7 @@ take (`summary.json`, `stderr.log`, the compare reports).
 | the compare fields copied into `live.log` after the family | yes | no | log only (§9.4) |
 | the verdict files in `artifacts/` | only with `FV_FETCH_TREE=1` | `pod fetch` takes them | §11.4 |
 | the family verdict's `cells` (and so its `why`) | in `FV_B4A_CELLS`'s order; a name matching no cell fails (`<name>:no-verdict`) | in the tier's order; `pod up` refuses an arm name the tier lacks, `gate` too | chosen (review of #188, F4): document it, not reproduce it, since fv-lab has no ordered cell list to follow; `fv-lab-compare-runs.sh` compares a family verdict's `cells` and `why` as sets |
-| `FV_B4A_CELLS` handed to fv-lab | (the script's knob) | refused by `pod up --extra-env` and by `run` (F8) | fv-lab would ignore it and run all three cells at three times the cost |
+| `FV_B4A_CELLS` handed to fv-lab | (the script's knob) | refused by `pod up --extra-env` and by `run` (F8); since §11.6 also by `runpod-http.sh`'s `FV_EXTRA_ENV` (`FV_LAB_NOT_READ`) | fv-lab would ignore it and run all three cells at three times the cost |
 | the arm selection | not recorded | `<tier>.arms.json` in the run directory | `fv-lab gate` reads it (§11.3) |
 | `fv-lab gate` on a fetched run | n/a | writes beside it (`<run>.regate`), never into it | §11.3 |
 
@@ -743,12 +748,63 @@ verdict, diff and two evidence files).
 Then, in the next D1 PR: `b4a` joins `fv-lab-retired.sh`, its branch is deleted, its three fixtures freeze (§10), and
 `runpod-http.sh`'s route refuses `FV_B4A_CELLS` in `FV_EXTRA_ENV` as it refuses the other dropped knobs.
 
+**Result (2026-10-25): pass.** `SHA=e82b6b7`, `BASE=e93e357`, the cell `b4a-h3-4step-tea`, both on the RTX PRO 6000:
+
+- fv-lab side: `fv-lab pod up --sha e82b6b7 --family b4a --cells b4a-h3-4step-tea-base b4a-h3-4step-tea-pr
+  --baseline-sha e93e357 --yes --wait` (pod `j25pn9a2xc1ll8`) → `artifacts/runpod/b4a/e82b6b7-1025211328-a2f3`;
+- script side: `FV_FAMILY=b4a FV_EXTRA_ENV="FV_BASELINE_SHA=e93e357 FV_B4A_CELLS=b4a-h3-4step-tea" FV_FETCH_TREE=1
+  FV_FETCH_SKIP=/frames/ runpod-http.sh run e82b6b7` (pod `ik1hd9tz9cay82`) → `artifacts/runpod/b4a/e82b6b7-10252113`;
+- `fv-lab-compare-runs.sh --expect-verdicts 5` (`artifacts/runpod/b4a/compare-e82b6b7.txt`): exit 0, "2 arm(s) the
+  same (2 ran with byte-identical frames, 0 skipped in both, 0 failed in both), 1 report(s) the same, 5 verdict
+  file(s) the same, 0 difference(s)"; 124 frames per arm; the `--off-identity` compare `pass` / `ok`;
+- both `matrix_exit=0`; per arm 5 evidence lines and 2 reused forwards on both sides; the cell verdict and the family
+  verdict `pass` on both;
+- `fv-lab gate --check`: 0 differences on each run (fv-lab's arms from its `b4a.arms.json`, the script's with
+  `--cells b4a-h3-4step-tea-base,b4a-h3-4step-tea-pr`).
+
+The image: `ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-e82b6b7` at
+`sha256:c5a683f55f24a9400f7010114109db589da459ad53419e0d35e1f1a32f5ee344` (labels `dev.fastvideo.tools=compiled`,
+revision `e82b6b78`). The first attempt ran on the tag's earlier digest (`sha256:bd1761d2…`), built from a prebuilt
+tools release whose fv-lab (0.1.51) predates `[verdict]`: it refused the cells ("unknown field `verdict`").
+`gpucheck-runtime-image` (run 40233480444) had caught that in its fv-lab check, but only after it had pushed
+`sha-e82b6b7`, so the tag named an image that could not run the commit's `lab/`. **Follow-up (open):** the image job
+runs its checks (fv-lab `--version`, `check`, the dry run) before it pushes `sha-<7>`, or pushes to a staging tag and
+retags only after they pass.
+
+Done in that PR: `b4a` is in `FV_LAB_RETIRED`; the `b4a)` branch (its `b4a_evidence` / `b4a_pair` helpers lived inside
+it) is deleted from `runpod-matrix.sh`, and the remaining families' dry runs are unchanged (`FV_DRY_RUN=1` output and
+`FV_DRY_RUN_GATES` records before and after for all 32: 30 byte-identical, `determinism` differing only in a bash
+error message's line number and `writer` only in its `dd` timings, which differ run to run). `b4-verdict.sh` stays
+whole: `b4_exit_ok`, `b4_identical` and `b4_family_verdict` are also `b4b` / `b4c` / `b4c2`'s, and
+`tests/b4-verdict.test.sh` keeps testing them. `fv-lab-goldens.sh` no longer writes `b4a`'s three fixtures (§10 item
+3). `tests/verdict.rs` ran the script's live `b4a` branch, which now refuses `b4a` (exit 2); it runs a frozen copy
+instead, `crates/fastvideo-lab/fixtures/b4a-script/`: `runpod-matrix.sh` as of main `8b18d89f`, cut to its shared
+frame, the `b4a` branch and the fallback branch with every kept line unchanged (`git show
+8b18d89f:scripts/gpu/runpod-matrix.sh | sed -n '1,446p;1618,1743p;3197,3223p'`), and that commit's `b4-verdict.sh`,
+`cuda-13.pins` and `fv-lab-retired.sh` whole, so changes under `scripts/gpu/` no longer move the reference. What
+the frame reads from fixed host paths is kept out where the test can do it without editing the cut: the CUDA
+library links under `<scratch>/fv-libs` are faked (so the image's `remote.sh` never runs and no host library is
+linked), and the `matrix start image=` line, read from the hard-coded
+`/opt/fastvideo-rs/target/release/fv-gpucheck.build-id`, reads as `unknown` when a host has that file. One host
+dependency is left, as it was before the freeze: the frame's `PATH` puts `/opt/fastvideo-rs/target/release` and
+`/usr/local/bin` before the fake `bin/`, so a host `nvidia-smi` there would shadow the fake one. A new test runs the
+frozen copy's dry run and finds it equal to `fixtures/b4a-dry-run.txt`, line for line. `runpod-http.sh run` / `plan` route
+`FV_FAMILY=b4a` to `fv-lab pod up` (§10 item 2), and refuse `FV_B4A_CELLS` in `FV_EXTRA_ENV` with "b4a selects by arm,
+as every tier: `FV_CELLS="<cell>-base <cell>-pr"`" (for another tier, a message without `b4a`). The review of #195
+added: the pair selectors `FV_B4A_CELLS`, `FV_TECH_CELLS` and `FV_B6_CELLS` set in the host environment (not
+`FV_EXTRA_ENV`) are refused too for every retired tier, where they were ignored and the run covered every cell
+(`fv-lab-route.test.sh`). The gate's script-side command is now
+refused (it sets `FV_FETCH_SKIP`, `FV_FETCH_TREE=1` and `FV_B4A_CELLS`, none of which fv-lab honours; the first
+refusal answers); its fv-lab equivalent is
+`FV_FAMILY=b4a FV_CELLS="b4a-h3-4step-tea-base b4a-h3-4step-tea-pr" FV_BASELINE_SHA=e93e357 runpod-http.sh run <7>`.
+
 #### 11.7 Open decisions
 
 1. **Selection by arm** (§11.5): `--cells` takes arms (and `FV_B4A_CELLS` is refused); a cell-name form (`--cells b4a-h3-4step-tea` meaning its
    verdict arms) would read closer to `FV_B4A_CELLS`. Proposed: arms only, as every tier.
 2. **`runpod-http.sh`'s fetch** stays without the verdict files (the script side of the gate uses `FV_FETCH_TREE=1`).
-   Proposed: no change to a fetch that retires with the script.
+   Settled by §11.6: `runpod-http.sh run` routes `b4a` to `fv-lab pod up`, whose `pod fetch` takes them; the script
+   fetch was not changed.
 3. **Settled (review of #188, F2):** `fv-lab gate` never writes into the run directory; `--out` defaults to
    `<run>.regate`, and `--check` compares.
 4. **`oracle`** (the `oracle` family, `oracle.sh`, `fv-gpucheck compare-dumps`) is the second D1d slice; the
@@ -756,8 +812,8 @@ Then, in the next D1 PR: `b4a` joins `fv-lab-retired.sh`, its branch is deleted,
 
 ### 12. Two dropped modes restored as tiers: `precision-nvfp4`, `ltxvae-gen`
 
-Status: proposed 2026-10-25 (owner decision "restore dropped test modes"); CPU part done, GPU check pending (the
-coordinator's, below). §10 item 4 dropped two modes of retired families with their branches. They come back as
+Status: accepted 2026-10-25 (owner decision "restore dropped test modes"); CPU part done, GPU check passed (the
+coordinator's, "Result" below). §10 item 4 dropped two modes of retired families with their branches. They come back as
 tiers of their own, each reproducing what the script ran in that mode at `5987e6a4` (main before #185), the last
 commit with the branches.
 
@@ -905,15 +961,42 @@ with "no release matches") is another commit's gpucheck.
 - **Only the NVFP4 arm differs** (the bf16 arm is byte-identical): cuBLASLt picks its FP4 algorithm per driver, so
   compare the two pods' `box.txt` driver versions before calling it a regression.
 
+**Result (2026-10-25): pass, both tiers.** fv-lab at main `8b18d89` (#191's merge; image `sha-8b18d89`, tools
+compiled, build id `1fb053d232522a86`), the script at `5987e6a4` (image `sha-5987e6a`, build id `2327ed48ab74bffe`),
+the 4k5s cells of each mode; four RTX PRO 6000 pods in EU-RO-1 on the volume `bz0ofkfx45`, driver 595.91.07, all
+deleted:
+
+- `ltxvae-gen`:
+  - fv-lab: `fv-lab pod up --sha 8b18d89 --family ltxvae-gen --cells ltx25-4k5s-gen ltx25-4k5s-gen-streaming --yes
+    --wait` (pod `wgzwvt5mjcn1nv`) → `artifacts/runpod/ltxvae-gen/8b18d89-1025215640-5305`.
+  - The script: `FV_FAMILY=ltxvae FV_EXTRA_ENV="FV_VAE_GEN=1" FV_CELLS="ltx25-4k5s-gen ltx25-4k5s-gen-streaming"
+    runpod-http.sh run 5987e6a` → `artifacts/runpod/ltxvae/5987e6a-10252157`.
+  - `fv-lab-compare-runs.sh` (`artifacts/runpod/ltxvae-gen/compare-8b18d89.txt`): exit 0, "2 arm(s) the same (2 ran
+    with byte-identical frames, 0 skipped in both, 0 failed in both), 4 report(s) the same, … 0 difference(s)": 121
+    frames per arm; the gen / streaming compare `pass` on both, the three unselected compares `skipped` on both.
+- `precision-nvfp4`:
+  - fv-lab: `fv-lab pod up --sha 8b18d89 --family precision-nvfp4 --cells ltx25-4k5s-sol-bf16 ltx25-4k5s-sol-nvfp4
+    --yes --wait` (pod `ymrchzi0z3eixy`) → `artifacts/runpod/precision-nvfp4/8b18d89-1025215713-20dd`.
+  - The script: `FV_FAMILY=precision FV_EXTRA_ENV="FV_PRECISION_ARM=ltx-nvfp4" FV_CELLS="ltx25-4k5s-sol-bf16
+    ltx25-4k5s-sol-nvfp4" runpod-http.sh run 5987e6a` → `artifacts/runpod/precision/5987e6a-10252158`.
+  - `fv-lab-compare-runs.sh` (`artifacts/runpod/precision-nvfp4/compare-8b18d89.txt`): exit 0, 2 arms the same, 242
+    frames per arm byte-identical (the NVFP4 arm too), 3 reports the same (the 4k5s compare, the unselected
+    1080p20s compare skipped on both, and the gate report present on both).
+  - The lossy gate's verdict is `fail` on both sides, as the 2026-09-27 run's 4k5s gate was: no run failure.
+- Both script pods (`64opofps1163h8`, `kxhdp1v19w151y`) and both fv-lab pods end `matrix_exit=0`.
+
+Byte identity held, so the generation source between `5987e6a4` and `8b18d89` (the deploy section of
+`fastvideo-manifest` aside) and the other tools build left these arms' frames unchanged.
+
 **Refused, not ignored (review of #191).**
 - `fv-lab` refuses the settings no tier reads (`crates/fastvideo-lab/src/knobs.rs`):
   - `fv-lab run` refuses the retired families' mode knobs (§9.4) in its environment.
   - `pod up --extra-env` refuses those knobs and what the start command sets after `--extra-env`.
   - This is the same set as `runpod-http.sh`'s `FV_LAB_NOT_READ` (`tests/knobs.rs` holds them equal, and
     `RESTORED_MODES` equal to `FV_LAB_RESTORED`).
-  - D1d's `FV_B4A_CELLS` refusal (§11.5) is one more entry of the same module (`SCRIPT_KNOBS`), with its message
-    unchanged. It is refused by fv-lab only, because `b4a` still has its script branch, where the script reads it.
-    It joins `FV_LAB_NOT_READ` when `b4a` retires.
+  - D1d's `FV_B4A_CELLS` refusal (§11.5) is one more entry of the same module, with its message unchanged. It was
+    refused by fv-lab only (`SCRIPT_KNOBS`) while `b4a` had its script branch; since `b4a` retired (§11.6) it is a
+    `MODE_KNOBS` entry and in `FV_LAB_NOT_READ`, and `SCRIPT_KNOBS` is gone.
 - A restored mode's setting is answered first and names its tier. Each refusal lists every refused key at once.
 - `runpod-http.sh` does the same: the mode check comes before every other refusal of the call, and one message lists
   all the refused `FV_EXTRA_ENV` keys.
@@ -962,7 +1045,7 @@ D1b, GPU (the coordinator's): §9.5 per moved family, on one commit whose runtim
 fv-lab; expected `fv-lab-compare-runs.sh` exit 0 (arms, frames, compare reports) and `matrix_exit=0` on both sides.
 Passed for all nine (§9.5).
 
-§11 (D1d), CPU: `tests/verdict.rs` (the script's `b4a` branch and `fv-lab run b4a` on one fake box: verdicts,
+§11 (D1d), CPU: `tests/verdict.rs` (the frozen copy of the script's last `b4a` branch and `fv-lab run b4a` on one fake box: verdicts,
 evidence and diffs byte-identical; `fv-lab gate` reproduces them), `tests/fv_lab_bin.rs` (`b4a` dry run,
 `gate_evaluates_a_finished_runs_verdicts_offline`), `tests/dry_run.rs` and `tests/payload_golden.rs` with the `b4a`
 fixtures, `fv-lab-goldens.sh --check` (with compare-runs' verdict-file cases); GPU: §11.6.

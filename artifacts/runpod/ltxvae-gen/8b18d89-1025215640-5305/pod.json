@@ -1,0 +1,13 @@
+{
+  "id": "wgzwvt5mjcn1nv",
+  "name": "fv-lab-ltxvae-gen-8b18d89-1025215640-5305",
+  "family": "ltxvae-gen",
+  "tag": "8b18d89-1025215640-5305",
+  "sha": "8b18d89",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:cb91ad2a0ed66cc474622c298798eb72f4b3e967f06f60aeb1ab236ba7fc5f0a",
+  "url": "https://wgzwvt5mjcn1nv-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792965403.0294392,
+  "cap_s": 14400
+}

@@ -209,7 +209,8 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["precision-h3", "precision-ltx25"]
 
-# ---- D1d (docs/adr/0019-fv-lab.md §11): runpod-matrix.sh `b4a` (plan B4a, docs/adr/0020-step-cache.md), the
+# ---- D1d (docs/adr/0019-fv-lab.md §11): was runpod-matrix.sh `b4a` (plan B4a, docs/adr/0020-step-cache.md;
+# retired after its GPU gate, §11.6, FV_B4A_CELLS dropped with the branch: select by arm), the
 # first family with a verdict step: one cell per b4a_pair, the baseline binary against this build,
 # compare-clips --off-identity, then the cell's [verdict] (b4a-<cell>.verdict.json) and the family's
 # (b4a.verdict.json). The rtx6000 tier's pod; the script's FV_GEN_TIMEOUT_S default of 900 never applies

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan | b200 | ... | b4a
+# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan | b200 | ... | b4c2
 # One process per family. Continues to the next cell on failure.
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) unless a
 # cell sets it.
 #
 # Retired to fv-lab (docs/adr/0019-fv-lab.md §10): the families of
 # fv-lab-retired.sh (rtx6000, techniques, b6, rtx5090, fastvideo, h3arms,
-# trace, ltxfps, ltxvae, precision) passed their GPU gate and their branches
-# are gone; they are tiers of lab/ (`fv-lab run <tier>` on the box,
+# trace, ltxfps, ltxvae, precision; b4a, with its verdict step, §11.6)
+# passed their GPU gate and their branches are gone; they are tiers of lab/ (`fv-lab run <tier>` on the box,
 # `runpod-http.sh run` / `fv-lab pod up` from a host). This script refuses
 # them (exit 2), and `headline` runs its cells of them through fv-lab. Two
 # modes of them are fv-lab tiers too (§12, FV_LAB_RESTORED):
@@ -30,14 +30,14 @@
 # FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
-# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b4a (or b4b, b4c, b4c2). A
+# FV_BASELINE_SHA=<sha> bash scripts/gpu/runpod-matrix.sh b4b (or b4c, b4c2). A
 # dry run does not fetch the baseline binary, and with
 # FV_DRY_RUN_GATES=<file> it appends one line per gated cell ("arm", its
 # verify-weights.sh cell, -) and per promotion gate ("gate", kind, OFF arm
 # or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh) when a
 # family moves to lab/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|precision-debug|fuse|oracle|writer|eval|ltxoffload|b4a|b4b|b4c|b4c2|h3attn (retired to fv-lab: fv-lab-retired.sh)}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|determinism|det-short|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|precision-debug|fuse|oracle|writer|eval|ltxoffload|b4b|b4c|b4c2|h3attn (retired to fv-lab: fv-lab-retired.sh)}"
 DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
@@ -1613,132 +1613,6 @@ Audio: male speech, clear voice, quiet room"
     gate_cells ltx25-512p-f32act ltx25-512p-bf16act lossy
     for f in "$RUNS"/gate/gate-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
-    done
-    ;;
-  b4a)
-    # Plan B4a (docs/adr/0020-step-cache.md): byte identity of every step
-    # cache a family on the EU volume ships, after the per-family controllers
-    # became parameter sets of the one implementation per algorithm. Each
-    # cell runs the baseline binary (FV_BASELINE_SHA's runtime image,
-    # fetch-baseline.sh) and this build with the same command line and
-    # environment, then compare-clips --off-identity; run_cell writes each
-    # arm's frames.sha256.json. Every arm encodes its prompt
-    # (--no-text-cache). A cell fails (b4a-<cell>.verdict.json) when either
-    # arm did not exit 0 or reused no forward, the --off-identity compare did
-    # not pass (b4-verdict.sh b4_identical), or the arms' cache evidence
-    # lines differ; b4a.verdict.json fails when a cell named in
-    # FV_B4A_CELLS has no passing verdict.
-    # Only H3 TeaCache: Wan / SANA / LingBot / Cosmos caches have no tree
-    # on the EU volume (volumes.sh FV_EU_VOLUME_TREES), and LTX-2.5 FBCache
-    # has no reachable path (fbcache::scope admits only dev guided stage 1,
-    # which no LTX-2.5 generate route runs today); their evidence is the CPU
-    # equality fixtures (step_cache/equality.rs).
-    # FV_B4A_CELLS narrows the cells (default: all three), one per pod when
-    # the coordinator runs them in parallel.
-    base_sha="${FV_BASELINE_SHA:?b4a family needs FV_BASELINE_SHA (the commit before the step-cache unification)}"
-    BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
-    if [[ "$DRY_RUN" != 1 ]]; then
-      if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
-        log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
-        tee -a "$LOG" <"$RUNS/baseline-fetch.log"
-        exit 2
-      fi
-      log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
-    fi
-    # A cold H3 load reads ~70 GB from the volume before its first step.
-    export FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-900}"
-    fx="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
-    b4a_cells="${FV_B4A_CELLS:-b4a-h3-fullopt-env b4a-h3-fullopt-prof b4a-h3-4step-tea}"
-    # No verdict of an earlier run in this directory may stand in for this one.
-    [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS"/b4a-*.verdict.json "$RUNS/b4a.verdict.json"
-    # b4a_evidence <cell>-<arm>: the step cache's lines of that arm's
-    # stderr.log (what was installed, every H3 decision), without the
-    # timestamp a log line starts with, into cache-evidence.log. On bytes
-    # (LC_ALL=C, grep -a): a log line that is not valid UTF-8, or holds a NUL,
-    # is still a line, whatever the pod's locale (fv-lab's [verdict] reads
-    # the same bytes, docs/adr/0019-fv-lab.md §11.5).
-    b4a_evidence() {
-      LC_ALL=C grep -ah 'h3 sol teacache\|h3 teacache:\|h3 teacache step\|fuse step cache' "$RUNS/$1/stderr.log" \
-        | LC_ALL=C sed -E 's/^(\[[^]]*\] *)+//' >"$RUNS/$1/cache-evidence.log" || true
-    }
-    # b4a_pair <cell> <weight cell> <env K=V ... or -> <fv-gpucheck args ...>:
-    # <cell>-base (the baseline binary) and <cell>-pr (this build), the
-    # frames under <cell>-<arm>/frames, then the byte-identity compare and
-    # the cell's verdict.
-    b4a_pair() {
-      local cell="$1" wcell="$2" envs="$3" arm bin reuses verdict=pass why=""
-      shift 3
-      [[ " $b4a_cells " == *" $cell "* ]] || { log "skip $cell (not in FV_B4A_CELLS)"; return 0; }
-      # shellcheck disable=SC2206
-      local e=($envs)
-      [[ "$envs" == - ]] && e=()
-      for arm in base pr; do
-        bin="$BIN"
-        [[ "$arm" == base ]] && bin="$BASE"
-        if [[ "$DRY_RUN" == 1 ]]; then
-          log "dry-run $cell-$arm: rm -rf $RUNS/$cell-$arm"
-        else
-          rm -rf "${RUNS:?}/$cell-$arm"
-        fi
-        gated_cell "$cell-$arm" "$wcell" \
-          env ${e[@]+"${e[@]}"} "$bin" "$@" "$RUNS/$cell-$arm/frames"
-        [[ "$DRY_RUN" == 1 ]] && continue
-        b4_exit_ok "$cell-$arm" || { verdict=fail; why+=" $arm:exit"; }
-        if [[ ! -f "$RUNS/$cell-$arm/stderr.log" ]]; then
-          verdict=fail why+=" $arm:no-run"
-          continue
-        fi
-        b4a_evidence "$cell-$arm"
-        reuses="$(LC_ALL=C grep -ac 'h3 teacache step .*REUSE' "$RUNS/$cell-$arm/stderr.log" || true)"
-        log "[$cell-$arm] teacache reused forwards: ${reuses:-0}"
-        (( ${reuses:-0} > 0 )) || { verdict=fail; why+=" $arm:no-reuse"; }
-      done
-      [[ "$DRY_RUN" == 1 ]] || rm -f "$RUNS/compare/compare-clips-$cell-base--$cell-pr.json"
-      compare_cells "$cell-base" "$cell-pr" --off-identity
-      if [[ "$DRY_RUN" == 1 ]]; then
-        log "dry-run $cell: verdict also needs both arms exit 0 (summary.json) and the --off-identity compare passed"
-        return 0
-      fi
-      b4_identical "$cell-base" "$cell-pr" || { verdict=fail; why+=" not-identical"; }
-      if [[ -f "$RUNS/$cell-base/cache-evidence.log" && -f "$RUNS/$cell-pr/cache-evidence.log" ]]; then
-        # -a: evidence holding a NUL is still diffed as text, so the file
-        # never names the run directory ("Binary files <path> and ...").
-        if ! LC_ALL=C diff -a "$RUNS/$cell-base/cache-evidence.log" "$RUNS/$cell-pr/cache-evidence.log" \
-          >"$RUNS/$cell.evidence.diff"; then
-          verdict=fail why+=" evidence-differs"
-        fi
-      fi
-      write_json "$RUNS/b4a-$cell.verdict.json" "$(printf '{"cell":"%s","verdict":"%s","why":"%s"}' "$cell" "$verdict" "${why# }")"
-      log "b4a $cell: $verdict${why:+ (${why# })}"
-    }
-    # H3 at 480p / 5 s, the auto text encoder, each arm encoding its prompt.
-    h3_b4a=(--mode fast h3 gen --weights "$W/h3-base" --height 480 --width 832 --seconds 5
-      --prompt "$PROMPT" --seed "$SEED" --text-encoder auto --no-text-cache --no-mp4)
-    # 1. The RTX 5090 fullopt route from the legacy flag: sol-h3-rtx over 49
-    #    forwards with FASTVIDEO_H3_SOL_CACHE=teacache (rtx_teacache: 0.10 /
-    #    retain 5 / cooldown 1), the `techniques` family's h3-480p-fullopt -env arm.
-    b4a_pair b4a-h3-fullopt-env h3-base "FASTVIDEO_H3_SOL_CACHE=teacache" \
-      "${h3_b4a[@]}" --h3-recipe sol-h3-rtx --clip-dir
-    # 2. The same route from the profile (H3Techniques::teacache_state, the
-    #    profile log line), MXFP8 linears as in the techniques -prof arm.
-    b4a_pair b4a-h3-fullopt-prof h3-base "FASTVIDEO_H3_QUANT=mxfp8" \
-      "${h3_b4a[@]}" --techniques h3/rtx5090_fullopt --clip-dir
-    # 3. FastH3 4-step VSA with a loose TeaCache
-    #    (fixtures/b4a-h3-4step-teacache.toml: threshold 4.0, retain 1,
-    #    cooldown 1): forwards 1 and 2 are the only candidates and reuse
-    #    while the accumulated rel-L1 of the block-0 probe stays under 4.0.
-    #    Unmeasured on a GPU before this family; the reuse assertion says.
-    b4a_pair b4a-h3-4step-tea fasth3-4step-vsa - \
-      "${h3_b4a[@]}" --techniques "$fx/b4a-h3-4step-teacache.toml" --clip-dir
-    # The family: every cell named in FV_B4A_CELLS must have passed.
-    if [[ "$DRY_RUN" == 1 ]]; then
-      log "dry-run b4a: family verdict b4_family_verdict b4a $b4a_cells -> $RUNS/b4a.verdict.json (a named cell without a passing verdict fails)"
-    else
-      # shellcheck disable=SC2086
-      log "$(b4_family_verdict b4a $b4a_cells)"
-    fi
-    for f in "$RUNS"/compare/compare-clips-b4a-*.json; do
-      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
     done
     ;;
   b4b)

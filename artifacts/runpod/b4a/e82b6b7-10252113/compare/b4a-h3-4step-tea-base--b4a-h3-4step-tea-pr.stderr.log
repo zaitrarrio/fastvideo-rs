@@ -1,0 +1,6 @@
+[INFO] compare-clips-b4a-h3-4step-tea-base--b4a-h3-4step-tea-pr/frame_counts {"baseline":124,"candidate":124,"match":true,"pairs":124}
+[PASS] compare-clips-b4a-h3-4step-tea-base--b4a-h3-4step-tea-pr/frame_shape {"shape_mismatch":null} (limits {})
+[INFO] compare-clips-b4a-h3-4step-tea-base--b4a-h3-4step-tea-pr/pixel_metrics {"mean_abs_pixel_diff":0.0,"mse_max":0.0,"mse_mean":0.0,"pairs":124,"patch_boundary_ratio_by_size_max":{"16":1.0,"32":1.0,"8":1.0},"patch_boundary_ratio_by_size_mean":{"16":1.0,"32":1.0,"8":1.0},"patch_boundary_ratio_max":1.0,"patch_boundary_ratio_mean":1.0,"psnr_mean":null,"psnr_min":null,"sharpness_ratio_mean":1.0,"status":"ok","temporal_delta_error_max":0.0,"temporal_delta_error_mean":0.0,"temporal_jitter_ratio_max":1.0,"temporal_jitter_ratio_mean":1.0,"temporal_jitter_ratio_min":1.0}
+[PASS] compare-clips-b4a-h3-4step-tea-base--b4a-h3-4step-tea-pr/off_identity {"max_abs_diff_uint8":0,"nonidentical_frames":0,"pairs":124,"status":"ok"} (limits {"max_abs_diff_uint8":0})
+[PASS] compare-clips-b4a-h3-4step-tea-base--b4a-h3-4step-tea-pr/off_identity_frame_count {"baseline":124,"candidate":124} (limits {"equal":true})
+[PASS] stage compare-clips-b4a-h3-4step-tea-base--b4a-h3-4step-tea-pr → /fvscratch/runs/b4a/e82b6b7-10252113/compare/compare-clips-b4a-h3-4step-tea-base--b4a-h3-4step-tea-pr.json (0.2s)

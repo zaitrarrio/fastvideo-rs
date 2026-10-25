@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Verdicts of the plan B4 byte-identity families of runpod-matrix.sh (b4a,
-# b4b, b4c, b4c2), sourced by it. Pure functions over a run directory ($RUNS)
+# Verdicts of the plan B4 byte-identity families of runpod-matrix.sh (b4b,
+# b4c, b4c2), sourced by it. b4a retired to fv-lab (docs/adr/0019-fv-lab.md
+# §11.6): its verdict is the tier's typed [verdict] step, and the last script
+# branch that used b4_exit_ok / b4_identical / b4_family_verdict for it is
+# vendored, with this file as it was then, under
+# crates/fastvideo-lab/fixtures/b4a-script/ (tests/verdict.rs). Pure functions over a run directory ($RUNS)
 # and, for b4c / b4c2, the cache root ($B4C_CACHE), so scripts/gpu/tests/b4-verdict.test.sh
 # holds them to stub trees. A verdict passes only on positive evidence: a
 # missing file, a skipped compare or a run that did not exit 0 fails it.

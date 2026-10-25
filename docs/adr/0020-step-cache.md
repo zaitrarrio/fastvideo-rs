@@ -15,7 +15,8 @@
 - Tests: `step_cache/equality.rs` (old against new, bit for bit, on
   synthetic tensors) with the pre-B4a controllers verbatim in
   `step_cache/legacy.rs`; a decision-sequence test in each algorithm's
-  module; GPU: `scripts/gpu/runpod-matrix.sh b4a`
+  module; GPU: `scripts/gpu/runpod-matrix.sh b4a`, since ADR-0019 §11.6 the
+  fv-lab tier `b4a` (`lab/cells/b4a-h3-*.toml`; the script branch retired)
 
 Line references to "pre-B4a" code are to main `2e3c71b1`, where the
 copies lived; `legacy.rs` holds them verbatim under the same names, except
@@ -282,7 +283,10 @@ easycache: ...`, `wan a14b easycache: ...`, `wan sol taylorseer: ...`,
   Since the B4c review (PR #177) the verdict also needs both arms' exit 0
   and the `--off-identity` compare passed and not skipped
   (`scripts/gpu/b4-verdict.sh`), and `b4a.verdict.json` fails when a cell
-  named in `FV_B4A_CELLS` has no passing verdict.
+  named in `FV_B4A_CELLS` has no passing verdict. The family is an fv-lab
+  tier since ADR-0019 §11 (its GPU gate passed on `e82b6b7`, §11.6, and
+  the script branch is deleted): `fv-lab pod up --family b4a --cells
+  <cell>-base <cell>-pr --baseline-sha <7>` runs it, with the same files.
   Three H3 TeaCache cells: the legacy flag, the profile, and a 4-step
   reuse fixture. **Not on the GPU:**
   - LTX-2.5 FBCache has no reachable path today: `fbcache::scope` admits

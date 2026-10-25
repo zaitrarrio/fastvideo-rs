@@ -40,9 +40,12 @@ pub const RESTORED_MODES: [RestoredMode; 2] = [
     },
 ];
 
-/// The retired families' knobs that changed their arms (ADR-0019 §9.4): no
-/// tier reads them.
-pub const MODE_KNOBS: [&str; 10] = [
+/// The retired families' knobs that changed their arms (ADR-0019 §9.4) or
+/// picked their pairs (`FV_TECH_CELLS`, `FV_B6_CELLS`, `FV_B4A_CELLS`): no
+/// tier reads them. `FV_B4A_CELLS` joined when `b4a` retired (§11.6); with it
+/// ignored, every `b4a` cell would run, at three times the cost of the one
+/// asked for.
+pub const MODE_KNOBS: [&str; 11] = [
     "FV_PRECISION_ARM",
     "FV_NVFP4_WORKLOADS",
     "FV_VAE_GEN",
@@ -53,18 +56,12 @@ pub const MODE_KNOBS: [&str; 10] = [
     "FV_LTXFPS_FRAMES",
     "FV_TECH_CELLS",
     "FV_B6_CELLS",
+    "FV_B4A_CELLS",
 ];
 
 /// The knobs that picked workloads or arm groups of a restored mode: one cell
 /// per workload in the tier, so `--cells` / `FV_CELLS` by arm replaces them.
 const BY_ARM: [&str; 3] = ["FV_NVFP4_WORKLOADS", "FV_VAE_WORKLOADS", "FV_VAE_UNTRACED"];
-
-/// Knobs of a family that is a tier *and* still a script family (D1d,
-/// ADR-0019 §11.5: `b4a`), where the script reads them: fv-lab refuses
-/// them, `runpod-http.sh` passes them to the script path, so they are not in
-/// [`not_read`] until the family retires. With `FV_B4A_CELLS` ignored, every
-/// `b4a` cell would run, at three times the cost of the one asked for.
-pub const SCRIPT_KNOBS: [&str; 1] = ["FV_B4A_CELLS"];
 
 /// What `--extra-env` may not carry besides [`MODE_KNOBS`]: the prompts
 /// (a cell's workload, ADR-0019 §7) and what the pod's start command sets
@@ -167,13 +164,11 @@ pub fn check_extra_env(tier: &str, entries: &[String]) -> Result<(), String> {
     message(found)
 }
 
-/// `fv-lab run`: the [`MODE_KNOBS`] and [`SCRIPT_KNOBS`] set (non-empty) in
-/// its environment.
+/// `fv-lab run`: the [`MODE_KNOBS`] set (non-empty) in its environment.
 /// `get` reads one variable (the process environment in the binary).
 pub fn check_run_env(tier: &str, get: impl Fn(&str) -> Option<String>) -> Result<(), String> {
     let found = MODE_KNOBS
         .iter()
-        .chain(&SCRIPT_KNOBS)
         .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (*k, v)))
         .filter_map(|(k, v)| {
             why(Some(tier), k, &v, false).map(|w| (restored_mode(k, &v).is_some(), w))
@@ -265,7 +260,9 @@ mod tests {
         let env = |k: &str| (k == "FV_B4A_CELLS").then(|| "x".to_owned());
         let e = check_run_env("b4a", env).unwrap_err();
         assert!(e.contains("not FV_B4A_CELLS"), "{e}");
-        assert!(!not_read().any(|k| k == "FV_B4A_CELLS"));
+        // Retired with the b4a branch (ADR-0019 §11.6): runpod-http.sh's
+        // FV_LAB_NOT_READ refuses it too (tests/knobs.rs holds them equal).
+        assert!(not_read().any(|k| k == "FV_B4A_CELLS"));
     }
 
     #[test]

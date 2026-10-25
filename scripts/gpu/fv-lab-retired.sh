@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Sourced, not run. The runpod-matrix.sh families retired to fv-lab
-# (docs/adr/0019-fv-lab.md §8, §9.5, §10): each passed its GPU gate (one
+# (docs/adr/0019-fv-lab.md §8, §9.5, §10, and §11.6 for b4a, the first with
+# a verdict step): each passed its GPU gate (one
 # `fv-lab pod up --wait` run and one `runpod-http.sh run` of the same commit,
 # `fv-lab-compare-runs.sh` exit 0), so its `case` branch is gone from
 # runpod-matrix.sh and the tier lives only in lab/ (lab/tiers.toml,
@@ -15,7 +16,7 @@
 # A family joins this list in the PR that deletes its branch, never before.
 # The restored modes below join it in the PR that restores them: their branch
 # was already gone, so they start frozen.
-FV_LAB_RETIRED="rtx6000 techniques b6 rtx5090 fastvideo h3arms trace ltxfps ltxvae precision precision-nvfp4 ltxvae-gen"
+FV_LAB_RETIRED="rtx6000 techniques b6 rtx5090 fastvideo h3arms trace ltxfps ltxvae precision precision-nvfp4 ltxvae-gen b4a"
 
 # Script modes restored as tiers (ADR-0019 §12, owner decision 2026-10-25):
 # `<tier>:<family>:<K=V>` is the mode `FV_EXTRA_ENV=<K=V> runpod-matrix.sh

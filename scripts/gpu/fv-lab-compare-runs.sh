@@ -27,7 +27,8 @@
 #   - the file exists in both and is byte-identical (no timings in them),
 #     except a family verdict (<family>.verdict.json), whose `cells` and `why`
 #     are compared as sets: fv-lab lists the cells in the tier's order, the
-#     script in FV_B4A_CELLS's (ADR-0019 §11.5).
+#     script in FV_B4A_CELLS's (ADR-0019 §11.5; a script run of b4a from
+#     before its branch was deleted, §11.6).
 # (`fv-lab pod fetch` takes these; on the runpod-http.sh side they need
 # FV_FETCH_TREE=1.) --expect-verdicts N fails unless at least N verdict files
 # compared the same: a tier with verdict cells whose files never arrived
