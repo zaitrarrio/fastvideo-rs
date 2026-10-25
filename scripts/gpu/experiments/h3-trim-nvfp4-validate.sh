@@ -80,7 +80,9 @@ case "$cmd" in
 && (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
 && export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
 && (cd /srv && "$PY" -m http.server 8000 >/dev/null 2>&1 &) && unset FV_PLAN_GZ_B64_0 FV_PLAN_GZ_B64_1 FV_PLAN_GZ_B64_2 FV_PLAN_GZ_B64_3 && bash /opt/fastvideo-rs/scripts/gpu/experiments/h3-trim-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
-sleep 1200; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
+sleep 1200; if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then until fv_self_delete /tmp/self-delete.log; do sleep 60; done; fi; sleep infinity'
+    # fv_self_delete: GraphQL podTerminate with the pod-scoped key, retried each minute (ADR-0023 §4).
+    start="$(<"$HERE/../lib/self-delete.sh")"$'\n'"$start"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
     payload="$(jq -n --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" --arg name "fv-h3trim-nvfp4-$(date -u +%m%d%H%M)" --arg image "$image" --arg vol "$FV_EU_VOLUME_ID" \

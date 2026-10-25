@@ -7,7 +7,12 @@
 //! - **Runpod** (an edge front or a standalone pod: `FV_CLUSTER_DEADLINE`,
 //!   `FV_BACKSTOP_API_KEY`, `RUNPOD_POD_ID`): at the deadline, or when the
 //!   account balance (checked every 60 s) is below `FV_MIN_BALANCE`, the pod
-//!   deletes itself through the Runpod REST API.
+//!   deletes itself through the Runpod REST API. The key is fv-control's
+//!   account key (`envCtx` `runpodApiKey` = its `RUNPOD_API_KEY`, the key it
+//!   creates and deletes pods with over REST), not the pod-scoped
+//!   `RUNPOD_API_KEY` Runpod injects (which REST refuses with a 403,
+//!   docs/adr/0023-lab-report-and-ci-bridge.md §4). Only a 2xx, or a 404 (the
+//!   pod is already gone), ends the attempts; anything else is retried.
 //! - **GMI** (`FV_BACKSTOP_API_KEY` = the GMI key, `FV_BACKSTOP_API`): at the
 //!   deadline the container deletes itself (found by `FV_POD_NAME`), and
 //!   fv-serve is stopped.
@@ -19,7 +24,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::env::{BootEnv, Kind, Provider};
-use super::sys::{kill_cmd, Method, Request};
+use super::sys::{kill_cmd, Method, Request, Response};
 use super::Ctx;
 
 pub const RUNPOD_REST: &str = "https://rest.runpod.io/v1";
@@ -136,6 +141,13 @@ pub fn container_id(body: &[u8], name: &str) -> Option<String> {
     walk(&serde_json::from_slice(body).ok()?, name)
 }
 
+/// Whether a REST `DELETE /pods/{id}` answer means the pod is going or gone:
+/// a 2xx, or a 404 (already deleted). A 403 (a key REST refuses), a 5xx or
+/// any other status is not, and neither is a transport error.
+pub fn runpod_deleted(r: &Response) -> bool {
+    r.ok() || r.status == 404
+}
+
 fn delete_runpod(c: &Ctx<'_>, pod: &str, key: &str, why: &str) {
     c.say(&format!("[watchdog] {why}: deleting {pod}"));
     for i in 0..3 {
@@ -145,8 +157,10 @@ fn delete_runpod(c: &Ctx<'_>, pod: &str, key: &str, why: &str) {
             Duration::from_secs(30),
         )
         .bearer(key);
-        if c.deps.http.send(&req).is_ok() {
-            return;
+        match c.deps.http.send(&req) {
+            Ok(r) if runpod_deleted(&r) => return,
+            Ok(r) => c.say(&format!("[watchdog] delete {pod}: HTTP {}", r.status)),
+            Err(e) => c.say(&format!("[watchdog] delete {pod}: {e}")),
         }
         if i < 2 {
             c.deps.clock.sleep(Duration::from_secs(5));

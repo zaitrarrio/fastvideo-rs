@@ -90,7 +90,9 @@ case "$cmd" in
     start='mkdir -p /opt/fv /srv && curl -fsSL --retry 5 -o /opt/fv/bundle.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  /opt/fv/bundle.tgz" | sha256sum -c - >>/srv/log.txt 2>&1 \
 && tar -xzf /opt/fv/bundle.tgz -C /opt/fv && rm -f /opt/fv/bundle.tgz && chmod 600 /opt/fv/plan.json \
 && (cd /srv && /opt/upstream/tools/bin/python -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/gpu/experiments/fasth3-nvfp4-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
-sleep 600; [ -n "${RUNPOD_POD_ID:-}" ] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; sleep infinity'
+sleep 600; if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then until fv_self_delete /tmp/self-delete.log; do sleep 60; done; fi; sleep infinity'
+    # fv_self_delete: GraphQL podTerminate with the pod-scoped key, retried each minute (ADR-0023 §4).
+    start="$(<"$HERE/../lib/self-delete.sh")"$'\n'"$start"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
     export FVX_URL="$url"

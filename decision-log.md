@@ -1651,3 +1651,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ); probes by the coordinator
 - ADR: docs/adr/0023-lab-report-and-ci-bridge.md §4
 - Verification: `pod::tests::every_pod_deletes_itself_at_its_wall_cap`; the rendered function run locally against a fake curl (200 + data: success; 200 + errors and 403: retry; the request body is exactly the probe's); payload goldens regenerated and equal; the coordinator's live cap test on the pushed commit
+
+### FVID · 2026-10-25 · FVID-2026-10-25-pod-self-delete-everywhere
+- Trigger: ADR-0023 §4's follow-up list (owner-approved): 25 more in-pod self-deletes still DELETE `rest.runpod.io/v1/pods/$RUNPOD_POD_ID` with the pod-scoped key (HTTP 403); fv-control's edge/standalone watchdog and fv-boot's `delete_runpod` use `FV_BACKSTOP_API_KEY` and count any HTTP answer, a 403 included, as done
+- Options: 25 hand copies; one library sourced on the pod (the pod scripts are shipped alone and cannot source the repository); one library embedded by the local launchers plus checked inline copies in the pod scripts
+- Decision: `scripts/gpu/lib/self-delete.sh` holds the one `fv_self_delete` (#181's text); the launchers embed it into the start commands they send, the pod scripts carry the same text inline, each retries until success (the busy-GPU exits 5 times, then the start command's own retry); `scripts/gpu/tests/self-delete.test.sh` (in `control.yml`) fails on any REST self-delete with the pod key and on any copy that differs from the library, and runs the function against a stand-in curl. `FV_BACKSTOP_API_KEY` is fv-control's account key (not pod-scoped), so payloads.ts and watchdog.rs keep REST, but only a 2xx or a 404 now counts as deleted; anything else is retried
+- Reason: the in-pod idle and cap deletes never worked; one text keeps them the same everywhere
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0023-lab-report-and-ci-bridge.md §4
+- Verification: `scripts/gpu/tests/self-delete.test.sh` (37 inline copies + `ltx-pod.sh entry`; fails with a site reverted (tried on sol-bench-pod.sh, h3-glue-validate.sh, ltx-pod.sh, pod-boot.sh), a changed copy, a wrong library path and a broken success rule), `boot::tests::watchdog_retries_a_refused_runpod_delete`, `edge.test.ts` "counts only a 2xx or a 404 as deleted"; `lint.sh`, `fv-lab-goldens.sh --check` (fixtures unchanged), control's gen-check, typecheck and unit tests; fmt, clippy, `cargo test -p fastvideo-deploy`, `cargo test --workspace --lib` on the build pod; the coordinator's live check pending

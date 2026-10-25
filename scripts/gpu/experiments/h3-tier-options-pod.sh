@@ -32,6 +32,17 @@ RES="${FV_RES:-480 768}"
 PROMPTS="talking-head spark-mountain-lake ltx-frogyoga ltx-newsbroadcast h3-demo"
 mkdir -p "$SRV" "$L"
 cd "$SRV" || exit 1
+# The in-pod self-delete (scripts/gpu/lib/self-delete.sh, the same text; checked by
+# scripts/gpu/tests/self-delete.test.sh).
+fv_self_delete() {
+  # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,
+  # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no "errors".
+  code=$(curl -sS --max-time 30 -o "$1.resp" -w '%{http_code}' -X POST https://api.runpod.io/graphql \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer $RUNPOD_API_KEY" \
+    --data "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$RUNPOD_POD_ID\\\"}) }\"}" 2>>"$1")
+  { cat "$1.resp"; echo " http=$code"; } >>"$1" 2>/dev/null
+  [ "$code" = 200 ] && ! grep -q '"errors"' "$1.resp"
+}
 log() { echo "$(date -u +%FT%TZ) $*" >>$SRV/log.txt; }
 want() { [[ "$STEPS" == *" $1 "* ]]; }
 step() {
@@ -78,7 +89,9 @@ used="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head 
 if [[ "${used:-0}" -gt 4096 ]]; then
   log "GPU busy before start: ${used} MiB used; deleting this pod"
   echo busy >$SRV/DONE
-  [[ -n "${RUNPOD_POD_ID:-}" ]] && curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" >>$SRV/log.txt 2>&1
+  if [[ -n "${RUNPOD_API_KEY:-}" && -n "${RUNPOD_POD_ID:-}" ]]; then
+    for _ in 1 2 3 4 5; do fv_self_delete $SRV/log.txt && break; sleep 30; done
+  fi
   exit 1
 fi
 

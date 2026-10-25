@@ -36,7 +36,19 @@ chmod +x /e2e/serve.sh
 date -u +%s > /e2e/boot.t0
 # Optional idle guard (FV_E2E_IDLE_DELETE_MIN): the pod deletes itself after
 # that many minutes in a row at 0 % GPU utilization (sampled every 30 s),
-# with the pod-scoped RUNPOD_API_KEY Runpod puts in the environment.
+# with the pod-scoped RUNPOD_API_KEY Runpod puts in the environment: GraphQL
+# podTerminate (fv_self_delete, the text of scripts/gpu/lib/self-delete.sh;
+# that key may not DELETE through REST, ADR-0023 §4), runpodctl when that
+# call failed; retried every 30 s while the pod stays idle.
+fv_self_delete() {
+  # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,
+  # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no "errors".
+  code=$(curl -sS --max-time 30 -o "$1.resp" -w '%{http_code}' -X POST https://api.runpod.io/graphql \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer $RUNPOD_API_KEY" \
+    --data "{\"query\":\"mutation { podTerminate(input: {podId: \\\"$RUNPOD_POD_ID\\\"}) }\"}" 2>>"$1")
+  { cat "$1.resp"; echo " http=$code"; } >>"$1" 2>/dev/null
+  [ "$code" = 200 ] && ! grep -q '"errors"' "$1.resp"
+}
 if [ -n "${FV_E2E_IDLE_DELETE_MIN:-}" ]; then
   (
     idle=0
@@ -46,8 +58,8 @@ if [ -n "${FV_E2E_IDLE_DELETE_MIN:-}" ]; then
       echo "$(date -u +%FT%TZ) util=${u:-?} idle_s=$idle" >> /e2e/idle.log
       if [ "$idle" -ge $((FV_E2E_IDLE_DELETE_MIN * 60)) ]; then
         echo "$(date -u +%FT%TZ) idle for ${FV_E2E_IDLE_DELETE_MIN} min: deleting pod" >> /e2e/idle.log
-        curl -sS -X DELETE -H "Authorization: Bearer ${RUNPOD_API_KEY:-}" "https://rest.runpod.io/v1/pods/${RUNPOD_POD_ID}" >> /e2e/idle.log 2>&1
-        command -v runpodctl >/dev/null && runpodctl remove pod "$RUNPOD_POD_ID" >> /e2e/idle.log 2>&1
+        { [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ] && fv_self_delete /e2e/idle.log; } \
+          || { command -v runpodctl >/dev/null && runpodctl remove pod "${RUNPOD_POD_ID:-}" >> /e2e/idle.log 2>&1; }
       fi
     done
   ) &

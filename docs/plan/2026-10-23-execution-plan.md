@@ -1091,3 +1091,13 @@ ran (pod id, $/hr), result, cost.
   clippy, `cargo test -p fastvideo-engine-service` (141),
   `cargo test --workspace --lib` (2109) and `scripts/serve/check.sh` green.
   No GPU cost.
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): every remaining
+  in-pod REST self-delete (ADR-0023 §4's 25 sites: scripts/serve/e2e,
+  family-pool, sol-bench, the experiments) now calls GraphQL `podTerminate`
+  through one `fv_self_delete` (`scripts/gpu/lib/self-delete.sh`, embedded by
+  the launchers, inline and checked in the pod scripts,
+  `scripts/gpu/tests/self-delete.test.sh` in `control.yml`); fv-control's and
+  fv-boot's watchdogs keep REST with the account key but retry anything but
+  a 2xx or 404. Branch `claude/pod-self-delete-graphql` (draft PR); build
+  pod gates green (`cargo test --workspace --lib` 2123, fastvideo-deploy
+  138); no GPU cost. Live check by the coordinator pending.

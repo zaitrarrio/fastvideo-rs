@@ -1482,6 +1482,79 @@ fn watchdog_loops() {
     );
 }
 
+/// The Runpod delete counts as done only on a 2xx or a 404 (the pod is gone);
+/// a 403 (a key REST refuses, ADR-0023 §4), a 5xx or another status is retried
+/// (3 attempts, 5 s apart), and the deadline round repeats it a minute later.
+#[test]
+fn watchdog_retries_a_refused_runpod_delete() {
+    let img = Image::new("wdr");
+    let sp = FakeSpawner::new(default_handler);
+    for (status, attempts) in [
+        (200, 1),
+        (204, 1),
+        (404, 1),
+        (403, 3),
+        (401, 3),
+        (500, 3),
+        (302, 3),
+    ] {
+        let log = CaptureLog::default();
+        let http = FakeHttp::new().answer(move |_| Response {
+            status,
+            body: br#"{"error":"x"}"#.to_vec(),
+        });
+        let clock = FakeClock::new();
+        let deps = Deps {
+            spawner: &sp,
+            http: &http,
+            clock: &clock,
+            log: &log,
+        };
+        let c = Ctx::new(BootEnv::default(), deps, img.paths.clone(), 1);
+        let m = watchdog::Mode::Runpod {
+            pod: "p9".into(),
+            key: "rpa_acct".into(),
+            deadline: 0.0,
+            min_balance: 0.0,
+        };
+        watchdog::run(&c, &m, Some(4321), Some(1));
+        let del: Vec<Request> = http
+            .sent()
+            .into_iter()
+            .filter(|r| r.method == sys::Method::Delete)
+            .collect();
+        assert_eq!(del.len(), attempts, "HTTP {status}");
+        assert!(del
+            .iter()
+            .all(|r| r.url == "https://rest.runpod.io/v1/pods/p9"));
+        // 5 s between attempts, then the deadline round's minute.
+        let mut want = vec![Duration::from_secs(5); attempts - 1];
+        want.push(Duration::from_secs(60));
+        assert_eq!(clock.slept(), want, "HTTP {status}");
+        assert_eq!(
+            log.has(&format!("[watchdog] delete p9: HTTP {status}")),
+            attempts > 1,
+            "HTTP {status}"
+        );
+        // The key is never logged.
+        assert!(log.lines().iter().all(|l| !l.contains("rpa_acct")));
+    }
+    for (status, done) in [
+        (200, true),
+        (299, true),
+        (404, true),
+        (403, false),
+        (400, false),
+        (500, false),
+    ] {
+        let r = Response {
+            status,
+            body: Vec::new(),
+        };
+        assert_eq!(watchdog::runpod_deleted(&r), done, "HTTP {status}");
+    }
+}
+
 #[test]
 fn upsampler_sidecar_start_wait_and_report() {
     let img = Image::new("ups");
