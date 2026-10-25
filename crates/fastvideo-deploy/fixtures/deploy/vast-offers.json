@@ -1,6 +1,6 @@
 {
   "cuda_max_good": {
-    "gte": 13.0
+    "gte": 13
   },
   "direct_port_count": {
     "gte": 1
@@ -9,7 +9,7 @@
     "gte": 40
   },
   "dph_total": {
-    "lte": 0.60
+    "lte": 0.6
   },
   "limit": 20,
   "num_gpus": {
