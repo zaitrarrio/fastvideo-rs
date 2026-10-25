@@ -11,6 +11,7 @@ import {
   canonical,
   isDirect,
   workerCreatePayload,
+  clusterGuards,
   poolDataCenters,
   workerPlacements,
   workerSystemEnv,
@@ -167,7 +168,7 @@ export async function createWorker(env: Env, c: Cluster, poolId: string, image: 
   const ctx = await envCtx(env, c);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pool: poolId, image });
   for (const pl of workerPlacements(c.spec, pool, env)) {
-    const payload = workerCreatePayload(runpodName(c, poolId), image, pool, pl, full);
+    const payload = workerCreatePayload(runpodName(c, poolId), image, pool, pl, full, clusterGuards(c.spec));
     let r: any;
     try {
       r = await runpod.create(env, payload);
