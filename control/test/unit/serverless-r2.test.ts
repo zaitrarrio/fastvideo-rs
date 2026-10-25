@@ -45,13 +45,13 @@ const pin = (rev: string, bytes = 1000) => ({ rev, files: 1, bytes, manifest_sha
 describe("the spec: weights_source", () => {
   it("defaults to volume (the coordinator flips DEFAULT_SLS_WEIGHTS_SOURCE after the benchmarks)", () => {
     expect(DEFAULT_SLS_WEIGHTS_SOURCE).toBe("volume");
-    const d = defaultEndpointSpec("x", "ltx", "ltx");
+    const d = defaultEndpointSpec("x", "GPU", "ltx");
     expect(d.weights_source).toBe("volume");
     expect(d.network_volume).toBe(EU);
     expect(d.data_centers).toEqual(["EU-RO-1"]);
-    expect(defaultEndpointSpec("x", "cpu").weights_source).toBeUndefined();
+    expect(defaultEndpointSpec("x", "CPU").weights_source).toBeUndefined();
     // The EU volume holds H3 + LTX only (2026-10-13): a preset with trees elsewhere defaults to r2.
-    expect(defaultEndpointSpec("x", "wan", "wan")).toMatchObject({ weights_source: "r2", network_volume: null });
+    expect(defaultEndpointSpec("x", "GPU", "wan")).toMatchObject({ weights_source: "r2", network_volume: null });
     expect(normalizeEndpointSpec({ name: "w", preset: "fastwan21" })).toMatchObject({ weights_source: "r2", network_volume: null });
     // ... unless the spec asks for the volume: then the missing trees are a serving issue.
     expect(normalizeEndpointSpec({ name: "w", preset: "wan", weights_source: "volume" })).toMatchObject({ weights_source: "volume", network_volume: EU });

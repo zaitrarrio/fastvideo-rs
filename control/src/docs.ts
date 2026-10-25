@@ -19,6 +19,7 @@ import { normalizeSlsPolicy, slsPolicy } from "./serverless/ops";
 import { deleteVar, listVars, setVar, type Scope } from "./envvars";
 import { validate, type Issue, type SchemaName } from "./schemas";
 import { audit, HttpError, now, parseJson, putSetting } from "./util";
+import { imageOf } from "./enums";
 
 export type DocKind = "cluster-spec" | "policies" | "attribution" | "env" | "build-pods" | "serverless-policy";
 export const DOC_KINDS: DocKind[] = ["cluster-spec", "policies", "attribution", "env", "build-pods", "serverless-policy"];
@@ -225,7 +226,7 @@ export async function planSpec(env: Env, rawId: string, doc: unknown) {
       if (!was) actions.push({ action: "create", target: p.id, detail: `new pool: ${p.count} worker(s) on Scale` });
       else if (p.count > have) actions.push({ action: "create", target: p.id, detail: `${p.count - have} more worker(s) (Scale ${p.id} to ${p.count})` });
       else if (p.count < have) actions.push({ action: "delete", target: p.id, detail: `${have - p.count} worker(s) drained and deleted (Scale ${p.id} to ${p.count})` });
-      if (was && (was.variant !== p.variant || was.image !== p.image)) actions.push({ action: "roll", target: p.id, detail: `image of ${p.id} changes: Roll` });
+      if (was && (imageOf(was) !== imageOf(p) || was.image !== p.image)) actions.push({ action: "roll", target: p.id, detail: `image of ${p.id} changes: Roll` });
     }
     for (const p of cur.pools) if (!next.pools.some((x) => x.id === p.id)) actions.push({ action: "delete", target: p.id, detail: `pool removed: its ${c.state.workers[p.id]?.length || 0} worker(s) are stopped (Scale to 0 first)` });
     if (imgChanged) actions.push({ action: "roll", target: "all", detail: `image source ${JSON.stringify(cur.image)} → ${JSON.stringify(next.image)}: Roll every pool (and the gateway)` });

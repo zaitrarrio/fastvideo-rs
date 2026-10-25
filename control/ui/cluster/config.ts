@@ -342,9 +342,9 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
     const imgInput = imgKind === "channel" ? select(["image", "channel"], (dyn.channels || []).map((c: any) => [c.id, `${c.id}${c.sha ? ` (at ${c.sha})` : ""}`])) : imgKind === "sha" ? text(["image", "sha"], { list: "cf-shas", placeholder: "git sha (7-40 hex)", mono: true }) : text(["image", "ref"], { placeholder: "ghcr.io/owner/repo:tag or @sha256:…", mono: true });
     const imgHelp =
       imgKind === "channel"
-        ? `Per-variant images <variant>-${s.image?.channel || "<channel>"}${(dyn.channels || []).find((c: any) => c.id === s.image?.channel)?.sha ? `, now at ${(dyn.channels || []).find((c: any) => c.id === s.image?.channel).sha}` : ""}; resolved to digests at Start.`
+        ? `The serve images cuda-${s.image?.channel || "<channel>"} (GPU pools) and cpu-${s.image?.channel || "<channel>"} (CPU pools)${(dyn.channels || []).find((c: any) => c.id === s.image?.channel)?.sha ? `, now at ${(dyn.channels || []).find((c: any) => c.id === s.image?.channel).sha}` : ""}; resolved to digests at Start. Each pool's worker config is sent at boot.`
         : imgKind === "sha"
-          ? `Per-variant images <variant>-sha-${(s.image?.sha || "<sha>").slice(0, 7)}.`
+          ? `The serve images cuda-sha-${(s.image?.sha || "<sha>").slice(0, 7)} (GPU pools) and cpu-sha-… (CPU pools).`
           : "One all-in-one image for every pod.";
     const regionOpts = (dyn.regions || []).map((r: any) => ({ id: r.id, label: r.id, detail: `${r.dc} · volume ${r.volume} · ${(r.gpus || []).map((g: string) => g.replace(/^NVIDIA /, "").replace(/ Blackwell Server Edition$/, "")).join(", ")}` }));
     el.form.replaceChildren(
@@ -495,8 +495,8 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       const v = sel.value;
       if (!v) return;
       let pool: any;
-      if (v === "__blank") pool = { id: uniqueId("pool"), variant: "ltx", count: 1, compute: "GPU", config: "/etc/fv/runpod-ltx.toml", models: [{ id: "ltx25-distill-sol", family: "ltx2", recipe: "ltx-turbo" }] };
-      else if (v === "__cpu") pool = { id: uniqueId("fake"), variant: "cpu", count: 1, compute: "CPU", config_toml: (tpl["tiny-cpu"]?.pools?.[0]?.config_toml as string) || "", cpu_flavors: ["cpu3c"], vcpu: 2, volume: false, fake_models: ["fake-wan"] };
+      if (v === "__blank") pool = { id: uniqueId("pool"), count: 1, compute: "GPU", config: "runpod-ltx.toml", models: [{ id: "ltx25-distill-sol", family: "ltx2", recipe: "ltx-turbo" }] };
+      else if (v === "__cpu") pool = { id: uniqueId("fake"), count: 1, compute: "CPU", config_toml: (tpl["tiny-cpu"]?.pools?.[0]?.config_toml as string) || "", cpu_flavors: ["cpu3c"], vcpu: 2, volume: false, fake_models: ["fake-wan"] };
       else {
         const pr = presets.find((x) => x.id === v)!;
         if (pr.licence && !confirm(`${pr.title}: ${pr.licence}. Add it anyway?`)) return void (sel.value = "");
@@ -576,7 +576,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       { class: "cf-pool-head" },
       h("button", { type: "button", class: "ghost cf-caret", "aria-expanded": String(open), onclick: () => (open ? openPools.delete(i) : openPools.add(i), drawForm()) }, open ? "▾" : "▸"),
       h("b", { class: "mono" }, p.id || "(no id)"),
-      badge(`${p.variant || "?"} · ${p.compute || "GPU"}`),
+      badge(`${p.compute === "CPU" ? "cpu" : "cuda"} image · ${p.compute || "GPU"}`),
       badge(p.provider || "runpod", isOther(p) ? "warn" : ""),
       counter,
       h("span", { class: "muted small" }, "workers"),
@@ -644,7 +644,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
     const fakeModels = multi(P("fake_models"), enumOf(["pools", 0, "fake_models", 0]).map((x) => ({ id: x, label: x })), { optional: true });
     const cfg = (() => {
       const seg = h("div", { class: "cf-seg", role: "radiogroup" });
-      for (const [k, l] of [["file", "file in the image"], ["toml", "inline TOML"]] as const)
+      for (const [k, l] of [["file", "named config"], ["toml", "inline TOML"]] as const)
         seg.append(
           h(
             "button",
@@ -656,7 +656,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
                 const q = spec.pools[i];
                 if (k === "file") {
                   delete q.config_toml;
-                  q.config ||= "/etc/fv/runpod.toml";
+                  q.config ||= "runpod.toml";
                 } else {
                   delete q.config;
                   q.config_toml ??= "";
@@ -669,7 +669,7 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
           ),
         );
       let ctl: HTMLElement;
-      if (cfgKind === "file") ctl = text(P("config"), { placeholder: "/etc/fv/runpod.toml", mono: true, list: "cf-config-paths" });
+      if (cfgKind === "file") ctl = text(P("config"), { placeholder: "runpod.toml", mono: true, list: "cf-config-paths" });
       else {
         const ta = h("textarea", { class: "cf-toml", spellcheck: "false", rows: "10", "aria-label": `pools.${i}.config_toml` }, p.config_toml || "");
         ta.addEventListener("input", () => {
@@ -753,10 +753,9 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       { class: "cf-fields cf-pool-body" },
       fieldBox(P("id"), "Pool id", text(P("id"), { mono: true }), describe(["pools", 0, "id"])),
       providerBox,
-      fieldBox(P("variant"), "Image variant", select(P("variant"), (dyn.variants || []).map((v: any) => [v.id, `${v.id}${v.detail ? ` — ${v.detail}` : ""}`]), { onSet: () => drawForm() }), "The CI-built image this pool runs."),
       ...otherBoxes,
       ...weightsBoxes,
-      other ? null : fieldBox(P("compute"), "Compute", segmented(P("compute"), [["GPU", "GPU"], ["CPU", "CPU"]], () => drawForm())),
+      other ? null : fieldBox(P("compute"), "Compute", segmented(P("compute"), [["GPU", "GPU"], ["CPU", "CPU"]], () => drawForm()), "GPU pools run the CUDA image, CPU pools the cpu image (the fake engine)."),
       other ? null : isCpu
         ? fieldBox(P("cpu_flavors"), "CPU flavors (in order)", multi(P("cpu_flavors"), (dyn.cpu_flavors || []).map((f: any) => ({ id: f.id, label: f.id, detail: `$${f.dph_per_vcpu}/vCPU·hr` })), { optional: true }), describe(["pools", 0, "cpu_flavors"]), true)
         : fieldBox(P("gpu_types"), "GPU types (in order; none: the regions')", multi(P("gpu_types"), gpuOpts(), { optional: true }), describe(["pools", 0, "gpu_types"]), true),
@@ -793,9 +792,9 @@ export async function openClusterConfig(host: HTMLElement, o: ConfigOptions) {
       // The prompt upsampler's local sidecar (docs/serve/upsampler-local.md): llama-server next to fv-serve, default off.
       isCpu && !other ? null : fieldBox(P("upsampler_local"), "Prompt upsampler (local)", toggle(P("upsampler_local"), "llama-server sidecar (Qwen3-VL-4B-Instruct) on the pod's GPU"), describe(["pools", 0, "upsampler_local"])),
       other ? null : fieldBox(P("volume"), "Weights volume", volSel, "Mounted at /workspace."),
-      fieldBox(P("image"), "Image override", text(P("image"), { optional: true, mono: true, placeholder: "(the variant's image)" }), describe(["pools", 0, "image"])),
+      fieldBox(P("image"), "Image override", text(P("image"), { optional: true, mono: true, placeholder: "(the compute's serve image)" }), describe(["pools", 0, "image"])),
       spec.control_plane !== "direct" ? fieldBox(P("family"), "Edge family", select(P("family"), enumOf(["pools", 0, "family"]).map((v) => [v, v]), { optional: true }), describe(["pools", 0, "family"])) : null,
-      fieldBox(P("config"), "Worker config", cfg, "A path inside the image, or a whole worker config sent inline (FV_WORKER_TOML_B64).", true),
+      fieldBox(P("config"), "Worker config", cfg, "A configs/serve file by name, or a whole worker config; either is sent at boot (FV_WORKER_TOML_B64): the images bake none.", true),
       fieldBox(P("models"), "Models", models, describe(["pools", 0, "models"]), true),
       fieldBox(P("fake_models"), "Fake-engine models", fakeModels, "The fake engine's models (CPU pools, tests).", true),
       fieldBox(P("max_queued"), "Max queued", num(P("max_queued"), { min: 0, max: 10000, step: 1, optional: true }), describe(["pools", 0, "max_queued"])),

@@ -14,6 +14,7 @@ import { normalizeEndpointSpec, specDiff, type EndpointSpec } from "./spec";
 import { newWeightsToken, slsHubEnv, slsWeightsEnv } from "./weights";
 import { upsamplerPodEnv } from "../upsampler";
 import { defaultCancelPath } from "../jobapi";
+import { legacyVariant } from "../enums";
 
 export interface SlsRow {
   id: string;
@@ -75,7 +76,10 @@ export function normalizeSlsPolicy(x: Partial<SlsPolicy>): SlsPolicy {
 }
 
 export const LIVE = "deleted_at IS NULL AND status NOT IN ('deleted', 'gone', 'failed')";
-export const specOf = (r: SlsRow): EndpointSpec => parseJson<EndpointSpec>(r.spec, {} as EndpointSpec);
+/** A stored endpoint's spec. One stored before the one-image decision names an image `variant`: it reads as its compute
+ * and, without a config of its own, the config that variant's image baked (enums.ts legacyVariant), which fv-control
+ * now sends at boot. */
+export const specOf = (r: SlsRow): EndpointSpec => legacyVariant(parseJson<EndpointSpec>(r.spec, {} as EndpointSpec));
 
 // ---------------------------------------------------------------- ownership
 /** One of fv-control's endpoints by its row id (se_…), Runpod endpoint id, or live name; 404 otherwise. */
@@ -122,7 +126,7 @@ async function liveSizes(env: Env): Promise<{ id: string; workers_max: number }[
 // ---------------------------------------------------------------- images
 /** The spec's image, resolved to a digest the way clusters resolve theirs (ghcr.ts resolveClusterImages). */
 export async function resolveImage(env: Env, spec: EndpointSpec): Promise<string> {
-  const pseudo = { image: spec.image, pools: [{ id: "sls", variant: spec.variant }] } as unknown as ClusterSpec;
+  const pseudo = { image: spec.image, pools: [{ id: "sls", compute: spec.compute }] } as unknown as ClusterSpec;
   const out = await resolveClusterImages(env, pseudo);
   return out.sls!;
 }
@@ -183,11 +187,9 @@ export async function createEndpoint(env: SlsEnv, who: Actor, input: unknown, o:
       const got = await sls.getEndpoint(env, ep);
       tpl = got?.templateId ?? er?.templateId ?? null;
       await patchRow(env, id, { template_id: tpl, own_template: tpl ? 1 : 0 });
-      const boot = v2TemplateBoot(spec);
-      if (boot) {
-        if (!tpl) throw new HttpError(502, "runpod: the v2 endpoint has no template to give the config");
-        await sls.updateTemplate(env, tpl, boot);
-      }
+      // Its config's boot (every endpoint sends one: the images bake none).
+      if (!tpl) throw new HttpError(502, "runpod: the v2 endpoint has no template to give the config");
+      await sls.updateTemplate(env, tpl, v2TemplateBoot(spec));
     }
     // Runpod's create drops some fields (REST v1: flashboot false, workersMax 0; live 2026-10-06): set them again.
     await sls.patchEndpoint(env, ep, endpointUpdatePayload(spec));

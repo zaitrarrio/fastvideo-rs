@@ -9,6 +9,8 @@
 //!     [--once]                         one tick, print the report as JSON, exit
 //!     [--admin-bind 127.0.0.1:9090]    serve /fv/v1/admin/autoscale (FV_ADMIN_TOKEN)
 //!     [--holder NAME]                  lease holder id (default: hostname-pid)
+//!     [--serve-configs DIR]            where pod pools' `pod.worker_config` files are
+//!                                      (default: `serve/` beside the config file)
 //! ```
 //!
 //! Env: `RUNPOD_API_KEY`; `FV_ADMIN_TOKEN`; for `lease.backend = "d1"`
@@ -67,6 +69,18 @@ async fn main() {
     let path = arg(&args, "--config").unwrap_or_else(|| die("--config <file> is required"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| die(format!("{path}: {e}")));
     let mut cfg = AutoscaleConfig::from_toml_document(&text).unwrap_or_else(|e| die(e));
+    // Pod pools send their worker config (the serve images bake none, ADR-0011):
+    // `configs/serve` beside the config file unless --serve-configs names another.
+    let serve_dir = arg(&args, "--serve-configs")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(&path)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("serve")
+        });
+    cfg.resolve_worker_configs(&serve_dir)
+        .unwrap_or_else(|e| die(e));
     if args.iter().any(|a| a == "--live") {
         cfg.dry_run = false;
     }

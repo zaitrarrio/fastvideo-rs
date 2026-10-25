@@ -27,7 +27,7 @@ import {
 } from "./ops";
 import { markReady } from "../boottime";
 import { checkPod } from "../podlogs";
-import type { OtherProviderId } from "../enums";
+import { imageOf, type OtherProviderId } from "../enums";
 import { brevReleased } from "../brev-park";
 import { budgetCheck, budgetLine, isOtherPod, isOtherPool, otherPodDiag, otherPodState, poolProvider, providerIssues, reportedUrl } from "../providers";
 import type { PodRec, PoolStatus } from "./payloads";
@@ -552,12 +552,12 @@ export class ClusterOps implements DurableObject {
   }
 
   // ---------------- rolling redeploy
-  /** A roll target (channel, commit or image) as the digest of a pool's variant; an all-in-one cluster (image.ref) rolls onto the all-in-one image. */
-  private async resolveTarget(c: Cluster, variant: string, target: string): Promise<string> {
+  /** A roll target (channel, commit or image) as the digest of a pool's serve image (enums.ts imageOf: cuda or cpu); an all-in-one cluster (image.ref) rolls onto the all-in-one image. */
+  private async resolveTarget(c: Cluster, image: string, target: string): Promise<string> {
     if (target.includes("/")) return resolveDigest(this.env, target);
     const repo = this.env.SERVE_REPO || "ghcr.io/zaitrarrio/fastvideo-rs-serve";
     const tag = /^[0-9a-f]{7,40}$/.test(target) ? `sha-${target.slice(0, 7)}` : target;
-    return resolveDigest(this.env, `${repo}:${c.spec.image.ref ? "" : `${variant}-`}${tag}`);
+    return resolveDigest(this.env, `${repo}:${c.spec.image.ref ? "" : `${image}-`}${tag}`);
   }
   private async roll(c: Cluster, op: Op): Promise<Step> {
     const env = this.env;
@@ -574,7 +574,7 @@ export class ClusterOps implements DurableObject {
       for (const p of pools) {
         const spec = c.spec.pools.find((x) => x.id === p);
         if (!spec) return { done: true, error: `no pool ${p}` };
-        d.images[p] = await this.resolveTarget(c, spec.variant, target);
+        d.images[p] = await this.resolveTarget(c, imageOf(spec), target);
       }
       d.pools = pools.filter((p) => (c.state.workers[p] || []).some((r) => r.image !== d.images[p]));
       this.log(`roll to ${target}: pools ${d.pools.join(", ") || "(none change)"}`);

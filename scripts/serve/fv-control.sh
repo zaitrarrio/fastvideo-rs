@@ -28,7 +28,7 @@
 #   fv-control.sh build-pod stop [--force] [<id>]   (default: the one in $FV_BUILD_STATE; refused while busy)
 #   fv-control.sh build-pod start <id> | delete [--force] <id> | token [<id>] | plan [region]
 #   fv-control.sh build-pod policy [json]      show, or merge a JSON object into, the build_pods policy
-#   fv-control.sh pod launch <name> [--preset P | --variant V (--config PATH | --config-toml FILE)]
+#   fv-control.sh pod launch <name> [--preset P | (--config NAME | --config-toml FILE) [--cpu]]
 #                     [--channel C | --sha S | --image REF] [--gpu TYPE]... [--cpu [FLAVOR]] [--region eu|EU-RO-1|<DC> (r2)]
 #                     [--weights volume|r2|hub|none [--approve-hub-download]] [--dc DC|any]... (Runpod without the volume: any DC, in order)
 #                     [--no-volume] [--env K=V]... [--secret-env K=V|K=@FILE]... [--deadline-min N] [--idle-stop-min N]
@@ -38,7 +38,8 @@
 #                                              cluster, with the cluster pods' price check, image preflight, backstops,
 #                                              cost ledger (owner pod:<name>) and logs from boot. --provider gmi|brev
 #                                              (docs/serve/deploy-gmi-brev.md): --gpu is the GMI product / Brev instance
-#                                              type; --fake = the cpu image's fake engine (a cheap smoke test)
+#                                              type; --fake = the fake engine (a cheap smoke test). No image bakes a
+#                                              config: --config names a configs/serve file, sent at boot
 #   fv-control.sh providers                    launch providers: enabled or why not, budget, month's spend, GPU products
 #                                              and the pod tunnels' mode (named | quick); a warning or error on stderr
 #   fv-control.sh budget gmi|brev [USD|unset]  a GMI / Brev monthly budget: show it, or set it (policy <p>_budget_usd,
@@ -61,9 +62,10 @@
 #                                              volume, weights per component, warm-up, ready (and the phase it is in)
 #   fv-control.sh endpoint list [--all]       Runpod serverless endpoints fv-control made (docs/control/serverless.md)
 #   fv-control.sh endpoint create <spec.json|-> | create <name> --preset P [--mode queue|lb] [--weights volume|r2|hub]
-#                                 [--approve-hub-download] [--gpu TYPE]... [--dc DC]... | create <name> [variant]
-#                                              model-first: a preset (endpoint presets) sets variant, config, weights,
-#                                              GPU; a bare variant is a custom endpoint (default cpu = CPU fake engine).
+#                                 [--approve-hub-download] [--gpu TYPE]... [--dc DC]... | create <name> [--config NAME]
+#                                              model-first: a preset (endpoint presets) sets compute, config, weights,
+#                                              GPU; --config NAME (a configs/serve file, sent at boot: the images bake
+#                                              none) is a custom GPU endpoint; neither: CPU fake engine.
 #                                              --weights r2: the R2 weights store (no volume, any DC unless --dc)
 #                                              --weights hub --approve-hub-download: the Hub at the pinned revisions onto
 #                                              the container disk at every cold start, FlashBoot on (owner-approved; also
@@ -173,7 +175,7 @@ cmd_build_pod() {
     *) die "build-pod up|status|list|stop|start|delete|token|plan|policy" ;;
   esac
 }
-sp_line() { jq -r '.pods[]? // .pod | select(. != null) | "\(.name)  \(.status)  \(.pod.pod_id // "-")  \(.definition.variant) \(.definition.image | tostring)  \(.pod.gpu // .definition.gpu_types[0]? // .definition.compute) \(.pod.dc // .definition.dc)  $\(.pod.cost_per_hr // 0)/hr  today $\(.cost.today * 100 | round / 100) total $\(.cost.total * 100 | round / 100)  deadline \(if .deadline then (.deadline / 1000 | todate) else "-" end)\(if .pod.boot then "  boot: " + .pod.boot.phase else "" end)\(if .pool_status and .pool_status.status != "ready" and .pool_status.status != "starting" then "  " + .pool_status.status + ": " + (.pool_status.detail // "") else "" end)\(if .op then "  op " + .op.kind + "/" + .op.phase else "" end)"'; }
+sp_line() { jq -r '.pods[]? // .pod | select(. != null) | "\(.name)  \(.status)  \(.pod.pod_id // "-")  \(.definition.serve_image) \(.definition.image | tostring)  \(.pod.gpu // .definition.gpu_types[0]? // .definition.compute) \(.pod.dc // .definition.dc)  $\(.pod.cost_per_hr // 0)/hr  today $\(.cost.today * 100 | round / 100) total $\(.cost.total * 100 | round / 100)  deadline \(if .deadline then (.deadline / 1000 | todate) else "-" end)\(if .pod.boot then "  boot: " + .pod.boot.phase else "" end)\(if .pool_status and .pool_status.status != "ready" and .pool_status.status != "starting" then "  " + .pool_status.status + ": " + (.pool_status.detail // "") else "" end)\(if .op then "  op " + .op.kind + "/" + .op.phase else "" end)"'; }
 sp_wait() { # <name>: until no operation runs; prints the last operation's log
   local name="$1" op
   while :; do
@@ -194,7 +196,6 @@ cmd_pod() {
       while (( $# )); do
         case "$1" in
           --preset) body="$(jq -c --arg v "${2:?}" '.preset = $v' <<<"$body")"; shift 2 ;;
-          --variant) body="$(jq -c --arg v "${2:?}" '.variant = $v' <<<"$body")"; shift 2 ;;
           --config) body="$(jq -c --arg v "${2:?}" '.config = $v' <<<"$body")"; shift 2 ;;
           --config-toml) body="$(jq -c --rawfile v "${2:?}" '.config_toml = $v' <<<"$body")"; shift 2 ;;
           --channel) body="$(jq -c --arg v "${2:?}" '.channel = $v' <<<"$body")"; shift 2 ;;
@@ -220,7 +221,7 @@ cmd_pod() {
           --idc) body="$(jq -c --arg v "${2:?}" '.provider_region = $v' <<<"$body")"; shift 2 ;;
           --weights) body="$(jq -c --arg v "${2:?}" '.weights_source = $v' <<<"$body")"; shift 2 ;;
           --approve-hub-download) body="$(jq -c '.weights_download_approved = true' <<<"$body")"; shift ;;
-          --fake) body="$(jq -c '.variant = "cpu" | .config = "/etc/fv/runpod-fake.toml" | .fake_models = ["fake-wan"]' <<<"$body")"; shift ;;
+          --fake) body="$(jq -c '.config = "runpod-fake.toml" | .fake_models = ["fake-wan"]' <<<"$body")"; shift ;;
           --wait) wait=1; shift ;;
           --json) json="${2:?}"; shift 2 ;;
           *) die "pod launch: unknown option $1" ;;
@@ -257,7 +258,7 @@ cmd_pod() {
     *) die "pod launch|list|status|start|stop|extend|delete|wait|logs" ;;
   esac
 }
-ep_line() { jq -r '.endpoints[]? // .endpoint | select(. != null) | "\(.name)  \(.endpoint_id // "-")  \(.mode)  \(.status)  \(.spec.variant)/\(.spec.compute)  workers \(.workers // 0) (\(.spec.workers_min)..\(.spec.workers_max))  $\(.live_dph // 0)/hr  billed $\(.cost_usd * 1000 | round / 1000)\(if .deadline then "  \(.deadline_action) at " + (.deadline / 1000 | todate) else "" end)\(if .last_error then "  ERROR " + .last_error else "" end)"'; }
+ep_line() { jq -r '.endpoints[]? // .endpoint | select(. != null) | "\(.name)  \(.endpoint_id // "-")  \(.mode)  \(.status)  \(.spec.preset // "custom")/\(.spec.compute)  workers \(.workers // 0) (\(.spec.workers_min)..\(.spec.workers_max))  $\(.live_dph // 0)/hr  billed $\(.cost_usd * 1000 | round / 1000)\(if .deadline then "  \(.deadline_action) at " + (.deadline / 1000 | todate) else "" end)\(if .last_error then "  ERROR " + .last_error else "" end)"'; }
 cmd_endpoint() {
   local sub="${1:-list}"; shift || true
   local id body
@@ -266,7 +267,7 @@ cmd_endpoint() {
     create)
       if [[ -f "${1:-}" || "${1:-}" == - ]]; then body="$(jq -c '{spec: .}' "${1/#-//dev/stdin}")"
       else
-        local name="${1:?spec.json or a name}" preset="" variant="" mode="" weights="" hubok="" gpus="[]" dcs="[]"; shift
+        local name="${1:?spec.json or a name}" preset="" config="" mode="" weights="" hubok="" gpus="[]" dcs="[]"; shift
         while (( $# )); do case "$1" in
           --preset) preset="${2:?--preset P (endpoint presets)}"; shift 2 ;;
           --mode) mode="${2:?--mode queue|lb}"; shift 2 ;;
@@ -274,18 +275,18 @@ cmd_endpoint() {
           --approve-hub-download) hubok=1; shift ;;
           --gpu) gpus="$(jq -c --arg g "${2:?--gpu TYPE}" '. + [$g]' <<<"$gpus")"; shift 2 ;;
           --dc) dcs="$(jq -c --arg d "${2:?--dc DC}" '. + [$d]' <<<"$dcs")"; shift 2 ;;
-          -*) die "endpoint create: unknown option $1" ;;
-          *) variant="$1"; shift ;;
+          --config) config="${2:?--config NAME (a configs/serve file)}"; shift 2 ;;
+          *) die "endpoint create: unknown option $1" ;;
         esac; done
-        [[ -n "$preset" && -n "$variant" ]] && die "endpoint create: --preset or a variant, not both"
+        [[ -n "$preset" && -n "$config" ]] && die "endpoint create: --preset or --config, not both"
         [[ -n "$hubok" && "$weights" != hub ]] && die "endpoint create: --approve-hub-download only with --weights hub"
-        body="$(jq -nc --arg n "$name" --arg p "$preset" --arg v "${variant:-cpu}" --arg m "$mode" --arg w "$weights" --arg h "$hubok" --argjson g "$gpus" --argjson d "$dcs" \
-          '{spec: ({name: $n} + (if $p != "" then {preset: $p} else {variant: $v} end) + (if $m != "" then {mode: $m} else {} end)
+        body="$(jq -nc --arg n "$name" --arg p "$preset" --arg c "$config" --arg m "$mode" --arg w "$weights" --arg h "$hubok" --argjson g "$gpus" --argjson d "$dcs" \
+          '{spec: ({name: $n} + (if $p != "" then {preset: $p} elif $c != "" then {compute: "GPU", config: $c} else {compute: "CPU"} end) + (if $m != "" then {mode: $m} else {} end)
             + (if $w != "" then {weights_source: $w} else {} end) + (if $h != "" then {weights_download_approved: true} else {} end)
             + (if ($g | length) > 0 then {gpu_types: $g} else {} end) + (if ($d | length) > 0 then {data_centers: $d} else {} end))}')"
       fi
       api_s POST /api/serverless "$body" || die "create: $(api_err)"; ep_line <<<"$API_OUT" ;;
-    presets) api GET /api/serverless/presets | jq -r '.presets[] | "\(.id)\t\(.variant)\(if .inline_config then " + inline config" else "" end)\t>= \(.min_vram_gb) GB\tweights: \(.weights | join(","))\n  serves: \([.serves.models[] | "\(.id) [\(.tasks | join(","))]"] | join("; "))\n  API names: \([.serves.aliases[] | "\(.name)->\(.model)"] | join(", "))\n  APIs: \(.serves.protocols | join(", "))"' ;;
+    presets) api GET /api/serverless/presets | jq -r '.presets[] | "\(.id)\t\(.compute)\(if .inline_config then " + inline config" else "" end)\t>= \(.min_vram_gb) GB\tweights: \(.weights | join(","))\n  serves: \([.serves.models[] | "\(.id) [\(.tasks | join(","))]"] | join("; "))\n  API names: \([.serves.aliases[] | "\(.name)->\(.model)"] | join(", "))\n  APIs: \(.serves.protocols | join(", "))"' ;;
     serves) api GET "/api/serverless/${1:?name|id}/serves" | jq '{preset, preset_inferred, models: [.serves.models[] | {id, recipe, tier, tasks}], aliases: .serves.aliases, protocols: .serves.protocols, fal_apps: .serves.fal_apps, weights: .serves.weights, examples: [.examples[] | {label, invoke}]}' ;;
     show) api GET "/api/serverless/${1:?name|id}" | jq '{endpoint: (.endpoint | del(.spec)), spec: .endpoint.spec, runpod: .runpod, health, stats, outlook: (.outlook | {weights_source, note, cache, fetch_gb, rate_gbps, rate_source}), boots, jobs: [.jobs[] | {id, route, status, cold, delay_ms, exec_ms, wall_ms}], costs}' ;;
     update) api_s PUT "/api/serverless/${1:?name|id}" "$(jq -c '{spec: .}' <<<"${2:?json (merged over the spec)}")" || die "update: $(api_err)"; ep_line <<<"$API_OUT" ;;

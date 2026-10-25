@@ -106,10 +106,11 @@ describe("github and releases", () => {
   it("drift against the channel head", () => {
     const spec = defaultSpec("x");
     const c: any = { spec, state: { images: {}, workers: { wan: [{ pod: "w", image: "r@sha256:w0" }], "h3-turbo": [{ pod: "g", image: "r@sha256:g1" }] } } };
-    const heads: any = [{ channel: "stable", git_sha: "abcdef1234", digests: { "h3-turbo": "r@sha256:g1", wan5b: "r@sha256:w1" } }];
+    // Every GPU pool runs the one CUDA image (release key cuda); a head recorded before 2026-10-25 keyed it per variant.
+    const heads: any = [{ channel: "stable", git_sha: "abcdef1234", digests: { cuda: "r@sha256:g1", cpu: "r@sha256:c1" } }];
     const d = clusterDrift(c, heads);
     expect(d.drift).toBe(true);
-    expect(d.pods.find((p) => p.pod === "w")).toMatchObject({ key: "wan5b", running: "sha256:w0", head: "sha256:w1", drift: true });
+    expect(d.pods.find((p) => p.pod === "w")).toMatchObject({ key: "cuda", running: "sha256:w0", head: "sha256:g1", drift: true });
     expect(d.pods.find((p) => p.pod === "g")!.drift).toBe(false);
   });
 });

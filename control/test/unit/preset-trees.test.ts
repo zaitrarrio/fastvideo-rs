@@ -4,7 +4,6 @@
 // table is tied to the Rust sources here, so a new adapter or tree layout fails this test instead of a worker.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { BAKED_CONFIGS, IMAGE_CONFIGS } from "../../src/cluster/image-configs";
 import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
 import { POOL_PRESETS } from "../../src/presets";
 import { poolTrees, weightsPlan, weightsSource } from "../../src/providers";
@@ -23,10 +22,11 @@ const ROOT = new URL("../../../", import.meta.url).pathname;
 /** h3/ltx presets whose trees are not all on the EU volume (R2 only). */
 const R2_ONLY_PRESETS = new Set(["h3-larry-turbo", "h3-lightx2v-turbo", "h3-lightx2v-turbo-v01", "h3-family"]);
 const rust = (p: string) => readFileSync(`${ROOT}${p}`, "utf8");
+/** A preset's worker config: its inline TOML (every preset sends its config at boot), else the named file's. */
 const configOf = (p: (typeof POOL_PRESETS)[number]) => {
   if (p.pool.config_toml) return p.pool.config_toml;
-  const f = (p.pool.config || IMAGE_CONFIGS[p.pool.variant]!.default).split("/").pop()!;
-  return BAKED_CONFIGS[f] || WORKER_CONFIGS[f] || readFileSync(`${ROOT}configs/serve/${f}`, "utf8");
+  const f = p.pool.config!.split("/").pop()!;
+  return WORKER_CONFIGS[f] || readFileSync(`${ROOT}configs/serve/${f}`, "utf8");
 };
 /** A config path's tree: the first segment under the weights root, or a published nested tree by its full name. */
 const treeOf = (path: string) => {
@@ -158,20 +158,20 @@ describe("recipe-trees.ts against the Rust sources", () => {
 
 describe("the trees a config without a preset loads (plan A3: [[models]] name variants)", () => {
   const larry = `[engine]\nbackend = "cuda"\n[[models]]\nvariant = "h3-larry-turbo"\nresident = true\n`;
-  it("pools: a custom inline config and a baked /etc/fv config resolve their variants' trees", () => {
-    expect(poolTrees({ id: "c", variant: "h3-max", count: 1, compute: "GPU", config_toml: larry } as any)).toEqual(["h3-base", "h3-turbo-loras/larry"]);
-    expect(poolTrees({ id: "c", variant: "wan5b", count: 1, compute: "GPU", config: "/etc/fv/runpod-wan14b.toml" } as any)).toEqual([
+  it("pools: a custom inline config and a named config resolve their variants' trees", () => {
+    expect(poolTrees({ id: "c", count: 1, compute: "GPU", config_toml: larry } as any)).toEqual(["h3-base", "h3-turbo-loras/larry"]);
+    expect(poolTrees({ id: "c", count: 1, compute: "GPU", config: "/etc/fv/runpod-wan14b.toml" } as any)).toEqual([
       "longlive-plug/wan21-t2v-14b-cfg",
       "longlive-plug/wan21-t2v-14b-few-step",
       "wan21-t2v-14b",
     ]);
     // A `weights` path replaces the variant's own tree.
     const moved = `[[models]]\nvariant = "wan-max"\nweights = "\${FV_WEIGHTS}/my-wan"\nresident = true\n`;
-    expect(poolTrees({ id: "c", variant: "wan5b", count: 1, compute: "GPU", config_toml: moved } as any)).toEqual(["my-wan"]);
+    expect(poolTrees({ id: "c", count: 1, compute: "GPU", config_toml: moved } as any)).toEqual(["my-wan"]);
   });
   it("serverless: the same for an endpoint's custom inline and baked configs", () => {
-    expect(slsTrees({ variant: "h3-max", compute: "GPU", config_toml: larry, image: { channel: "stable" } })).toEqual(["h3-base", "h3-turbo-loras/larry"]);
-    expect(slsTrees({ variant: "wan5b", compute: "GPU", config: "/etc/fv/runpod-wan14b.toml", image: { channel: "stable" } })).toEqual([
+    expect(slsTrees({ compute: "GPU", config_toml: larry, image: { channel: "stable" } })).toEqual(["h3-base", "h3-turbo-loras/larry"]);
+    expect(slsTrees({ compute: "GPU", config: "/etc/fv/runpod-wan14b.toml", image: { channel: "stable" } })).toEqual([
       "longlive-plug/wan21-t2v-14b-cfg",
       "longlive-plug/wan21-t2v-14b-few-step",
       "wan21-t2v-14b",
@@ -183,11 +183,11 @@ describe("the trees a boot fetches", () => {
   const env = {} as Env;
   it("serverless r2: the preset's weights, its pre-quantized trees and the aux trees", () => {
     const p = SLS_PRESETS.find((x) => x.id === "h3-turbo")!;
-    const spec = { variant: p.variant, compute: "GPU" as const, preset: p.id, image: { channel: "stable" } };
+    const spec = { compute: "GPU" as const, preset: p.id, config_toml: p.config_toml, image: { channel: "stable" } };
     expect(slsTrees(spec)).toEqual(["FastH3-4-step-Preview-v1-LoRA", "h3-base", "h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]);
     expect(slsFetchTrees(env, spec)).toEqual(["FastH3-4-step-Preview-v1-LoRA", "auxiliary/lpips", "auxiliary/tae", "h3-base", "h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]);
     expect(slsFetchTrees({ WEIGHTS_R2_AUX: "0" } as Env, spec)).toEqual(slsTrees(spec));
-    expect(slsFetchTrees(env, { variant: "cpu", compute: "CPU", preset: "cpu", image: { channel: "stable" } })).toEqual([]);
+    expect(slsFetchTrees(env, { compute: "CPU", preset: "cpu", config: "runpod-fake.toml", image: { channel: "stable" } })).toEqual([]);
   });
   it("pods: r2 adds the pre-quantized and aux trees; the Hub gets only what it has (no prequant)", () => {
     const pool = { ...POOL_PRESETS.find((x) => x.id === "h3-max")!.pool, provider: "brev" as const, provider_gpu: "g7e.2xlarge" };

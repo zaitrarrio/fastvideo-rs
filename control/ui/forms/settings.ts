@@ -47,7 +47,7 @@ export async function mountReleaseForm(host: HTMLElement, o: { api: Api; toast: 
         f.field(["notes"], { label: "Notes", placeholder: "why" }),
         f.field(["dry_run"], { label: "Dry run", placeholder: "only show what would change" }),
         f.field(["templates"], { label: "Templates", placeholder: "update the Runpod templates too (default on)" }),
-        ...(promote ? [f.field(["allow_partial"], { label: "Allow partial", placeholder: "even if some variants have no image" })] : []),
+        ...(promote ? [f.field(["allow_partial"], { label: "Allow partial", placeholder: "even if some serve images have no build" })] : []),
       ),
     );
     f.prune();

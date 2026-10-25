@@ -15,7 +15,7 @@ import {
   BUILD_VCPUS,
   RUNPOD_DISK_MAX_GB,
   CHANNEL_RE,
-  CONFIG_PATH_RE,
+  CONFIG_NAME_RE,
   CPU_FLAVORS,
   CPU_VCPUS,
   CUDA_VERSIONS,
@@ -50,9 +50,10 @@ import {
   TOKEN_NAME_RE,
   TOKEN_NAME_RULE,
   TOKEN_SCOPES,
-  VARIANTS,
+  legacyVariant,
   type NameKind,
 } from "./enums";
+import { CONFIG_NAMES, MAX_WORKER_TOML_BYTES, workerConfigProblem } from "./worker-config";
 import { EndpointSpecZ } from "./serverless/spec";
 export { noVolumePod } from "./enums";
 import { HttpError } from "./util";
@@ -127,8 +128,8 @@ function providerRules(x: { provider?: string; provider_gpu?: string; provider_r
   }
   if (!x.provider_gpu) add("provider_gpu", `provider ${x.provider}: the GPU product / instance type is required`);
   if (x.gpu_types) add(gpuTypesKey, `gpu_types are Runpod GPU type ids: provider ${x.provider} takes provider_gpu`);
-  if (x.cpu_flavors || x.vcpu !== undefined) add("cpu_flavors", `provider ${x.provider} has GPU machines only (the cpu variant runs on one)`);
-  if (x.compute === "CPU") add("compute", `provider ${x.provider} has GPU machines only: compute GPU (the cpu variant runs there too)`);
+  if (x.cpu_flavors || x.vcpu !== undefined) add("cpu_flavors", `provider ${x.provider} has GPU machines only (a fake-engine smoke test runs there on the CUDA image)`);
+  if (x.compute === "CPU") add("compute", `provider ${x.provider} has GPU machines only: compute GPU (a fake-engine smoke test runs there on the CUDA image)`);
   if (x.volume) add("volume", `provider ${x.provider} cannot mount the Runpod weights volume: weights_source r2, hub or none`);
   if (x.weights_source === "volume") add("weights_source", `provider ${x.provider} has no Runpod volume: r2, hub or none`);
   if (x.provider === "brev" && x.provider_region) add("provider_region", "brev: the instance type implies the region");
@@ -136,7 +137,21 @@ function providerRules(x: { provider?: string; provider_gpu?: string; provider_r
   if (x.weights_source === "none" && x.models?.length) add("weights_source", "models need weights: r2 (the R2 weights store), hub (owner approval) or serve fake_models");
 }
 const imageRef = z.string().max(300).regex(IMAGE_REF_RE, { message: "an image reference: registry/repo[:tag][@sha256:<64 hex>]" }).meta({ "x-rule": "registry/repo[:tag][@sha256:<64 hex>], lower-case" });
-const configPath = z.string().max(200).regex(CONFIG_PATH_RE, { message: "an absolute .toml path in the image" }).meta({ "x-rule": "an absolute path ending in .toml, e.g. /etc/fv/runpod.toml", "x-dynamic": "config_paths" });
+/** A named worker config: a configs/serve file fv-control carries and sends inline at boot (worker-config.ts; the
+ * images bake none). `/etc/fv/<file>`, as specs stored before the one-image decision name it, is the same file. */
+export const configNameZ = z
+  .string()
+  .max(200)
+  .regex(CONFIG_NAME_RE, { message: "a configs/serve file name (runpod-ltx.toml)" })
+  .refine((c) => !workerConfigProblem({ config: c }), { message: `not a worker config fv-control carries (configs/serve: ${CONFIG_NAMES.join(", ")})` })
+  .meta({ "x-rule": "a configs/serve file name, e.g. runpod-ltx.toml (fv-control sends its text at boot)", "x-dynamic": "config_paths" });
+/** An inline worker config, at most what fits the FV_WORKER_TOML_B64 env guard (worker-config.ts MAX_WORKER_TOML_B64). */
+export const configTomlZ = z
+  .string()
+  .min(1)
+  .max(MAX_WORKER_TOML_BYTES)
+  .refine((t) => !workerConfigProblem({ config_toml: t }), { message: `over the FV_WORKER_TOML_B64 size guard (${MAX_WORKER_TOML_BYTES} bytes of TOML)` })
+  .meta({ "x-ui": "textarea" });
 const channel = z.string().regex(CHANNEL_RE, { message: "a channel: a lower-case word" }).meta({ "x-dynamic": "channels" });
 const sha = z.string().regex(SHA_RE, { message: "7-40 lower-case hex characters" }).meta({ "x-dynamic": "shas", "x-rule": "a git commit: 7-40 hex characters" });
 
@@ -166,11 +181,10 @@ export const ModelRefZ = z
 export const PoolSpecZ = z
   .object({
     id: nameZ("pool", "Pool id"),
-    variant: z.enum(VARIANTS).meta({ "x-dynamic": "variants" }).describe("Image variant (docs/serve/images.md): h3-turbo, h3-max, ltx, wan, wan5b, sfwan (GPU), cpu (CPU, the fake engine). The pool presets reuse these images with an inline config_toml."),
     count: z.number().int().min(0).max(8).meta({ "x-unit": "pods" }).describe("Worker pods in this pool. Change a running cluster's count with Scale."),
-    compute: z.enum(["GPU", "CPU"]).describe("GPU pod, or CPU pod (the cpu variant: fake engine, tests)."),
-    config: configPath.optional().describe("Worker config inside the image (e.g. /etc/fv/runpod.toml). Exactly one of config / config_toml."),
-    config_toml: z.string().min(1).max(32768).optional().meta({ "x-ui": "textarea" }).describe("An inline worker config (sent as FV_WORKER_TOML_B64) instead of a file in the image."),
+    compute: z.enum(["GPU", "CPU"]).describe("GPU pod (the one CUDA image, every preset), or CPU pod (the cpu image: fake engine, tests). The compute picks the image (docs/serve/images.md); a spec stored with an image `variant` reads as its compute."),
+    config: configNameZ.optional().describe("The worker config, by name: a configs/serve file fv-control carries (e.g. runpod-ltx.toml), sent at boot as FV_WORKER_TOML_B64 (the images bake none). Exactly one of config / config_toml."),
+    config_toml: configTomlZ.optional().describe("An inline worker config (sent as FV_WORKER_TOML_B64) instead of a named one."),
     gpu_types: uniq(gpuType).min(1).max(12).optional().describe("Runpod GPU type ids to try, in order. Default: the region's (RTX PRO 6000 in eu)."),
     regions: uniq(region).min(1).optional().describe("Regions to try, in order. Default: the cluster's."),
     cpu_flavors: uniq(cpuFlavor).min(1).optional().describe("CPU pods: flavors to try, in order."),
@@ -206,19 +220,17 @@ export const PoolSpecZ = z
     if (!!p.config === !!p.config_toml) add(["config"], p.config ? "one of config / config_toml, not both" : "config or config_toml is required");
     if (!(p.models?.length || p.fake_models?.length)) add(["models"], "models or fake_models (what the pool serves) is required");
     providerRules(p, (path, message) => add([path], message));
-    // GMI / Brev machines are GPU machines; the cpu variant (fake engine) runs on one as a smoke test.
+    // GMI / Brev machines are GPU machines; a fake-engine smoke test runs on one on the CUDA image.
     const other = !!p.provider && p.provider !== "runpod";
     if (other) {
       /* providerRules covers it */
     } else if (p.compute === "CPU") {
       if (p.gpu_types) add(["gpu_types"], "a CPU pool takes no gpu_types");
-      if (p.variant !== "cpu" && !p.image) add(["variant"], "CPU pods run the cpu variant (the CUDA variants need a GPU)");
+      if (p.models?.length && !p.image) add(["models"], "CPU pods run the cpu image (the fake engine): fake_models, not models");
     } else {
       if (p.cpu_flavors) add(["cpu_flavors"], "a GPU pool takes no cpu_flavors");
       if (p.vcpu !== undefined) add(["vcpu"], "a GPU pool takes no vcpu");
-      if (p.variant === "cpu") add(["variant"], "the cpu variant runs on CPU pods (compute: CPU)");
     }
-    if (p.variant === "cpu" && p.models?.length) add(["models"], "the cpu variant runs the fake engine: fake_models, not models");
     if (p.data_centers) {
       if (other) add(["data_centers"], `data_centers is Runpod's: provider ${p.provider} takes provider_region`);
       else if (!noVolumePod(p)) add(["data_centers"], NEEDS_NO_VOLUME);
@@ -226,7 +238,7 @@ export const PoolSpecZ = z
       if (why) add(["data_centers"], why);
     }
     if (p.allowed_cuda && (other || p.compute === "CPU")) add(["allowed_cuda"], "allowed_cuda is for Runpod GPU pods");
-    if (p.upsampler_local && (p.compute === "CPU" || p.variant === "cpu")) add(["upsampler_local"], "the upsampler sidecar runs on the GPU: GPU pools only");
+    if (p.upsampler_local && p.compute === "CPU") add(["upsampler_local"], "the upsampler sidecar runs on the GPU: GPU pools only");
     if (p.stale_after_s !== undefined && p.job_timeout_s !== undefined && p.stale_after_s > p.job_timeout_s) add(["stale_after_s"], `at most job_timeout_s (${p.job_timeout_s})`);
     const ids = new Set<string>();
     (p.models || []).forEach((m, i) => {
@@ -241,8 +253,8 @@ export const ClusterSpecZ = z
     name: nameZ("cluster", "Cluster name"),
     image: z
       .object({
-        channel: channel.optional().describe("Release channel (stable, latest, …): per-variant images <variant>-<channel>."),
-        sha: sha.optional().describe("A git commit: per-variant images <variant>-sha-<sha7>."),
+        channel: channel.optional().describe("Release channel (stable, latest, …): the serve images <image>-<channel> (cuda for GPU pools, cpu for CPU pools)."),
+        sha: sha.optional().describe("A git commit: the serve images <image>-sha-<sha7>."),
         ref: imageRef.optional().describe("One (all-in-one) image reference for every pod."),
       })
       .strict()
@@ -372,7 +384,7 @@ export const ReleaseDispatchZ = z
     to: z.string().regex(/^\d+$/, { message: "a release id" }).optional().meta({ "x-dynamic": "releases" }).describe("rollback: a release id (default: the previous release of the channel)."),
     notes: z.string().max(200).optional().describe("Why (kept with the release record)."),
     templates: z.boolean().optional().describe("Also update the Runpod templates that follow the channel (default on)."),
-    allow_partial: z.boolean().optional().describe("Promote even when some variants have no image at the target."),
+    allow_partial: z.boolean().optional().describe("Promote even when some serve images have no image at the target."),
     dry_run: z.boolean().optional().describe("Show what would change; change nothing."),
   })
   .strict()
@@ -388,16 +400,15 @@ export const StandaloneLaunchZ = z
     preset: z
       .enum(POOL_PRESET_IDS, { error: (i) => `no pool preset ${JSON.stringify(i.input)} (GET /api/v1/templates: ${POOL_PRESET_IDS.join(", ")})` })
       .optional()
-      .meta({ "x-dynamic": "pool_presets" }).describe("A pool preset (variant, config and models); none: variant + config."),
-    variant: z.enum(VARIANTS).optional().meta({ "x-dynamic": "variants" }).describe("Without a preset: the image variant."),
-    config: configPath.optional().describe("Without a preset: the worker config in the image."),
-    config_toml: z.string().min(1).max(32768).optional().meta({ "x-ui": "textarea" }).describe("Without a preset: an inline worker config."),
+      .meta({ "x-dynamic": "pool_presets" }).describe("A pool preset (config and models); none: config + models."),
+    config: configNameZ.optional().describe("Without a preset: the worker config by name (a configs/serve file, sent at boot)."),
+    config_toml: configTomlZ.optional().describe("Without a preset: an inline worker config."),
     models: z.array(ModelRefZ).max(32).optional().describe("Without a preset: the models it serves."),
-    fake_models: uniq(z.enum(FAKE_MODELS).meta({ "x-dynamic": "fake_models" })).min(1).optional().describe("Without a preset: fake-engine models (the cpu variant)."),
+    fake_models: uniq(z.enum(FAKE_MODELS).meta({ "x-dynamic": "fake_models" })).min(1).optional().describe("Without a preset: fake-engine models (a CPU pod, or a GPU smoke test)."),
     channel: channel.optional().describe("Image: a release channel (default stable)."),
     sha: sha.optional().describe("Image: a git commit."),
     image: imageRef.optional().describe("Image: an image reference."),
-    compute: z.enum(["GPU", "CPU"]).optional().describe("GPU or CPU pod (default: the preset's, else GPU)."),
+    compute: z.enum(["GPU", "CPU"]).optional().describe("GPU pod (the CUDA image) or CPU pod (the cpu image, fake engine); default: the preset's, else GPU."),
     gpu_types: uniq(gpuType).min(1).max(12).optional().describe("GPU types in placement order (default: the region's)."),
     gpu_type: gpuType.optional().describe("One GPU type (shorthand for gpu_types)."),
     cpu_flavors: uniq(cpuFlavor).min(1).optional().describe("CPU pods: flavors in order."),
@@ -443,9 +454,10 @@ export const StandaloneLaunchZ = z
     if (x.weights_download_approved && x.weights_source !== "hub") add("weights_download_approved", "only with weights_source hub");
     if (x.upsampler_local && x.compute === "CPU") add("upsampler_local", "the upsampler sidecar runs on the GPU: GPU pods only");
     if ([x.channel, x.sha, x.image].filter(Boolean).length > 1) add("channel", "at most one of channel, sha, image");
-    if (!x.preset && !x.variant) add("variant", "a preset or variant is required");
-    if (x.preset && (x.variant || x.config || x.config_toml || x.models || x.fake_models)) add("preset", "a preset brings its variant, config and models: leave those out");
-    if (!x.preset && x.variant && !x.config && !x.config_toml) add("config", "config or config_toml (the worker config)");
+    if (x.preset && (x.config || x.config_toml || x.models || x.fake_models)) add("preset", "a preset brings its config and models: leave those out");
+    if (!x.preset && !x.config && !x.config_toml) add("config", "a preset, or config / config_toml (the worker config: the images bake none)");
+    if (!x.preset && !x.models?.length && !x.fake_models?.length) add("models", "a preset, or models / fake_models (what the pod serves)");
+    if (x.compute === "CPU" && x.models?.length && !x.image) add("models", "CPU pods run the cpu image (the fake engine): fake_models, not models");
     if (x.config && x.config_toml) add("config", "one of config / config_toml");
     if (x.gpu_types && x.gpu_type) add("gpu_type", "gpu_types or gpu_type, not both");
     if (x.compute === "CPU" && (x.gpu_types || x.gpu_type)) add("gpu_types", "a CPU pod takes no GPU types");
@@ -460,7 +472,7 @@ export const StandaloneLaunchZ = z
       const why = dcListProblem(dcs);
       if (why) add(dcKey, why);
       const off = dcs.filter((d) => !volumeDc(d));
-      const cpu = x.compute === "CPU" || (x.compute === undefined && x.variant === "cpu");
+      const cpu = x.compute === "CPU";
       if (off.length && !noVolumePod(x)) {
         const where = off.map((d) => (d === DC_ANY ? "\"any\" (Runpod places it)" : d)).join(", ");
         if (cpu) add(x.volume ? "volume" : dcKey, `${where} has no weights volume: a CPU pod there runs with volume off, or ${EU_ONLY}`);
@@ -677,8 +689,25 @@ export function jsonSchemas(): Record<string, unknown> {
 
 export type { Issue };
 export { zIssues };
+/**
+ * Read-compat for documents that name an image `variant` (cluster specs and their pools, standalone launches,
+ * serverless endpoints, before the one-image decision of 2026-10-25): a copy with the field dropped and mapped
+ * (enums.ts legacyVariant: `cpu` is compute CPU; a variant's baked config becomes the named config when the document
+ * names none). Anything else is returned as is.
+ */
+export function withoutVariants(name: SchemaName, doc: unknown): unknown {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return doc;
+  if (name === "pool") return legacyVariant({ ...(doc as Record<string, unknown>) });
+  if (name === "standalone-launch" || name === "serverless-endpoint") return legacyVariant({ ...(doc as Record<string, unknown>) });
+  if (name === "cluster-spec") {
+    const d = { ...(doc as Record<string, unknown>) };
+    if (Array.isArray(d.pools)) d.pools = d.pools.map((p) => (p && typeof p === "object" && !Array.isArray(p) ? legacyVariant({ ...p }) : p));
+    return d;
+  }
+  return doc;
+}
 export function validate(name: SchemaName, doc: unknown): { ok: true; value: any } | { ok: false; issues: Issue[] } {
-  const r = (SCHEMAS[name] as z.ZodType).safeParse(doc);
+  const r = (SCHEMAS[name] as z.ZodType).safeParse(withoutVariants(name, doc));
   if (r.success) return { ok: true, value: r.data };
   return { ok: false, issues: zIssues(r.error) };
 }

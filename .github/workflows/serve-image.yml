@@ -2,12 +2,15 @@
 # and pushes them to ghcr.io/<owner>/fastvideo-rs-serve:
 #   :latest / :sha-<sha>                 the legacy all-in-one `serve` target (the
 #                                        debug flavour: ssh, rsync, fv-gpucheck, scripts)
-#   :<variant> / :<variant>-sha-<sha>    one slim image per pod variant
-#                                        (h3-turbo h3-max ltx wan wan5b sfwan cpu)
+#   :<image> / :<image>-sha-<sha>        the slim serve images: `cuda` (one CUDA
+#                                        image for every preset) and `cpu` (the
+#                                        fake engine); neither bakes a worker
+#                                        config, every launch sends one (owner
+#                                        decision 2026-10-25, docs/adr/0011-deploy-section.md)
 # then, on main, records the build as the `latest` release in D1 (with a
 # Cloudflare token secret) and, only when the repository variable
 # FV_TEMPLATE_CHANNEL is `latest`, points the Runpod templates
-# fv-serve-<variant>-{sls,pod} at the new digests. By default the templates
+# fv-serve-cuda-{sls,pod} and fv-serve-cpu-pod at the new digests. By default the templates
 # follow `stable`, which moves only by .github/workflows/release.yml
 # (docs/serve/releases.md). Deploy tooling pins digests.
 name: serve-image
@@ -19,12 +22,12 @@ on:
         description: "fv-serve cargo features"
         required: false
         default: "cuda,http-client"
-      variants:
-        description: "variant images to build (space list)"
+      images:
+        description: "serve images to build (space list: cuda, cpu)"
         required: false
-        default: "h3-turbo h3-max ltx wan wan5b sfwan cpu"
+        default: "cuda cpu"
       compression:
-        description: "variant layer compression: gzip or zstd (zstd tags get a -zstd- infix)"
+        description: "serve image layer compression: gzip or zstd (zstd tags get a -zstd- infix)"
         required: false
         default: "gzip"
       debug:
@@ -123,7 +126,7 @@ jobs:
       # The shared lower layers (Ubuntu + ffmpeg, + CUDA libraries) as
       # published images, one per content hash, built here only when missing.
       # Passing them as named contexts puts this image on the same layer
-      # digests as fastvideo-rs-runtime and every serve variant (docs/serve/images.md "Layers").
+      # digests as fastvideo-rs-runtime and the serve images (docs/serve/images.md "Layers").
       # Plus llama-server (the prompt upsampler's sidecar, docs/serve/upsampler-local.md), compiled
       # once per llama.cpp pin and published the same way.
       - name: Shared base images
@@ -199,8 +202,8 @@ jobs:
           echo "fv-serve image (debug): \`$ref\` (tag sha-${{ steps.meta.outputs.short_sha }}, $(bash scripts/serve/ci-images.sh size "$ref") MB/layers compressed)" >> "$GITHUB_STEP_SUMMARY"
           docker image rm "$ref" >/dev/null 2>&1 || true
 
-      # One slim image per variant, sharing the base, CUDA and binary layers.
-      - name: Build and push the variant images
+      # The slim serve images: the one CUDA image and the CPU image (no baked config).
+      - name: Build and push the serve images
         env:
           FV_IMAGE: ${{ steps.meta.outputs.image }}
           FV_SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
@@ -214,19 +217,19 @@ jobs:
             ${{ steps.pre.outputs.contexts }}
             ${{ steps.base.outputs.contexts }}
           FV_TOOLS_TAG: ${{ steps.pre.outputs.tag }}
-        run: bash scripts/serve/ci-images.sh build ${{ github.event.inputs.variants || 'h3-turbo h3-max ltx wan wan5b sfwan cpu' }}
+        run: bash scripts/serve/ci-images.sh build ${{ github.event.inputs.images || 'cuda cpu' }}
 
-      - name: Smoke-check the variant images (no GPU)
+      - name: Smoke-check the serve images (no GPU)
         run: |
           while IFS=$'\t' read -r v ref mb; do
             echo "::group::$v ($mb MB)"
             bash scripts/serve/ci-images.sh smoke "$v" "$ref"
             echo "::endgroup::"
-          done < artifacts/ci/variants.tsv
-          { echo "### Variant images"; bash scripts/serve/ci-images.sh summary; } >> "$GITHUB_STEP_SUMMARY"
-          while IFS=$'\t' read -r v ref mb; do echo "::notice title=fv-serve $v::$ref ($mb MB)"; done < artifacts/ci/variants.tsv
+          done < artifacts/ci/images.tsv
+          { echo "### Serve images"; bash scripts/serve/ci-images.sh summary; } >> "$GITHUB_STEP_SUMMARY"
+          while IFS=$'\t' read -r v ref mb; do echo "::notice title=fv-serve $v::$ref ($mb MB)"; done < artifacts/ci/images.tsv
 
-      # Publish to Runpod: the per-variant templates boot the new digests, when
+      # Publish to Runpod: the serve images' templates boot the new digests, when
       # they follow `latest` (vars.FV_TEMPLATE_CHANNEL); by default they follow
       # `stable` and move with release.yml.
       - name: Register the Runpod templates
@@ -240,7 +243,7 @@ jobs:
             echo "::warning title=Runpod templates::RUNPOD_API_KEY secret not set; templates not updated (docs/serve/images.md)"
             exit 0
           fi
-          FV_RELEASE_CHANNEL=latest bash scripts/serve/runpod-templates.sh sync-all artifacts/ci/variants.tsv
+          FV_RELEASE_CHANNEL=latest bash scripts/serve/runpod-templates.sh sync-all artifacts/ci/images.tsv
           echo "synced=1" >> "$GITHUB_OUTPUT"
           { echo "### Runpod templates"; echo '```'; bash scripts/serve/runpod-templates.sh list; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
@@ -260,5 +263,5 @@ jobs:
             echo "::warning title=Release history::no Cloudflare token secret (FV_CF_API_TOKEN); the build is not recorded (docs/serve/releases.md)"
             exit 0
           fi
-          bash scripts/serve/release.sh record-build latest "$GITHUB_SHA" artifacts/ci/variants.tsv $DEBUG_REF ${SYNCED:+--templates-updated} \
+          bash scripts/serve/release.sh record-build latest "$GITHUB_SHA" artifacts/ci/images.tsv $DEBUG_REF ${SYNCED:+--templates-updated} \
             || echo "::warning title=Release history::could not record the build in D1"

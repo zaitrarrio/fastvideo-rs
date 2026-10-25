@@ -8,7 +8,7 @@
 #                                           age, the channels naming their digest, drift vs the
 #                                           channel they follow (--probe: ask each pod's /health)
 #   release.sh promote <sha|digest|tag> [channel]
-#                                           point :<channel> and :<variant>-<channel> at that
+#                                           point :<channel> and :<image>-<channel> at that
 #                                           build (no rebuild), update the Runpod templates when
 #                                           <channel> is the templates' channel, record it in D1
 #   release.sh rollback [channel] [--to ID] re-promote the channel's previous release
@@ -18,7 +18,7 @@
 #                                           unknown and drifted resources are flagged (--adopt
 #                                           records unknown ones, --fix records the live image)
 #   release.sh resolve <sha|digest|tag>     the image set of one build (JSON; no change)
-#   release.sh record-build <channel> <sha> <variants.tsv> [debug ref]
+#   release.sh record-build <channel> <sha> <images.tsv> [debug ref]
 #                                           CI: a main build recorded as the `latest` release
 #
 # Channels: `stable` (what deploys and the Runpod templates default to) and
@@ -32,7 +32,7 @@
 # (GH_TOKEN / GITHUB_TOKEN with actions:write) unless --local. --dry-run
 # prints the plan and changes nothing, anywhere.
 # Flags: --dry-run --local --dispatch --notes TEXT --no-templates
-#        --allow-partial (a build missing some variant images) --force
+#        --allow-partial (a build missing some serve images) --force
 #
 # Env: RUNPOD_API_KEY; D1 (scripts/serve/lib/d1.sh: FV_CF_API_TOKEN or
 # CLOUDFLARE_API_TOKEN / CLOUDFLARE_API_KEY, FV_CF_ACCOUNT_ID, FV_D1_DATABASE_ID);
@@ -97,7 +97,7 @@ check_channel() {
   local c="$1" v
   [[ "$c" =~ ^[a-z][a-z0-9-]{1,30}$ ]] || die "channel '$c': lower-case letters, digits and '-'"
   [[ "$c" != sha-* && "$c" != buildcache* && "$c" != *-sha-* ]] || die "channel '$c' collides with the build tags"
-  for v in $FV_VARIANTS; do [[ "$c" != "$v" ]] || die "channel '$c' is a variant name"; done
+  for v in $FV_IMAGES; do [[ "$c" != "$v" ]] || die "channel '$c' is a serve image name"; done
 }
 
 rp() {
@@ -132,7 +132,7 @@ resolve() {
     s="$(short "$rev")"
   fi
   imgs="$(fv_ghcr_set_for_sha "$s")"
-  [[ "$imgs" != '{}' ]] || die "no image tagged sha-$s or <variant>-sha-$s in $FV_SERVE_REPO"
+  [[ "$imgs" != '{}' ]] || die "no image tagged sha-$s or <image>-sha-$s in $FV_SERVE_REPO"
   # Every image of the set must carry the revision; the first full sha wins.
   rev=""
   for k in $(jq -r 'keys[]' <<<"$imgs"); do
@@ -164,10 +164,10 @@ apply() {
     done
   done
   if ((TEMPLATES)) && [[ "$ch" == "$TEMPLATE_CHANNEL" ]]; then
-    for v in $FV_VARIANTS; do
+    for v in $FV_IMAGES; do
       ref="$(jq -r --arg k "$v" '.[$k] // empty' <<<"$digests")"
       [[ -n "$ref" ]] || continue
-      for f in $(fv_variant_flavours "$v"); do
+      for f in $(fv_image_flavours "$v"); do
         cur="$(template_image "$v" "$f")"
         if ((DRY)); then
           if [[ "$cur" == "$ref" ]]; then echo "  template $(fv_template_name "$v" "$f"): image already $(dshort "$ref"); env gains FV_RELEASE_CHANNEL=$ch"
@@ -429,8 +429,8 @@ cmd_reconcile() {
   # The shared templates vs the channel they follow.
   heads="$(fv_release_heads)"
   want="$(jq -c --arg c "$TEMPLATE_CHANNEL" '[.[] | select(.channel == $c)][0].digests // "{}" | fromjson' <<<"$heads")"
-  for v in $FV_VARIANTS; do
-    for f in $(fv_variant_flavours "$v"); do
+  for v in $FV_IMAGES; do
+    for f in $(fv_image_flavours "$v"); do
       cur="$(jq -r --arg n "$(fv_template_name "$v" "$f")" '[.[] | select(.name == $n)][0].imageName // empty' <<<"$TPLS")"
       [[ -n "$cur" ]] || { echo "template  $(fv_template_name "$v" "$f") missing"; continue; }
       if [[ "$want" != '{}' && "$(jq -r --arg v "$v" '.[$v] // ""' <<<"$want")" != "$cur" ]]; then
@@ -445,7 +445,7 @@ cmd_reconcile() {
 # ---- CI ---------------------------------------------------------------------
 
 cmd_record_build() {
-  local ch="${ARGS[0]:?record-build <channel> <sha> <variants.tsv> [debug ref]}" sha="${ARGS[1]:?sha}" tsv="${ARGS[2]:?variants.tsv}" dbg="${ARGS[3]:-}" digests id
+  local ch="${ARGS[0]:?record-build <channel> <sha> <images.tsv> [debug ref]}" sha="${ARGS[1]:?sha}" tsv="${ARGS[2]:?images.tsv}" dbg="${ARGS[3]:-}" digests id
   check_channel "$ch"
   need_d1
   digests="$(awk -F'\t' 'NF >= 2 && $2 ~ /@sha256:/ {print $1 "\t" $2}' "$tsv" | jq -R -s -c 'split("\n") | map(select(length > 0) | split("\t") | {(.[0]): .[1]}) | add // {}')"

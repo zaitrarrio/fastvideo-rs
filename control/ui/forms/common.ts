@@ -132,7 +132,7 @@ export function budgetField(api: Api, d: ProviderDetails, onSaved: (d: ProviderD
 export const FORM_FIELDS: Record<string, { schema: string; fields: Path[]; notOffered?: Record<string, string> }> = {
   "standalone-launch": {
     schema: "standalone-launch",
-    fields: [["name"], ["preset"], ["variant"], ["config"], ["models"], ["fake_models"], ["channel"], ["sha"], ["image"], ["compute"], ["cpu_flavors"], ["vcpu"], ["region"], ["data_centers"], ["volume"], ["container_disk_gb"], ["deadline_min"], ["idle_stop_min"], ["max_gpu_dph"], ["auth"], ["log_level"], ["env"], ["provider"], ["provider_gpu"], ["provider_region"], ["weights_source"], ["weights_download_approved"], ["upsampler_local"]],
+    fields: [["name"], ["preset"], ["config"], ["models"], ["fake_models"], ["channel"], ["sha"], ["image"], ["compute"], ["cpu_flavors"], ["vcpu"], ["region"], ["data_centers"], ["volume"], ["container_disk_gb"], ["deadline_min"], ["idle_stop_min"], ["max_gpu_dph"], ["auth"], ["log_level"], ["env"], ["provider"], ["provider_gpu"], ["provider_region"], ["weights_source"], ["weights_download_approved"], ["upsampler_local"]],
     notOffered: {
       config_toml: "inline worker configs come with the presets; a custom one is a cluster pool (the cluster page's TOML editor)",
       gpu_types: "the instance table: a row click picks the primary GPU type, \"+ fallback\" appends; the Selected GPUs strip orders them",
@@ -147,7 +147,7 @@ export const FORM_FIELDS: Record<string, { schema: string; fields: Path[]; notOf
   },
   "serverless-endpoint": {
     schema: "serverless-endpoint",
-    fields: [["name"], ["preset"], ["mode"], ["image", "channel"], ["image", "sha"], ["image", "ref"], ["variant"], ["compute"], ["config"], ["env"], ["gpu_types"], ["gpu_count"], ["cpu_flavors"], ["vcpu"], ["data_centers"], ["weights_source"], ["weights_download_approved"], ["network_volume"], ["workers_min"], ["workers_max"], ["idle_timeout_s"], ["flashboot"], ["execution_timeout_s"], ["scaler_type"], ["scaler_value"], ["allowed_cuda"], ["container_disk_gb"], ["deadline_min"], ["deadline_action"], ["upsampler_local"]],
+    fields: [["name"], ["preset"], ["mode"], ["image", "channel"], ["image", "sha"], ["image", "ref"], ["compute"], ["config"], ["env"], ["gpu_types"], ["gpu_count"], ["cpu_flavors"], ["vcpu"], ["data_centers"], ["weights_source"], ["weights_download_approved"], ["network_volume"], ["workers_min"], ["workers_max"], ["idle_timeout_s"], ["flashboot"], ["execution_timeout_s"], ["scaler_type"], ["scaler_value"], ["allowed_cuda"], ["container_disk_gb"], ["deadline_min"], ["deadline_action"], ["upsampler_local"]],
     notOffered: { config_toml: "the JSON tab (an inline worker config)" },
   },
   "token-create": { schema: "token-create", fields: [["name"], ["scope"], ["ttl_days"]] },

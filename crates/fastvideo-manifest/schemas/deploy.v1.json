@@ -28,7 +28,7 @@
       }
     },
     "images": {
-      "description": "The serve image variants (and documented legacy tag sets).",
+      "description": "The serve images: one per compute (the CUDA image, the CPU image).",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Image"
@@ -72,10 +72,10 @@
       "additionalProperties": false
     },
     "Compute": {
-      "description": "What an image variant's fv-serve is built for.",
+      "description": "What an image's fv-serve is built for.",
       "oneOf": [
         {
-          "description": "The CUDA fv-serve (`serve-cuda-bin`).",
+          "description": "The CUDA fv-serve (`serve-cuda`).",
           "type": "string",
           "const": "gpu"
         },
@@ -206,11 +206,11 @@
       ]
     },
     "Image": {
-      "description": "One `[[images]]` table: a serve image variant\n(`docker/gpucheck.Dockerfile` stage `serve-<id>`).",
+      "description": "One `[[images]]` table: a serve image (`docker/gpucheck.Dockerfile`\nstage `serve-<id>`, GHCR tags `<id>-<channel>`). It bakes no worker\nconfig: every launch sends one (`FV_WORKER_TOML_B64`, or\n`FV_WORKER_CONFIG` naming a file it carries), and an image started\nwithout one refuses to boot (fv-boot, ADR-0014).",
       "type": "object",
       "properties": {
-        "also": {
-          "description": "Further worker configs the image carries under `/etc/fv`.",
+        "carries": {
+          "description": "The worker configs the image carries under `/etc/fv` (`configs/serve`\nfile names): [`SMOKE_CONFIG`] for CI's smoke check.",
           "type": "array",
           "items": {
             "type": "string"
@@ -219,16 +219,8 @@
         "compute": {
           "$ref": "#/$defs/Compute"
         },
-        "config": {
-          "description": "The worker config baked as `FV_CONFIG` (a `configs/serve` file name).",
-          "type": "string"
-        },
         "id": {
           "type": "string"
-        },
-        "legacy": {
-          "description": "A documented tag set that CI no longer builds as a variant.",
-          "type": "boolean"
         },
         "note": {
           "description": "A short note for the documentation tables.",
@@ -241,7 +233,7 @@
       "additionalProperties": false,
       "required": [
         "id",
-        "config"
+        "carries"
       ]
     },
     "LeftOut": {
@@ -294,7 +286,7 @@
       "type": "object",
       "properties": {
         "config": {
-          "description": "The worker config (a `configs/serve` file name).",
+          "description": "The worker config (a `configs/serve` file name), sent at boot.",
           "type": "string"
         },
         "container_disk_gb": {
@@ -313,7 +305,7 @@
           "type": "string"
         },
         "image": {
-          "description": "The image variant ([`Image::id`]).",
+          "description": "The serve image ([`Image::id`]): the CUDA image.",
           "type": "string"
         },
         "job_timeout_s": {

@@ -7,6 +7,7 @@ import { HttpError } from "../util";
 import CATALOG from "./catalog.json";
 import { FAMILY_PRESETS, presetPool, STANDARD_POOLS, STREAMING_FAMILY_MEMBERS, WAN_FAMILY_LEFT_OUT } from "../presets";
 import { regionProblem, type RegionId } from "./regions";
+import { legacyVariant } from "../enums";
 export * from "./regions";
 
 export type { CpuFlavor } from "../enums";
@@ -109,7 +110,7 @@ export function defaultSpec(name: string, template: string = "standard"): Cluste
     base.cap_s = 1800;
     base.min_start = 10;
     base.pools = [
-      { id: "fake", variant: "cpu", count: 1, compute: "CPU", config_toml: FAKE_CPU_WORKER_TOML, cpu_flavors: ["cpu3c", "cpu5c", "cpu3g"], vcpu: 2, container_disk_gb: 10, volume: false, fake_models: ["fake-wan"], max_queued: 8, job_timeout_s: 600, stale_after_s: 120 },
+      { id: "fake", count: 1, compute: "CPU", config_toml: FAKE_CPU_WORKER_TOML, cpu_flavors: ["cpu3c", "cpu5c", "cpu3g"], vcpu: 2, container_disk_gb: 10, volume: false, fake_models: ["fake-wan"], max_queued: 8, job_timeout_s: 600, stale_after_s: 120 },
     ];
   }
   return base;
@@ -152,8 +153,8 @@ export function normalizeSpec(input: any): ClusterSpec {
     // A standard or preset pool id fills what the entry leaves out; its own config wins.
     const std = presetPool(String(p?.id ?? ""));
     if (std && (p?.config || p?.config_toml)) delete std.config, delete std.config_toml;
-    const q: PoolSpec = { ...(std ?? {}), ...p } as PoolSpec;
-    if ((q.variant as string) === "gateway") q.variant = "cpu"; // the CPU image's name before the gateway was retired
+    // A pool stored or posted with an image variant (before the one-image decision, 2026-10-25): its compute.
+    const q: PoolSpec = { ...(std ?? {}), ...legacyVariant({ ...p }, { fillConfig: !std }) } as PoolSpec;
     if (q.count === undefined) q.count = 1;
     if (q.compute === undefined) q.compute = "GPU";
     (q.regions || []).forEach((r, j) => {
@@ -176,14 +177,17 @@ export function normalizeSpec(input: any): ClusterSpec {
 /** A spec stored before the gateway was retired, read as today's: its
  * `gateway` block gives the auth mode, and direct mode when the gateway was
  * off; a gateway cluster reads as an edge cluster (normalizeSpec does the
- * same on the next save). */
+ * same on the next save). A pool stored with an image `variant` (before the
+ * one-image decision) reads as its compute (enums.ts legacyVariant). */
 export function migrateSpec(spec: ClusterSpec): ClusterSpec {
   const any = spec as any;
   if (!any || typeof any !== "object") return spec;
   const legacy = any.gateway && typeof any.gateway === "object" ? any.gateway : null;
   if (any.control_plane === "gateway" || (any.control_plane === undefined && legacy)) any.control_plane = legacy && legacy.enabled === false ? "direct" : "edge";
   if (any.auth === undefined) any.auth = legacy?.auth ?? "keys";
-  for (const p of any.pools || []) if (p?.variant === "gateway") p.variant = "cpu";
+  // One image (2026-10-25): a pool's `variant` (`gateway`: the CPU image's name before the gateway was retired) is
+  // its compute; the config the variant baked is the pool's named config when it has none.
+  for (const p of any.pools || []) if (p && typeof p === "object") legacyVariant(p);
   // Plan A3: the two models that were serve-config special cases are variants of their own; a pool model stored
   // with the old recipe names them by the variant (the old names are no longer manifest names, or name another tree).
   for (const p of any.pools || [])

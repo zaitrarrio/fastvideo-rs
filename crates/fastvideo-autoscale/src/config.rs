@@ -177,8 +177,46 @@ impl AutoscaleConfig {
                     {
                         return bad(format!("pool {}: pod.template_id, pod.gpu_types and pod.placements are required", p.name));
                     }
+                    // The serve images bake no worker config (ADR-0011, one image): a
+                    // pod started from the template without one refuses to boot.
+                    if !valid_config_name(&p.pod.worker_config) {
+                        return bad(format!(
+                            "pool {}: pod.worker_config is required: a configs/serve file name (the image bakes no config; the pods get it as FV_WORKER_TOML_B64)",
+                            p.name
+                        ));
+                    }
                 }
             }
+        }
+        Ok(())
+    }
+}
+
+/// A `configs/serve` file name (no directory part).
+fn valid_config_name(n: &str) -> bool {
+    n.ends_with(".toml")
+        && n.len() > ".toml".len()
+        && n.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+impl AutoscaleConfig {
+    /// Reads every pod pool's `pod.worker_config` from `serve_dir` (the
+    /// repository's `configs/serve`) into its `FV_WORKER_TOML_B64`, which the
+    /// pod create sends (the serve images bake no config). The binary does
+    /// this at start; an unreadable or oversized config is an error.
+    pub fn resolve_worker_configs(
+        &mut self,
+        serve_dir: &std::path::Path,
+    ) -> Result<(), ConfigError> {
+        for p in self.pools.iter_mut().filter(|p| p.kind == PoolKind::Pod) {
+            let path = serve_dir.join(&p.pod.worker_config);
+            let text = std::fs::read_to_string(&path).map_err(|e| {
+                ConfigError::Invalid(format!("pool {}: {}: {e}", p.name, path.display()))
+            })?;
+            let (_, b64) = fastvideo_deploy::launch::inline_config(&text)
+                .map_err(|why| ConfigError::Invalid(format!("pool {}: {why}", p.name)))?;
+            p.pod.worker_toml_b64 = b64;
         }
         Ok(())
     }
@@ -403,11 +441,21 @@ impl Default for ServerlessConfig {
     }
 }
 
-/// Runpod pods from a template (REST v1 `POST /pods`).
+/// Runpod pods from a template (REST v1 `POST /pods`): the one CUDA image's
+/// pod template (`fv-serve-cuda-pod`), with the pool's worker config in the
+/// pod's env.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PodConfig {
     pub template_id: String,
+    /// The worker config the pods serve (a `configs/serve` file name). The
+    /// serve images bake none (ADR-0011, owner decision 2026-10-25): the pod
+    /// create sends it as `FV_WORKER_TOML_B64`
+    /// ([`AutoscaleConfig::resolve_worker_configs`]).
+    pub worker_config: String,
+    /// The config's `FV_WORKER_TOML_B64`, filled at load (never in the file).
+    #[serde(skip)]
+    pub worker_toml_b64: String,
     /// Preference order; the controller falls back along it when a type
     /// is out of stock.
     pub gpu_types: Vec<String>,
@@ -430,6 +478,8 @@ impl Default for PodConfig {
     fn default() -> Self {
         Self {
             template_id: String::new(),
+            worker_config: String::new(),
+            worker_toml_b64: String::new(),
             gpu_types: Vec::new(),
             // The EU weights volume (fv-weights-h3-ltx-500, EU-RO-1, H3 + LTX trees
             // only since 2026-10-13); the US volume (s2k01690bi, US-CA-2) was deleted
@@ -482,7 +532,7 @@ mod tests {
             name = "h3"
             family = "h3"
             kind = "pod"
-            pod = { template_id = "t1", gpu_types = ["NVIDIA H200"] }
+            pod = { template_id = "t1", worker_config = "runpod-sfwan.toml", gpu_types = ["NVIDIA H200"] }
         "#;
         let c = AutoscaleConfig::from_toml_document(text).unwrap();
         assert!(c.enabled && !c.dry_run);
@@ -507,6 +557,15 @@ mod tests {
         assert_eq!(live.pod.placements.len(), 1);
         assert_eq!(live.pod.placements[0].volume_id, "bz0ofkfx45");
         assert_eq!(c.price(live), 2.09);
+        // The one image's pod template, the worker config in the pool (ADR-0011).
+        assert_eq!(live.pod.worker_config, "runpod-sfwan.toml");
+        let serve = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs/serve");
+        let mut c = c;
+        c.resolve_worker_configs(&serve).unwrap();
+        assert!(!c.pools[3].pod.worker_toml_b64.is_empty());
+        let mut missing = c.clone();
+        missing.pools[3].pod.worker_config = "no-such.toml".into();
+        assert!(missing.resolve_worker_configs(&serve).is_err());
         // 10:00 PDT on a Monday = 17:00 UTC.
         assert_eq!(c.pools[0].scheduled_min(1_790_553_600.0 + 17.0 * 3600.0), 1);
     }
@@ -526,6 +585,15 @@ mod tests {
             AutoscaleConfig::from_toml_document(t).is_err(),
             "pod template required"
         );
+        // A pod pool without a worker config: the image would refuse to boot.
+        let t = "[autoscale]\n[[autoscale.pools]]\nname='a'\nkind='pod'\npod={template_id='t',gpu_types=['NVIDIA H200']}\n";
+        let e = AutoscaleConfig::from_toml_document(t).unwrap_err();
+        assert!(
+            e.to_string().contains("pod.worker_config is required"),
+            "{e}"
+        );
+        let t = "[autoscale]\n[[autoscale.pools]]\nname='a'\nkind='pod'\npod={template_id='t',worker_config='../x.toml',gpu_types=['NVIDIA H200']}\n";
+        assert!(AutoscaleConfig::from_toml_document(t).is_err());
         let t = "[autoscale]\nbogus=1\n";
         assert!(AutoscaleConfig::from_toml_document(t).is_err());
     }

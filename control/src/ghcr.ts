@@ -2,6 +2,7 @@
 import type { ClusterSpec } from "./cluster/spec";
 import { defaults, type Env } from "./env";
 import { fetchWithTimeout, HttpError } from "./util";
+import { imageOf } from "./enums";
 
 const ACCEPT =
   "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json";
@@ -50,22 +51,23 @@ export async function listTags(env: Env, repoRef = defaults.serveRepo(env)): Pro
   return out;
 }
 
-/** The image of each pod of a cluster: per-variant digests for a channel or sha, one all-in-one image for a ref. */
+/** The image of each pod of a cluster: the serve image of its compute (enums.ts imageOf: the CUDA image for GPU
+ * pools, the CPU image for CPU pools) at a channel or sha, its own image override, or one image for a ref. */
 export async function resolveClusterImages(env: Env, spec: ClusterSpec): Promise<Record<string, string>> {
   const repo = defaults.serveRepo(env);
   const out: Record<string, string> = {};
   const suffix = spec.image.channel ? spec.image.channel : spec.image.sha ? `sha-${spec.image.sha.slice(0, 7)}` : null;
-  const imageFor = async (variant: string, override?: string) => {
+  const imageFor = async (image: string, override?: string) => {
     if (override) return resolveDigest(env, override);
     if (spec.image.ref) return resolveDigest(env, spec.image.ref);
     try {
-      return await resolveDigest(env, `${repo}:${variant}-${suffix}`);
+      return await resolveDigest(env, `${repo}:${image}-${suffix}`);
     } catch (e) {
       // Before the first promotion there is no :stable (releases.md): :latest, as the scripts do.
-      if (spec.image.channel === "stable") return resolveDigest(env, `${repo}:${variant}-latest`);
+      if (spec.image.channel === "stable") return resolveDigest(env, `${repo}:${image}-latest`);
       throw e;
     }
   };
-  for (const p of spec.pools) out[p.id] = await imageFor(p.variant, p.image);
+  for (const p of spec.pools) out[p.id] = await imageFor(imageOf(p), p.image);
   return out;
 }

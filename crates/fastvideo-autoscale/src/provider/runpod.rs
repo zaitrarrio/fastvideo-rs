@@ -586,20 +586,23 @@ impl RunpodPods {
         let mut v = Vec::new();
         for pl in &pool.pod.placements {
             for gpu in &pool.pod.gpu_types {
-                v.push((
-                    format!("{gpu} in {}", pl.data_center),
-                    json!({
-                        "name": name,
-                        "templateId": pool.pod.template_id,
-                        "computeType": "GPU",
-                        "cloudType": pool.pod.cloud_type,
-                        "gpuTypeIds": [gpu],
-                        "gpuCount": 1,
-                        "networkVolumeId": pl.volume_id,
-                        "volumeMountPath": "/workspace",
-                        "dataCenterIds": [pl.data_center],
-                    }),
-                ));
+                let mut body = json!({
+                    "name": name,
+                    "templateId": pool.pod.template_id,
+                    "computeType": "GPU",
+                    "cloudType": pool.pod.cloud_type,
+                    "gpuTypeIds": [gpu],
+                    "gpuCount": 1,
+                    "networkVolumeId": pl.volume_id,
+                    "volumeMountPath": "/workspace",
+                    "dataCenterIds": [pl.data_center],
+                });
+                // The template's image bakes no worker config (ADR-0011): the pool's
+                // rides in the pod's env.
+                if !pool.pod.worker_toml_b64.is_empty() {
+                    body["env"] = json!({ "FV_WORKER_TOML_B64": pool.pod.worker_toml_b64 });
+                }
+                v.push((format!("{gpu} in {}", pl.data_center), body));
             }
         }
         v
@@ -909,5 +912,11 @@ mod tests {
         assert_eq!(b["networkVolumeId"], "bz0ofkfx45");
         assert_eq!(b["templateId"], "tpl");
         assert!(b.get("allowedCudaVersions").is_none());
+        // No resolved config: no env (the binary always resolves one).
+        assert!(b.get("env").is_none());
+        let mut with = pool.clone();
+        with.pod.worker_toml_b64 = "W3NlcnZlcl0K".into();
+        let b = &RunpodPods::payloads(&with, "fv-as-sfwan-2")[0].1;
+        assert_eq!(b["env"]["FV_WORKER_TOML_B64"], "W3NlcnZlcl0K");
     }
 }

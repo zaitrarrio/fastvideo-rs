@@ -114,13 +114,11 @@ pub struct LaunchSource {
     pub family: String,
     /// The preset id (a `[[presets]]` or `[[family_presets]]` id).
     pub preset: String,
-    /// The image variant (`[[images]]` id).
-    pub image_variant: String,
-    /// The worker config (a `configs/serve` file name).
+    /// The serve image (`[[images]]` id: the CUDA image).
+    pub image: String,
+    /// The worker config (a `configs/serve` file name), sent inline as
+    /// `FV_WORKER_TOML_B64` (the image bakes none).
     pub config: String,
-    /// Whether the image carries the config (else it is sent inline as
-    /// `FV_WORKER_TOML_B64`).
-    pub config_baked: bool,
 }
 
 /// The GPU request.

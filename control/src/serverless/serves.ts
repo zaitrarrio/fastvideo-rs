@@ -2,14 +2,14 @@
 // any worker boots (docs/control/serverless.md §1a): the models, their
 // tasks and tiers, the API names that reach them (config aliases and the
 // MiniMax tier names), the mounted APIs and fal apps, and the weight trees
-// they load. The config is the preset's, the inline config_toml, a config
-// file of the image (src/cluster/image-configs.ts, generated from the
-// Dockerfile) or the variant's baked default. A config's [[models]] name
+// they load. The config is the preset's, the inline config_toml or a named
+// configs/serve file (src/worker-config.ts): the spec's own, since the images
+// bake none (docs/adr/0011-deploy-section.md). A config's [[models]] name
 // variants of families/*.toml (families-gen.ts: family, tier, trees, public
 // names); RECIPES keeps the task view per name (fake.rs for the fake engine);
 // a worker's /fv/v1/capabilities is the truth, and compareCapabilities flags a
 // difference once one is up.
-import { BAKED_CONFIGS, IMAGE_CONFIGS } from "../cluster/image-configs";
+import { configFile, namedConfig } from "../worker-config";
 import { variantOf } from "../families";
 
 // ---------------------------------------------------------------- a small TOML reader
@@ -183,7 +183,7 @@ export interface ServedModel {
 }
 export interface Serves {
   /** Where the config came from. */
-  source: { kind: "inline" | "image" | "image-default" | "unknown"; config: string | null; note?: string };
+  source: { kind: "inline" | "named" | "unknown"; config: string | null; note?: string };
   engine: string;
   swap: boolean;
   models: ServedModel[];
@@ -279,18 +279,16 @@ export function servesOfToml(text: string, source: Serves["source"]): Serves {
   };
 }
 
-/** The config TOML a spec runs and where it comes from. */
-export function configOf(spec: { variant: string; config?: string; config_toml?: string; image?: { ref?: string } }): { text: string | null; source: Serves["source"] } {
+/** The config TOML a spec runs and where it comes from: its inline config_toml, or the named configs/serve file
+ * (fv-control sends either at boot). The spec's own config, never the image's: the images bake none. */
+export function configOf(spec: { config?: string; config_toml?: string }): { text: string | null; source: Serves["source"] } {
   if (spec.config_toml) return { text: spec.config_toml, source: { kind: "inline", config: null } };
-  const img = IMAGE_CONFIGS[spec.variant];
-  const path = spec.config || img?.default || null;
-  const file = path && path.startsWith("/etc/fv/") ? path.slice("/etc/fv/".length) : null;
-  const note = spec.image?.ref ? "an image ref: derived from this build's config of the variant (the image may differ)" : undefined;
-  const text = file && BAKED_CONFIGS[file] && (!img || img.files.includes(file) || spec.image?.ref) ? BAKED_CONFIGS[file]! : null;
-  return { text, source: { kind: text ? (spec.config ? "image" : "image-default") : "unknown", config: path, ...(note ? { note } : {}) } };
+  if (!spec.config) return { text: null, source: { kind: "unknown", config: null, note: "no worker config: the workers would refuse to boot (the images bake none)" } };
+  const text = namedConfig(spec.config) ?? null;
+  return { text, source: { kind: text ? "named" : "unknown", config: configFile(spec.config) } };
 }
 
-/** What a spec serves (null fields when its config is unknown, e.g. a path not in the image). */
+/** What a spec serves (null fields when its config is unknown, e.g. a name fv-control does not carry). */
 export function servesOf(spec: Parameters<typeof configOf>[0]): Serves {
   const c = configOf(spec);
   if (!c.text) return { source: { ...c.source, note: c.source.note ?? "the config is not one fv-control knows: nothing derived" }, engine: "?", swap: false, models: [], aliases: [], protocols: [], fal_apps: [], tasks: [], weights: [] };

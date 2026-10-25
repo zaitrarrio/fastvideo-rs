@@ -1,8 +1,9 @@
-// The preset catalog: an image variant plus the worker config it runs, the
-// models it serves, the weight trees it loads and the GPU memory it needs.
+// The preset catalog: the worker config a pool runs (sent at boot: the one CUDA
+// image bakes none, docs/adr/0011-deploy-section.md), the models it serves,
+// the weight trees it loads and the GPU memory it needs.
 // One source for cluster pools (cluster/spec.ts re-exports it), standalone
 // pods (standalone.ts) and serverless endpoints (serverless/presets.ts). The
-// deployment data (ids, titles, image variants, configs, models, queues,
+// deployment data (ids, titles, configs, models, queues,
 // timeouts, disks, family members) is deploy/deploy.toml, generated into
 // ./deploy-gen.ts (plan C1); the weights and GPU memory come from the family
 // manifests (./families-gen.ts). What stays here is how they combine.
@@ -16,22 +17,20 @@ import { mustVariant } from "./families";
 import { recipeTreesOf } from "./recipe-trees";
 import { readToml } from "./serverless/serves";
 import { DEPLOY_FAMILY_PRESETS, DEPLOY_PRESETS, type DeployFamilyPreset, type DeployPreset } from "./deploy-gen";
-import type { Variant } from "./enums";
 
 const inline = (file: string) => {
   const t = WORKER_CONFIGS[file];
   if (!t) throw new Error(`no generated worker config ${file} (node gen-configs.mjs)`);
   return t;
 };
-/** A deploy/deploy.toml preset's pool: its image variant, its worker config (the path in the image, or inline as
- * FV_WORKER_TOML_B64 when the image does not carry it), its models, queue and timeouts. */
+/** A deploy/deploy.toml preset's pool: its worker config (inline: every launch sends it as FV_WORKER_TOML_B64, the
+ * one CUDA image bakes none), its models, queue and timeouts. GPU, so it runs on the CUDA image. */
 function poolOf(p: DeployPreset): PoolSpec {
   return {
     id: p.id,
-    variant: p.image as Variant,
     count: 1,
     compute: "GPU",
-    ...(p.inline ? { config_toml: inline(p.config) } : { config: `/etc/fv/${p.config}` }),
+    config_toml: inline(p.config),
     ...(p.container_disk_gb !== undefined ? { container_disk_gb: p.container_disk_gb } : {}),
     models: p.models.map(({ id, family, recipe }) => ({ id, family, recipe })),
     max_queued: p.max_queued,
@@ -42,7 +41,7 @@ function poolOf(p: DeployPreset): PoolSpec {
 /** The default cluster's pools (deploy/deploy.toml presets with `standard = true`). */
 export const STANDARD_POOLS: PoolSpec[] = DEPLOY_PRESETS.filter((p) => p.standard).map(poolOf);
 
-/** A pool the dashboard can add: an image variant plus the worker config it runs. */
+/** A pool the dashboard can add: the worker config it runs (on the CUDA image), its models and what they need. */
 export interface PoolPreset {
   id: string;
   title: string;
@@ -165,7 +164,6 @@ function familyPreset(o: DeployFamilyPreset): PoolPreset {
     ...(o.left_out.length ? { left_out: o.left_out.map((l) => ({ ...l })) } : {}),
     pool: {
       id: o.id,
-      variant: o.image as Variant,
       count: 1,
       compute: "GPU",
       config_toml: toml,

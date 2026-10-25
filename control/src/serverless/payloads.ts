@@ -1,4 +1,4 @@
-import { MIN_CUDA } from "../enums";
+import { imageOf, MIN_CUDA } from "../enums";
 // Runpod payloads of a serverless endpoint (docs/control/serverless.md),
 // the same shapes scripts/serve/runpod-endpoint.sh and runpod-templates.sh
 // proved: a serverless template (REST v1 POST /templates) plus a queue
@@ -11,6 +11,7 @@ import { SLS_HUB_SH, SLS_R2_SH } from "./weights";
 import { DRIVER_CHECK_SH } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH } from "../upsampler";
 import { PREFER_FV_BOOT_SH } from "../fv-boot";
+import { workerConfigEnv } from "../worker-config";
 
 /** Every Runpod endpoint and template fv-control creates is named fvc-<name>…; nothing else is ever touched. */
 export const SLS_PREFIX = "fvc-";
@@ -18,18 +19,19 @@ export const endpointName = (spec: Pick<EndpointSpec, "name">) => `${SLS_PREFIX}
 /** Template names are unique per account: one per create (and per recreate). */
 export const templateName = (spec: Pick<EndpointSpec, "name">, at: number) => `${SLS_PREFIX}${spec.name}-${new Date(at).toISOString().replace(/[-:T]/g, "").slice(2, 14)}`;
 
-/** The worker's start when the spec names a config (or weights_source r2): the host's driver (driver-check.ts), the weights link (a serverless worker mounts the
- * volume at /runpod-volume; its HF-cache trees link into /workspace/weights) and an inline config, then
- * fv-serve. Without a config the image's own entrypoint (fv-boot; fv-entry on images from before it) and baked
- * FV_CONFIG run. An image with fv-boot runs that instead of this script (PREFER_FV_BOOT_SH, fv-boot.ts). */
+/** The worker's start: the host's driver (driver-check.ts), the weights link (a serverless worker mounts the volume at
+ * /runpod-volume; its HF-cache trees link into /workspace/weights) and the config (FV_WORKER_TOML_B64, which every
+ * endpoint sends: the images bake none, docs/adr/0011-deploy-section.md; or FV_WORKER_CONFIG, a file in the image),
+ * then fv-serve. Without a config it stops, as fv-boot does. An image with fv-boot runs that instead of this script
+ * (PREFER_FV_BOOT_SH, fv-boot.ts). */
 export const SLS_BOOT = `set -eu
 ${PREFER_FV_BOOT_SH}FV_DRV_POD="\${RUNPOD_POD_ID:-}"
 ${DRIVER_CHECK_SH}if [ -d /runpod-volume/weights ] && [ ! -e /workspace/weights ]; then mkdir -p /workspace && ln -s /runpod-volume/weights /workspace/weights; fi
 mkdir -p /fvstate
-${UPSAMPLER_START_SH}cfg="\${FV_CONFIG:-}"
+${UPSAMPLER_START_SH}cfg="\${FV_WORKER_CONFIG:-}"
 if [ -n "\${FV_WORKER_TOML_B64:-}" ]; then printf "%s" "$FV_WORKER_TOML_B64" | base64 -d > /fv-worker.toml; cfg=/fv-worker.toml; fi
-${UPSAMPLER_WAIT_SH}if [ -n "$cfg" ]; then exec /opt/fastvideo-rs/bin/fv-serve --config "$cfg"; fi
-exec /opt/fastvideo-rs/bin/fv-serve`;
+if [ -z "$cfg" ]; then echo "[fv-boot] FAILED: no worker config: the image serves no default; send FV_WORKER_TOML_B64 or FV_WORKER_CONFIG" >&2; exit 1; fi
+${UPSAMPLER_WAIT_SH}exec /opt/fastvideo-rs/bin/fv-serve --config "$cfg"`;
 
 /** The start of a weights_source r2 worker (bash: the fetch, then SLS_BOOT's config handling and fv-serve). */
 export const SLS_R2_BOOT = SLS_BOOT.replace(`mkdir -p /fvstate\n${UPSAMPLER_START_SH}`, `mkdir -p /fvstate\n${UPSAMPLER_START_SH}${SLS_R2_SH}`);
@@ -40,14 +42,8 @@ const isHub = (spec: EndpointSpec) => spec.weights_source === "hub" && spec.comp
 /** A worker that downloads its weights at boot (r2 or hub): its own bash start, whatever the config. */
 const bashBoot = (spec: EndpointSpec) => (isR2(spec) ? SLS_R2_BOOT : isHub(spec) ? SLS_HUB_BOOT : null);
 
-function b64utf8(s: string): string {
-  const u = new TextEncoder().encode(s);
-  let bin = "";
-  for (const x of u) bin += String.fromCharCode(x);
-  return btoa(bin);
-}
-
-/** The workers' env: secret references, the image's identity, the serve mode, weights_source r2's or hub's (`weights`:
+/** The workers' env: secret references, the image's identity, the serve mode, the worker config (FV_WORKER_TOML_B64:
+ * the spec's inline config or its named one's text; the images bake none), weights_source r2's or hub's (`weights`:
  * serverless/weights.ts slsWeightsEnv / slsHubEnv), the spec's env last. */
 export function workerEnv(spec: EndpointSpec, image: string, weights: Record<string, string> = {}): Record<string, string> {
   const e: Record<string, string> = {
@@ -62,18 +58,17 @@ export function workerEnv(spec: EndpointSpec, image: string, weights: Record<str
     RUST_LOG: "info",
   };
   if (spec.network_volume) e.FV_WEIGHTS = "/runpod-volume/weights";
-  if (spec.config) e.FV_CONFIG = spec.config;
-  if (spec.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(spec.config_toml);
+  Object.assign(e, workerConfigEnv(spec));
   if (spec.mode === "lb") Object.assign(e, { PORT: "8000", PORT_HEALTH: "8000", FV_WORKERS_MAX: String(Math.max(1, spec.workers_max)) });
   // weights_source r2's env, and upsampler_local's (the sidecar's switch and its fetch, any weights source).
   if (isR2(spec) || isHub(spec) || (spec.upsampler_local && spec.compute === "GPU")) Object.assign(e, weights);
   return { ...e, ...(spec.env || {}) };
 }
 
-// Without a config (and without r2) the image's entrypoint (fv-boot; fv-entry on older images) runs, which starts the upsampler sidecar itself.
+// Every endpoint sends its config (the images bake none): r2 / hub start with their fetch (bash), the rest with SLS_BOOT.
 const bootFields = (spec: EndpointSpec) => {
   const bash = bashBoot(spec);
-  return bash ? { dockerEntrypoint: ["bash", "-c", bash], dockerStartCmd: [] as string[] } : spec.config || spec.config_toml ? { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] } : {};
+  return bash ? { dockerEntrypoint: ["bash", "-c", bash], dockerStartCmd: [] as string[] } : { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] };
 };
 
 /** REST v1 POST /templates (queue endpoints). */
@@ -87,14 +82,13 @@ export function templateCreatePayload(spec: EndpointSpec, image: string, name: s
     volumeInGb: 0,
     env: workerEnv(spec, image, weights),
     ...bootFields(spec),
-    readme: `fv-control serverless endpoint ${spec.name} (${spec.variant}); docs/control/serverless.md`,
+    readme: `fv-control serverless endpoint ${spec.name} (${imageOf(spec)}); docs/control/serverless.md`,
   };
 }
 /** REST v1 PATCH /templates/<id>: image, env, start and disk (a rolling release of the endpoint's workers). */
 export function templateUpdatePayload(spec: EndpointSpec, image: string, weights: Record<string, string> = {}) {
   const { name: _n, isServerless: _s, category: _c, readme: _r, ...rest } = templateCreatePayload(spec, image, "", weights);
-  // Without a config (and without r2 / hub) the template goes back to the image's own entrypoint.
-  return { ...rest, ...(spec.config || spec.config_toml || bashBoot(spec) ? {} : { dockerEntrypoint: [], dockerStartCmd: [] }) };
+  return rest;
 }
 
 /** The scaling and placement fields REST v1 takes on create and PATCH. */
@@ -152,8 +146,6 @@ export function v2CreatePayload(spec: EndpointSpec, image: string, pools: string
     name: endpointName(spec),
     type: lb ? "LOAD_BALANCER" : "QUEUE",
     image,
-    // The image's entrypoint (fv-boot, fv-entry on older images: the weights link) passes these to fv-serve (runpod-endpoint.sh up-lb).
-    ...(lb && spec.config ? { args: `--config ${spec.config}` } : {}),
     ...(lb ? { ports: ["8000/http"] } : {}),
     disk: spec.container_disk_gb,
     env: workerEnv(spec, image, weights),
@@ -168,15 +160,11 @@ export function v2CreatePayload(spec: EndpointSpec, image: string, pools: string
     timeout: spec.execution_timeout_s * 1000,
   };
 }
-/** What a v2-made template gets after create (REST v1 PATCH /templates): the boot of a named config. A queue
- * endpoint's config (a file or inline), and a load balancer's inline config: v2 create has no entrypoint field,
- * and the image's entrypoint (fv-entry, on images from before fv-boot) knows FV_CONFIG but not FV_WORKER_TOML_B64. A load balancer's config
- * file rides v2's `args` instead (`--config <path>` to the entrypoint). */
+/** What a v2-made template gets after create (REST v1 PATCH /templates): the boot of its config (v2 create has no
+ * entrypoint field, and an image from before fv-boot does not read FV_WORKER_TOML_B64 on its own). Every endpoint
+ * sends its config, so every v2-made template gets it. */
 export function v2TemplateBoot(spec: EndpointSpec) {
-  const bash = bashBoot(spec);
-  if (bash) return { dockerEntrypoint: ["bash", "-c", bash], dockerStartCmd: [] as string[] };
-  const boot = spec.mode === "queue" ? !!(spec.config || spec.config_toml) : !!spec.config_toml;
-  return boot ? { dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [] as string[] } : null;
+  return bootFields(spec);
 }
 /** Runpod catalog pools for the spec's GPU types, in the spec's order (unknown types are dropped). */
 export function lbPools(gpuTypes: string[], catalog: { id: string; pool: string | null }[]): string[] {

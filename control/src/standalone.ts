@@ -17,7 +17,7 @@ import { HttpError, utcDay } from "./util";
 import { weightsSource } from "./providers";
 import type { z } from "zod";
 import { parseOr400, type StandaloneLaunchZ } from "./schemas";
-import { noVolumePod, RUNPOD_DC_CHOICES } from "./enums";
+import { imageOf, legacyVariant, noVolumePod, RUNPOD_DC_CHOICES } from "./enums";
 
 /** The single pool's id inside a standalone pod's spec. */
 export const STANDALONE_POOL = "pod";
@@ -28,7 +28,7 @@ export type LaunchRequest = z.infer<typeof StandaloneLaunchZ>;
 /** The region of a region id or a data centre id. A Runpod data centre without a weights volume (or "any") is allowed
  * for a pod without the volume (weights_source r2 or none; a CPU pod with volume off; schemas.ts noVolumePod): the spec
  * keeps the nominal region eu and the pool's data_centers place the pod. */
-export function regionOf(x: { region?: string; dc?: string; data_centers?: string[]; weights_source?: string; compute?: string; variant?: string; volume?: boolean }): RegionId {
+export function regionOf(x: { region?: string; dc?: string; data_centers?: string[]; weights_source?: string; compute?: string; volume?: boolean }): RegionId {
   const first = x.data_centers?.[0] ?? x.dc;
   const want = x.region || first || "eu";
   const byDc = (Object.keys(REGIONS) as RegionId[]).find((r) => REGIONS[r].dc === want);
@@ -51,16 +51,16 @@ export function presetWeightsDefault(id: string): "volume" | "r2" | "hub" | "non
 /** A launch request → the env it sets (validated) and a normalized one-pool direct cluster spec. */
 export function standaloneSpec(input: LaunchRequest): { spec: ClusterSpec; env: { key: string; value: string; secret: boolean }[] } {
   if (!input || typeof input !== "object") throw new HttpError(400, "body: a launch request");
-  input = parseOr400("standalone-launch", input);
+  // A launch naming an image `variant` (before the one-image decision, 2026-10-25): its compute and baked config.
+  input = parseOr400("standalone-launch", legacyVariant({ ...(input as Record<string, unknown>) }));
   const base: Partial<PoolSpec> = input.preset ? presetPool(input.preset) ?? {} : {};
   const region = regionOf(input);
-  const compute = input.compute ?? base.compute ?? (input.variant === "cpu" ? "CPU" : "GPU");
+  const compute = input.compute ?? base.compute ?? "GPU";
   const pool: PoolSpec = {
     ...(base as PoolSpec),
     id: STANDALONE_POOL,
     count: 1,
     compute,
-    variant: input.variant || base.variant!,
     regions: [region],
   };
   if (input.config || input.config_toml) {
@@ -165,7 +165,8 @@ export async function standaloneView(env: Env, c: Cluster, op: unknown) {
     definition: {
       provider: pool.provider ?? "runpod",
       ...(pool.provider && pool.provider !== "runpod" ? { provider_gpu: pool.provider_gpu, provider_region: pool.provider_region ?? null, weights_source: weightsSource(pool, env), hub_download_approved: !!pool.hub_download_approved } : { weights_source: pool.compute === "CPU" ? null : weightsSource(pool, env), hub_download_approved: !!pool.hub_download_approved }),
-      variant: pool.variant,
+      // The serve image of its compute (cuda / cpu); `image`: the build it runs.
+      serve_image: imageOf(pool),
       image: pool.image ? { image: pool.image } : c.spec.image,
       compute: pool.compute,
       gpu_types: pool.gpu_types || null,

@@ -1,30 +1,30 @@
 // Model-first serverless endpoints (docs/control/serverless.md §1a): a
 // preset from the one catalog (../presets.ts POOL_PRESETS, plus `cpu`, the
-// fake engine) fixes the image variant, the worker config (a file in the
-// image, or inline), the weight trees, the GPU memory and sensible disk and
-// timeouts. servingIssues checks what Runpod cannot tell us before a worker
-// boots: the config is in the image, the weights are on the volume, the GPU
-// types have the memory, a GPU preset has a volume.
-import { IMAGE_CONFIGS } from "../cluster/image-configs";
+// fake engine) fixes the compute (the CUDA image, or the cpu image), the
+// worker config (sent at boot: the images bake none), the weight trees, the
+// GPU memory and sensible disk and timeouts. servingIssues checks what Runpod
+// cannot tell us before a worker boots: a config fv-control can send, the
+// weights are on the volume, the GPU types have the memory, a GPU preset has
+// a volume.
 import { REGIONS } from "../cluster/regions";
-import { WORKER_CONFIGS } from "../cluster/worker-configs";
-import { SLS_PRESET_IDS } from "../enums";
+import { legacyVariant, SLS_PRESET_IDS } from "../enums";
+import { workerConfigProblem } from "../worker-config";
 import { gpuMemoryGb, gpusWithAtLeast } from "../gpus";
 import { POOL_PRESETS } from "../presets";
 import { missingTrees, VOLUME_TREES_SOURCE } from "../volumes";
 import { examplesFor, type InvokeExample } from "./examples";
-import { servesOf, type Serves } from "./serves";
+import { configOf, servesOf, type Serves } from "./serves";
 
 export type SlsPresetId = (typeof SLS_PRESET_IDS)[number];
 export interface SlsPreset {
   id: SlsPresetId;
   title: string;
   description: string;
-  variant: string;
+  /** GPU: the CUDA image; CPU: the cpu image (the fake engine). */
   compute: "GPU" | "CPU";
-  /** A config file of the image other than its baked default (FV_CONFIG). */
+  /** A named config (a configs/serve file fv-control sends at boot). */
   config?: string;
-  /** An inline config (FV_WORKER_TOML_B64): one the image does not carry. */
+  /** An inline config: both are sent as FV_WORKER_TOML_B64 (the images bake none). */
   config_toml?: string;
   weights: string[];
   /** Pre-quantized trees fetched with weights_source r2 (../presets.ts PoolPreset.prequant). */
@@ -37,18 +37,16 @@ export interface SlsPreset {
   upsampler_local?: boolean;
 }
 
-/** Every serverless preset: the pool presets (their image-default config left unset, so the image's own entrypoint runs it) and `cpu`. */
+/** Every serverless preset: the pool presets (their config sent at boot) and `cpu` (the fake engine's config). */
 export const SLS_PRESETS: SlsPreset[] = [
   ...POOL_PRESETS.map((p): SlsPreset => {
     const pool = p.pool;
-    const img = IMAGE_CONFIGS[pool.variant];
     return {
       id: p.id as SlsPresetId,
       title: p.title,
       description: p.description,
-      variant: pool.variant,
       compute: pool.compute === "CPU" ? "CPU" : "GPU",
-      ...(pool.config && pool.config !== img?.default ? { config: pool.config } : {}),
+      ...(pool.config ? { config: pool.config } : {}),
       ...(pool.config_toml ? { config_toml: pool.config_toml } : {}),
       weights: p.weights,
       prequant: p.prequant ?? [],
@@ -59,31 +57,27 @@ export const SLS_PRESETS: SlsPreset[] = [
       ...(pool.upsampler_local ? { upsampler_local: true } : {}),
     };
   }),
-  { id: "cpu", title: "Fake engine (CPU, tests)", description: "The cpu image's fake engine on CPU workers: every API, placeholder outputs, no GPU and no weights. For tests.", variant: "cpu", compute: "CPU", weights: [], prequant: [], min_vram_gb: 0, container_disk_gb: 20, execution_timeout_s: 600 },
+  { id: "cpu", title: "Fake engine (CPU, tests)", description: "The cpu image's fake engine on CPU workers: every API, placeholder outputs, no GPU and no weights. For tests.", compute: "CPU", config: "runpod-fake.toml", weights: [], prequant: [], min_vram_gb: 0, container_disk_gb: 20, execution_timeout_s: 600 },
 ];
 export const slsPreset = (id: unknown): SlsPreset | undefined => SLS_PRESETS.find((p) => p.id === id);
 
 /** The fields a preset owns (an input may repeat them, not change them). */
-export const PRESET_OWNED = ["variant", "compute", "config", "config_toml"] as const;
+export const PRESET_OWNED = ["compute", "config", "config_toml"] as const;
 export function presetOwned(p: SlsPreset): Record<(typeof PRESET_OWNED)[number], unknown> {
-  return { variant: p.variant, compute: p.compute, config: p.config, config_toml: p.config_toml };
+  return { compute: p.compute, config: p.config, config_toml: p.config_toml };
 }
 
-/** The preset a spec without one runs anyway (same variant, compute and config), or null (a custom spec). */
-export function inferPreset(spec: { variant: string; compute: string; config?: string; config_toml?: string }): SlsPresetId | null {
-  const def = IMAGE_CONFIGS[spec.variant]?.default;
-  const path = (c?: string) => c || def;
-  for (const p of SLS_PRESETS) {
-    if (p.variant !== spec.variant || p.compute !== spec.compute) continue;
-    if (p.config_toml ? spec.config_toml === p.config_toml : !spec.config_toml && path(spec.config) === path(p.config)) return p.id;
-  }
+/** The preset a spec without one runs anyway (same compute and the same config text), or null (a custom spec). */
+export function inferPreset(spec: { compute: string; config?: string; config_toml?: string }): SlsPresetId | null {
+  const mine = configOf(spec).text;
+  if (!mine) return null;
+  for (const p of SLS_PRESETS) if (p.compute === spec.compute && configOf(p).text === mine) return p.id;
   return null;
 }
 
 export interface SpecLike {
   preset?: string;
   mode: "queue" | "lb";
-  variant: string;
   compute: "GPU" | "CPU";
   config?: string;
   config_toml?: string;
@@ -108,25 +102,17 @@ export function minVramGb(spec: SpecLike, s: Serves): number {
 
 /**
  * The checks only fv-control can make before a worker boots, field by field:
- * a config path in the image, the weight trees on the volume (a static list,
- * volumes.ts), a volume for a config that loads weights, the GPU types'
- * memory. Warnings: a licence, an image ref (its configs cannot be checked).
+ * a config fv-control can send (named or inline, within the env size guard),
+ * the weight trees on the volume (a static list, volumes.ts), a volume for a
+ * config that loads weights, the GPU types' memory. Warnings: a licence.
  */
 export function servingIssues(spec: SpecLike, s: Serves = servesOf(spec)): { issues: Issue[]; warnings: Issue[] } {
   const issues: Issue[] = [];
   const warnings: Issue[] = [];
   const preset = slsPreset(spec.preset);
-  if (spec.config) {
-    const img = IMAGE_CONFIGS[spec.variant];
-    const file = spec.config.startsWith("/etc/fv/") ? spec.config.slice("/etc/fv/".length) : null;
-    if (spec.image.ref) warnings.push({ path: ["config"], message: `an image ref: fv-control cannot check that ${spec.config} is in it` });
-    else if (img && (!file || !img.files.includes(file))) {
-      const text = file ? WORKER_CONFIGS[file] : undefined;
-      const inline = text ? SLS_PRESETS.find((p) => p.config_toml === text) : undefined;
-      issues.push({ path: ["config"], message: `the ${spec.variant} image carries ${img.files.map((f) => `/etc/fv/${f}`).join(", ")}; ${spec.config} is not in it${inline ? ` (preset ${inline.id} sends that config inline)` : " (a config the image does not carry goes inline: config_toml, or pick a preset)"}` });
-    }
-  }
-  if (!s.models.length && s.source.kind === "unknown" && !spec.config) warnings.push({ path: ["variant"], message: "fv-control does not know this variant's config: nothing derived" });
+  // Every endpoint sends its config at boot (the images bake none): one fv-control can send.
+  const cfg = workerConfigProblem(spec);
+  if (cfg) issues.push({ path: [spec.config_toml ? "config_toml" : "config"], message: cfg });
   const trees = [...new Set([...(preset?.weights ?? []), ...s.weights])];
   if (spec.compute === "GPU" && s.engine !== "fake") {
     if (spec.weights_source === "r2" || spec.weights_source === "hub") {
@@ -161,11 +147,14 @@ export function servingView(spec: SpecLike): { preset: string | null; preset_inf
 
 /**
  * An update's document merged over the stored spec (PUT /api/v1/serverless/:id takes a partial spec). A
- * different preset brings its own variant, compute and config, so the stored ones are dropped; a
- * document that names a variant or config but no preset is a custom endpoint, so the stored preset is
- * dropped (`preset: null` drops it too).
+ * different preset brings its own compute and config, so the stored ones are dropped; a document that
+ * names a config but no preset is a custom endpoint, so the stored preset is dropped (`preset: null`
+ * drops it too). A stored spec or a patch naming an image `variant` (before the one-image decision)
+ * reads as its compute (enums.ts legacyVariant).
  */
-export function mergeSpec(prev: Record<string, any>, patch: Record<string, any>): Record<string, any> {
+export function mergeSpec(prevIn: Record<string, any>, patchIn: Record<string, any>): Record<string, any> {
+  const prev = legacyVariant({ ...prevIn });
+  const patch = legacyVariant({ ...patchIn });
   const base = { ...prev };
   if ("preset" in patch && patch.preset !== prev.preset) for (const k of PRESET_OWNED) delete base[k];
   else if (!("preset" in patch) && PRESET_OWNED.some((k) => k in patch && k !== "compute" && patch[k] !== prev[k])) delete base.preset;
@@ -175,4 +164,4 @@ export function mergeSpec(prev: Record<string, any>, patch: Record<string, any>)
 }
 
 /** Fields whose change makes an update re-check what the endpoint serves (servingIssues). */
-export const SERVING_FIELDS = ["preset", "variant", "compute", "config", "config_toml", "image", "gpu_types", "network_volume", "weights_source", "container_disk_gb"] as const;
+export const SERVING_FIELDS = ["preset", "compute", "config", "config_toml", "image", "gpu_types", "network_volume", "weights_source", "container_disk_gb"] as const;

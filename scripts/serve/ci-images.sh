@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
-# CI half of the per-variant serve images (docs/serve/images.md); run by
+# CI half of the serve images (docs/serve/images.md): `cuda`, the one CUDA image every preset runs, and `cpu`
+# (the fake engine). Neither bakes a worker config: every launch sends one, and an image started without one
+# refuses to boot (owner decision 2026-10-25, docs/adr/0011-deploy-section.md). Run by
 # .github/workflows/serve-image.yml after the legacy (debug) image.
 #
-#   ci-images.sh build <variant>…     build + push serve-<variant> (docker/gpucheck.Dockerfile);
-#                                     appends "<variant> <repo>@<digest> <compressed MB>" to $FV_CI_OUT
-#   ci-images.sh smoke <variant> <ref>   no-GPU checks of a pushed variant image
+#   ci-images.sh build <image>…       build + push serve-<image> (docker/gpucheck.Dockerfile);
+#                                     appends "<image> <repo>@<digest> <compressed MB>" to $FV_CI_OUT
+#   ci-images.sh smoke <image> <ref>  no-GPU checks of a pushed serve image: the libraries, ffmpeg, the
+#                                     refusal without a config, and the fake engine's /healthz through
+#                                     FV_WORKER_CONFIG=/etc/fv/runpod-fake.toml (the one config it carries)
 #   ci-images.sh size <ref>           compressed size (MB) and layer count of a pushed image
 #   ci-images.sh layers <ref>         "<digest> <MB>" per layer (bottom first)
 #   ci-images.sh summary              markdown table of $FV_CI_OUT (for $GITHUB_STEP_SUMMARY)
 #
 # Env: FV_IMAGE (repo, e.g. ghcr.io/zaitrarrio/fastvideo-rs-serve); FV_SHORT_SHA;
 # FV_BUILD_ID; FV_SERVE_FEATURES (default cuda,http-client);
-# FV_CPU_FEATURES (default http-client); FV_LATEST=1 also tags :<variant>
-# and :<variant>-latest (the `latest` channel, docs/serve/releases.md);
+# FV_CPU_FEATURES (default http-client); FV_LATEST=1 also tags :<image>
+# and :<image>-latest (the `latest` channel, docs/serve/releases.md);
 # FV_BUILD_TIME (the commit time, for `fv-serve --version`);
 # FV_COMPRESSION (gzip | zstd, default gzip); FV_CACHE_FROM (space list of
-# registry cache refs); FV_CI_OUT (default artifacts/ci/variants.tsv);
+# registry cache refs); FV_CI_OUT (default artifacts/ci/images.tsv);
 # FV_BUILD_CONTEXTS (name=path lines from scripts/ci/prebuilt.sh: directories
 # of build-pod binaries that replace the serve-build / cpu-build stages,
 # so no cargo compile runs; empty: compile in the image); FV_TOOLS_TAG (the
@@ -23,7 +27,9 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-OUT="${FV_CI_OUT:-$ROOT/artifacts/ci/variants.tsv}"
+OUT="${FV_CI_OUT:-$ROOT/artifacts/ci/images.tsv}"
+# The one config the serve images carry: CI's smoke check names it explicitly (FV_WORKER_CONFIG).
+SMOKE_CONFIG=/etc/fv/runpod-fake.toml
 COMPRESSION="${FV_COMPRESSION:-gzip}"
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 2; }
@@ -47,15 +53,15 @@ build() {
     tags="$FV_IMAGE:$v-sha-$FV_SHORT_SHA"
     [[ "${FV_LATEST:-0}" == 1 ]] && tags+=",$FV_IMAGE:$v,$FV_IMAGE:$v-latest"
     [[ "$COMPRESSION" == gzip ]] || tags="${tags//:$v-sha-/:$v-$COMPRESSION-sha-}"
-    # One registry cache per build graph: the CUDA variants share everything
-    # up to the variant stage (h3-turbo exports it), cpu has its own.
+    # One registry cache per build graph: cuda's, and cpu's own.
     cache_to=()
     case "$v" in
-      h3-turbo) cache_to=(--cache-to "type=registry,ref=$FV_IMAGE:buildcache-variants,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true") ;;
+      cuda) cache_to=(--cache-to "type=registry,ref=$FV_IMAGE:buildcache-cuda,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true") ;;
       cpu) cache_to=(--cache-to "type=registry,ref=$FV_IMAGE:buildcache-cpu,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true") ;;
+      *) die "unknown serve image $v (cuda, cpu; deploy/deploy.toml [[images]])" ;;
     esac
     args=()
-    for c in ${FV_CACHE_FROM:-} "$FV_IMAGE:buildcache-variants" "$FV_IMAGE:buildcache-cpu"; do
+    for c in ${FV_CACHE_FROM:-} "$FV_IMAGE:buildcache-cuda" "$FV_IMAGE:buildcache-cpu"; do
       args+=(--cache-from "type=registry,ref=$c")
     done
     while IFS= read -r c; do
@@ -98,20 +104,21 @@ smoke() {
   [[ "$ep" == '["/opt/fastvideo-rs/bin/fv-boot"]' ]] || die "serve-$v: entrypoint $ep, expected [\"/opt/fastvideo-rs/bin/fv-boot\"]"
   docker run --rm "$img" --version
   # Every dynamic library resolves; ffmpeg does what the code asks of it;
-  # the baked config parses; CUDA variants have the CUDA libraries, the
-  # cpu image none; none has the debug tooling.
+  # no config is baked (FV_CONFIG unset) and the one the image carries parses;
+  # the CUDA image has the CUDA libraries, the cpu image none; none has the
+  # debug tooling.
   docker run --rm --entrypoint bash -e V="$v" "$img" -euo pipefail -c '
     bad() { echo "FAIL: $*"; exit 1; }
     for b in /opt/fastvideo-rs/bin/fv-serve /opt/fastvideo-rs/bin/fv-boot /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; do
       ldd "$b" | grep "not found" && bad "$b: unresolved libraries"
     done
     test "$FV_VARIANT" = "$V"
-    test -f "$FV_CONFIG"
+    test -z "${FV_CONFIG:-}" || bad "FV_CONFIG=$FV_CONFIG is baked (the images bake no config)"
+    test "$(ls /etc/fv)" = runpod-fake.toml || bad "/etc/fv holds $(ls /etc/fv | tr "\n" " "), not only runpod-fake.toml"
     # the entrypoint is fv-boot (docs/adr/0014-fv-boot.md); fv-entry.sh is gone
     /opt/fastvideo-rs/bin/fv-boot version
     test -e /opt/fastvideo-rs/bin/fv-entry && bad "fv-entry is in the image"
     cat /opt/fastvideo-rs/bin/fv-serve.features
-    FV_ENGINE=fake /opt/fastvideo-rs/bin/fv-serve --config "$FV_CONFIG" --print-config >/dev/null
     FV_ENGINE=fake /opt/fastvideo-rs/bin/fv-serve --config /etc/fv/runpod-fake.toml --print-config >/dev/null
     ffmpeg -hide_banner -encoders | grep -E " (h264_nvenc|libx264|libvpx|aac) "
     ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=s=64x48:r=24:d=0.2 -f lavfi -i sine=d=0.2 \
@@ -142,8 +149,15 @@ smoke() {
       cat /opt/fastvideo-rs/bin/llama-server.version
     fi
     echo "smoke ok: $V"'
-  # HTTP mode on the fake engine through the image entrypoint: /healthz 200.
-  cid="$(docker run -d -p 18001:8000 -e FV_ENGINE=fake -e FV_AUTH_MODE=none "$img" --config /etc/fv/runpod-fake.toml)"
+  # Started without a config, the image refuses to boot: fv-boot exits non-zero and says why (no fv-serve default).
+  local out rc=0
+  out="$(docker run --rm -e FV_FAIL_SLEEP_S=0 "$img" 2>&1)" || rc=$?
+  [[ "$rc" != 0 ]] || die "serve-$v: started without a config, it booted (exit 0)"
+  grep -q "FAILED: no worker config" <<<"$out" || die "serve-$v: no refusal message without a config: $(tail -3 <<<"$out")"
+  echo "refused without a config (exit $rc): $(grep -m1 'FAILED: no worker config' <<<"$out")"
+  # HTTP mode on the fake engine through the image entrypoint, the config named explicitly
+  # (FV_WORKER_CONFIG, the escape hatch for this check): /healthz 200.
+  cid="$(docker run -d -p 18001:8000 -e FV_ENGINE=fake -e FV_AUTH_MODE=none -e "FV_WORKER_CONFIG=$SMOKE_CONFIG" "$img")"
   for _ in $(seq 1 60); do
     if curl -fsS localhost:18001/healthz; then ok=1; break; fi
     sleep 1
@@ -166,16 +180,16 @@ layers() {
 }
 
 summary() {
-  echo "| variant | image | compressed MB |"
+  echo "| image | reference | compressed MB |"
   echo "|---|---|---:|"
   awk -F'\t' '{printf "| %s | `%s` | %s |\n", $1, $2, $3}' "$OUT"
 }
 
 case "${1:-}" in
   build) shift; build "$@" ;;
-  smoke) shift; smoke "${1:?variant}" "${2:?image}" ;;
+  smoke) shift; smoke "${1:?image id}" "${2:?image ref}" ;;
   size) shift; size "${1:?image}" ;;
   layers) shift; layers "${1:?image}" ;;
   summary) summary ;;
-  *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

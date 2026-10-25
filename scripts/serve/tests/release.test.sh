@@ -31,7 +31,7 @@ export FV_POD_URL_TEMPLATE="$M/pod/{pod}" FV_SERVE_LEDGER="$T/ledger.tsv"
 # host (the shared build pod). Nothing here waits for it to fire.
 export FV_DEPLOYED_BY=test FV_POD_CAP_S=300
 REPO=ghcr.io/zaitrarrio/fastvideo-rs-serve
-KEYS="debug h3-turbo h3-max ltx wan wan5b sfwan cpu"
+KEYS="debug cuda cpu"
 
 # `docker buildx imagetools create --tag <repo>:<tag> <repo>@<digest>` moves the mock's tag.
 mkdir -p "$T/bin"
@@ -59,7 +59,7 @@ A=aaaaaaa1111111111111111111111111111111111
 A="${A:0:40}"
 B="bbbbbbb2222222222222222222222222222222222"; B="${B:0:40}"
 C="ccccccc3333333333333333333333333333333333"; C="${C:0:40}"
-DA="$(build "$A" "$KEYS")"; DB="$(build "$B" "$KEYS")"; build "$C" "debug h3-turbo" >/dev/null
+DA="$(build "$A" "$KEYS")"; DB="$(build "$B" "$KEYS")"; build "$C" "debug cuda" >/dev/null
 # The shared templates, on an older image.
 tpls='{}'
 for v in $KEYS; do
@@ -74,14 +74,14 @@ curl -sS -X POST -d "{\"templates\": $tpls}" "$M/__seed" >/dev/null
 # --- resolve -------------------------------------------------------------------
 out="$(rel resolve "${A:0:7}")"
 check "resolve: a short sha gives every image, the full sha from the labels" \
-  test "$(jq -r '.sha, (.digests | length), .digests["h3-turbo"]' <<<"$out" | tr '\n' ' ')" = "$A 8 $REPO@$(jq -r '.["h3-turbo"]' <<<"$DA") "
-out="$(rel resolve "$REPO@$(jq -r .ltx <<<"$DB")")"
+  test "$(jq -r '.sha, (.digests | length), .digests["cuda"]' <<<"$out" | tr '\n' ' ')" = "$A 3 $REPO@$(jq -r '.["cuda"]' <<<"$DA") "
+out="$(rel resolve "$REPO@$(jq -r .cuda <<<"$DB")")"
 check "resolve: a digest finds its build through the revision label" test "$(jq -r .short <<<"$out")" = "${B:0:7}"
 
 # --- promote -------------------------------------------------------------------
 out="$(rel promote "${A:0:7}" stable --dry-run)"
 check "promote --dry-run: prints the retags and template changes" \
-  bash -c 'grep -q "retag  :stable -> " <<<"$0" && grep -q "retag  :h3-turbo-stable -> " <<<"$0" && grep -q "template fv-serve-wan-sls: .*0ld -> " <<<"$0"' "$out"
+  bash -c 'grep -q "retag  :stable -> " <<<"$0" && grep -q "retag  :cuda-stable -> " <<<"$0" && grep -q "template fv-serve-cuda-sls: .*0ld -> " <<<"$0"' "$out"
 check "promote --dry-run: changes nothing" \
   bash -c '[[ -z "$(jq -r ".tags.stable // empty" <<<"$0")" && ! -e "$1/docker.log" ]]' "$(state)" "$T"
 
@@ -92,11 +92,11 @@ check "promote dispatch: no tag moved" test -z "$(tag stable)"
 
 out="$(rel promote "${A:0:7}" stable --local --notes "first stable")"
 check "promote --local: release 1 recorded" bash -c 'grep -q "release 1: stable = aaaaaaa (promote)" <<<"$0"' "$out"
-check "promote: :stable and :<variant>-stable point at the build" \
-  test "$(tag stable) $(tag h3-turbo-stable) $(tag cpu-stable)" = "$(jq -r '.debug, .["h3-turbo"], .cpu' <<<"$DA" | xargs)"
-check "promote: stable does not move the legacy :<variant> tags" test -z "$(tag h3-turbo)"
+check "promote: :stable and :<image>-stable point at the build" \
+  test "$(tag stable) $(tag cuda-stable) $(tag cpu-stable)" = "$(jq -r '.debug, .cuda, .cpu' <<<"$DA" | xargs)"
+check "promote: stable does not move the plain :<image> tags" test -z "$(tag cuda)"
 check "promote: every template boots the build, with its identity env" \
-  test "$(state | jq -r --arg d "$(jq -r .wan <<<"$DA")" '[.templates[] | select(.name | startswith("fv-serve-wan-"))
+  test "$(state | jq -r --arg d "$(jq -r .cuda <<<"$DA")" '[.templates[] | select(.name | startswith("fv-serve-cuda-"))
     | (.imageName | endswith($d)) and .env.FV_IMAGE_DIGEST == $d and .env.FV_RELEASE_CHANNEL == "stable"] | all')" = true
 check "promote: the D1 row" \
   test "$(sql "SELECT channel, git_sha, action, notes, templates_updated, promoted_by FROM releases WHERE id = 1" | jq -c '.[0]')" \
@@ -109,17 +109,17 @@ rel promote "${B:0:7}" stable --local >/dev/null
 check "promote B: release 2" test "$(sql "SELECT MAX(id) AS n FROM releases" | jq -r '.[0].n')" = 2
 rel promote "${B:0:7}" latest --local >/dev/null
 check "promote to latest: :latest, :<v>-latest and :<v>; templates untouched" \
-  bash -c '[[ "$(jq -r ".tags.latest, .tags[\"wan-latest\"], .tags.wan" <<<"$0" | xargs)" == "$1" ]] && [[ "$(jq -r "[.templates[] | .env.FV_RELEASE_CHANNEL] | unique[]" <<<"$0")" == stable ]]' \
-  "$(state)" "$(jq -r '.debug, .wan, .wan' <<<"$DB" | xargs)"
+  bash -c '[[ "$(jq -r ".tags.latest, .tags[\"cuda-latest\"], .tags.cuda" <<<"$0" | xargs)" == "$1" ]] && [[ "$(jq -r "[.templates[] | .env.FV_RELEASE_CHANNEL] | unique[]" <<<"$0")" == stable ]]' \
+  "$(state)" "$(jq -r '.debug, .cuda, .cuda' <<<"$DB" | xargs)"
 
 out="$(bash "$SERVE/release.sh" promote "${C:0:7}" stable --local 2>&1)"
-check "promote: a build missing variants is refused" bash -c '[[ "$0" == *"has no image for: h3-max ltx wan wan5b sfwan cpu"* ]]' "$out"
+check "promote: a build missing an image is refused" bash -c '[[ "$0" == *"has no image for: cpu"* ]]' "$out"
 check "promote: refused, nothing moved" test "$(tag stable)" = "$(jq -r .debug <<<"$DB")"
 
 # --- list / history ------------------------------------------------------------
 out="$(rel list --verify)"
 check "list: the head of each channel, the tags verified" \
-  bash -c 'grep -q "^stable   release 2  *bbbbbbb" <<<"$0" && grep -q "^latest   release 3" <<<"$0" && ! grep -q DIFFERS <<<"$0" && grep -c ":.* ok" <<<"$0" | grep -q 16' "$out"
+  bash -c 'grep -q "^stable   release 2  *bbbbbbb" <<<"$0" && grep -q "^latest   release 3" <<<"$0" && ! grep -q DIFFERS <<<"$0" && grep -c ":.* ok" <<<"$0" | grep -qx 6' "$out"
 out="$(rel history --channel stable)"
 check "history: newest first" bash -c '[[ "$(awk "NR>1 {print \$1}" <<<"$0" | xargs)" == "2 1" ]]' "$out"
 
@@ -131,7 +131,7 @@ check "rollback --dry-run: plans the previous release" bash -c 'grep -q "retag  
 out="$(rel rollback stable --local)"
 check "rollback: release 4 re-promotes release 1" bash -c 'grep -q "release 4: stable = aaaaaaa (rollback)" <<<"$0"' "$out"
 check "rollback: the tags and templates are back on A" \
-  test "$(tag stable) $(state | jq -r '.templates["tpl-ltx-pod"].imageName')" = "$(jq -r .debug <<<"$DA") $REPO@$(jq -r .ltx <<<"$DA")"
+  test "$(tag stable) $(state | jq -r '.templates["tpl-cuda-pod"].imageName')" = "$(jq -r .debug <<<"$DA") $REPO@$(jq -r .cuda <<<"$DA")"
 check "rollback: the row names its source and B is marked rolled back" \
   test "$(sql "SELECT (SELECT source_release FROM releases WHERE id = 4) AS s, (SELECT rolled_back_at IS NOT NULL FROM releases WHERE id = 2) AS r" | jq -c '.[0]')" = '{"s":1,"r":1}'
 out="$(bash "$SERVE/release.sh" rollback stable --local 2>&1)"
@@ -140,19 +140,21 @@ out="$(rel rollback stable --local --to 2)"
 check "rollback --to: an explicit release" bash -c 'grep -q "stable = bbbbbbb (rollback)" <<<"$0"' "$out"
 
 # --- CI record -----------------------------------------------------------------
-printf 'h3-turbo\t%s\t1000\nwan\t%s\t900\n' "$REPO@$(jq -r '.["h3-turbo"]' <<<"$DA")" "$REPO@$(jq -r .wan <<<"$DA")" >"$T/variants.tsv"
-out="$(rel record-build latest "$A" "$T/variants.tsv" "$REPO@$(jq -r .debug <<<"$DA")")"
+printf 'cuda\t%s\t1000\ncpu\t%s\t300\n' "$REPO@$(jq -r .cuda <<<"$DA")" "$REPO@$(jq -r .cpu <<<"$DA")" >"$T/images.tsv"
+out="$(rel record-build latest "$A" "$T/images.tsv" "$REPO@$(jq -r .debug <<<"$DA")")"
 check "record-build: the main build as a latest release" \
-  test "$(sql "SELECT action, digests FROM releases WHERE id = (SELECT MAX(id) FROM releases)" | jq -c '.[0] | [.action, (.digests | fromjson | keys)]')" = '["build",["debug","h3-turbo","wan"]]'
+  test "$(sql "SELECT action, digests FROM releases WHERE id = (SELECT MAX(id) FROM releases)" | jq -c '.[0] | [.action, (.digests | fromjson | keys)]')" = '["build",["cpu","cuda","debug"]]'
 
 # --- deploy scripts write the registry ------------------------------------------
-line="$(FV_SERVE_IMAGE="$REPO@$(jq -r '.["h3-turbo"]' <<<"$DA")" FV_SERVE_CONFIG=/etc/fv/runpod.toml bash "$SERVE/runpod-pod.sh" up 2>>"$T/stderr.log")"
+line="$(FV_SERVE_IMAGE="$REPO@$(jq -r .cuda <<<"$DA")" FV_SERVE_CONFIG=/etc/fv/runpod.toml bash "$SERVE/runpod-pod.sh" up 2>>"$T/stderr.log")"
 POD="${line%% *}"
 row="$(sql "SELECT kind, status, variant, git_sha, created_by, digest FROM deployments WHERE runpod_id = '$POD'" | jq -c '.[0]')"
-check "runpod-pod.sh up: a deployments row with the build's sha and variant" \
-  test "$row" = "{\"kind\":\"pod\",\"status\":\"creating\",\"variant\":\"h3-turbo\",\"git_sha\":\"$A\",\"created_by\":\"test/runpod-pod.sh\",\"digest\":\"$(jq -r '.["h3-turbo"]' <<<"$DA")\"}"
+check "runpod-pod.sh up: a deployments row with the build's sha and image" \
+  test "$row" = "{\"kind\":\"pod\",\"status\":\"creating\",\"variant\":\"cuda\",\"git_sha\":\"$A\",\"created_by\":\"test/runpod-pod.sh\",\"digest\":\"$(jq -r .cuda <<<"$DA")\"}"
 check "runpod-pod.sh up: the pod env names its image" \
-  test "$(state | jq -r --arg p "$POD" '.pods[$p].env.FV_IMAGE_DIGEST')" = "$(jq -r '.["h3-turbo"]' <<<"$DA")"
+  test "$(state | jq -r --arg p "$POD" '.pods[$p].env.FV_IMAGE_DIGEST')" = "$(jq -r .cuda <<<"$DA")"
+check "runpod-pod.sh up: the config rides inline (the image bakes none), fv-boot starts it" \
+  test "$(state | jq -r --arg p "$POD" '.pods[$p] | [(.env.FV_WORKER_TOML_B64 | @base64d | startswith("# fv-serve on Runpod")), .dockerEntrypoint[0], (.dockerStartCmd // [] | length)] | @tsv')" = "$(printf 'true\t/opt/fastvideo-rs/bin/fv-boot\t0')"
 bash "$SERVE/runpod-pod.sh" down "$POD" >/dev/null 2>>"$T/stderr.log"
 check "runpod-pod.sh down: the row is deleted" \
   test "$(sql "SELECT status, deleted_at IS NOT NULL AS d FROM deployments WHERE runpod_id = '$POD'" | jq -c '.[0]')" = '{"status":"deleted","d":1}'
@@ -177,17 +179,17 @@ check "price cap: the over-cap type is skipped and the next one created, once" \
 
 # --- deployed / reconcile --------------------------------------------------------
 # A stray fv pod nobody recorded, and a row for a pod that is gone.
-curl -sS -X POST "$M/__seed" -d "{\"pods\": {\"stray1\": {\"id\": \"stray1\", \"name\": \"fv-serve-smoke-x\", \"imageName\": \"$REPO@$(jq -r .ltx <<<"$DB")\",
+curl -sS -X POST "$M/__seed" -d "{\"pods\": {\"stray1\": {\"id\": \"stray1\", \"name\": \"fv-serve-smoke-x\", \"imageName\": \"$REPO@$(jq -r .cuda <<<"$DB")\",
   \"desiredStatus\": \"RUNNING\", \"createdAt\": \"2026-09-29 01:22:30.836 +0000 UTC\", \"env\": {\"FV_ADMIN_TOKEN\": \"never-print-me\"}},
   \"other1\": {\"id\": \"other1\", \"name\": \"someone-else\", \"imageName\": \"daydreamlive/scope\", \"desiredStatus\": \"RUNNING\"}}}" >/dev/null
 sql "INSERT INTO deployments (id, kind, runpod_id, created_at, updated_at, created_by, status) VALUES ('pod:ghost', 'pod', 'ghost', 1, 1, 'test', 'ready')" >/dev/null
 out="$(rel deployed --json)"
 got="$(jq -c '[.[] | select(.id == "stray1") | {key, sha: .sha[0:7], channels, follows, drift, known}]' <<<"$out")"
-want='[{"key":"ltx","sha":"bbbbbbb","channels":["stable"],"follows":"stable","drift":false,"known":false}]'
+want='[{"key":"cuda","sha":"bbbbbbb","channels":["stable"],"follows":"stable","drift":false,"known":false}]'
 if [[ "$got" == "$want" ]]; then ok "deployed: fv pods only, with sha, image key, channels and drift"; else bad "deployed: fv pods only, with sha, image key, channels and drift" "$got"; fi
 check "deployed: never someone else's pods" test "$(jq '[.[] | select(.id == "other1")] | length' <<<"$out")" = 0
 out="$(rel deployed)"
-check "deployed: the table" bash -c 'grep -q "^pod  *stray1 .* ltx  *bbbbbbb .* ok (stable) unregistered" <<<"$0"' "$out"
+check "deployed: the table" bash -c 'grep -q "^pod  *stray1 .* cuda  *bbbbbbb .* ok (stable) unregistered" <<<"$0"' "$out"
 out="$(rel reconcile --dry-run)"
 check "reconcile --dry-run: the gone row and the unknown pod, nothing marked" \
   bash -c 'grep -q "^gone      pod ghost" <<<"$0" && grep -q "^unknown   pod stray1" <<<"$0" && grep -q "not marked" <<<"$0"' "$out"

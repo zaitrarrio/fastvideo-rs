@@ -36,7 +36,7 @@ import { slsPreset } from "./presets";
 import { configOf, servesOfToml } from "./serves";
 import type { EndpointSpec } from "./spec";
 
-type SpecLike = Pick<EndpointSpec, "variant" | "compute"> & Partial<Pick<EndpointSpec, "preset" | "config" | "config_toml" | "image" | "weights_source" | "network_volume" | "data_centers" | "container_disk_gb" | "upsampler_local" | "weights_download_approved">>;
+type SpecLike = Pick<EndpointSpec, "compute"> & Partial<Pick<EndpointSpec, "preset" | "config" | "config_toml" | "image" | "weights_source" | "network_volume" | "data_centers" | "container_disk_gb" | "upsampler_local" | "weights_download_approved">>;
 
 /** The previous weights token stays valid this long after a rotation (Runpod's rolling release of the workers). */
 export const SLS_TOKEN_GRACE_MS = 30 * 60_000;
@@ -53,7 +53,7 @@ export function slsTrees(spec: SpecLike, prequant = true): string[] {
   if (spec.compute !== "GPU") return [];
   const p = slsPreset(spec.preset);
   const out = new Set<string>([...(p?.weights ?? []), ...(prequant ? (p?.prequant ?? []).filter((t) => R2_TREES[t]) : [])]);
-  const text = configOf({ variant: spec.variant, config: spec.config, config_toml: spec.config_toml, image: spec.image }).text || "";
+  const text = configOf({ config: spec.config, config_toml: spec.config_toml }).text || "";
   for (const t of servesOfToml(text, { kind: "inline", config: null }).weights) out.add(t);
   for (const line of text.split("\n")) {
     if (/^\s*#/.test(line)) continue;
@@ -366,13 +366,17 @@ fi
  * docs/serve/images.md §FlashBoot); a host without the image: up to 458 s (about 10 % of cold starts). */
 export const SLS_IMAGE_START_S = 60;
 export const SLS_IMAGE_PULL_TAIL_S = 458;
-/** Model load after start, by variant (measured from the volume: wan 70, h3 52, ltx 33 s; docs/serve/gateway.md §8.6).
- * From a local NVMe container disk: UNVERIFIED (expected no slower). */
-export function slsLoadS(variant: string): number {
-  if (variant.startsWith("h3")) return 52;
-  if (variant.startsWith("ltx")) return 33;
-  if (variant.startsWith("wan") || variant === "sfwan") return 70;
-  return variant === "cpu" ? 2 : 60;
+/** Model load after start, by the model families the spec's config serves (measured from the volume: wan 70, h3 52,
+ * ltx 33 s; docs/serve/gateway.md §8.6), the slowest of them; the fake engine 2 s. From a local NVMe container disk:
+ * UNVERIFIED (expected no slower). */
+export function slsLoadS(spec: Pick<EndpointSpec, "compute"> & Partial<Pick<EndpointSpec, "config" | "config_toml">>): number {
+  if (spec.compute === "CPU") return 2;
+  const text = configOf({ config: spec.config, config_toml: spec.config_toml }).text;
+  const served = text ? servesOfToml(text, { kind: "inline", config: null }) : null;
+  if (served?.engine === "fake") return 2;
+  const of: Record<string, number> = { h3: 52, ltx2: 33, wan: 70 };
+  const fams = (served?.models ?? []).map((m) => of[m.family] ?? 60);
+  return fams.length ? Math.max(...fams) : 60;
 }
 
 export interface BootRow {
@@ -430,7 +434,7 @@ export function slsOutlook(env: Env, spec: SpecLike, boots: BootRow[] = []): Out
   const planRate = ws === "hub" ? HUB_DOWNLOAD_GBPS : R2_DOWNLOAD_GBPS;
   const rate = measured ? measured.fetch_mbps! / 1000 : planRate;
   const fetchS = fetches ? Math.round(fetchGb / rate) + (ws === "hub" ? SLS_HUB_TOOLS_S : 0) : 0;
-  const loadS = slsLoadS(spec.variant);
+  const loadS = slsLoadS(spec);
   const last = boots[0] ?? null;
   const verb = ws === "hub" ? "downloaded" : "fetched";
   const cacheState: Outlook["cache"] = !fetches

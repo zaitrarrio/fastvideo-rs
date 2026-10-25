@@ -9,6 +9,7 @@ import { R2_RUNPOD_SH, r2DiskGb, r2PodEnv } from "../r2weights";
 import { DRIVER_CHECK_SH } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH, upsamplerDiskGb, upsamplerPodEnv } from "../upsampler";
 import { PREFER_FV_BOOT_SH } from "../fv-boot";
+import { workerConfigEnv } from "../worker-config";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -22,9 +23,11 @@ export const SECRET_ENV_REFS: Record<string, string> = {
   FV_WEBHOOK_ED25519_KEY: "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
 };
 
-// A worker's start command (direct workers): the config from the image, or
-// inline (FV_WORKER_TOML_B64) when the pool has one. An image with fv-boot runs
-// that instead (PREFER_FV_BOOT_SH, fv-boot.ts): the same steps from the same env.
+// A worker's start command (direct workers): the config fv-control sends inline
+// (FV_WORKER_TOML_B64: the images bake none, docs/adr/0011-deploy-section.md),
+// else FV_WORKER_CONFIG, a file in the image (with neither, `set -u` stops the
+// boot). An image with fv-boot runs that instead (PREFER_FV_BOOT_SH, fv-boot.ts):
+// the same steps from the same env.
 export const WORKER_BOOT = `set -u
 ${PREFER_FV_BOOT_SH}echo "[fv-boot] start" >&2
 FV_DRV_POD="\${RUNPOD_POD_ID:-}"
@@ -157,13 +160,6 @@ export interface EnvCtx {
   env?: Env;
 }
 
-function b64utf8(s: string): string {
-  const u = new TextEncoder().encode(s);
-  let bin = "";
-  for (const x of u) bin += String.fromCharCode(x);
-  return btoa(bin);
-}
-
 function logShipEnv(ctx: EnvCtx): Record<string, string> {
   if (!ctx.spec.log_shipping || !ctx.ingestUrl || !ctx.secrets.ingest_token) return {};
   return { FV_LOG_SHIP_URL: ctx.ingestUrl, FV_LOG_SHIP_TOKEN: ctx.secrets.ingest_token, FV_LOG_SHIP_LEVEL: ctx.spec.log_level || "info" };
@@ -225,13 +221,14 @@ export function workerSystemEnv(ctx: EnvCtx, pool: PoolSpec, image: string): Rec
     FV_INTERNAL_TOKEN: ctx.secrets.internal_token,
     FV_URL_SIGNING_KEY: ctx.secrets.url_signing_key,
     FV_PUBLIC_BASE_URL: "",
-    FV_WORKER_CONFIG: pool.config || "/fv-worker.toml",
+    // The pool's worker config, inline: the serve images bake none (one image, ADR-0011), whether the pool names a
+    // configs/serve file (`config`, resolved here, at launch) or carries its own (`config_toml`).
+    ...workerConfigEnv(pool),
     FV_STATE_DIR: "/fvstate",
     FV_WEIGHTS: "/workspace/weights",
     FV_JOBS_HEARTBEAT_S: "10",
     RUST_LOG: "info",
   };
-  if (pool.config_toml) e.FV_WORKER_TOML_B64 = b64utf8(pool.config_toml);
   const out = { ...e, ...directEnv(ctx), ...edgeEnv(ctx, pool), ...logShipEnv(ctx), ...upsamplerEnv(ctx, pool), ...runpodR2Env(ctx, pool), ...runpodHubEnv(ctx, pool) };
   // Edge fronts never use the account's (production) bucket: they upload
   // results through the edge into its outputs bucket and presign their URLs

@@ -4,12 +4,14 @@
 # scripts/serve/variants.sh.
 #
 # Release keys: `debug` (the all-in-one image: :sha-<s>, :latest, :<channel>)
-# and every variant of $FV_VARIANTS (:<v>-sha-<s>, :<v>, :<v>-<channel>).
+# and every serve image of $FV_IMAGES, the one CUDA image and the CPU image
+# (:<i>-sha-<s>, :<i>, :<i>-<channel>). Builds before 2026-10-25 carried one
+# key per image variant (h3-turbo, ltx, …); their D1 rows keep those keys.
 #
 #   fv_ghcr_init                     anonymous pull token (public package)
 #   fv_ghcr_digest <tag>             the tag's digest (sha256:…), or fail
 #   fv_ghcr_labels <digest>          the image config's labels (JSON)
-#   fv_ghcr_set_for_sha <short sha>  {"debug": "<repo>@sha256:…", "h3-turbo": …} of the tags that exist
+#   fv_ghcr_set_for_sha <short sha>  {"debug": "<repo>@sha256:…", "cuda": …} of the tags that exist
 #   fv_key_sha_tag <key> <short>     sha-<s> | <v>-sha-<s>
 #   fv_key_channel_tags <key> <ch>   the tags a promotion to <ch> moves
 #   fv_ghcr_retag <ref@digest> <tag> docker buildx imagetools create (no rebuild), then
@@ -19,7 +21,7 @@
 # the tests use a mock); FV_DOCKER (default docker).
 
 FV_REGISTRY_API="${FV_REGISTRY_API:-https://ghcr.io}"
-FV_RELEASE_KEYS="debug $FV_VARIANTS"
+FV_RELEASE_KEYS="debug $FV_IMAGES"
 _FV_MANIFEST_ACCEPT='Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json'
 
 fv_repo_path() { echo "${FV_SERVE_REPO#*/}"; }
@@ -62,7 +64,7 @@ fv_ghcr_labels() {
 fv_key_sha_tag() { if [[ "$1" == debug ]]; then echo "sha-$2"; else echo "$1-sha-$2"; fi; }
 
 # The tags a promotion to <channel> points at the image: debug -> :<channel>;
-# a variant -> :<v>-<channel>, and for `latest` also the legacy :<v>.
+# a serve image -> :<i>-<channel>, and for `latest` also the plain :<i>.
 fv_key_channel_tags() {
   if [[ "$1" == debug ]]; then echo "$2"
   elif [[ "$2" == latest ]]; then echo "$1-latest $1"

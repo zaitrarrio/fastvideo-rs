@@ -60,7 +60,7 @@ import { serverlessRoutes } from "./serverless/routes";
 import { getRow, serverlessTick } from "./serverless/ops";
 import { consoleRequest, sweepUploads, uploadGet } from "./serverless/console";
 import { cloudrift, cloudriftEnabled, CLOUDRIFT_OWNER_TAG } from "./cloudrift";
-import { OTHER_PROVIDERS, type OtherProviderId } from "./enums";
+import { legacyVariant, OTHER_PROVIDERS, type OtherProviderId } from "./enums";
 import { brevBoot, brevRow, deleteParked, parkedView, storageDph, unpark } from "./brev-park";
 import { R2_FETCH_PY, R2_FETCH_SHA256 } from "./r2-fetch-script";
 import { slsReport } from "./serverless/ingest";
@@ -1401,9 +1401,11 @@ app.post("/api/v1/preflight", async (c) => {
   }
   if (b.launch) spec = standaloneSpec(b.launch).spec;
   else if (b.endpoint) {
-    // A preset names the variant (a spec as the API and the CLI send it, before the defaults are filled).
-    const e = { ...b.endpoint, variant: b.endpoint.variant ?? slsPreset(b.endpoint.preset)?.variant, image: b.endpoint.image ?? { channel: "stable" } };
-    spec = normalizeSpec({ name: "preflight", image: e.image, control_plane: "direct", pools: [{ id: "endpoint", variant: e.variant, compute: e.variant === "cpu" ? "CPU" : "GPU", count: 1, config: "/etc/fv/runpod.toml", ...(e.variant === "cpu" ? { fake_models: ["fake-wan"] } : { models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }) }] });
+    // A preset names the compute (a spec as the API and the CLI send it, before the defaults are filled); the image is
+    // the compute's (the CUDA image or the cpu image), so the check is a pool of that compute.
+    const e = legacyVariant({ ...b.endpoint });
+    const compute = e.compute ?? slsPreset(e.preset)?.compute ?? "CPU";
+    spec = normalizeSpec({ name: "preflight", image: e.image ?? { channel: "stable" }, control_plane: "direct", pools: [{ id: "endpoint", compute, count: 1, ...(compute === "CPU" ? { config: "runpod-fake.toml", fake_models: ["fake-wan"] } : { config: "runpod.toml", models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }) }] });
   } else spec = normalizeSpec(b.spec || {});
   let images: Record<string, string>;
   try {

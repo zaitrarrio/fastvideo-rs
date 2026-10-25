@@ -8,6 +8,7 @@ import { bootMatch, bootPhase, bootRows, foldBoot, getBoot, markReady, recordBoo
 import { checkImages, imageRevision, IMAGE_FEATURES, neededFeatures, revisionContains } from "../../src/cluster/preflight";
 import { bootFor, EDGE_WORKER_BOOT, WATCHDOG_WORKER_BOOT, WORKER_BOOT, workerCreatePayload, workerPlacements, workerSystemEnv, type EnvCtx } from "../../src/cluster/payloads";
 import { normalizeSpec } from "../../src/cluster/spec";
+import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
 import { getCluster, ownerOf } from "../../src/cluster/store";
 import { summarize, upOutcome, type PoolView } from "../../src/cluster/upwait";
 import { b64, randomBytes } from "../../src/crypto";
@@ -214,15 +215,21 @@ describe("standalone pods: the spec", () => {
     const { spec, env } = standaloneSpec({ name: "h3-solo", preset: "h3-turbo", channel: "latest", deadline_min: 45, idle_stop_min: 20, env: { FASTVIDEO_ATTN_SAGE: "0", HF_TOKEN: { value: "hf_x", secret: true } } });
     expect(spec).toMatchObject({ name: "h3-solo", control_plane: "direct", regions: ["eu"], image: { channel: "latest" }, cap_s: 2700, auto_stop_idle_min: 20, log_shipping: true });
     expect(spec.pools).toHaveLength(1);
-    expect(spec.pools[0]).toMatchObject({ id: STANDALONE_POOL, variant: "h3-turbo", count: 1, compute: "GPU", volume: true, config: "/etc/fv/runpod.toml", regions: ["eu"] });
+    expect(spec.pools[0]).toMatchObject({ id: STANDALONE_POOL, count: 1, compute: "GPU", volume: true, regions: ["eu"] });
+    // The preset's config, inline (the one CUDA image bakes none).
+    expect(spec.pools[0]!.config_toml).toBe(WORKER_CONFIGS["runpod.toml"]);
+    expect("variant" in spec.pools[0]!).toBe(false);
     expect(env).toEqual([
       { key: "FASTVIDEO_ATTN_SAGE", value: "0", secret: false },
       { key: "HF_TOKEN", value: "hf_x", secret: true },
     ]);
   });
-  it("custom variant on CPU, a DC alias, a GPU type, an image ref or a sha", () => {
-    const cpu = standaloneSpec({ name: "fake1", variant: "cpu", compute: "CPU", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], dc: "EU-RO-1" }).spec;
-    expect(cpu.pools[0]).toMatchObject({ compute: "CPU", volume: false, fake_models: ["fake-wan"] });
+  it("custom on CPU, a DC alias, a GPU type, an image ref or a sha", () => {
+    const cpu = standaloneSpec({ name: "fake1", compute: "CPU", config: "runpod-fake.toml", fake_models: ["fake-wan"], dc: "EU-RO-1" }).spec;
+    expect(cpu.pools[0]).toMatchObject({ compute: "CPU", volume: false, fake_models: ["fake-wan"], config: "runpod-fake.toml" });
+    // A launch as a client from before the one image sends it: the cpu variant is a CPU pod.
+    const old = standaloneSpec({ name: "fake2", variant: "cpu", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"] } as any).spec;
+    expect([old.pools[0]!.compute, "variant" in old.pools[0]!]).toEqual(["CPU", false]);
     expect(cpu.image).toEqual({ channel: "stable" });
     const g = standaloneSpec({ name: "g", preset: "ltx-pro", gpu_type: "NVIDIA RTX PRO 6000 Blackwell Server Edition", sha: "b51ddcd" }).spec;
     expect(g.image).toEqual({ sha: "b51ddcd" });
@@ -242,7 +249,7 @@ describe("standalone pods: the spec", () => {
     expect(bad({ channel: "latest", sha: "abcdef1" })).toThrow(/at most one/);
     expect(bad({ preset: "nope" })).toThrow(/no pool preset/);
     expect(bad({ name: "Bad Name" })).toThrow(/name/);
-    expect(() => standaloneSpec({ name: "x" } as any)).toThrow(/preset or variant/);
+    expect(() => standaloneSpec({ name: "x" } as any)).toThrow(/a preset, or config \/ config_toml/);
   });
   it("its worker env carries the backstop and its boot runs the watchdog; a direct cluster's does not", () => {
     const { spec } = standaloneSpec({ name: "h3-solo", preset: "h3-turbo" });
@@ -282,7 +289,7 @@ describe("standalone pods: the API", () => {
     const r = await call(env, "/api/v1/standalone", { method: "POST", body: launch, headers: admin });
     expect(r.status).toBe(201);
     const j: any = await r.json();
-    expect(j.pod).toMatchObject({ name: "h3-solo", status: "defined", definition: { variant: "h3-turbo", image: { channel: "latest" }, region: "eu", dc: "EU-RO-1", volume: "bz0ofkfx45", deadline_min: 30 }, pod: null });
+    expect(j.pod).toMatchObject({ name: "h3-solo", status: "defined", definition: { serve_image: "cuda", image: { channel: "latest" }, region: "eu", dc: "EU-RO-1", volume: "bz0ofkfx45", deadline_min: 30 }, pod: null });
     expect(j.operation).toMatch(/^op_/);
     expect(ops.calls.find((x) => x.path === "/op/start")?.body).toMatchObject({ kind: "up", params: { skip_price_check: false } });
     const cl = await getCluster(env, "h3-solo");
