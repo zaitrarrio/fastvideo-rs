@@ -546,7 +546,7 @@ create that the autoscaler runs through `spawn_blocking`, and the live quote rep
   key; the US volume is refused), `scripts/serve/tests/fv-deploy-goldens.sh --check` in `control.yml`.
 
 - C3b is pinned by `vast_search_and_create_equal_vast_sh`, `gcp_firewall_and_instance_equal_vm_sh`, the preset-diff
-  goldens, `provider/tests_c3b.rs` (13 tests), `runpod::shared_tests`, `runpod::template::tests`, the autoscaler's
+  goldens, `provider/tests_c3b.rs` (14 tests), `runpod::shared_tests`, `runpod::template::tests`, the autoscaler's
   `the_async_client_sends_the_shared_requests`, and `scripts/gcp/tests/vm.test.sh`.
 
 ## Validation
