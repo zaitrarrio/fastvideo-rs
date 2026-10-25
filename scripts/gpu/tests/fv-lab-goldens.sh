@@ -201,6 +201,20 @@ done
 cp -a "$TMP/rb" "$TMP/rj"; cp -a "$TMP/rb" "$TMP/rk"
 echo 'not json' >"$TMP/rj/compare/compare-clips-a--s.json"; echo 'not json' >"$TMP/rk/compare/compare-clips-a--s.json"
 if clean bash "$CMP" "$TMP/rj" "$TMP/rk" >/dev/null; then echo "fv-lab-goldens: compare-runs passed two unreadable reports" >&2; rc=1; fi
+# The verdict step's files (D1d): equal in both pass; another verdict, an
+# evidence file in one run only, or another evidence diff fails.
+cp -a "$TMP/rb" "$TMP/va"; cp -a "$TMP/rb" "$TMP/vb"
+for r in va vb; do
+  echo '{"cell":"c","verdict":"pass","why":""}' >"$TMP/$r/fam-c.verdict.json"
+  : >"$TMP/$r/c.evidence.diff"; echo 'h3 teacache step 1: REUSE' >"$TMP/$r/a/cache-evidence.log"
+done
+clean bash "$CMP" "$TMP/va" "$TMP/vb" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on equal verdict files" >&2; rc=1; }
+cp -a "$TMP/vb" "$TMP/vc"; echo '{"cell":"c","verdict":"fail","why":"pr:exit"}' >"$TMP/vc/fam-c.verdict.json"
+cp -a "$TMP/vb" "$TMP/vd"; rm "$TMP/vd/a/cache-evidence.log"
+cp -a "$TMP/vb" "$TMP/ve"; echo '1c1' >"$TMP/ve/c.evidence.diff"
+for bad in vc vd ve; do
+  if clean bash "$CMP" "$TMP/va" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a verdict difference ($bad)" >&2; rc=1; fi
+done
 for bad in rc rd re rf rh ri; do
   if clean bash "$CMP" "$TMP/ra" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a difference ($bad)" >&2; rc=1; fi
 done

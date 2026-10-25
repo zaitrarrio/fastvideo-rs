@@ -21,7 +21,12 @@
 #     --off-identity compare) agree: both follow from the frames, which are
 #     byte-identical on one GPU class. A gate's verdict also weighs the two
 #     arms' timings, which differ from pod to pod, so a gate report is only
-#     required in both runs.
+#     required in both runs;
+# and for every file of the verdict step (D1d, ADR-0019 §11: the run's
+# *.verdict.json and *.diff, each arm's *-evidence.log; `b4a`) of either run:
+#   - the file exists in both and is byte-identical (no timings in them).
+# (`fv-lab pod fetch` takes these; on the runpod-http.sh side they need
+# FV_FETCH_TREE=1.)
 # Exit 0 when the runs agree and at least one arm ran (exit 0) with
 # byte-identical frames in both; 1 otherwise (one line per difference). An
 # unreadable summary, frames record or report is a difference; arms skipped or
@@ -86,7 +91,16 @@ while IFS= read -r r; do
   echo "same $r: $va"
   nrep=$((nrep + 1))
 done < <({ reports "$A"; reports "$B"; } | LC_ALL=C sort -u)
-echo "$same arm(s) the same ($ran ran with byte-identical frames, $skipped skipped in both, $failed failed in both), $nrep report(s) the same, $diffs difference(s)"
+vfiles() { (cd "$1" && for r in *.verdict.json *.diff */*-evidence.log; do [[ -f "$r" ]] && echo "$r"; done) | LC_ALL=C sort; }
+nver=0
+while IFS= read -r r; do
+  if [[ ! -f "$A/$r" ]]; then say "DIFF $r: only in the runpod-http run"; continue; fi
+  if [[ ! -f "$B/$r" ]]; then say "DIFF $r: only in the fv-lab run"; continue; fi
+  cmp -s "$A/$r" "$B/$r" || { say "DIFF $r: differs (diff the two files)"; continue; }
+  echo "same $r"
+  nver=$((nver + 1))
+done < <({ vfiles "$A"; vfiles "$B"; } | LC_ALL=C sort -u)
+echo "$same arm(s) the same ($ran ran with byte-identical frames, $skipped skipped in both, $failed failed in both), $nrep report(s) the same, $nver verdict file(s) the same, $diffs difference(s)"
 if (( ran == 0 )); then
   echo "no arm ran with frames in both runs: nothing was compared"
   exit 1
