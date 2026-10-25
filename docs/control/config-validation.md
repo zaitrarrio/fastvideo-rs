@@ -149,7 +149,7 @@ Columns:
 | log_shipping | toggle | bool | — | zod | toggle |
 | log_level | select (from the schema) | trace…error | — | zod enum | select |
 | pools[].id | text, pattern | name rule; not `gateway` | unique | zod | text |
-| pools[].variant | select (live variants) | `VARIANTS` | cpu ⇔ compute CPU (unless image override) | zod enum (was regex) | select |
+| ~~pools[].variant~~ | removed 2026-10-25 (one image, ADR-0011): `compute` picks the image; a stored value is read and dropped | — | — | — | select |
 | pools[].count | stepper / number | 0–8 | warning at 0 | zod | number |
 | pools[].compute | segmented | GPU, CPU | GPU: no cpu_flavors/vcpu; CPU: no gpu_types | zod refine | segmented |
 | pools[].gpu_types | chips (live: $/hr, stock) | Runpod GPU type ids (REST openapi enum), unique, 1–12 | Secure-Cloud offered (live) | zod enum + live | chips (items free strings server-side) |
@@ -160,11 +160,11 @@ Columns:
 | pools[].volume | select default/on/off | bool | — | zod | select |
 | pools[].image | text, pattern | OCI ref | — | zod pattern (new) | free |
 | pools[].family | select | h3, ltx, wan, sfwan, fake | edge only | zod enum (was regex) | **free** |
-| pools[].config / config_toml | segmented file/inline; path text (suggestions) / textarea | `/…​.toml` / ≤ 32 KiB | exactly one (was "at least one") | zod | free path |
+| pools[].config / config_toml | segmented file/inline; path text (suggestions) / textarea | a `configs/serve` name / ≤ 12 KiB (16 KiB as `FV_WORKER_TOML_B64`, `worker-config.ts`) | exactly one (was "at least one") | zod | free path |
 | pools[].models[].id | select (catalog) — fills family and recipe | catalog model ids | — | zod enum | **free** (datalist) |
 | pools[].models[].family | select | h3, ltx2, wan | = the model's family | zod refine | **free** |
 | pools[].models[].recipe | select (servable recipes of that family) | servable recipes | recipe's family = family | zod enum + refine | **free** |
-| pools[].fake_models | chips | `FAKE_MODELS` | the cpu variant: fake only | zod enum | **free** (comma list) |
+| pools[].fake_models | chips | `FAKE_MODELS` | CPU pools: fake only | zod enum | **free** (comma list) |
 | pools[].max_queued | number | 0–10000 | — | zod | number |
 | pools[].job_timeout_s / stale_after_s | number s | 10–86400 | stale ≤ job timeout | zod refine | number |
 | pools[].provider | select (live: off providers say why) | runpod, gmi, brev | gmi/brev: no gpu_types, cpu_flavors, vcpu, volume, regions; compute GPU | zod enum + `providerIssues` (configured, PUBLIC_URL) | new (docs/serve/deploy-gmi-brev.md) |
@@ -179,12 +179,12 @@ Columns:
 | Field | Type/control | Allowed | Deps | Server | Before |
 |---|---|---|---|---|---|
 | name | text + rule + uniqueness | name rule | unique with clusters | zod + 409 | text (pattern attr only) |
-| preset | select (live presets) or "custom" | `POOL_PRESET_IDS` | excludes variant/config/models | zod enum | select |
-| variant | select | `VARIANTS` | custom only | zod enum | **free** (datalist) |
-| config | text, suggestions | `/…​.toml` | custom: required | zod | free |
-| models / fake_models | chips (catalog / fake models) | catalog / `FAKE_MODELS` | cpu variant: fake | zod | **free** (comma list); GPU custom could not set models |
+| preset | select (live presets) or "custom" | `POOL_PRESET_IDS` | excludes config/models | zod enum | select |
+| ~~variant~~ | removed 2026-10-25 (`compute` picks the image) | — | — | — | **free** (datalist) |
+| config | select / suggestions | a `configs/serve` name | custom: required (or config_toml) | zod | free |
+| models / fake_models | chips (catalog / fake models) | catalog / `FAKE_MODELS` | CPU: fake | zod | **free** (comma list); GPU custom could not set models |
 | channel / sha / image | segmented source + select / suggestions / text | patterns | at most one | zod refine | **free** |
-| compute | segmented | GPU, CPU | cpu variant → CPU | zod | select |
+| compute | segmented | GPU, CPU | CPU: fake models only | zod | select |
 | gpu_types | chips (live) | GPU enum | GPU only | zod | **free** (datalist) |
 | cpu_flavors, vcpu | chips, select | flavors; 2–32 sizes | CPU only | zod | absent |
 | region | select | eu | — | zod enum (EU only message) | select |
@@ -205,11 +205,11 @@ Columns:
 | Field | Type/control | Allowed | Deps | Server | Before |
 |---|---|---|---|---|---|
 | name | text + rule + uniqueness, shows `fvc-<name>` | name rule; not defaults/policy/validate/tick | unique live | zod + 409 | text |
-| variant | select (live) — loads the variant's defaults | `VARIANTS` | cpu ⇔ CPU | zod enum (was regex) | select |
+| ~~variant~~ | removed 2026-10-25: `compute` loads the defaults (`?compute=`) | — | — | — | select |
 | compute | segmented | GPU, CPU | — | zod | absent (implied) |
 | mode | segmented | queue, lb | lb: GPU only, REQUEST_COUNT, no config_toml | zod refine | select |
 | image.* | segmented source + select / suggestions / text | patterns | exactly one | zod | free |
-| config | text, suggestions | `/…​.toml` | not with config_toml | zod | free |
+| config | text, suggestions | a `configs/serve` name | not with config_toml | zod | free |
 | gpu_types | chips (live) | GPU enum, unique, 1–12 | GPU only | zod enum | **textarea** |
 | gpu_count | number | 1–8 | GPU only | zod | absent |
 | allowed_cuda | chips | CUDA enum | GPU only | zod | absent |

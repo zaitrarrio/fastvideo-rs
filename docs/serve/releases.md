@@ -21,10 +21,10 @@ built:    2026-09-29T01:05:12Z
 build-id: 5d0c3f0e9a4b7c21
 profile:  release
 features: cuda,http-client,fal,ltxapi,minimax,openai-videos,reactor,webrtc
-variant:  h3-turbo
+variant:  cuda
 channel:  stable
 image:    ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:c782eb37…
-tag:      h3-turbo-sha-2cd1ba0
+tag:      cuda-sha-2cd1ba0
 digest:   sha256:c782eb37…
 ```
 
@@ -34,15 +34,15 @@ digest:   sha256:c782eb37…
 | field | from |
 |---|---|
 | `git_sha`, `built`, `build-id`, `features`, `profile` | compiled in by `build.rs`: `FV_GIT_SHA` / `GITHUB_SHA` / `git rev-parse HEAD`; `FV_BUILD_TIME` / the commit time (not the wall clock, so one commit builds identically); `FV_BUILD_ID` / `BUILD_ID`. The image build passes them as build args (`.git` is not in the Docker context) |
-| `variant` | `FV_VARIANT` at run time (baked into each variant image; the CUDA variants share one binary, so it cannot be compiled in); `FV_BUILD_VARIANT` at compile time otherwise |
+| `variant` | `FV_VARIANT` at run time (the image key, `cuda` or `cpu`, set by its Dockerfile stage; before 2026-10-25 one per variant image); `FV_BUILD_VARIANT` at compile time otherwise |
 | `image.ref`, `image.tag`, `image.digest`, `channel` | `FV_IMAGE_REF`, `FV_IMAGE_TAG`, `FV_IMAGE_DIGEST`, `FV_RELEASE_CHANNEL` at run time. An image cannot know its own digest: the Runpod templates and every deploy script set them (`fv_image_env_json`, scripts/serve/variants.sh) |
 
 ## Channels
 
 | channel | tags | moved by | who follows it |
 |---|---|---|---|
-| `latest` | `:latest`, `:<variant>`, `:<variant>-latest` | every green main build (serve-image.yml), recorded as a `build` release | nothing by default: for trying the newest build |
-| `stable` | `:stable`, `:<variant>-stable` | `release.sh promote <sha> stable` / `rollback` (release.yml) | the Runpod templates `fv-serve-<variant>-{sls,pod}`, so every template-based endpoint and pod, and the deploy scripts' default image |
+| `latest` | `:latest`, `:<image>`, `:<image>-latest` (`<image>`: `cuda`, `cpu`) | every green main build (serve-image.yml), recorded as a `build` release | nothing by default: for trying the newest build |
+| `stable` | `:stable`, `:<image>-stable` | `release.sh promote <sha> stable` / `rollback` (release.yml) | the Runpod templates `fv-serve-cuda-{sls,pod}` and `fv-serve-cpu-pod`, so every template-based endpoint and pod, and the deploy scripts' default image |
 
 Decision: `:latest` stays "the newest green main build" (what it has always
 meant, and what people and older scripts expect); promotion is a separate,
@@ -66,7 +66,8 @@ fall back to `:latest` (with a note on stderr).
 Table `releases` in the `fv-jobs` D1 database (`deploy/d1/registry.sql`,
 applied idempotently by the scripts before their first write): one row per
 promotion, rollback or recorded main build: `channel`, `git_sha`,
-`digests` (JSON: `debug` = the all-in-one image, and one per variant),
+`digests` (JSON: `debug` = the all-in-one image, `cuda` and `cpu`; releases
+from before 2026-10-25 carry one per variant image instead),
 `action` (`build` | `promote` | `rollback`), `promoted_at`, `promoted_by`
 (`ci:release#<run> by <actor>`, `user:…`, `agent:…`), `notes`, `run_url`,
 `templates_updated`, `source_release` (a rollback's target) and
@@ -84,7 +85,7 @@ recorded digests must still exist in GHCR (checked first).
 
 Table `deployments`: one row per Runpod resource a deploy script created,
 keyed `<kind>:<runpod id>` (`kind`: `pod`, `endpoint`, `gateway`), with pool,
-variant, image and digest, git sha and channel (looked up from `releases`
+variant (the image key), image and digest, git sha and channel (looked up from `releases`
 by digest when the script did not name them), region / DC, GPU, $/hr,
 `created_at` / `ready_at` / `deleted_at`, `created_by` (`<who>/<script>`),
 `status` (`creating` → `ready` → `draining` → `deleted`; `gone` when
@@ -118,7 +119,7 @@ the templates and write D1 right there; anywhere else they dispatch
 `release.yml` through the GitHub API (`GH_TOKEN` with `actions:write`).
 `--dry-run` always runs locally and changes nothing (GHCR, Runpod and D1 are
 only read). Other flags: `--notes`, `--no-templates`, `--allow-partial` (a
-build some variant images are missing from; refused by default), `--force`
+build some serve images are missing from; refused by default), `--force`
 (re-apply a promotion that is already current).
 
 `deployed` shows, per live resource (pods running an `fastvideo-rs-serve`

@@ -1,6 +1,6 @@
 # ADR-0011: The deployment data (`deploy/deploy.toml`)
 
-- Status: Accepted; one open owner decision (one image with boot-time config, below)
+- Status: Accepted; amended 2026-10-25 (owner decision: one image with boot-time config, below)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-deploy-section
 - Crate: `fastvideo-manifest`, module `deploy`; schema
@@ -67,19 +67,18 @@ h3 = "h3"
 ltx2 = "ltx"
 wan = "wan"
 
-[[images]]                     # a serve image variant (Dockerfile stage serve-<id>)
-id = "wan5b"
-config = "runpod-wan5b.toml"   # baked as FV_CONFIG
-also = ["runpod-wan14b.toml"]  # further configs it carries
-# compute = "cpu" (fake engine, its own build) / legacy = true (documented tag set) / note
+[[images]]                     # a serve image (Dockerfile stage serve-<id>); since 2026-10-25
+id = "cuda"                    # exactly one GPU image and at most one CPU image
+carries = ["runpod-fake.toml"] # the configs under /etc/fv (FV_WORKER_CONFIG); must include runpod-fake.toml
+# compute = "cpu" (fake engine, its own build) / note
 
 [[presets]]                    # a model preset: ONE pool
 id = "h3-turbo"
 title = "H3 turbo (fasth3)"
 description = "..."
 standard = true                # one of the default cluster's pools
-image = "h3-turbo"
-config = "runpod.toml"         # configs/serve; inline when the image does not carry it
+image = "cuda"
+config = "runpod.toml"         # configs/serve; sent at boot (FV_WORKER_TOML_B64)
 prequant = ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]
 models = [{ variant = "fasth3-4step-vsa", id = "fasth3", recipe = "h3-turbo" }]
 max_queued = 32
@@ -91,7 +90,7 @@ stale_after_s = 120
 id = "h3-family"
 title = "..."                  # `{members}` stands for the members
 description = "..."
-image = "h3-max"
+image = "cuda"
 config = "runpod-family-h3.toml"
 min_vram_gb = 96               # hand-chosen card class, >= the members' floor
 members = ["h3-turbo", "h3-max", ...]
@@ -127,7 +126,7 @@ The review's list, field by field:
 | Review item | Where |
 |---|---|
 | worker config | `config` names a `configs/serve` file; the file stays the worker config (A3: the variants a process serves and their **residency**, `resident` / `[engine] swap`). A second copy of residency here would be a second source |
-| image variant | `image`, an `[[images]]` id |
+| image variant | `image`, an `[[images]]` id: since 2026-10-25 always the one GPU image, `cuda` |
 | weights source default per region | derived, not data: the EU volume when it holds every tree (`volumes.sh` `FV_EU_VOLUME_TREES`), else R2 (`control/src/providers.ts` `weightsSource`). The only region with a volume is `eu`; the validator refuses any other volume (below) |
 | disk | derived from the trees (fv-control sizes it), except where a preset sets `container_disk_gb` (`ltx-a2v`: 60); a family preset takes its members' largest |
 | GPU class with `needs` | a model preset's class is its variants' floor (`gpu.min_vram_gib`, derived as before); a family preset states `min_vram_gb`, checked against the floor. `min_sm` / `needs` are computed (`DeployManifest::preset_floor`) but not yet a filter: fv-control filters GPU types by memory only, which is why the NVFP4 families state 96 GB |
@@ -157,7 +156,9 @@ The review's list, field by field:
 `DeployManifest::parse` (the file alone): `schema = 1`; unknown keys refused;
 ids are DNS labels of at most 31 characters (fv-control's name rule), unique
 across model and family presets; config names are `configs/serve` file
-names; a preset's image exists, is built (not `legacy`) and runs on a GPU;
+names; exactly one GPU image and at most one CPU image, each carrying
+`runpod-fake.toml` (`SMOKE_CONFIG`) and no config twice; a preset's image is
+the GPU image;
 positive queues, timeouts and disks; family members are model presets;
 GCP rows: unique names, `served` only (and then required) without a
 `runpod_twin`, `dispatch_family` a dispatch family; autoscale pools: unique
@@ -179,10 +180,10 @@ first variant of a tier. The exact spelling is checked in JavaScript only.
 `control/gen-configs.mjs` repeats what it needs to generate and adds what
 only it can see (`deployChecks`, run by `--check`): the exact tier-alias
 spelling (the engine's `tier_alias`, resolved through `MODEL_NAMES`), the named configs exist, the
-hand-written `serve-cpu` stage (read from the Dockerfile as the run generates
-it, so an image edit regenerates in one run) and
-`.github/workflows/serve-image.yml`'s two build lists name the image
-variants, GCP `verify_cells` are
+hand-written `serve-cuda` / `serve-cpu` stages copy exactly the configs their
+image `carries`, set `FV_VARIANT` to its id and no `FV_CONFIG`, no other
+`serve-*` stage exists, and `.github/workflows/serve-image.yml`'s build list
+names the images (since 2026-10-25), GCP `verify_cells` are
 `verify-weights.sh` cells, `configs/autoscale.toml`'s prices cover every
 pool's GPU types. fv-control's unit tests check its presets against the
 family rules (`templates.test.ts`: the listed members equal
@@ -193,10 +194,10 @@ family rules (`templates.test.ts`: the listed members equal
 | Output | What |
 |---|---|
 | `control/src/deploy-gen.ts` | images, presets, family presets, dispatch map; `presets.ts` builds `STANDARD_POOLS`, `MODEL_PRESETS`, `FAMILY_PRESETS` from them |
-| `control/src/enums.ts` regions | `VARIANTS`, `POOL_PRESET_IDS` |
-| `control/src/cluster/worker-configs.ts` | the inline configs: every preset config its image does not carry |
-| `scripts/serve/variants.sh` region | the image and preset tables, `FV_VARIANTS`, `FV_POOL_PRESETS`, `fv_variant_config` |
-| `docker/gpucheck.Dockerfile` region | the six thin `serve-<variant>` CUDA stages (the image build is unchanged: every non-comment line identical) |
+| `control/src/enums.ts` regions | `SERVE_IMAGES` (was `VARIANTS`), `POOL_PRESET_IDS` |
+| `control/src/cluster/worker-configs.ts` | every Runpod worker config's text (all are sent at boot since 2026-10-25) |
+| `scripts/serve/variants.sh` region | the image table, `FV_IMAGES`, `FV_CUDA_IMAGE` (the preset table and `fv_variant_for_config` went 2026-10-25) |
+| ~~`docker/gpucheck.Dockerfile` region~~ | removed 2026-10-25 with the six thin `serve-<variant>` stages; the Dockerfile is cross-checked, not generated |
 | `configs/autoscale.toml` region | the `[[autoscale.pools]]`, copied as text with their comments (checked to parse to the same pools) |
 | `docs/serve/images.md` region | the image table |
 | `scripts/gcp/families.tsv` | the whole file |
@@ -220,10 +221,10 @@ tier"); region markers.
 - `configs/autoscale.toml` `[autoscale]` settings, lease and prices: the
   autoscaler's own configuration and the account's price table, not per
   pool (prices are cross-checked against the pools' GPU types).
-- The `serve-cpu` Dockerfile stage: its own build graph (a CPU compile
-  stage, `base-os`, its entrypoint); cross-checked.
-- `serve-image.yml`'s build lists: YAML strings of the image build, which
-  C1 does not change; cross-checked.
+- The `serve-cuda` and `serve-cpu` Dockerfile stages: their own build
+  graphs; cross-checked against `[[images]]`.
+- `serve-image.yml`'s build list (`images`, default `cuda cpu`): a YAML
+  string of the image build; cross-checked.
 - The component cells of `verify-weights.sh` (`needs()`): components inside
   trees and research trees no family has; they belong to the weights store
   and go when `gia verify` replaces the script (review §7.2).
@@ -237,13 +238,15 @@ tier"); region markers.
   `H3_DRAFT`, `cluster/regions.ts`, `cluster/catalog.json` descriptions: not
   in A4's inventory; they can move in a follow-up without a format change.
 
-## Open owner decision: one image with boot-time config
+## One image with boot-time config (owner decision 2026-10-25)
 
-Today CI builds seven image variants (six CUDA, one CPU) that differ only in
-their last layer, a few KB: the baked `FV_CONFIG` and `FV_VARIANT`
-(`docs/serve/images.md` "Layers"). The review (§7.4) proposes one CUDA image
-whose config is always supplied at boot. **Not implemented** (plan §1: an
-owner decision); the analysis:
+
+**Decided by the owner on 2026-10-25 and implemented (plan C4).** Until
+then CI built seven image variants (six CUDA, one CPU) that differed only in
+their last layer, a few KB: the baked `FV_CONFIG` and `FV_VARIANT`. The
+review (§7.4) proposed one CUDA image whose config is always supplied at
+boot. The analysis it was decided on (written before the change, in the
+present tense of that day):
 
 **The path is proven.** 22 of the 28 presets already run on an image whose
 baked config they do not use: fv-control sends their worker config as
@@ -290,7 +293,75 @@ the natural place for (1).
 launch carries the config, so a template edit no longer changes what a
 running endpoint serves until it is relaunched.
 
+### What changed (2026-10-25)
+
+- **Images.** `[[images]]` is `cuda` (GPU, carries `runpod-fake.toml`) and
+  `cpu` (fake engine); every preset's `image` is `cuda`. The `Image` type
+  lost `config` / `also` / `legacy` for `carries`; `DeployManifest::parse`
+  refuses a second GPU image, a second CPU image and an image that does not
+  carry `runpod-fake.toml` (`fastvideo_manifest::SMOKE_CONFIG`). The
+  Dockerfile's generated region and its six thin stages are gone; the
+  `serve-cuda` stage is the former `serve-cuda-bin` plus
+  `/etc/fv/runpod-fake.toml` and `FV_VARIANT=cuda`; no stage sets
+  `FV_CONFIG` (the debug `serve` image neither). CI builds, smoke-checks and
+  pushes `cuda` and `cpu` (`ci-images.sh`, `serve-image.yml` input
+  `images`); release keys are `debug cuda cpu`; the Runpod templates are
+  `fv-serve-cuda-sls`, `fv-serve-cuda-pod` and `fv-serve-cpu-pod`.
+- **(1) Every launch path sends a config; fv-boot refuses without one.**
+  `fastvideo-deploy` `boot::config`: inline `FV_WORKER_TOML_B64`, else
+  `--config`, else `FV_WORKER_CONFIG`; otherwise `boot::config::missing`
+  ends the boot before anything else runs, non-zero, with the remedy (an
+  old image's `FV_CONFIG` is named and not read). The legacy path
+  (`FV_BOOT_LEGACY`) materializes the same way. Launch paths: fv-control
+  clusters (Runpod, GMI / Brev), serverless and standalone send
+  `FV_WORKER_TOML_B64` for every pool (`control/src/worker-config.ts`);
+  `fv-deploy` sends it for every preset (`launch::inline_config`); the
+  autoscaler's pod pools name `worker_config` and send it in the pod's env;
+  `runpod-pod.sh` / `runpod-endpoint.sh` send `FV_WORKER_CONFIG` for the
+  fake config and the file inline otherwise; the CI smoke check names
+  `FV_WORKER_CONFIG=/etc/fv/runpod-fake.toml` explicitly and asserts the
+  refusal without it. `fv-lab` boots the `fastvideo-rs-runtime` image,
+  not a serve image (no change).
+- **(2) Serverless derives what it serves from the spec's config**
+  (`serverless/serves.ts`, by the config's families); `image-configs.ts`
+  (`IMAGE_CONFIGS` / `BAKED_CONFIGS`) is deleted.
+- **(3) Size.** Runpod documents no per-value env limit (pods: up to 50
+  variables; v2 template body: 1 MiB). The largest config,
+  `runpod-family-h3.toml`, is 4199 bytes (5600 as base64). fv-control and
+  fv-deploy refuse an encoded config over 16 KiB (`MAX_WORKER_TOML_B64`,
+  equal in both, tested), with every committed config under half of it.
+- **(4) Stored specs** naming a `variant` load: the field is dropped, `cpu`
+  becomes `compute = "CPU"`, and a spec without a config takes the config
+  its variant image baked (`enums.ts` `legacyVariant`); tested for cluster,
+  standalone and serverless specs.
+- **(5) The CPU image stays separate** (`cpu`, its own build, no CUDA).
+- **(6) The CUDA image carries `runpod-fake.toml`**, checked by
+  `gen-configs.mjs --check` and used by the smoke check.
+- **(7) Autoscaler.** `sfwan-live` names the template placeholder
+  `REPLACE_FV_SERVE_CUDA_POD_TEMPLATE_ID` and `worker_config =
+  "runpod-sfwan.toml"`; `fastvideo-autoscale` resolves the config at start
+  (`--serve-configs`, default `<config dir>/serve`) and refuses a pod pool
+  without one.
+- **Removed:** the `VARIANTS` enum and the `variant` field of pool specs,
+  launch forms and serverless specs (read-compat only); `variants.sh`'s
+  preset tables and `fv_variant_for_config`; the inline-versus-baked
+  distinction; `image-configs.ts`; five GHCR tag families going forward.
+
+**Live steps.** No live resource moved with the change. The owner's
+ordered steps (build, promote, smoke, deploy fv-control, verify, roll,
+re-point the autoscaler, retire the old templates) and the rollback are in
+`docs/serve/images.md` "One image: the live steps".
+
 ## Consequences
+
+- One CUDA image for every preset (2026-10-25): a rollback or pin is per
+  image; a launch always carries its config, so a template edit changes the
+  image only. Enforced by `fastvideo-manifest` `deploy` tests (one GPU
+  image, carries the smoke config), `fastvideo-deploy` boot tests
+  (`an_image_started_without_a_config_refuses_to_boot`,
+  `no_config_refuses_to_boot`) and payload goldens
+  (`every_worker_config_fits_the_env_size_guard`), fv-control's
+  `payloads.test.ts` (read-compat, size guard) and `gen-configs.mjs --check`.
 
 - One more schema under drift check: `schemas/deploy.v1.json`.
 - `fastvideo-manifest` joins the adapter-tests crate set
