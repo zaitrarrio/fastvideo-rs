@@ -18,7 +18,7 @@ through, it goes through by the same code, not a copy:
 | concern | how a standalone pod gets it |
 |---|---|
 | validation | `normalizeSpec` (the cluster spec schema), after `standaloneSpec` turns the launch request into a spec |
-| create | the ClusterOps `up` operation: price check against the floor, image preflight (`cluster/preflight.ts`), placement (`workerPlacements`), payload (`workerCreatePayload`), the `max_gpu_dph` cap, wait until ready with the early verdict (`cluster/upwait.ts`) |
+| create | the ClusterOps `up` operation: price check against the floor, image preflight (`cluster/preflight.ts`), placement (`workerPlacements`), payload (`workerCreatePayload`: a GPU pod is fv-deploy's `Launch`, ADR-0018 §7), the `max_gpu_dph` cap, wait until ready with the early verdict (`cluster/upwait.ts`) |
 | stop / delete | the `down` operation (delete, verify, retry); delete with a pod passes `delete_definition`, and the definition goes once the pod is gone |
 | deadline | the cron's deadline backstop (`collector.ts`), and the pod's own watchdog: `WATCHDOG_WORKER_BOOT` (the edge fronts' watchdog on a direct worker), with `FV_CLUSTER_DEADLINE`, `FV_MIN_BALANCE`, `FV_BACKSTOP_API_KEY` |
 | balance floor | the cron's floor rule stops it like any cluster; the price check refuses a start under the floor |

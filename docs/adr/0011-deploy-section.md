@@ -393,8 +393,9 @@ would brick every pool of an older image at its next scale-up.
   boots (`REGISTER_OFF_SH`, for images without fv-boot) do the same but
   append `[gateway]`, which every fv-serve reads. **The writers are
   unchanged:** every `configs/serve` file keeps `[gateway]`, so
-  `worker-configs.ts`, the fv-deploy goldens and the autoscale pod pools'
-  payloads are byte-identical; `fastvideo-serve`
+  `worker-configs.ts`, the fv-deploy goldens and the worker configs every
+  launcher sends are byte-identical (fv-control's start commands change
+  only in the shell boots' edit); `fastvideo-serve`
   `config::tests::shipped_configs_round_trip_under_both_names` fails on a
   shipped config that says `[cluster]`. An inline `config_toml` may say
   `[cluster]` only for images from stage 1 on.
