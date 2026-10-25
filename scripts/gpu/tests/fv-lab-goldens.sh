@@ -215,6 +215,18 @@ cp -a "$TMP/vb" "$TMP/ve"; echo '1c1' >"$TMP/ve/c.evidence.diff"
 for bad in vc vd ve; do
   if clean bash "$CMP" "$TMP/va" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a verdict difference ($bad)" >&2; rc=1; fi
 done
+# --expect-verdicts: three files the same pass 3, not 4; runs without any fail 1.
+clean bash "$CMP" --expect-verdicts 3 "$TMP/va" "$TMP/vb" >/dev/null || { echo "fv-lab-goldens: compare-runs --expect-verdicts 3 failed on three equal verdict files" >&2; rc=1; }
+if clean bash "$CMP" --expect-verdicts 4 "$TMP/va" "$TMP/vb" >/dev/null; then echo "fv-lab-goldens: compare-runs --expect-verdicts 4 passed with three" >&2; rc=1; fi
+if clean bash "$CMP" --expect-verdicts 1 "$TMP/ra" "$TMP/rb" >/dev/null; then echo "fv-lab-goldens: compare-runs --expect-verdicts 1 passed with no verdict file" >&2; rc=1; fi
+# A family verdict lists its cells (and reasons) in the tier's order on fv-lab's
+# side, FV_B4A_CELLS's on the script's: the same set is the same; another is not.
+cp -a "$TMP/va" "$TMP/vf"; cp -a "$TMP/va" "$TMP/vg"; cp -a "$TMP/va" "$TMP/vh"
+echo '{"family":"fam","verdict":"fail","cells":"c d","why":"c:fail d:fail"}' >"$TMP/vf/fam.verdict.json"
+echo '{"family":"fam","verdict":"fail","cells":"d c","why":"d:fail c:fail"}' >"$TMP/vg/fam.verdict.json"
+echo '{"family":"fam","verdict":"fail","cells":"d c","why":"d:fail"}' >"$TMP/vh/fam.verdict.json"
+clean bash "$CMP" "$TMP/vf" "$TMP/vg" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on a family verdict in another order" >&2; rc=1; }
+if clean bash "$CMP" "$TMP/vf" "$TMP/vh" >/dev/null; then echo "fv-lab-goldens: compare-runs missed another family verdict" >&2; rc=1; fi
 for bad in rc rd re rf rh ri; do
   if clean bash "$CMP" "$TMP/ra" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a difference ($bad)" >&2; rc=1; fi
 done
