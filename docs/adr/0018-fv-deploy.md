@@ -277,17 +277,36 @@ for a cluster or standalone pod `max_usd_per_hr` = the spec's `max_gpu_dph` (a p
 create), `min_balance_usd` = `balance_floor`, `cap_s` = `cap_s` (the cron and the in-pod watchdog), `ready_timeout_s`
 360 (the pull deadline after which a pod is replaced, `podlogs.ts`) and `ready_cycles` 3 (one pod plus `MAX_REPLACE`
 2, `cluster/do.ts`); for a serverless endpoint `cap_s` = `deadline_min` × 60 (0: none), `min_balance_usd` 8 (the
-least of `assertFloor`'s floor + margin) and 0 for the price cap, readiness and cycles, meaning "not checked by
-fv-control" (Runpod reports no serverless price: §5.3's known gap; Runpod replaces workers). `source` is not set
-(a standalone pod's pool no longer names its preset; the stored spec is fv-control's record).
+least of `assertFloor`'s floor + margin) and `ready_cycles` 1 (one endpoint per create, never replaced by
+fv-control). **fv-control checks no serverless price and no worker readiness** (Runpod reports no serverless price,
+§5.3's known gap; Runpod starts and replaces the workers), and Launch v1 cannot say "not checked": so
+`max_usd_per_hr` and `ready_timeout_s` carry 0, fv-deploy's fail-closed values (no offer is under a $0 cap: fv-deploy
+would create nothing), named in `serverless/payloads.ts SLS_GUARDS_NOT_CHECKED` with a warning at `endpointGuards`.
+A consumer (the C3d ledger, a plan printout) must not show them as a cap or a timeout; §7.3 proposes `null` for
+"not checked". `source` is not set (a standalone pod's pool no longer names its preset; the stored spec is
+fv-control's record).
 
-The refactor changed no payload: 4162 cases (every cluster template on both control planes, every pool preset as a
-standalone pod on each weights source with r2 data centres, the upsampler, a CUDA filter, a disk and GPU list, every
-placement attempt, edge contexts with and without the outputs bucket, and every serverless preset on each weights
-source and mode plus the custom ones, each GPU one also stored without `compute` (read as GPU, as before), through
-template create / update, endpoint create / update and the v2 create)
-gave the same bodies before and after by value (only the key order inside a JSON body moved). The existing unit tests
-pass unchanged.
+A `Launch` that fails the schema never fails inside an operation: `poolLaunchIssues` checks every Runpod GPU pool of a
+spec at every placement attempt (`liveSpecIssues`: the editor's issues and a 400 on defining a cluster or launching a
+standalone pod; `assertPoolLaunches`: a 409 with typed issues before `up`, `scale`, `roll`, `restart`, a save-and-start
+and a standalone start of a stored spec), and `createWorker` turns a
+`LaunchSchemaError` it still meets into that pool's "no pod" with the reason in the log, as no stock (tested on a
+stored spec with a fractional disk).
+
+**The refactor changed no payload, and the repository re-runs that claim.** `control/test/unit/payload-corpus.test.ts`
+compares fv-control's bodies over a corpus of 1024 cases (`payload-corpus.ts`: every cluster template, edge and
+direct; every pool preset as a standalone pod on each weights source it allows, r2 with other data centres, and as an
+edge pool; edge contexts with and without the outputs bucket; the upsampler, a CUDA filter, a disk and GPU list, a CPU
+pool on the volume; a cluster stored with the gateway block and image variants; every serverless preset on each
+weights source and mode, custom CPU / GPU / inline endpoints, endpoint rows stored with a variant or without
+`compute`; through pod create, template create / update, endpoint create / update and the v2 create; first and last
+placement attempt) with `fixtures/payload-corpus.json`, written **from main at 2258aec2** (the hand-written builders
+before C3c) with `FV_WRITE_PAYLOAD_CORPUS=1 npx vitest run test/unit/payload-corpus.test.ts` on those files. Every
+case is held by the SHA-256 of its canonical body (sorted keys: only the key order inside a body moved), and 31
+representative bodies are in the file in full (long strings by length and hash) for review. A body change fails it;
+the command above regenerates it for an intended change. The comparison does not go through the `Launch` code, so it
+is not true by construction. (While building C3c a wider dump of 4162 cases, every placement attempt, was compared the
+same way, once; the coordinator's review compared 9163.)
 
 #### 7.3 What stays outside `Launch` v1
 
@@ -303,6 +322,11 @@ additive changes only, in the crate). So these keep their own shapes, from the s
 - **The REST v2 envelope** of load-balancer and CPU endpoints (`type`, `gpu.pools`, `workers`, `scaling`): LB mode is
   an open owner decision (§1, plan §1); its fields come from the `Launch` (§7.2), the envelope does not.
 - **Build pods** (`buildpods.ts`): CPU pods of the build service, not serve launches.
+- **"Not checked" guards.** Every `Guards` field is a required number, so a launcher that does not check one (fv-control:
+  the serverless price and readiness, §7.2) can only write a value fv-deploy would read as a rule. Proposal (a Rust
+  schema change, with C3b / C3d): `max_usd_per_hr`, `ready_timeout_s` and `ready_cycles` become `Option`, `null`
+  meaning "not checked by this launcher", which fv-deploy's own `up` refuses (it always checks) and a ledger shows as
+  such. Until then fv-control writes fv-deploy's fail-closed 0 and names those fields (`SLS_GUARDS_NOT_CHECKED`).
 - fv-control's `providers.ts` `Offer` / `InstanceState` / `ProviderInstance` describe GMI / Brev for the planner and the
   views (stock, stoppable, deploy time; `starting | running | stopped | failed`); they are not duplicates of the
   schema's `Offer` / `InstanceState` (other fields and states) and are API response shapes, so they stay. No API
@@ -313,10 +337,14 @@ additive changes only, in the crate). So these keep their own shapes, from the s
 `control/test/unit/launch-goldens.test.ts`: (1) `runpodPodBody` / `runpodTemplateBody` / `runpodEndpointBody` of the
 launches `payload_goldens.rs` builds (`script_pod`, `script_endpoint`) equal `fixtures/deploy/runpod-{pod,template,
 endpoint}.json` exactly; (2) for the presets fv-deploy launches (`h3-turbo`, `h3-max`, `ltx`, `ltx-pro`) fv-control's
-standalone pod, direct cluster pool and edge front equal fv-deploy's preset pod (the fixture plus the delta
-`preset_pod_is_the_script_pod_plus_fv_boot` allows, the preset's config inline), and fv-control's serverless template
-and endpoint equal fv-deploy's (`preset_endpoint_is_the_script_endpoint_plus_fv_boot`), field by field and env key by
-env key, except for these; a new difference fails, and so does a listed one that no longer occurs:
+standalone pod, direct cluster pool and edge front are **exactly** fv-deploy's preset pod (the fixture plus the delta
+`preset_pod_is_the_script_pod_plus_fv_boot` allows, the preset's config inline) with the differences of **their
+context** applied, each pinned to its value (`podDifferences`: the boot per context, `WATCHDOG_WORKER_BOOT` /
+`WORKER_BOOT` / `EDGE_WORKER_BOOT`; the env keys and values of a standalone, direct or edge worker), and fv-control's
+serverless template and endpoint are exactly fv-deploy's (`preset_endpoint_is_the_script_endpoint_plus_fv_boot`)
+with the serverless differences. So an edge-only value on a direct or standalone pod fails, and so does any other new
+difference; each context's test also fails when one of its listed differences no longer occurs for any preset (each
+test on its own). The differences:
 
 | Field | fv-control | fv-deploy | Why |
 |---|---|---|---|
@@ -326,7 +354,7 @@ env key, except for these; a new difference fails, and so does a listed one that
 | `category`, `readme` (template) | `NVIDIA`, a readme | — | fv-control's template metadata |
 | `scalerValue` (endpoint) | 4 | 1 | fv-control's serverless default (`QUEUE_DELAY` 4 s); `runpod-endpoint.sh`'s 1 s |
 | `executionTimeoutMs` (endpoint) | the preset's job timeout | 1 800 000 | fv-control's per-preset timeouts (`serverless/presets.ts`) |
-| env only in fv-control | cluster: `FV_SERVE_ROLE`, `FV_INTERNAL_TOKEN`, `FV_URL_SIGNING_KEY`, `FV_PUBLIC_BASE_URL`, `FV_JOBS_HEARTBEAT_S`; direct: `FV_WORKER_DIRECT`, `FV_AUTH_MODE`, `FV_KEY_STORE`, `FV_ADMIN_TOKEN`; in-pod backstop (standalone, edge): `FV_CLUSTER_DEADLINE`, `FV_MIN_BALANCE`, `FV_BACKSTOP_API_KEY`; logs: `FV_LOG_SHIP_*`; edge: `FV_DISPATCH_*`, `FV_MP4_FRAGMENTED`; serverless: `FV_CONTROL_ENDPOINT` | — | fv-control's cluster, auth (minted keys in D1), watchdog, log shipping and edge |
+| env only in fv-control | every pod: `FV_SERVE_ROLE`, `FV_URL_SIGNING_KEY`, `FV_JOBS_HEARTBEAT_S`, `FV_LOG_SHIP_*`, `FV_INTERNAL_TOKEN` (the cluster's; an edge front's is the edge's), `FV_PUBLIC_BASE_URL` (empty; an edge front's is the edge's URL); direct and standalone: `FV_WORKER_DIRECT`, `FV_AUTH_MODE=keys`, `FV_KEY_STORE`, `FV_ADMIN_TOKEN`; standalone and edge (in-pod backstop): `FV_CLUSTER_DEADLINE`, `FV_MIN_BALANCE`, `FV_BACKSTOP_API_KEY`; edge only: `FV_AUTH_MODE=trust-edge`, `FV_DISPATCH_*`, `FV_MP4_FRAGMENTED`; serverless: `FV_CONTROL_ENDPOINT` | — | fv-control's cluster, auth (minted keys in D1), watchdog, log shipping and edge |
 | env only in fv-deploy | — | `FV_API_KEYS`, `FV_SERVE_FORWARD`, `FV_WEIGHTS_SOURCE=volume` | fv-deploy's one run key; the script's forward switch; fv-control names the weights source only for r2 / hub (fv-boot's default is the volume) |
 | env value | edge front: `FV_R2_BUCKET` (the edge's outputs bucket), `FV_D1_DATABASE_ID` (the edge's D1) | the Runpod secret references | an edge front writes through the edge |
 
@@ -336,18 +364,25 @@ Equal in every case: the image (and `FV_IMAGE_REF` / `FV_IMAGE_DIGEST` / `FV_REL
 data centre, the container and pod-volume disks, the ports, the CUDA minimum and filter, and the endpoint's other
 scaling fields.
 
-**fv-control's `Launch` carries secret values.** §3 says a `Launch` never does; fv-control's env holds the cluster's
-tokens and, for edge fronts and standalone pods, its own Runpod key as `FV_BACKSTOP_API_KEY` (the in-pod watchdog that
-§"Open decisions" leaves out of fv-deploy; fv-control made that choice earlier, `docs/control/standalone-pods.md`).
-fv-control builds each `Launch` for one create call and never stores, logs or returns it (its views mask these keys,
-`SECRET_SYSTEM_KEYS`), so the rule holds for every `Launch` that leaves the process.
+**fv-control's `Launch` carries secret values.** §3 says a `Launch` never does; a pod's `Launch.env` is the env
+`cluster/ops.ts desiredEnv` resolves, which holds (1) the cluster's tokens (`FV_INTERNAL_TOKEN`,
+`FV_URL_SIGNING_KEY`, `FV_ADMIN_TOKEN`, `FV_LOG_SHIP_TOKEN`, `FV_ENDPOINT_REPORT_TOKEN`), (2) for edge fronts and
+standalone pods fv-control's own Runpod key as `FV_BACKSTOP_API_KEY` (the in-pod watchdog that §"Open decisions"
+leaves out of fv-deploy; fv-control made that choice earlier, `docs/control/standalone-pods.md`), and (3) **the
+user's env layers, secret rows decrypted** (`envvars.ts resolvePlain`: account < cluster < pool < pod, every secret
+row's plain value, as Runpod must receive it). fv-control builds each `Launch` for one create call and never stores,
+logs or returns it (its views mask these values: `SECRET_SYSTEM_KEYS`, `resolveView`), so the rule holds for every
+`Launch` that leaves the process. A `LaunchSchemaError` names paths and expectations only, never a value: zod 4.6.5
+reports none, and `launch-goldens.test.ts` pins it (a secret in the env, and in each kind of failing field, never
+appears in the message or the issues).
 
 #### 7.5 Read-compat
 
 No stored shape changed: cluster specs (D1 `clusters.spec`, `migrateSpec`) and endpoint rows (`serverless_endpoints.spec`,
 `specOf`) are read as before, and the `Launch` is derived at launch time, never stored. Tested: a cluster stored with
-the retired gateway block and pools by image variant, and an endpoint row with a variant and no config, load and
-build schema-valid launches whose bodies carry the variant's config.
+the retired gateway block and pools by image variant, an endpoint row with a variant and no config, and an endpoint
+spec without `compute` (read as GPU, as before) load and build schema-valid launches whose bodies carry the variant's
+config; the payload corpus (§7.2) holds their bodies to main's.
 
 ## Open decisions
 

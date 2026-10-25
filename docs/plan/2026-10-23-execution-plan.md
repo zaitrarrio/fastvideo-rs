@@ -1170,9 +1170,18 @@ ran (pod id, $/hr), result, cost.
   `crates/fastvideo-deploy/schemas/*.v1.json` (`--check` in `control.yml`,
   which now runs on schema changes); cluster workers, edge fronts, standalone
   pods and GPU serverless endpoints are schema-checked `Launch` values whose
-  Runpod bodies follow `pod.rs` / `serverless.rs`; 4162 payload cases equal
-  before and after; `launch-goldens.test.ts` holds the TS builders to the C3a
+  Runpod bodies follow `pod.rs` / `serverless.rs`; payloads unchanged (a
+  committed corpus of 1024 bodies from main's builders, `payload-corpus.test.ts`); `launch-goldens.test.ts` holds the TS builders to the C3a
   goldens and h3-turbo / h3-max / ltx / ltx-pro to fv-deploy field by field
   (intended differences listed). CPU pods / endpoints, GMI / Brev and the v2
   envelope stay outside Launch v1 (proposal: a CPU section and `gmi` /
   `brev` kinds after C3b). No Rust change, no live resource. No GPU cost.
+- 2026-10-25 21:00Z: C3c review fixes on #189: the payload corpus committed
+  (`control/test/unit/fixtures/payload-corpus.json`, 1024 cases written from
+  main's builders at 2258aec2, regenerate command in the test); intended
+  differences pinned per context (standalone / direct / edge / serverless)
+  and checked for staleness per test; `gen-configs.mjs` refuses any JSON
+  Schema keyword it does not translate; serverless guards fail-closed and
+  named (`SLS_GUARDS_NOT_CHECKED`, proposal for `null` in ADR-0018 §7.3); a
+  Launch that fails the schema is a 400 / 409 before the op and a clean
+  "no pod" inside it; schema errors never carry a value (tested).
