@@ -395,25 +395,15 @@ fn split_list(s: &str) -> Vec<String> {
 
 // ------------------------------------------------------------------ run
 
-/// A script setting fv-lab would silently ignore, refused instead (ADR-0019
-/// §11.5): with `FV_B4A_CELLS` ignored, every `b4a` cell would run, at three
-/// times the cost of the one asked for.
-fn refused_knob(key: &str) -> Option<String> {
-    (key == "FV_B4A_CELLS").then(|| {
-        "fv-lab selects by arm: pass --cells <cell>-base <cell>-pr (FV_CELLS), not FV_B4A_CELLS"
-            .to_owned()
-    })
-}
-
 fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
-    if let (Some(v), Some(why)) = (env_nonempty("FV_B4A_CELLS"), refused_knob("FV_B4A_CELLS")) {
-        return Err(format!("FV_B4A_CELLS={v}: {why}"));
-    }
     let root = find_root(a.root.as_ref())?;
     let lab = Lab::load(&root).map_err(|e| e.to_string())?;
     let (tier, cells) = lab
         .resolve(&a.target, a.family.as_deref())
         .map_err(|e| e.to_string())?;
+    // A script knob no tier reads (a retired family's mode knob, b4a's
+    // FV_B4A_CELLS) would be ignored: refused (`knobs`; ADR-0019 §11.5, §12).
+    fastvideo_lab::knobs::check_run_env(&tier.name, env_nonempty)?;
     if a.all && tier.name != a.target {
         return Err(format!(
             "--all runs a whole tier; `{}` is a cell (of `{}`)",
@@ -755,12 +745,8 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let mut so = StartOptions::for_tier(t, &tag);
     so.cells = u.cells.iter().flat_map(|c| split_list(c)).collect();
     so.extra_env = u.extra_env.clone();
-    for e in so.extra_env.iter().flat_map(|e| e.split_whitespace()) {
-        let key = e.split_once('=').map_or(e, |(k, _)| k);
-        if let Some(why) = refused_knob(key) {
-            return Err(format!("--extra-env {e}: {why}"));
-        }
-    }
+    // What no tier reads would be ignored on the pod: refused (`knobs`).
+    fastvideo_lab::knobs::check_extra_env(&t.name, &so.extra_env)?;
     let cells: Vec<_> = t.cells.iter().filter_map(|c| lab.cells.get(c)).collect();
     check_cells(
         &t.name,

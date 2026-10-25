@@ -8,7 +8,8 @@ deleted and the tier is fv-lab only ([The families](#the-families), [ADR-0019 §
 held to the script's last dry run by a frozen golden ([below](#keeping-it-equal-to-the-scripts)). The other families
 stay in the script and move in later slices. An eleventh, `gold`, is fv-lab's own: every gold variant's canonical
 cell (ADR-0023). A twelfth, `b4a` (D1d), is moved but not yet retired: its cells carry a verdict step, and its
-script branch stays until its GPU gate ([Verdicts and `fv-lab gate`](#verdicts-and-fv-lab-gate)).
+script branch stays until its GPU gate ([Verdicts and `fv-lab gate`](#verdicts-and-fv-lab-gate)). `precision-nvfp4` and
+`ltxvae-gen` are two modes of retired families, restored as tiers ([ADR-0019 §12](../adr/0019-fv-lab.md)).
 
 ## Build
 
@@ -54,6 +55,8 @@ dry run show what will run.
 | `ltxvae` | `ltxvae-*` (4) | 12 | the LTX-2.5 VAE decode alone (`vae-bench`) | |
 | `precision` | `precision-{h3,ltx25}` | 8 | precision switches against f32 activations | the script's default mode only |
 | `b4a` | `b4a-h3-*` (3) | 6 | the H3 TeaCache step cache, baseline binary vs this build: byte identity and equal cache decisions, a verdict per cell | D1d; needs `--baseline-sha`; **not retired** (script branch kept until its GPU gate) |
+| `precision-nvfp4` | `precision-nvfp4-ltx25-{4k5s,1080p20s}` | 4 | NVFP4 video FFN against bf16, LTX-2.5 Sol, compare + lossy gate | was `precision`'s `FV_PRECISION_ARM=ltx-nvfp4` mode; restored (§12) |
+| `ltxvae-gen` | `ltxvae`'s 4 + `ltxvae-gen-{4k5s,1080p20s}` | 16 | `ltxvae`, plus per workload a cold gen saving its latents and the streaming decoder on them | was `ltxvae`'s `FV_VAE_GEN=1`; restored (§12); shares `ltxvae`'s cells |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)) |
 
 All ten above `b4a` are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10): their `runpod-matrix.sh`
@@ -61,10 +64,37 @@ branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The s
 ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is not on the EU volume (`h3-8step`)
 is recorded as skipped (`weights incomplete`), as the script recorded it.
 
-What the retired branches had and the tiers do not, dropped with the branches: the `precision` family's
-`FV_PRECISION_ARM=ltx-nvfp4` mode, `ltxvae`'s `FV_VAE_GEN=1` arms (and the `FV_VAE_*`, `FV_LTXFPS*`,
-`FV_TECH_CELLS`, `FV_B6_CELLS` knobs, ADR-0019 §9.4), and the summaries the branches copied into `live.log`.
-Either variant comes back as its own tier when wanted (git history has the commands).
+What the retired branches had and the tiers do not, dropped with the branches: the `FV_VAE_*`, `FV_LTXFPS*`,
+`FV_TECH_CELLS`, `FV_B6_CELLS` knobs (ADR-0019 §9.4) and the summaries the branches copied into `live.log`. The two
+modes dropped with them are tiers again (owner decision 2026-10-25, [ADR-0019 §12](../adr/0019-fv-lab.md)):
+
+```sh
+./fv-lab run precision-nvfp4 --dry-run      # was FV_PRECISION_ARM=ltx-nvfp4 runpod-matrix.sh precision
+./fv-lab run ltxvae-gen --dry-run           # was FV_VAE_GEN=1 runpod-matrix.sh ltxvae (all 16 arms)
+./fv-lab run ltxvae-gen --cells ltx25-4k5s-gen,ltx25-4k5s-gen-streaming   # only the 4k5s gen pair (no knob did this)
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family precision-nvfp4 --lpips --yes --wait
+```
+
+The old knobs pick arms, and `--cells` (`FV_CELLS`) names the same arms. Each list below assumes the mode's other knobs
+at their defaults:
+
+| old setting | `--cells` |
+|---|---|
+| `FV_NVFP4_WORKLOADS=4k5s` | `ltx25-4k5s-sol-bf16,ltx25-4k5s-sol-nvfp4` |
+| `FV_NVFP4_WORKLOADS=1080p20s` | `ltx25-1080p20s-sol-bf16,ltx25-1080p20s-sol-nvfp4` |
+| `FV_VAE_WORKLOADS=4k5s` (the 8 arms of 4k5s) | `ltxvae-4k5s-fast,ltxvae-4k5s-streaming,ltxvae-4k5s-fast-untraced,ltxvae-4k5s-streaming-untraced,ltxvae-4k5s-fast-mp4,ltxvae-4k5s-fast-tune,ltx25-4k5s-gen,ltx25-4k5s-gen-streaming` |
+| `FV_VAE_WORKLOADS=1080p20s` | the same eight with `1080p20s` |
+| `FV_VAE_UNTRACED=0` (traced and gen arms, both workloads) | `ltxvae-4k5s-fast,ltxvae-4k5s-streaming,ltx25-4k5s-gen,ltx25-4k5s-gen-streaming,ltxvae-1080p20s-fast,ltxvae-1080p20s-streaming,ltx25-1080p20s-gen,ltx25-1080p20s-gen-streaming` |
+| `FV_VAE_UNTRACED=0 FV_VAE_WORKLOADS=4k5s` | `ltxvae-4k5s-fast,ltxvae-4k5s-streaming,ltx25-4k5s-gen,ltx25-4k5s-gen-streaming` |
+
+`--cells` runs the same arms, but the run is not identical. The script never reached the arms its knobs left out. fv-lab
+logs each unselected arm as `skip <arm> (not in FV_CELLS)` and a compare of two unselected arms as `skip compare
+(frames missing)`. The arm directories, frames and reports are the same.
+
+Their goldens are what the script wrote in that mode at `5987e6a4` (`scripts/gpu/tests/fv-lab-restored-goldens.sh
+--check` reproduces them from git history), frozen from the start; fv-lab's dry run and pod equal them with the
+family named by the tier and without the mode's `FV_EXTRA_ENV` setting. `FV_VAE_TRACE=0` has no tier. NVFP4 needs
+sm_100 / sm_120: the tier is the PRO 6000, as the mode was.
 
 ### `runpod-http.sh` for a retired tier
 
@@ -86,7 +116,15 @@ that fv-lab would not honour is refused, not dropped, unless fv-lab does the sam
   `FV_PLAN_VOLUME` the EU volume, `RUNPOD_IMAGE` the commit's runtime image, `FV_POD_PREFIX` `fv-lab`;
 - `FV_EXTRA_ENV` entries no tier reads: the dropped modes' knobs (`FV_PRECISION_ARM`, `FV_NVFP4_WORKLOADS`,
   `FV_VAE_*`, `FV_LTXFPS*`, `FV_TECH_CELLS`, `FV_B6_CELLS`), `FV_PROMPTS` / `FV_PROMPT` / `FV_SEED`, and what the
-  start command sets after them (`FV_WORK`, `FV_SCRATCH`, `FV_RUN_TAG`, `FV_CELLS`, `FV_GEN_TIMEOUT_S`).
+  start command sets after them (`FV_WORK`, `FV_SCRATCH`, `FV_RUN_TAG`, `FV_CELLS`, `FV_GEN_TIMEOUT_S`). The two
+  restored modes' settings name their tier: `FV_PRECISION_ARM=ltx-nvfp4` says `use FV_FAMILY=precision-nvfp4`,
+  `FV_VAE_GEN=1` says `use FV_FAMILY=ltxvae-gen` (refused, not routed: the run would land under another run
+  directory and pod name than `FV_FAMILY`'s); `FV_NVFP4_WORKLOADS`, `FV_VAE_WORKLOADS`, `FV_VAE_UNTRACED` say to
+  narrow by arm with `FV_CELLS`. A mode setting is answered before any other refusal, and one message lists every
+  refused `FV_EXTRA_ENV` key. `fv-lab` itself refuses the same: `pod up --extra-env` this whole set, `fv-lab run`
+  the mode knobs in its environment (its own inputs `FV_WORK`, … are not refused, and `FV_PROMPTS` / `FV_PROMPT` /
+  `FV_SEED` keep their warning); `runpod-matrix.sh precision` with `FV_PRECISION_ARM=ltx-nvfp4` (or `ltxvae` with
+  `FV_VAE_GEN=1`, or the tier's own name) names the tier.
 
 `FV_CELLS` and `FV_EXTRA_ENV` are split on spaces (and `FV_CELLS` on commas) without globbing. `all` mode is refused
 (run `kernels`, then `run`), and `FV_FAMILY=gold` is refused for `run` / `all` (no script family: `fv-lab pod up
@@ -301,7 +339,10 @@ before the branch went and are fv-lab's own goldens from then on: the goldens sc
 checks that they exist, that the tier is in `lab/tiers.toml` and that its branch is gone (and that every other script
 tier still has one); `tests/dry_run.rs` checks the same. The Rust tests still compare fv-lab's dry run, gates and pod
 body with them, so a change to a frozen tier's commands or pod is deliberate: edit the cell (or `pod-start.sh.in`)
-and the fixture in the same PR, and say why in the PR. The ten retired tiers are frozen; `b4a`'s fixtures are still written from its script branch until its GPU gate; `gold` was never a
+and the fixture in the same PR, and say why in the PR. The ten retired tiers are frozen, and so are the two
+restored modes (`precision-nvfp4`, `ltxvae-gen`), whose fixtures come from the script at `5987e6a4` in that mode
+(`FV_LAB_RESTORED` in `fv-lab-retired.sh`; `fv-lab-restored-goldens.sh --check` reproduces them); `b4a`'s fixtures
+are still written from its script branch until its GPU gate; `gold` was never a
 script family (only its pod body comes from `runpod-http.sh plan`). The `gold` tier is no script family: only its pod body is written there, and its dry run is fv-lab's own golden
 (`fixtures/gold-dry-run.txt`, `tests/gold_tier.rs`). Once, there is also its `frames_digest` of a sample. A new tier fails
 `--check` until its fixtures are written; `tests/{dry_run,payload_golden,frames_digest,fv_lab_bin}.rs` hold fv-lab to

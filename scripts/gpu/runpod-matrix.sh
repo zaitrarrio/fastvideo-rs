@@ -9,7 +9,10 @@
 # trace, ltxfps, ltxvae, precision) passed their GPU gate and their branches
 # are gone; they are tiers of lab/ (`fv-lab run <tier>` on the box,
 # `runpod-http.sh run` / `fv-lab pod up` from a host). This script refuses
-# them (exit 2), and `headline` runs its cells of them through fv-lab.
+# them (exit 2), and `headline` runs its cells of them through fv-lab. Two
+# modes of them are fv-lab tiers too (§12, FV_LAB_RESTORED):
+# FV_PRECISION_ARM=ltx-nvfp4 is `precision-nvfp4`, FV_VAE_GEN=1 `ltxvae-gen`;
+# the refusal names the tier.
 #
 # Evaluation layer (eval family and the gen cells):
 #   every H3 / LTX-2 gen cell writes <cell>/benchmark.json (timings per stage
@@ -3192,7 +3195,21 @@ Audio: male speech, clear voice, quiet room"
     done
     ;;
   *)
-    if fv_lab_retired "$FAMILY"; then
+    # A restored mode (fv-lab-retired.sh FV_LAB_RESTORED, docs/adr/0019-fv-lab.md
+    # §12): asked for as its family plus its setting, or by its tier's name.
+    restored_tier="" restored_why=""
+    for r in $FV_LAB_RESTORED; do
+      IFS=: read -r r_tier r_fam r_mode <<<"$r"
+      r_key="${r_mode%%=*}"
+      if [[ "$FAMILY" == "$r_fam" && "${!r_key:-}" == "${r_mode#*=}" ]]; then
+        restored_tier="$r_tier" restored_why="$r_mode was a mode of $r_fam; it is the fv-lab tier $r_tier now"
+      elif [[ "$FAMILY" == "$r_tier" ]]; then
+        restored_tier="$r_tier" restored_why="$r_tier is an fv-lab tier (the $r_fam family's $r_mode mode), never a runpod-matrix.sh family"
+      fi
+    done
+    if [[ -n "$restored_tier" ]]; then
+      log "FATAL: $restored_why: fv-lab run $restored_tier on the box, FV_FAMILY=$restored_tier runpod-http.sh run or fv-lab pod up --family $restored_tier from a host"
+    elif fv_lab_retired "$FAMILY"; then
       # docs/adr/0019-fv-lab.md §10: the tier runs only through fv-lab now.
       log "FATAL: $FAMILY is retired to fv-lab (fv-lab-retired.sh): fv-lab run $FAMILY on the box, runpod-http.sh run or fv-lab pod up --family $FAMILY from a host"
     else

@@ -46,7 +46,7 @@ import { missingTrees } from "./volumes";
 import { DRIVER_CHECK_SH } from "./driver-check";
 import { R2_AUX_TREES, r2AuxTrees, R2_DOWNLOAD_GBPS, R2_FETCH_SH, r2Bytes, r2Cfg, r2DiskGb, r2Manifest, r2PodEnv, r2Trees } from "./r2weights";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH } from "./upsampler";
-import { PREFER_FV_BOOT_SH } from "./fv-boot";
+import { PREFER_FV_BOOT_SH, REGISTER_OFF_SH } from "./fv-boot";
 import { policies, type Policies } from "./alerts";
 
 // ---------------------------------------------------------------- ids
@@ -739,12 +739,7 @@ else
   [ -f "$FV_WORKER_CONFIG" ] || fail "no worker config $FV_WORKER_CONFIG in the image"
   cp "$FV_WORKER_CONFIG" /fv-worker.toml || fail "cannot copy $FV_WORKER_CONFIG"
 fi
-if grep -q "^\\[gateway\\]" /fv-worker.toml; then
-  sed -i "/^\\[gateway\\]/a register = false" /fv-worker.toml
-else
-  printf "\\n[gateway]\\nregister = false\\n" >> /fv-worker.toml
-fi
-export FV_WORKER_ID="$FV_POD_ID"
+${REGISTER_OFF_SH}export FV_WORKER_ID="$FV_POD_ID"
 cfgerr="$("$FV_SERVE_BIN" --config /fv-worker.toml --print-config 2>&1 >/dev/null)" || fail "fv-serve config: $(printf '%s' "$cfgerr" | tail -n 3 | tr '\\n"' '  ')"
 say "config ok: /fv-worker.toml"
 ${UPSAMPLER_START_SH}# ---- weights: the Hub at pinned revisions (fetch-hub-tree.py checks every file against the Hub listing), aux files by SHA-256

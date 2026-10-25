@@ -651,7 +651,7 @@ fn gcp_configs_mirror_runpod_and_join_family_dos() {
         );
         assert_eq!(c.director.chunk_seconds, 5.0, "{cfg}: director chunk");
         assert!(
-            c.gateway.pool.is_none(),
+            c.cluster.pool.is_none(),
             "{cfg}: a GCP worker joins family objects, not a pool socket"
         );
         // The Runpod twin serves the same thing.
@@ -715,7 +715,7 @@ fn gcp_configs_mirror_runpod_and_join_family_dos() {
         d.validate()
             .unwrap_or_else(|e| panic!("{cfg} (direct worker): {e}"));
         assert!(
-            d.gateway.direct && d.auth.key_store == fastvideo_serve::config::KeyStoreBackend::D1,
+            d.cluster.direct && d.auth.key_store == fastvideo_serve::config::KeyStoreBackend::D1,
             "{cfg}"
         );
     }

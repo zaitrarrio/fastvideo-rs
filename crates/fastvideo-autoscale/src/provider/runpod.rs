@@ -427,10 +427,12 @@ impl SignalSource for RunpodHealthSignals {
     }
 }
 
-// ---- The gateway's pod workers ----------------------------------------
+// ---- Pod workers' registrations ----------------------------------------
 
-/// [`WorkerRegistry`] over the gateway's own bookkeeping (docs/serve/gateway.md
-/// §5.3): pod workers register themselves in D1 `gw_workers`, so
+/// [`WorkerRegistry`] over the workers' own bookkeeping (docs/serve/gateway.md
+/// §5.3): pod workers (fv-serve `[cluster] register`, on by default) register
+/// themselves in D1 `gw_workers` (the retired gateway's table name, kept:
+/// workers of every image age write it), so
 /// `register`/`deregister` only log; in-flight work per worker is
 /// `running + sessions` of its row (seen in the last 45 s); `drain` asks
 /// the worker itself (`POST {url}/fv/v1/internal/drain` with the internal
@@ -503,7 +505,7 @@ impl WorkerRegistry for GatewayWorkers {
             pool,
             worker = worker_id,
             url,
-            "autoscale: pod ready (it registers itself with the gateway)"
+            "autoscale: pod ready (it registers itself in gw_workers)"
         );
     }
     async fn drain(&self, _pool: &str, worker_id: &str) {

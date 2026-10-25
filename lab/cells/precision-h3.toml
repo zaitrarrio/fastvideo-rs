@@ -1,6 +1,6 @@
 # The precision family's H3 cell (runpod-matrix.sh `precision`, its default
 # mode; retired from the script, ADR-0019 §10; its
-# FV_PRECISION_ARM=ltx-nvfp4 mode was dropped with the branch): the
+# FV_PRECISION_ARM=ltx-nvfp4 mode is the precision-nvfp4 tier, §12): the
 # precision switches on the current build against the f32-activation baseline,
 # same prompt, seed, warm. `gate` on a compare runs that pair's gate right
 # after it, as the script's loop does. Schema:

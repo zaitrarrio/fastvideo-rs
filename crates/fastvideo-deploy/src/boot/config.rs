@@ -14,8 +14,10 @@
 //!
 //! Anything else **refuses to boot** ([`missing`]): no baked `FV_CONFIG`
 //! (no longer read), no fv-serve default. A controller worker's config gets
-//! `register = false` in its `[gateway]` table (the gateway is retired; the
-//! shell boots did the same edit).
+//! `register = false` in its `[cluster]` table, or in `[gateway]`, the name
+//! that table had before plan F3b and the one the shipped configs still use;
+//! a config with neither gets `[gateway]` (the shell boots do the same edit;
+//! [`register_off`]).
 
 use std::path::{Path, PathBuf};
 
@@ -86,16 +88,23 @@ pub fn without_config(args: &[String]) -> Vec<String> {
     out
 }
 
-/// `register = false` under `[gateway]` (appended as a new table when there
-/// is none). Idempotent: a config that already starts its `[gateway]` table
-/// with that line (a restarted container re-reading its own copy) is kept.
-pub fn gateway_off(toml: &str) -> String {
+/// `register = false` under the config's `[cluster]` table, or under
+/// `[gateway]`, its name before plan F3b (whichever the config has: adding
+/// the other name would make fv-serve refuse a config with both). A config
+/// with neither gets a new `[gateway]` table: every fv-serve reads that
+/// name, and the fv-serve fv-boot runs need not be its own image's
+/// (`FV_SERVE_BIN`), so nothing writes `[cluster]` until stage 2 of the
+/// rename (ADR-0011, "Renaming a worker-config section"). Idempotent: a
+/// config that already starts its table with that line (a restarted
+/// container re-reading its own copy) is kept.
+pub fn register_off(toml: &str) -> String {
     let mut out = String::with_capacity(toml.len() + 32);
     let mut done = false;
     let lines: Vec<&str> = toml.split_inclusive('\n').collect();
     for (i, line) in lines.iter().enumerate() {
         out.push_str(line);
-        if !done && line.trim_end_matches(['\n', '\r']).starts_with("[gateway]") {
+        let head = line.trim_end_matches(['\n', '\r']);
+        if !done && (head.starts_with("[cluster]") || head.starts_with("[gateway]")) {
             done = true;
             if lines.get(i + 1).map(|l| l.trim()) == Some("register = false") {
                 continue;
@@ -157,7 +166,7 @@ pub fn materialize(
         let text = String::from_utf8(bytes)
             .map_err(|_| BootError::Config("FV_WORKER_TOML_B64 is not UTF-8".into()))?;
         let text = if kind.controller_worker() {
-            gateway_off(&text)
+            register_off(&text)
         } else {
             text
         };
@@ -188,7 +197,7 @@ pub fn materialize(
         }
         let text = std::fs::read_to_string(src)
             .map_err(|_| BootError::Config(format!("no worker config {p} in the image")))?;
-        write(worker_toml, &gateway_off(&text))?;
+        write(worker_toml, &register_off(&text))?;
         return Ok(Materialized {
             source: Source::WorkerConfig(p.to_owned()),
             path: worker_toml.to_path_buf(),
@@ -235,23 +244,44 @@ mod tests {
     }
 
     #[test]
-    fn gateway_edit() {
+    fn register_edit() {
         assert_eq!(
-            gateway_off("[server]\nbind = \"x\"\n"),
+            register_off("[server]\nbind = \"x\"\n"),
             "[server]\nbind = \"x\"\n\n[gateway]\nregister = false\n"
         );
+        // Under the table the config has, by either name (never both).
         assert_eq!(
-            gateway_off("[gateway]\npool = \"h3\"\n"),
+            register_off("[cluster]\npool = \"h3\"\n"),
+            "[cluster]\nregister = false\npool = \"h3\"\n"
+        );
+        assert_eq!(
+            register_off("[gateway.x]\n[cluster]\n"),
+            "[gateway.x]\n[cluster]\nregister = false\n"
+        );
+        let once = register_off("[cluster]\npool = \"h3\"\n");
+        assert_eq!(register_off(&once), once);
+        assert_eq!(
+            register_off("[gateway]\npool = \"h3\"\n"),
             "[gateway]\nregister = false\npool = \"h3\"\n"
         );
         assert_eq!(
-            gateway_off("a = 1\n[gateway]"),
+            register_off("a = 1\n[gateway]"),
             "a = 1\n[gateway]\nregister = false\n"
         );
-        let once = gateway_off("[gateway]\npool = \"h3\"\n");
-        assert_eq!(gateway_off(&once), once);
-        let appended = gateway_off("a = 1\n");
-        assert_eq!(gateway_off(&appended), appended);
+        let once = register_off("[gateway]\npool = \"h3\"\n");
+        assert_eq!(register_off(&once), once);
+        let appended = register_off("a = 1\n");
+        assert_eq!(register_off(&appended), appended);
+        // Stage 1 of the rename (ADR-0011): fv-boot never introduces
+        // `[cluster]`; the fv-serve it runs may predate it (`FV_SERVE_BIN`).
+        for toml in [
+            "",
+            "[server]\n",
+            "a = 1\n[gateway]",
+            "[gateway]\npool = \"h3\"\n",
+        ] {
+            assert!(!register_off(toml).contains("[cluster]"), "{toml:?}");
+        }
     }
 
     #[test]
@@ -331,7 +361,7 @@ mod tests {
             s(&["--config", &fake.display().to_string(), "--x"])
         );
         assert!(!wt.exists());
-        // A controller worker copies it (gateway off); a file the image does not carry is refused.
+        // A controller worker copies it (registration off); a file the image does not carry is refused.
         let m = materialize(&e, &Kind::ClusterWorker, &[], &wt).unwrap();
         assert_eq!(m.path, wt);
         assert_eq!(

@@ -14,6 +14,9 @@
 # family to be a tier with no branch left). A change to such a tier's commands
 # or pod is deliberate: the fixture is edited in the same PR, and the Rust
 # tests hold fv-lab to it.
+# The restored modes (FV_LAB_RESTORED, ADR-0019 §12: precision-nvfp4,
+# ltxvae-gen) are in that list from the start: their fixtures are the script's
+# in that mode at 5987e6a4 (fv-lab-restored-goldens.sh reproduces them).
 #
 # Fixtures, per family <f> (every [[tier]] name of lab/tiers.toml but the
 # frozen ones; for the `gold` tier, generated from lab/gold/ and no script
