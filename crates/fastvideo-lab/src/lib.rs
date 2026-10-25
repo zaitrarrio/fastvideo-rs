@@ -47,5 +47,5 @@ pub use gold::{
     check_date, load_dir, Cost, Gap, Gold, GoldError, LastValidated, Latency, Measures, Model,
     Quality, Source, TierSpec, Upstream, Workload, CITABLE_FIELDS, GOLD_SCHEMA, NUMERIC_FIELDS,
 };
-pub use plan::{Arm, CellFile, Lab, LabError, Step, Tier, Tiers};
+pub use plan::{Arm, CellFile, Lab, LabError, Step, Tier, Tiers, Verdict};
 pub use profiles::{comment_of, measurement_claims, Claim};

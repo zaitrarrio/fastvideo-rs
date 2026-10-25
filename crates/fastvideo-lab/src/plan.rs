@@ -279,6 +279,190 @@ pub struct CellFile {
     /// Promotion gates (`fv-gpucheck gate`), after the compares.
     #[serde(default, rename = "gate", skip_serializing_if = "Vec::is_empty")]
     pub gates: Vec<GatePair>,
+    /// The cell's verdict (D1d): evidence read after each of its arms and a
+    /// pass / fail file after its compares ([`Verdict`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
+}
+
+/// A cell's verdict (docs/adr/0019-fv-lab.md §11, D1d): what the script's
+/// byte-identity families (`b4a`) do besides arms and compares, as data.
+///
+/// The verdict's arms start from an empty directory (`<runs>/<arm>` is
+/// removed before each, so no earlier run's output stands in for this one's).
+/// After each of them, in order: its `summary.json` must record exit 0 (else
+/// `<label>:exit`); its `stderr.log` must exist (else `<label>:no-run`, and
+/// nothing more is read for it); each [`Evidence`] file is written; each
+/// [`LineCount`] is logged and checked. After the cell's compares: each
+/// [`Identical`] pair, then each evidence `diff`. The verdict is
+/// `<runs>/<family>-<cell>.verdict.json`,
+/// `{"cell":"<cell>","verdict":"pass|fail","why":"<reasons>"}`; and every run
+/// with verdicts ends with `<runs>/<family>.verdict.json` over the cells it
+/// ran (`runpod-matrix.sh`'s `b4_family_verdict`). A verdict passes only on
+/// positive evidence: a missing file fails it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Verdict {
+    /// The verdict files' prefix and the log's (`b4a`: `b4a-<cell>.verdict.json`,
+    /// `b4a.verdict.json`); the name of the tier listing the cell.
+    pub family: String,
+    /// The arms the verdict reads, in order, each named `<cell>-<label>`; the
+    /// label names the arm in the reasons (`base:exit`).
+    pub arms: Vec<String>,
+    /// The dry run's line for the verdict: `dry-run <cell>: <describe>`.
+    pub describe: String,
+    /// Files of matching `stderr.log` lines, written into each arm's directory.
+    #[serde(default, rename = "evidence", skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<Evidence>,
+    /// Matching `stderr.log` lines counted per arm, with a minimum.
+    #[serde(default, rename = "count", skip_serializing_if = "Vec::is_empty")]
+    pub counts: Vec<LineCount>,
+    /// `--off-identity` compares of this cell that must have passed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identical: Vec<Identical>,
+}
+
+/// How an evidence line is cut before it is written.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum LineStrip {
+    /// As logged.
+    #[default]
+    None,
+    /// Without the leading `[…]` groups (and the spaces after each) a log line
+    /// starts with: its timestamp, level and target (`sed -E
+    /// 's/^(\[[^]]*\] *)+//'`), so two runs' lines compare.
+    BracketPrefixes,
+}
+
+/// One evidence file per arm: the `stderr.log` lines that match any pattern.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Evidence {
+    /// The file, in each arm's directory (`cache-evidence.log`); the name ends
+    /// in `-evidence.log`, which `fv-lab pod fetch` takes.
+    pub file: String,
+    /// Line patterns: a line matches when it contains the pattern, `*` standing
+    /// for any run of characters (`h3 teacache step *REUSE`).
+    pub lines: Vec<String>,
+    /// How each kept line is cut (default `none`).
+    #[serde(default, skip_serializing_if = "is_default_strip")]
+    pub strip: LineStrip,
+    /// The two arms' files must be equal: `diff <first> <second>` is written to
+    /// `<runs>/<cell>.<diff>` (`evidence.diff`), and a difference fails the
+    /// verdict (`evidence-differs`). Needs exactly two arms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+}
+
+fn is_default_strip(s: &LineStrip) -> bool {
+    *s == LineStrip::None
+}
+
+/// A count of matching `stderr.log` lines per arm (`grep -c`), logged as
+/// `[<arm>] <what>: <n>`; under `min` fails the verdict (`<label>:<why>`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LineCount {
+    /// What is counted, as the log line names it.
+    pub what: String,
+    /// Line patterns, as [`Evidence::lines`].
+    pub lines: Vec<String>,
+    /// The fewest lines that pass.
+    pub min: u64,
+    /// The reason a smaller count adds, after the arm's label (`no-reuse`).
+    pub why: String,
+}
+
+/// A compare of the cell (`[[compare]]` with `--off-identity`) whose report
+/// must exist, not be a skip, and pass both identity checks
+/// (`off_identity`, `off_identity_frame_count`); else `why`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Identical {
+    /// The compare's baseline arm (one of the verdict's arms).
+    pub baseline: String,
+    /// The compare's candidate arm.
+    pub candidate: String,
+    /// The reason a failed or missing compare adds (default `not-identical`).
+    #[serde(default = "not_identical")]
+    pub why: String,
+}
+
+fn not_identical() -> String {
+    "not-identical".into()
+}
+
+/// Whether `line` contains `pattern`, `*` matching any run of bytes (the
+/// pieces between the stars in order, without overlap): grep's `a.*b` on one
+/// line.
+pub fn line_matches(line: &[u8], pattern: &str) -> bool {
+    let mut rest = line;
+    for piece in pattern.split('*').filter(|p| !p.is_empty()) {
+        let p = piece.as_bytes();
+        match rest.windows(p.len()).position(|w| w == p) {
+            Some(i) => rest = &rest[i + p.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
+/// `sed -E 's/^(\[[^]]*\] *)+//'`: the line without its leading `[…]` groups.
+pub fn strip_bracket_prefixes(mut line: &[u8]) -> &[u8] {
+    while line.first() == Some(&b'[') {
+        let Some(close) = line.iter().position(|&b| b == b']') else {
+            break;
+        };
+        line = &line[close + 1..];
+        while line.first() == Some(&b' ') {
+            line = &line[1..];
+        }
+    }
+    line
+}
+
+impl Evidence {
+    /// The evidence of one `stderr.log`: `grep -h -e … | sed …`, every kept
+    /// line ending in a newline.
+    pub fn extract(&self, stderr: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for line in log_lines(stderr) {
+            if self.lines.iter().any(|p| line_matches(line, p)) {
+                let kept = match self.strip {
+                    LineStrip::None => line,
+                    LineStrip::BracketPrefixes => strip_bracket_prefixes(line),
+                };
+                out.extend_from_slice(kept);
+                out.push(b'\n');
+            }
+        }
+        out
+    }
+}
+
+impl LineCount {
+    /// `grep -c`: the matching lines of one `stderr.log`.
+    pub fn count(&self, stderr: &[u8]) -> u64 {
+        log_lines(stderr)
+            .filter(|l| self.lines.iter().any(|p| line_matches(l, p)))
+            .count() as u64
+    }
+}
+
+/// The lines of a log as grep reads them: split on `\n`, no empty last line.
+fn log_lines(text: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let body = (!text.is_empty()).then(|| text.strip_suffix(b"\n").unwrap_or(text));
+    body.into_iter().flat_map(|b| b.split(|&c| c == b'\n'))
+}
+
+impl Verdict {
+    /// The label of a verdict arm of `cell` (`b4a-x-base` → `base`).
+    pub fn label<'a>(cell: &str, arm: &'a str) -> &'a str {
+        arm.strip_prefix(cell)
+            .and_then(|r| r.strip_prefix('-'))
+            .unwrap_or(arm)
+    }
 }
 
 /// What every arm of a cell generates. Each value is referenced from the
@@ -738,6 +922,146 @@ impl CellFile {
                 }
             }
         }
+        if let Some(v) = &self.verdict {
+            self.validate_verdict(v, file, &names)?;
+        }
+        Ok(())
+    }
+
+    fn validate_verdict(
+        &self,
+        v: &Verdict,
+        file: &str,
+        names: &BTreeSet<&str>,
+    ) -> Result<(), LabError> {
+        let one_line = |s: &str| !s.trim().is_empty() && !s.contains(['\n', '\r']);
+        // Written verbatim into a JSON string and a log line.
+        let token = |s: &str| is_name(s) && !s.contains(['"', '\\']);
+        let patterns = |at: &str, lines: &[String]| {
+            if lines.is_empty() {
+                return Err(field(file, at, "no pattern"));
+            }
+            match lines
+                .iter()
+                .find(|p| !one_line(p) || p.trim_matches('*').is_empty())
+            {
+                Some(p) => Err(field(
+                    file,
+                    at,
+                    format!("`{p}` is not a one-line pattern with text besides `*`"),
+                )),
+                None => Ok(()),
+            }
+        };
+        if !is_name(&v.family) {
+            return Err(field(
+                file,
+                "verdict.family",
+                format!("`{}` is not a tier name", v.family),
+            ));
+        }
+        if !one_line(&v.describe) {
+            return Err(field(file, "verdict.describe", "one line, not empty"));
+        }
+        if v.arms.is_empty() {
+            return Err(field(file, "verdict.arms", "no arm"));
+        }
+        let mut seen = BTreeSet::new();
+        for a in &v.arms {
+            if !names.contains(a.as_str()) {
+                return Err(field(
+                    file,
+                    "verdict.arms",
+                    format!("`{a}` is not an arm of this cell"),
+                ));
+            }
+            let label = Verdict::label(&self.name, a);
+            if label == a || !token(label) {
+                return Err(field(
+                    file,
+                    "verdict.arms",
+                    format!("`{a}` is not `{}-<label>`", self.name),
+                ));
+            }
+            if !seen.insert(a.as_str()) {
+                return Err(field(file, "verdict.arms", format!("`{a}` twice")));
+            }
+        }
+        let mut files = BTreeSet::new();
+        for (i, e) in v.evidence.iter().enumerate() {
+            let at = |f: &str| format!("verdict.evidence[{i}].{f}");
+            if !token(&e.file) || !e.file.ends_with("-evidence.log") {
+                return Err(field(
+                    file,
+                    at("file"),
+                    format!("`{}` is not a file name ending in -evidence.log", e.file),
+                ));
+            }
+            if !files.insert(e.file.as_str()) {
+                return Err(field(file, at("file"), format!("`{}` twice", e.file)));
+            }
+            patterns(&at("lines"), &e.lines)?;
+            if let Some(d) = &e.diff {
+                if !token(d) || !d.ends_with(".diff") {
+                    return Err(field(
+                        file,
+                        at("diff"),
+                        format!("`{d}` is not a file name ending in .diff"),
+                    ));
+                }
+                if v.arms.len() != 2 {
+                    return Err(field(file, at("diff"), "a diff needs exactly two arms"));
+                }
+            }
+        }
+        for (i, c) in v.counts.iter().enumerate() {
+            let at = |f: &str| format!("verdict.count[{i}].{f}");
+            if !one_line(&c.what) {
+                return Err(field(file, at("what"), "one line, not empty"));
+            }
+            patterns(&at("lines"), &c.lines)?;
+            if !token(&c.why) {
+                return Err(field(
+                    file,
+                    at("why"),
+                    format!("`{}` is not a reason token", c.why),
+                ));
+            }
+        }
+        for (i, p) in v.identical.iter().enumerate() {
+            let at = format!("verdict.identical[{i}]");
+            for n in [&p.baseline, &p.candidate] {
+                if !v.arms.contains(n) {
+                    return Err(field(
+                        file,
+                        &at,
+                        format!("`{n}` is not an arm of the verdict"),
+                    ));
+                }
+            }
+            if !token(&p.why) {
+                return Err(field(
+                    file,
+                    &at,
+                    format!("`{}` is not a reason token", p.why),
+                ));
+            }
+            let compared = self.compares.iter().any(|c| {
+                c.baseline == p.baseline
+                    && c.candidate == p.candidate
+                    && c.args.iter().any(|a| a == "--off-identity")
+            });
+            if !compared {
+                return Err(field(
+                    file,
+                    &at,
+                    format!(
+                        "no [[compare]] of `{}` and `{}` with --off-identity",
+                        p.baseline, p.candidate
+                    ),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -831,6 +1155,39 @@ pub enum Step {
         kind: GateKind,
         off: Option<String>,
     },
+    /// A cell with a verdict (D1d): its own steps (arms, compares, gates), the
+    /// verdict's evidence after each of its arms, then the verdict file. Run
+    /// only when one of the verdict's arms is selected (`FV_CELLS`), as the
+    /// script runs only the cells `FV_B4A_CELLS` names.
+    Verdict {
+        cell: String,
+        verdict: Verdict,
+        steps: Vec<Step>,
+    },
+    /// `<runs>/<family>.verdict.json` over the verdict cells of `family` that
+    /// ran (each `(cell, its verdict arms)`), after every other step.
+    FamilyVerdict {
+        family: String,
+        cells: Vec<VerdictCellArms>,
+    },
+}
+
+/// A verdict cell and its verdict arms (what decides whether it ran).
+pub type VerdictCellArms = (String, Vec<String>);
+
+impl Step {
+    /// The steps with every [`Step::Verdict`]'s own steps in its place, the
+    /// verdict steps themselves kept (run order).
+    pub fn flatten(steps: &[Step]) -> Vec<&Step> {
+        let mut out = Vec::new();
+        for s in steps {
+            out.push(s);
+            if let Step::Verdict { steps, .. } = s {
+                out.extend(Step::flatten(steps));
+            }
+        }
+        out
+    }
 }
 
 /// The checked-in run plan.
@@ -907,6 +1264,13 @@ impl Lab {
                         format!("no {CELLS_DIR}/{c}.toml"),
                     )
                 })?;
+                if let Some(v) = cell.verdict.as_ref().filter(|v| v.family != t.name) {
+                    return Err(field(
+                        &format!("{CELLS_DIR}/{c}.toml"),
+                        "verdict.family",
+                        format!("`{}`, but the cell is in tier `{}`", v.family, t.name),
+                    ));
+                }
                 for a in &cell.arms {
                     if !arms.insert(a.name.as_str()) {
                         return Err(field(
@@ -971,47 +1335,76 @@ impl Lab {
 
     /// The steps of `cells`, rendered with `bin` and `paths`: per cell its
     /// arms, then its compares (each followed by its paired gate), then its
-    /// gates.
+    /// gates; a cell with a verdict as one [`Step::Verdict`] holding those,
+    /// and after all cells one [`Step::FamilyVerdict`] per verdict family
+    /// (in the order first seen).
     pub fn steps(cells: &[&CellFile], bin: &Path, paths: &Paths) -> Result<Vec<Step>, LabError> {
         let mut out = Vec::new();
+        let mut families: Vec<(String, Vec<VerdictCellArms>)> = Vec::new();
         for c in cells {
-            let label = format!("{CELLS_DIR}/{}.toml", c.name);
-            for a in &c.arms {
-                let command = c
-                    .command(a, bin, paths)
-                    .map_err(|m| field(&label, format!("arm `{}`", a.name), m))?;
-                out.push(Step::Arm {
-                    name: a.name.clone(),
-                    gate: a.gate.clone(),
-                    trees: a.trees.clone(),
-                    command,
-                    tae: a.tae.as_ref().map(|t| paths.tae.join(t)),
-                    baseline: a.bin == ArmBin::Baseline,
-                });
-            }
-            for cmp in &c.compares {
-                out.push(Step::Compare {
-                    baseline: cmp.baseline.clone(),
-                    candidate: cmp.candidate.clone(),
-                    args: cmp.args.clone(),
-                });
-                if let Some(g) = &cmp.gate {
-                    out.push(Step::Gate {
-                        baseline: cmp.baseline.clone(),
-                        candidate: cmp.candidate.clone(),
-                        kind: g.kind,
-                        off: g.off.clone(),
+            let steps = Self::cell_steps(c, bin, paths)?;
+            match &c.verdict {
+                None => out.extend(steps),
+                Some(v) => {
+                    let entry = (c.name.clone(), v.arms.clone());
+                    match families.iter_mut().find(|(f, _)| *f == v.family) {
+                        Some((_, cells)) => cells.push(entry),
+                        None => families.push((v.family.clone(), vec![entry])),
+                    }
+                    out.push(Step::Verdict {
+                        cell: c.name.clone(),
+                        verdict: v.clone(),
+                        steps,
                     });
                 }
             }
-            for g in &c.gates {
+        }
+        out.extend(
+            families
+                .into_iter()
+                .map(|(family, cells)| Step::FamilyVerdict { family, cells }),
+        );
+        Ok(out)
+    }
+
+    fn cell_steps(c: &CellFile, bin: &Path, paths: &Paths) -> Result<Vec<Step>, LabError> {
+        let mut out = Vec::new();
+        let label = format!("{CELLS_DIR}/{}.toml", c.name);
+        for a in &c.arms {
+            let command = c
+                .command(a, bin, paths)
+                .map_err(|m| field(&label, format!("arm `{}`", a.name), m))?;
+            out.push(Step::Arm {
+                name: a.name.clone(),
+                gate: a.gate.clone(),
+                trees: a.trees.clone(),
+                command,
+                tae: a.tae.as_ref().map(|t| paths.tae.join(t)),
+                baseline: a.bin == ArmBin::Baseline,
+            });
+        }
+        for cmp in &c.compares {
+            out.push(Step::Compare {
+                baseline: cmp.baseline.clone(),
+                candidate: cmp.candidate.clone(),
+                args: cmp.args.clone(),
+            });
+            if let Some(g) = &cmp.gate {
                 out.push(Step::Gate {
-                    baseline: g.baseline.clone(),
-                    candidate: g.candidate.clone(),
+                    baseline: cmp.baseline.clone(),
+                    candidate: cmp.candidate.clone(),
                     kind: g.kind,
                     off: g.off.clone(),
                 });
             }
+        }
+        for g in &c.gates {
+            out.push(Step::Gate {
+                baseline: g.baseline.clone(),
+                candidate: g.candidate.clone(),
+                kind: g.kind,
+                off: g.off.clone(),
+            });
         }
         Ok(out)
     }
@@ -1270,6 +1663,8 @@ candidate = "x-tae"
                     kind,
                     off,
                 } => format!("gate {baseline}--{candidate} {} {off:?}", kind.as_str()),
+                Step::Verdict { cell, .. } => format!("verdict {cell}"),
+                Step::FamilyVerdict { family, .. } => format!("family {family}"),
             })
             .collect();
         assert_eq!(
@@ -1303,6 +1698,166 @@ candidate = "x-tae"
         );
         bad("off = \"x-pr\"", "off = \"zz\"", "not an arm");
         bad("bin = \"baseline\"", "bin = \"other\"", "TOML");
+    }
+
+    const VERDICT: &str = r#"
+schema = 1
+name = "v1"
+description = "a verdict cell"
+
+[workload]
+model = "h3"
+seed = 7
+
+[[arm]]
+name = "v1-base"
+gate = "h3-base"
+trees = ["h3-base"]
+bin = "baseline"
+argv = ["h3", "gen", "--seed", "{seed}"]
+
+[[arm]]
+name = "v1-pr"
+gate = "h3-base"
+trees = ["h3-base"]
+argv = ["h3", "gen", "--seed", "{seed}"]
+
+[[compare]]
+baseline = "v1-base"
+candidate = "v1-pr"
+args = ["--off-identity"]
+
+[verdict]
+family = "fam"
+arms = ["v1-base", "v1-pr"]
+describe = "verdict also needs both arms exit 0"
+
+[[verdict.evidence]]
+file = "cache-evidence.log"
+lines = ["h3 teacache step", "fuse step cache"]
+strip = "bracket-prefixes"
+diff = "evidence.diff"
+
+[[verdict.count]]
+what = "teacache reused forwards"
+lines = ["h3 teacache step *REUSE"]
+min = 1
+why = "no-reuse"
+
+[[verdict.identical]]
+baseline = "v1-base"
+candidate = "v1-pr"
+"#;
+
+    #[test]
+    fn a_verdict_cell_renders_as_one_step_and_a_family_verdict_follows() {
+        let c = CellFile::parse(VERDICT, "v1.toml").unwrap();
+        let v = c.verdict.as_ref().unwrap();
+        assert_eq!(v.identical[0].why, "not-identical");
+        assert_eq!(v.evidence[0].strip, LineStrip::BracketPrefixes);
+        let plain = CellFile::parse(CELL, "c1.toml").unwrap();
+        let mut p = paths();
+        p.baseline = Some("/b/fv-gpucheck".into());
+        let steps = Lab::steps(&[&plain, &c], Path::new("/bin/fv"), &p).unwrap();
+        // c1's three steps, the verdict cell, the family verdict.
+        assert_eq!(steps.len(), 5);
+        let Step::Verdict {
+            cell, steps: inner, ..
+        } = &steps[3]
+        else {
+            panic!("{:?}", steps[3]);
+        };
+        assert_eq!(cell, "v1");
+        assert_eq!(inner.len(), 3, "two arms and the compare");
+        assert_eq!(
+            steps[4],
+            Step::FamilyVerdict {
+                family: "fam".into(),
+                cells: vec![("v1".into(), vec!["v1-base".into(), "v1-pr".into()])],
+            }
+        );
+        assert_eq!(Step::flatten(&steps).len(), 8);
+        assert_eq!(Verdict::label("v1", "v1-base"), "base");
+    }
+
+    #[test]
+    fn verdicts_name_their_arms_files_and_compares() {
+        let bad = |from: &str, to: &str, want: &str| {
+            let e = CellFile::parse(&VERDICT.replacen(from, to, 1), "v1.toml")
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(want), "{from} -> {to}: {e} lacks {want}");
+        };
+        bad(
+            "arms = [\"v1-base\", \"v1-pr\"]",
+            "arms = [\"v1-base\", \"zz\"]",
+            "not an arm of this cell",
+        );
+        let e = CellFile::parse(&VERDICT.replace("v1-pr", "w1-pr"), "v1.toml")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("is not `v1-<label>`"), "{e}");
+        bad(
+            "arms = [\"v1-base\", \"v1-pr\"]",
+            "arms = [\"v1-base\"]",
+            "exactly two arms",
+        );
+        bad(
+            "file = \"cache-evidence.log\"",
+            "file = \"cache.txt\"",
+            "-evidence.log",
+        );
+        bad("diff = \"evidence.diff\"", "diff = \"evidence\"", ".diff");
+        bad(
+            "lines = [\"h3 teacache step *REUSE\"]",
+            "lines = [\"**\"]",
+            "text besides",
+        );
+        bad("why = \"no-reuse\"", "why = \"no reuse\"", "reason token");
+        bad(
+            "args = [\"--off-identity\"]",
+            "args = []",
+            "with --off-identity",
+        );
+        bad(
+            "describe = \"verdict also needs both arms exit 0\"",
+            "describe = \"\"",
+            "one line",
+        );
+        bad("family = \"fam\"", "family = \"Fam\"", "tier name");
+        bad(
+            "strip = \"bracket-prefixes\"",
+            "strip = \"brackets\"",
+            "TOML",
+        );
+        bad("min = 1", "min = 1\nmax = 2", "TOML");
+    }
+
+    #[test]
+    fn evidence_lines_are_grep_and_sed() {
+        let e = Evidence {
+            file: "cache-evidence.log".into(),
+            lines: vec!["h3 teacache step".into(), "fuse step cache".into()],
+            strip: LineStrip::BracketPrefixes,
+            diff: None,
+        };
+        let log = b"[INFO] [fastvideo] h3 teacache step 1: REUSE (x)\nother\n[a[b] ]  fuse step cache on\n[unclosed h3 teacache step 2: compute\nh3 teacache step 3: REUSE";
+        assert_eq!(
+            e.extract(log),
+            b"h3 teacache step 1: REUSE (x)\n]  fuse step cache on\n[unclosed h3 teacache step 2: compute\nh3 teacache step 3: REUSE\n"
+        );
+        // As sed: `[a[b]` is one group, the `]` after it starts the text.
+        assert_eq!(e.extract(b""), b"");
+        let c = LineCount {
+            what: "reused".into(),
+            lines: vec!["h3 teacache step *REUSE".into()],
+            min: 1,
+            why: "no-reuse".into(),
+        };
+        assert_eq!(c.count(log), 2);
+        assert_eq!(c.count(b"REUSE h3 teacache step 1\n"), 0, "in order");
+        assert!(line_matches(b"abcabc", "c*a*c") && !line_matches(b"abc", "c*a"));
+        assert_eq!(strip_bracket_prefixes(b"[x]   [y]z [w]"), b"z [w]");
     }
 
     #[test]

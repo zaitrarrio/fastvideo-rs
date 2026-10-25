@@ -5,6 +5,9 @@
 //!                 [--baseline-sha <7>] [--runs-dir D]
 //!                 the on-pod runner (runpod-matrix.sh's frame, the cells of lab/);
 //!                 --dry-run prints each arm's command line and writes nothing
+//! fv-lab gate <run dir> [--family T] [--cells a,b] [--out D] [--gpucheck B] [--policy F]
+//!                 a finished run's promotion gates and verdicts, evaluated again from
+//!                 its files (no GPU): exit 0 all passed, 1 a failure or nothing evaluated
 //! fv-lab check    parse and validate lab/tiers.toml and lab/cells/*.toml
 //! fv-lab schema tiers|cell
 //! fv-lab pod up --sha <7> --family <tier> [--yes] [--wait] [--cells …] [--extra-env K=V …]
@@ -83,6 +86,8 @@ struct Cli {
 enum Cmd {
     /// Run a tier (or one cell) on this GPU box.
     Run(RunArgs),
+    /// Re-evaluate a finished run's gates and verdicts from its files (no GPU).
+    Gate(GateArgs),
     /// Parse and validate lab/tiers.toml and lab/cells/*.toml.
     Check {
         #[arg(long)]
@@ -207,6 +212,33 @@ struct RunArgs {
     baseline_sha: Option<String>,
     /// The root holding lab/ and scripts/gpu (FV_LAB_ROOT; default: found above
     /// the current directory, then above this binary).
+    #[arg(long)]
+    root: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct GateArgs {
+    /// The run directory: a fetched `artifacts/runpod/<tier>/<tag>` or a pod's
+    /// `<scratch>/runs/<tier>/<tag>`.
+    run_dir: PathBuf,
+    /// The tier (default: the run directory's parent's name).
+    #[arg(long)]
+    family: Option<String>,
+    /// Only these arms (default: the arms the run directory holds a
+    /// summary.json for, i.e. the arms the run selected).
+    #[arg(long)]
+    cells: Option<String>,
+    /// Where the re-evaluated gate reports and verdicts go (default: the run
+    /// directory, the names the run wrote).
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// fv-gpucheck for the promotion gates (FV_GPUCHECK; any build, the gate
+    /// is CPU only); needed only when the tier has gates.
+    #[arg(long)]
+    gpucheck: Option<PathBuf>,
+    /// The gate policy (FV_GATE_POLICY; default <root>/scripts/gpu/gate-policy.toml).
+    #[arg(long)]
+    policy: Option<PathBuf>,
     #[arg(long)]
     root: Option<PathBuf>,
 }
@@ -449,6 +481,116 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+// ------------------------------------------------------------------ gate
+
+/// `fv-lab gate <run dir>` (docs/adr/0019-fv-lab.md §11): the tier's
+/// promotion gates (`fv-gpucheck gate`) and verdicts evaluated again from a
+/// finished run's files, with the runner's own code; no arm or compare runs.
+/// Exit 0 when everything evaluated passed, 1 when anything failed or nothing
+/// could be evaluated.
+fn cmd_gate(a: &GateArgs) -> Result<ExitCode, String> {
+    let root = find_root(a.root.as_ref())?;
+    let lab = Lab::load(&root).map_err(|e| e.to_string())?;
+    if !a.run_dir.is_dir() {
+        return Err(format!("{}: not a run directory", a.run_dir.display()));
+    }
+    let family = match &a.family {
+        Some(f) => f.clone(),
+        None => a
+            .run_dir
+            .canonicalize()
+            .ok()
+            .and_then(|d| {
+                d.parent()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .filter(|n| lab.tier(n).is_some())
+            .ok_or_else(|| {
+                format!(
+                    "{}: its parent is no tier of lab/tiers.toml; pass --family",
+                    a.run_dir.display()
+                )
+            })?,
+    };
+    let (tier, cells) = lab.resolve(&family, None).map_err(|e| e.to_string())?;
+    let mut cfg = RunConfig::new(&tier.name, &root);
+    cfg.runs_dir = Some(a.run_dir.clone());
+    if let Some(b) = a
+        .gpucheck
+        .clone()
+        .or_else(|| env_nonempty("FV_GPUCHECK").map(PathBuf::from))
+    {
+        cfg.bin = b;
+    }
+    cfg.gate_policy = a
+        .policy
+        .clone()
+        .or_else(|| env_nonempty("FV_GATE_POLICY").map(PathBuf::from));
+    let arms: Vec<String> = cells
+        .iter()
+        .flat_map(|c| &c.arms)
+        .map(|arm| arm.name.clone())
+        .collect();
+    cfg.only = Some(match &a.cells {
+        Some(c) => split_list(c),
+        None => arms
+            .iter()
+            .filter(|n| a.run_dir.join(n).join("summary.json").is_file())
+            .cloned()
+            .collect(),
+    });
+    // The commands are rendered but never run here: a baseline arm needs
+    // some binary path to render.
+    let mut paths: Paths = cfg.paths();
+    if paths.baseline.is_none() {
+        paths.baseline = Some(PathBuf::from("fv-gpucheck.baseline"));
+    }
+    let steps = Lab::steps(&cells, &cfg.bin, &paths).map_err(|e| e.to_string())?;
+    let flat = fastvideo_lab::Step::flatten(&steps);
+    let gates = flat
+        .iter()
+        .filter(|s| matches!(s, fastvideo_lab::Step::Gate { .. }))
+        .count();
+    if gates > 0 && !fastvideo_deploy::boot::sys::is_executable(&cfg.bin) {
+        return Err(format!(
+            "{} has {gates} promotion gate(s) and fv-gpucheck is not at {} (--gpucheck, FV_GPUCHECK)",
+            tier.name,
+            cfg.bin.display()
+        ));
+    }
+    let out = a.out.clone().unwrap_or_else(|| a.run_dir.clone());
+    let mut runner = Runner::offline(cfg, &out);
+    let outcomes = runner.regate(&steps).to_vec();
+    let failed: Vec<&str> = outcomes
+        .iter()
+        .filter(|o| !o.pass)
+        .map(|o| o.what.as_str())
+        .collect();
+    println!(
+        "fv-lab gate {}: {} evaluated, {} failed{}",
+        tier.name,
+        outcomes.len(),
+        failed.len(),
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", failed.join(", "))
+        }
+    );
+    if outcomes.is_empty() {
+        println!(
+            "nothing to evaluate: no gate with both benchmark.json files and no verdict cell ran"
+        );
+        return Ok(ExitCode::from(1));
+    }
+    Ok(if failed.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }
 
 // ------------------------------------------------------------------ pod
@@ -1049,6 +1191,7 @@ fn run() -> Result<ExitCode, String> {
     };
     match cli.cmd {
         Cmd::Run(a) => cmd_run(&a),
+        Cmd::Gate(a) => cmd_gate(&a),
         Cmd::Check { root } => {
             let root = find_root(root.as_ref())?;
             let lab = Lab::load(&root).map_err(|e| e.to_string())?;

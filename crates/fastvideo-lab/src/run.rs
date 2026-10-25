@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 use fastvideo_deploy::boot::sys::utc_hms;
 use fastvideo_deploy::launch::utc_iso;
 
-use crate::plan::{GateKind, Paths, Step};
+use crate::plan::{GateKind, Paths, Step, Verdict};
 use crate::quote::printf_q_line;
 
 /// `runpod-matrix.sh`'s default binary.
@@ -199,6 +199,13 @@ pub fn dry_run_lines(cfg: &RunConfig, steps: &[Step]) -> Vec<String> {
     let f = &cfg.family;
     let build = build_id(&cfg.bin);
     let mut out = vec![format!("[{f}] matrix start image={build}")];
+    dry_run_steps(cfg, steps, &mut out);
+    out.push(format!("[{f}] matrix done"));
+    out
+}
+
+fn dry_run_steps(cfg: &RunConfig, steps: &[Step], out: &mut Vec<String>) {
+    let f = &cfg.family;
     for s in steps {
         match s {
             Step::Arm { name, command, .. } => {
@@ -223,10 +230,96 @@ pub fn dry_run_lines(cfg: &RunConfig, steps: &[Step]) -> Vec<String> {
             } => out.push(format!(
                 "[{f}] skip gate {baseline}--{candidate} (benchmark.json missing)"
             )),
+            // The script's b4a_pair: each verdict arm's directory removed
+            // before it, the cell's steps, the verdict's description.
+            Step::Verdict {
+                cell,
+                verdict,
+                steps,
+            } => {
+                if !verdict_selected(cfg, &verdict.arms) {
+                    out.push(format!("[{f}] skip {cell} (no arm in FV_CELLS)"));
+                    continue;
+                }
+                for s in steps {
+                    if let Step::Arm { name, .. } = s {
+                        if verdict.arms.contains(name) {
+                            out.push(format!(
+                                "[{f}] dry-run {name}: rm -rf {}",
+                                cfg.runs().join(name).display()
+                            ));
+                        }
+                    }
+                    dry_run_steps(cfg, std::slice::from_ref(s), out);
+                }
+                out.push(format!("[{f}] dry-run {cell}: {}", verdict.describe));
+            }
+            // The script's line names its function, b4-verdict.sh
+            // `b4_family_verdict`, whose rule `Runner::family_verdict` is.
+            Step::FamilyVerdict { family, cells } => out.push(format!(
+                "[{f}] dry-run {family}: family verdict b4_family_verdict {family} {} -> {} (a named cell without a passing verdict fails)",
+                selected_cells(cfg, cells).join(" "),
+                cfg.runs().join(format!("{family}.verdict.json")).display()
+            )),
         }
     }
-    out.push(format!("[{f}] matrix done"));
-    out
+}
+
+/// A verdict cell runs when any of its verdict arms is selected.
+fn verdict_selected(cfg: &RunConfig, arms: &[String]) -> bool {
+    arms.iter().any(|a| cfg.selected(a))
+}
+
+/// The cells of a family verdict that ran (one of their arms selected).
+fn selected_cells<'a>(cfg: &RunConfig, cells: &'a [(String, Vec<String>)]) -> Vec<&'a str> {
+    cells
+        .iter()
+        .filter(|(_, arms)| verdict_selected(cfg, arms))
+        .map(|(c, _)| c.as_str())
+        .collect()
+}
+
+/// `b4-verdict.sh b4_flat`: the bytes without spaces, tabs, CR or LF.
+fn flat(bytes: &[u8]) -> Vec<u8> {
+    bytes
+        .iter()
+        .copied()
+        .filter(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+        .collect()
+}
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// `b4-verdict.sh b4_exit_ok`: `summary.json` records `"exit":0` (followed
+/// by `,` or `}`), not a skip, a failure or nothing.
+pub fn summary_exit_ok(summary: &Path) -> bool {
+    if !summary.is_file() {
+        return false;
+    }
+    let f = flat(&fs::read(summary).unwrap_or_default());
+    contains(&f, b"\"exit\":0,") || contains(&f, b"\"exit\":0}")
+}
+
+/// `b4-verdict.sh b4_identical`: the `--off-identity` compare report exists,
+/// is not a skip, and both identity checks passed.
+pub fn compare_identical(report: &Path) -> bool {
+    if !report.is_file() {
+        return false;
+    }
+    let f = flat(&fs::read(report).unwrap_or_default());
+    !contains(&f, b"\"status\":\"skipped\"")
+        && contains(&f, b"\"name\":\"off_identity\",\"ok\":true")
+        && contains(&f, b"\"name\":\"off_identity_frame_count\",\"ok\":true")
+}
+
+/// What one gate or verdict decided (`fv-lab gate`'s summary).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outcome {
+    /// `gate <b>--<c>`, `verdict <cell>`, `family <family>`.
+    pub what: String,
+    pub pass: bool,
 }
 
 /// `cat <bin>.build-id`, or `unknown`.
@@ -260,31 +353,60 @@ fn exit_code(st: std::process::ExitStatus) -> i32 {
 /// The runner.
 pub struct Runner {
     pub cfg: RunConfig,
+    /// What the steps read: the run directory.
     runs: PathBuf,
-    log_path: PathBuf,
+    /// Where the gates and verdicts write: the run directory on a pod;
+    /// `fv-lab gate --out` offline.
+    out: PathBuf,
+    /// `live.log`; none offline (`fv-lab gate` logs to stdout only).
+    log_path: Option<PathBuf>,
     /// Set on every child (`export PATH`, `LD_LIBRARY_PATH`, `FV_AUX_DIR`).
     env: Vec<(String, String)>,
     lpips_args: Vec<String>,
     /// `tae_fetched`: `fetch-tae.sh` runs at most once per run.
     tae_fetched: bool,
+    /// `fv-lab gate`: re-evaluate a finished run's gates and verdicts; run no
+    /// arm and no compare, remove nothing.
+    offline: bool,
+    /// Every gate and verdict decided, in order.
+    outcomes: Vec<Outcome>,
 }
 
 impl Runner {
     pub fn new(cfg: RunConfig) -> Self {
         let runs = cfg.runs();
-        let log_path = runs.join("live.log");
         Self {
             cfg,
+            out: runs.clone(),
+            log_path: Some(runs.join("live.log")),
             runs,
-            log_path,
             env: Vec::new(),
             lpips_args: Vec::new(),
             tae_fetched: false,
+            offline: false,
+            outcomes: Vec::new(),
         }
+    }
+
+    /// The runner of `fv-lab gate`: reads the finished run directory
+    /// (`cfg.runs()`, e.g. `artifacts/runpod/<tier>/<tag>`) and writes the
+    /// re-evaluated gate reports (`<out>/gate/`) and verdicts (`<out>/…`)
+    /// into `out` (the run directory itself, or elsewhere). No GPU.
+    pub fn offline(cfg: RunConfig, out: &Path) -> Self {
+        let mut r = Self::new(cfg);
+        r.out = out.to_path_buf();
+        r.log_path = None;
+        r.offline = true;
+        r
     }
 
     pub fn runs(&self) -> &Path {
         &self.runs
+    }
+
+    /// Every gate and verdict decided so far, in order.
+    pub fn outcomes(&self) -> &[Outcome] {
+        &self.outcomes
     }
 
     /// `log`: `[HH:MM:SS] [<family>] msg` to stdout and `live.log` (a write
@@ -302,11 +424,8 @@ impl Runner {
         // Never a panic on a closed stdout (`println!` would): the line still
         // reaches live.log.
         let _ = writeln!(std::io::stdout().lock(), "{line}");
-        if let Ok(mut f) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_path)
-        {
+        let Some(log) = &self.log_path else { return };
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log) {
             let _ = writeln!(f, "{line}");
         }
     }
@@ -496,40 +615,15 @@ impl Runner {
     /// Every step, then `matrix done` and `done.json`.
     pub fn run(&mut self, steps: &[Step]) -> Result<(), RunError> {
         self.prepare()?;
-        if steps
+        if Step::flatten(steps)
             .iter()
             .any(|s| matches!(s, Step::Arm { baseline: true, .. }))
         {
             self.fetch_baseline()?;
         }
+        self.clear_verdicts(steps);
         for s in steps {
-            match s {
-                Step::Arm {
-                    name,
-                    gate,
-                    command,
-                    tae: Some(file),
-                    ..
-                } => self.tae_gated_cell(name, file, gate, command),
-                Step::Arm {
-                    name,
-                    gate,
-                    command,
-                    tae: None,
-                    ..
-                } => self.gated_cell(name, gate, command),
-                Step::Compare {
-                    baseline,
-                    candidate,
-                    args,
-                } => self.compare_cells(baseline, candidate, args),
-                Step::Gate {
-                    baseline,
-                    candidate,
-                    kind,
-                    off,
-                } => self.gate_cells(baseline, candidate, *kind, off.as_deref()),
-            }
+            self.step(s);
         }
         self.log("matrix done");
         self.write_json(
@@ -541,6 +635,238 @@ impl Runner {
             ),
         );
         Ok(())
+    }
+
+    /// One step. Offline (`fv-lab gate`) only the gates and verdicts are
+    /// evaluated: no arm or compare runs.
+    fn step(&mut self, s: &Step) {
+        match s {
+            Step::Arm { .. } | Step::Compare { .. } if self.offline => {}
+            Step::Arm {
+                name,
+                gate,
+                command,
+                tae: Some(file),
+                ..
+            } => self.tae_gated_cell(name, file, gate, command),
+            Step::Arm {
+                name,
+                gate,
+                command,
+                tae: None,
+                ..
+            } => self.gated_cell(name, gate, command),
+            Step::Compare {
+                baseline,
+                candidate,
+                args,
+            } => self.compare_cells(baseline, candidate, args),
+            Step::Gate {
+                baseline,
+                candidate,
+                kind,
+                off,
+            } => {
+                if let Some(rc) = self.gate_cells(baseline, candidate, *kind, off.as_deref()) {
+                    self.outcomes.push(Outcome {
+                        what: format!("gate {baseline}--{candidate}"),
+                        pass: rc == 0,
+                    });
+                }
+            }
+            Step::Verdict {
+                cell,
+                verdict,
+                steps,
+            } => self.verdict_cell(cell, verdict, steps),
+            Step::FamilyVerdict { family, cells } => self.family_verdict(family, cells),
+        }
+    }
+
+    /// `fv-lab gate`: the gates (`fv-gpucheck gate`, CPU only) and verdicts
+    /// of a finished run, evaluated again from its files; the outcomes.
+    pub fn regate(&mut self, steps: &[Step]) -> &[Outcome] {
+        self.offline = true;
+        let _ = fs::create_dir_all(&self.out);
+        for s in steps {
+            self.step(s);
+        }
+        &self.outcomes
+    }
+
+    /// The script's `rm -f "$RUNS"/b4a-*.verdict.json "$RUNS/b4a.verdict.json"`
+    /// before the first arm: no verdict of an earlier run in this directory
+    /// may stand in for this one.
+    fn clear_verdicts(&self, steps: &[Step]) {
+        for s in steps {
+            let Step::FamilyVerdict { family, .. } = s else {
+                continue;
+            };
+            let prefix = format!("{family}-");
+            for e in fs::read_dir(&self.out).into_iter().flatten().flatten() {
+                let n = e.file_name().to_string_lossy().into_owned();
+                if n.starts_with(&prefix) && n.ends_with(".verdict.json") {
+                    let _ = fs::remove_file(e.path());
+                }
+            }
+            let _ = fs::remove_file(self.out.join(format!("{family}.verdict.json")));
+        }
+    }
+
+    /// A verdict cell (the script's `b4a_pair`): each verdict arm from an
+    /// empty directory and its evidence right after it, the cell's compares
+    /// (their identity reports removed first), then
+    /// `<family>-<cell>.verdict.json`. Skipped whole when none of its arms is
+    /// selected.
+    fn verdict_cell(&mut self, cell: &str, v: &Verdict, steps: &[Step]) {
+        if !verdict_selected(&self.cfg, &v.arms) {
+            self.log(&format!("skip {cell} (no arm in FV_CELLS)"));
+            return;
+        }
+        let mut why = String::new();
+        if !self.offline {
+            for p in &v.identical {
+                let _ = fs::remove_file(self.compare_report(&p.baseline, &p.candidate));
+            }
+        }
+        for s in steps {
+            match s {
+                Step::Arm { name, .. } if v.arms.contains(name) => {
+                    if !self.offline {
+                        let _ = fs::remove_dir_all(self.runs.join(name));
+                    }
+                    self.step(s);
+                    self.arm_evidence(cell, v, name, &mut why);
+                }
+                other => self.step(other),
+            }
+        }
+        for p in &v.identical {
+            if !compare_identical(&self.compare_report(&p.baseline, &p.candidate)) {
+                why.push_str(&format!(" {}", p.why));
+            }
+        }
+        for e in &v.evidence {
+            let (Some(d), [a, b]) = (&e.diff, v.arms.as_slice()) else {
+                continue;
+            };
+            let (fa, fb) = (
+                self.out.join(a).join(&e.file),
+                self.out.join(b).join(&e.file),
+            );
+            if !(fa.is_file() && fb.is_file()) {
+                continue;
+            }
+            let same = File::create(self.out.join(format!("{cell}.{d}"))).is_ok_and(|f| {
+                self.cmd("diff")
+                    .arg(&fa)
+                    .arg(&fb)
+                    .stdout(f)
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success())
+            });
+            if !same {
+                why.push_str(" evidence-differs");
+            }
+        }
+        let verdict = if why.is_empty() { "pass" } else { "fail" };
+        let why = why.strip_prefix(' ').unwrap_or(&why);
+        self.write_json(
+            &self.out.join(format!("{}-{cell}.verdict.json", v.family)),
+            &format!("{{\"cell\":\"{cell}\",\"verdict\":\"{verdict}\",\"why\":\"{why}\"}}"),
+        );
+        let shown = if why.is_empty() {
+            String::new()
+        } else {
+            format!(" ({why})")
+        };
+        self.log(&format!("{} {cell}: {verdict}{shown}", v.family));
+        self.outcomes.push(Outcome {
+            what: format!("verdict {cell}"),
+            pass: verdict == "pass",
+        });
+    }
+
+    fn compare_report(&self, base: &str, cand: &str) -> PathBuf {
+        self.runs
+            .join("compare")
+            .join(format!("compare-clips-{base}--{cand}.json"))
+    }
+
+    /// After a verdict arm: its exit, then (when it wrote a `stderr.log`) its
+    /// evidence files and line counts; reasons appended to `why`.
+    fn arm_evidence(&self, cell: &str, v: &Verdict, arm: &str, why: &mut String) {
+        let label = Verdict::label(cell, arm);
+        if !summary_exit_ok(&self.runs.join(arm).join("summary.json")) {
+            why.push_str(&format!(" {label}:exit"));
+        }
+        let err = self.runs.join(arm).join("stderr.log");
+        if !err.is_file() {
+            why.push_str(&format!(" {label}:no-run"));
+            return;
+        }
+        let text = fs::read(&err).unwrap_or_default();
+        for e in &v.evidence {
+            let d = self.out.join(arm);
+            let _ = fs::create_dir_all(&d);
+            let _ = fs::write(d.join(&e.file), e.extract(&text));
+        }
+        for c in &v.counts {
+            let n = c.count(&text);
+            self.log(&format!("[{arm}] {}: {n}", c.what));
+            if n < c.min {
+                why.push_str(&format!(" {label}:{}", c.why));
+            }
+        }
+    }
+
+    /// `b4-verdict.sh b4_family_verdict`: `<family>.verdict.json`, a pass only
+    /// when every cell that ran wrote a passing verdict.
+    fn family_verdict(&mut self, family: &str, cells: &[(String, Vec<String>)]) {
+        let ran = selected_cells(&self.cfg, cells);
+        // Offline a run directory without any of the cells holds no verdict
+        // to re-evaluate (on a pod, as in the script, that is a failure).
+        if self.offline && ran.is_empty() {
+            self.log(&format!(
+                "skip {family} family verdict (no cell of it in the run)"
+            ));
+            return;
+        }
+        let mut why = String::new();
+        if ran.is_empty() {
+            why.push_str(" no-cells");
+        }
+        for c in &ran {
+            let f = self.out.join(format!("{family}-{c}.verdict.json"));
+            if !f.is_file() {
+                why.push_str(&format!(" {c}:no-verdict"));
+            } else if !contains(
+                &flat(&fs::read(&f).unwrap_or_default()),
+                b"\"verdict\":\"pass\"",
+            ) {
+                why.push_str(&format!(" {c}:fail"));
+            }
+        }
+        let verdict = if why.is_empty() { "pass" } else { "fail" };
+        let why = why.strip_prefix(' ').unwrap_or(&why);
+        self.write_json(
+            &self.out.join(format!("{family}.verdict.json")),
+            &format!(
+                "{{\"family\":\"{family}\",\"verdict\":\"{verdict}\",\"cells\":\"{}\",\"why\":\"{why}\"}}",
+                ran.join(" ")
+            ),
+        );
+        let shown = if why.is_empty() {
+            String::new()
+        } else {
+            format!(" ({why})")
+        };
+        self.log(&format!("{family} family: {verdict}{shown}"));
+        self.outcomes.push(Outcome {
+            what: format!("family {family}"),
+            pass: verdict == "pass",
+        });
     }
 
     /// The baseline binary (the script's `techniques` / `b6` preamble):
@@ -940,10 +1266,17 @@ impl Runner {
         v
     }
 
-    /// `gate_cells`: `fv-gpucheck gate` with the gate policy.
-    pub fn gate_cells(&self, base: &str, cand: &str, kind: GateKind, off: Option<&str>) {
+    /// `gate_cells`: `fv-gpucheck gate` with the gate policy; its exit status,
+    /// or `None` when the pair has nothing to gate (a `benchmark.json` missing).
+    pub fn gate_cells(
+        &self,
+        base: &str,
+        cand: &str,
+        kind: GateKind,
+        off: Option<&str>,
+    ) -> Option<i32> {
         let tag = format!("{base}--{cand}");
-        let dir = self.runs.join("gate");
+        let dir = self.out.join("gate");
         let _ = fs::create_dir_all(&dir);
         let mut args: Vec<String> = Vec::new();
         for f in self.compare_reports(&tag, cand) {
@@ -960,7 +1293,7 @@ impl Runner {
             || !self.runs.join(cand).join("benchmark.json").is_file()
         {
             self.log(&format!("skip gate {tag} (benchmark.json missing)"));
-            return;
+            return None;
         }
         let policy = self
             .cfg
@@ -993,6 +1326,7 @@ impl Runner {
             .next_back()
             .unwrap_or("");
         self.log(&format!("gate {tag} exit={rc} {verdict}"));
+        Some(rc)
     }
 }
 

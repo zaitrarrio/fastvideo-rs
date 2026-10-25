@@ -707,6 +707,11 @@ pub const RUN_FILES: [&str; 10] = [
 /// compare/, gate/), plus `DONE`. The
 /// listing is retried (one failed read once lost a whole run). Returns the
 /// directories fetched.
+///
+/// Beyond the script's fetch (ADR-0019 §11, D1d), the verdict step's files:
+/// the run directory's `*.verdict.json` and `*.diff`, and each directory's
+/// `*-evidence.log` ([`is_verdict_file`]). `runpod-http.sh` takes them only
+/// with `FV_FETCH_TREE=1`.
 pub fn fetch_run(
     http: &dyn Http,
     base: &str,
@@ -728,12 +733,18 @@ pub fn fetch_run(
     // The finish marker, which `judge_run` reads (runpod-http.sh only polls it).
     save(http, &format!("{run}/DONE"), &dest.join("DONE"));
     let mut cells = Vec::new();
+    let mut verdicts = Vec::new();
     for attempt in 1..=5 {
         if let Some(l) = get_text(http, &format!("{run}/")) {
-            cells = hrefs(&l)
-                .into_iter()
+            let all = hrefs(&l);
+            cells = all
+                .iter()
                 .filter_map(|h| h.strip_suffix('/').map(str::to_owned))
                 .filter(|h| !h.contains('/') && !h.is_empty() && h != "..")
+                .collect();
+            verdicts = all
+                .into_iter()
+                .filter(|h| !h.contains('/') && is_verdict_file(h, true))
                 .collect();
         }
         if !cells.is_empty() {
@@ -743,6 +754,9 @@ pub fn fetch_run(
             "[fv-lab] cell listing empty (attempt {attempt}); retrying"
         ));
         clock.sleep(Duration::from_secs(10));
+    }
+    for f in &verdicts {
+        save(http, &format!("{run}/{f}"), &dest.join(f));
     }
     for cell in &cells {
         let d = dest.join(cell);
@@ -763,7 +777,7 @@ pub fn fetch_run(
         if let Some(l) = get_text(http, &format!("{run}/{cell}/")) {
             for f in hrefs(&l)
                 .into_iter()
-                .filter(|h| h.ends_with(".json") && !h.contains('/'))
+                .filter(|h| !h.contains('/') && (h.ends_with(".json") || is_verdict_file(h, false)))
             {
                 save(http, &format!("{run}/{cell}/{f}"), &d.join(&f));
             }
@@ -771,6 +785,17 @@ pub fn fetch_run(
     }
     log.line(&format!("[fv-lab] results -> {}", dest.display()));
     Ok(cells)
+}
+
+/// A file of the verdict step (`plan::Verdict`) the fetch takes: in the run
+/// directory (`top`) a verdict (`*.verdict.json`) or an evidence diff
+/// (`*.diff`); in an arm's directory an evidence file (`*-evidence.log`).
+pub fn is_verdict_file(name: &str, top: bool) -> bool {
+    if top {
+        name.ends_with(".verdict.json") || name.ends_with(".diff")
+    } else {
+        name.ends_with("-evidence.log")
+    }
 }
 
 /// Why [`wait_done`] stopped.
@@ -1225,11 +1250,19 @@ cells = ["c"]
         let files: std::collections::BTreeMap<String, String> = [
             (format!("{run}/DONE"), "done t1\n"),
             (format!("{run}/matrix.out"), "matrix_exit=0\n"),
-            (format!("{run}/"), "<a href=\"a/\">a/</a><a href=\"live.log\">l</a>"),
+            (
+                format!("{run}/"),
+                "<a href=\"a/\">a/</a><a href=\"live.log\">l</a><a href=\"fam-c.verdict.json\">v</a><a href=\"c.evidence.diff\">d</a><a href=\"baseline-fetch.log\">b</a>",
+            ),
             (
                 format!("{run}/a/"),
-                "<a href=\"summary.json\">s</a><a href=\"frames.sha256.json\">f</a><a href=\"benchmark.json\">b</a><a href=\"frames/\">d</a>",
+                "<a href=\"summary.json\">s</a><a href=\"frames.sha256.json\">f</a><a href=\"benchmark.json\">b</a><a href=\"frames/\">d</a><a href=\"cache-evidence.log\">e</a><a href=\"other.log\">o</a>",
             ),
+            (format!("{run}/fam-c.verdict.json"), "{\"verdict\":\"pass\"}"),
+            (format!("{run}/c.evidence.diff"), ""),
+            (format!("{run}/baseline-fetch.log"), "x"),
+            (format!("{run}/a/cache-evidence.log"), "h3 teacache step 0\n"),
+            (format!("{run}/a/other.log"), "x"),
             (format!("{run}/a/summary.json"), "{\"exit\":0}"),
             (format!("{run}/a/frames.sha256.json"), "{\"arm\":\"a\"}"),
             (format!("{run}/a/benchmark.json"), "{}"),
@@ -1257,10 +1290,16 @@ cells = ["c"]
             "a/summary.json",
             "a/frames.sha256.json",
             "a/benchmark.json",
+            // The verdict step's files (D1d).
+            "fam-c.verdict.json",
+            "c.evidence.diff",
+            "a/cache-evidence.log",
         ] {
             assert!(dest.join(f).is_file(), "{f}");
         }
         assert!(!dest.join("a/frames").exists());
+        assert!(!dest.join("baseline-fetch.log").exists());
+        assert!(!dest.join("a/other.log").exists());
         assert!(judge_run(&dest, "t1").is_empty());
         let _ = std::fs::remove_dir_all(&dest);
     }

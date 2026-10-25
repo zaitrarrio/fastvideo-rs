@@ -360,3 +360,138 @@ fn pod_up_cells_must_be_arms_of_the_tier() {
         assert!(String::from_utf8_lossy(&o.stderr).contains("is not an arm of tier `gold`"));
     }
 }
+
+/// `fv-lab run b4a --dry-run` (D1d): the script's dry run, verdict lines
+/// included (the arm directories removed, the verdict's description, the
+/// family verdict). `{root}` is this checkout here, `/opt/fastvideo-rs` in
+/// the fixture (the goldens' image root).
+#[test]
+fn b4a_dry_run_prints_the_scripts_verdict_lines() {
+    let root = repo_root().canonicalize().unwrap().display().to_string();
+    let out = stdout(fv_lab().args([
+        "run",
+        "b4a",
+        "--dry-run",
+        "--baseline-sha",
+        "7654321",
+        "--work",
+        "/workspace",
+        "--scratch",
+        "/fvscratch",
+        "--tag",
+        "1234567-10241200",
+    ]));
+    let ours: Vec<String> = out
+        .lines()
+        .map(|l| {
+            l.get(11..)
+                .unwrap_or("")
+                .replace(&root, "/opt/fastvideo-rs")
+        })
+        .collect();
+    let fixture = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/b4a-dry-run.txt"),
+    )
+    .unwrap();
+    assert_eq!(ours, fixture.lines().collect::<Vec<_>>());
+    assert!(ours
+        .iter()
+        .any(|l| l.contains("family verdict b4_family_verdict b4a")));
+}
+
+/// A finished b4a run directory, as a fetch leaves it, under `<dir>/b4a/<tag>`.
+fn b4a_run(dir: &std::path::Path, pr_reuses: bool) -> PathBuf {
+    let runs = dir.join("b4a/1234567-10241200");
+    let cell = "b4a-h3-fullopt-env";
+    for arm in ["base", "pr"] {
+        let d = runs.join(format!("{cell}-{arm}"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("summary.json"),
+            format!("{{\"cell\":\"{cell}-{arm}\",\"family\":\"b4a\",\"exit\":0,\"seconds\":9,\"ended\":\"x\"}}\n"),
+        )
+        .unwrap();
+        let step = if arm == "pr" && !pr_reuses {
+            "compute"
+        } else {
+            "REUSE"
+        };
+        std::fs::write(
+            d.join("stderr.log"),
+            format!("[INFO] h3 teacache: threshold 0.1\n[INFO] [fastvideo] h3 teacache step 1: {step} (x)\nother\n"),
+        )
+        .unwrap();
+    }
+    std::fs::create_dir_all(runs.join("compare")).unwrap();
+    std::fs::write(
+        runs.join(format!("compare/compare-clips-{cell}-base--{cell}-pr.json")),
+        "{\n  \"checks\": [\n    {\n      \"name\": \"off_identity\",\n      \"ok\": true\n    },\n    {\n      \"name\": \"off_identity_frame_count\",\n      \"ok\": true\n    }\n  ],\n  \"status\": \"pass\"\n}\n",
+    )
+    .unwrap();
+    runs
+}
+
+/// `fv-lab gate <run dir>` (D1d): the verdicts of a fetched run evaluated
+/// again offline, the tier from the directory's parent, the cells the run
+/// holds; exit 0 on a pass, 1 on a failure, and the files the pod writes.
+#[test]
+fn gate_evaluates_a_finished_runs_verdicts_offline() {
+    let tmp = std::env::temp_dir().join(format!("fv-lab-bin-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let runs = b4a_run(&tmp.join("pass"), true);
+    let out = stdout(fv_lab().arg("gate").arg(&runs));
+    assert!(out.contains("b4a b4a-h3-fullopt-env: pass"), "{out}");
+    assert!(
+        out.contains("fv-lab gate b4a: 2 evaluated, 0 failed"),
+        "{out}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(runs.join("b4a.verdict.json")).unwrap(),
+        "{\"family\":\"b4a\",\"verdict\":\"pass\",\"cells\":\"b4a-h3-fullopt-env\",\"why\":\"\"}\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(runs.join("b4a-h3-fullopt-env-pr/cache-evidence.log")).unwrap(),
+        "h3 teacache: threshold 0.1\nh3 teacache step 1: REUSE (x)\n"
+    );
+
+    // The PR arm reused nothing: its evidence differs too. Into --out.
+    let runs = b4a_run(&tmp.join("fail"), false);
+    let elsewhere = tmp.join("out");
+    let o = fv_lab()
+        .arg("gate")
+        .arg(&runs)
+        .arg("--out")
+        .arg(&elsewhere)
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.join("b4a-b4a-h3-fullopt-env.verdict.json")).unwrap(),
+        "{\"cell\":\"b4a-h3-fullopt-env\",\"verdict\":\"fail\",\"why\":\"pr:no-reuse evidence-differs\"}\n"
+    );
+    assert!(
+        !runs.join("b4a.verdict.json").exists(),
+        "--out leaves the run alone"
+    );
+
+    // Not under a tier's name: --family says which.
+    let odd = tmp.join("odd");
+    std::fs::create_dir_all(&odd).unwrap();
+    let o = fv_lab().arg("gate").arg(&odd).output().unwrap();
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("pass --family"));
+    // A run of a tier with nothing to evaluate fails: no evidence.
+    let o = fv_lab()
+        .args(["gate", "--family", "b4a"])
+        .arg(&odd)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("nothing to evaluate"));
+    let _ = std::fs::remove_dir_all(&tmp);
+}

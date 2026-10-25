@@ -124,6 +124,7 @@ pub fn gold_cell(g: &Gold, v: &VariantManifest) -> CellFile {
         }],
         compares: Vec::new(),
         gates: Vec::new(),
+        verdict: None,
     }
 }
 
