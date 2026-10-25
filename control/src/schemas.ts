@@ -53,7 +53,7 @@ import {
   legacyVariant,
   type NameKind,
 } from "./enums";
-import { CONFIG_NAMES, MAX_WORKER_TOML_BYTES, workerConfigProblem } from "./worker-config";
+import { CONFIG_NAMES, cpuConfigProblem, MAX_WORKER_TOML_BYTES, workerConfigProblem } from "./worker-config";
 import { EndpointSpecZ } from "./serverless/spec";
 export { noVolumePod } from "./enums";
 import { HttpError } from "./util";
@@ -227,6 +227,8 @@ export const PoolSpecZ = z
     } else if (p.compute === "CPU") {
       if (p.gpu_types) add(["gpu_types"], "a CPU pool takes no gpu_types");
       if (p.models?.length && !p.image) add(["models"], "CPU pods run the cpu image (the fake engine): fake_models, not models");
+      const cpuWhy = cpuConfigProblem(p);
+      if (cpuWhy) add(["compute"], cpuWhy);
     } else {
       if (p.cpu_flavors) add(["cpu_flavors"], "a GPU pool takes no cpu_flavors");
       if (p.vcpu !== undefined) add(["vcpu"], "a GPU pool takes no vcpu");
@@ -458,6 +460,8 @@ export const StandaloneLaunchZ = z
     if (!x.preset && !x.config && !x.config_toml) add("config", "a preset, or config / config_toml (the worker config: the images bake none)");
     if (!x.preset && !x.models?.length && !x.fake_models?.length) add("models", "a preset, or models / fake_models (what the pod serves)");
     if (x.compute === "CPU" && x.models?.length && !x.image) add("models", "CPU pods run the cpu image (the fake engine): fake_models, not models");
+    const cpuWhy = cpuConfigProblem(x);
+    if (cpuWhy) add("compute", cpuWhy);
     if (x.config && x.config_toml) add("config", "one of config / config_toml");
     if (x.gpu_types && x.gpu_type) add("gpu_type", "gpu_types or gpu_type, not both");
     if (x.compute === "CPU" && (x.gpu_types || x.gpu_type)) add("gpu_types", "a CPU pod takes no GPU types");

@@ -11,7 +11,7 @@ import { getCluster, listClusters } from "./cluster/store";
 import type { Env } from "./env";
 import { releaseHeads } from "./releases";
 import { CPU_DPH_PER_VCPU, runpod } from "./runpod";
-import { ENV_VALUE_TYPES, FAKE_MODELS, OTHER_PROVIDERS, RUNPOD_DATA_CENTERS, type OtherProviderId } from "./enums";
+import { ENV_VALUE_TYPES, FAKE_MODELS, OTHER_PROVIDERS, RUNPOD_DATA_CENTERS, SERVE_IMAGES, type OtherProviderId } from "./enums";
 import { DEPLOY_IMAGES } from "./deploy-gen";
 import { CONFIG_NAMES } from "./worker-config";
 import { brevGpuOptions, providerImpl, providerView } from "./providers";
@@ -54,11 +54,18 @@ export function envKeyOptions(inUse: { key: string; scope: string; n: number }[]
 }
 
 let tagCache: { at: number; shas: string[] } | null = null;
-/** Commits with serve images in GHCR (tags <image>-sha-<sha7>), newest first as the registry lists them; 5-minute cache, 4 s budget. */
+/** The commits a launch can pin (`sha`): those with the one CUDA serve image (`cuda-sha-<sha7>`; a GPU pool resolves
+ * `<image>-sha-<sha7>`, enums.ts imageOf). A build from before the one image has only variant tags (`h3-turbo-sha-…`)
+ * and an old `cpu-sha-…`: not offered, a GPU pool could not resolve it. Newest first as the registry lists them. */
+export function launchableShas(tags: string[]): string[] {
+  const re = new RegExp(`^${SERVE_IMAGES.GPU}-sha-([0-9a-f]{7,40})$`);
+  return [...new Set(tags.map((t) => re.exec(t)?.[1]).filter((x): x is string => !!x))].reverse().slice(0, 50);
+}
+/** launchableShas of the GHCR tags; 5-minute cache, 4 s budget. */
 async function imageShas(env: Env): Promise<string[]> {
   if (tagCache && Date.now() - tagCache.at < 300_000) return tagCache.shas;
   const tags = await Promise.race([listTags(env), new Promise<string[]>((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000))]);
-  const shas = [...new Set(tags.map((t) => /(?:^|-)sha-([0-9a-f]{7,40})$/.exec(t)?.[1]).filter((x): x is string => !!x))].reverse().slice(0, 50);
+  const shas = launchableShas(tags);
   tagCache = { at: Date.now(), shas };
   return shas;
 }

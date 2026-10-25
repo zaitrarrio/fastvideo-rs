@@ -23,14 +23,16 @@ const inline = (file: string) => {
   if (!t) throw new Error(`no generated worker config ${file} (node gen-configs.mjs)`);
   return t;
 };
-/** A deploy/deploy.toml preset's pool: its worker config (inline: every launch sends it as FV_WORKER_TOML_B64, the
- * one CUDA image bakes none), its models, queue and timeouts. GPU, so it runs on the CUDA image. */
+/** A deploy/deploy.toml preset's pool: its worker config by name (a configs/serve file; every launch sends its text
+ * as FV_WORKER_TOML_B64, worker-config.ts, so an edited config reaches the next launch and the preset still owns it
+ * by name; the one CUDA image bakes none), its models, queue and timeouts. GPU, so it runs on the CUDA image. */
 function poolOf(p: DeployPreset): PoolSpec {
+  inline(p.config); // a config fv-control carries (generated), or the module fails to load
   return {
     id: p.id,
     count: 1,
     compute: "GPU",
-    config_toml: inline(p.config),
+    config: p.config,
     ...(p.container_disk_gb !== undefined ? { container_disk_gb: p.container_disk_gb } : {}),
     models: p.models.map(({ id, family, recipe }) => ({ id, family, recipe })),
     max_queued: p.max_queued,
@@ -166,7 +168,7 @@ function familyPreset(o: DeployFamilyPreset): PoolPreset {
       id: o.id,
       count: 1,
       compute: "GPU",
-      config_toml: toml,
+      config: o.config,
       ...(disk !== undefined ? { container_disk_gb: disk } : {}),
       models,
       max_queued: max("max_queued") ?? 32,

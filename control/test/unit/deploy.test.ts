@@ -147,7 +147,7 @@ describe("/api/v1/deploy/plan and /apply", () => {
     const h3 = await post(env, "/api/v1/deploy/plan", { name: "one-click-1", families: [{ family: "h3", pools: "template:h3" }] });
     expect(h3.j.pools.map((p: any) => [p.id, p.count])).toEqual([["h3-family", 1]]);
     expect(h3.j.pools[0].models).toEqual(expect.arrayContaining(["fasth3", "sol-h3", "fasth3-v2-nvfp4", "fasth3-trim-8step", "vdn-h3", "h3-ref2v-turbo", "h3-larry-turbo"]));
-    expect(h3.j.spec.pools[0].config_toml).toMatch(/^swap = true$/m);
+    expect(h3.j.spec.pools[0].config).toBe("runpod-family-h3.toml");
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM clusters").first<any>()).toMatchObject({ n: 0 });
   });
 

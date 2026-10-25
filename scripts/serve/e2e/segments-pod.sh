@@ -13,8 +13,8 @@
 #   RUNPOD_IMAGE=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:… \
 #     bash scripts/serve/e2e/segments-pod.sh
 #
-# The image is the `sfwan` variant (serve-image workflow, features
-# cuda,http-client) from a branch that has the segments router; the variant
+# The image is the CUDA serve image (serve-image workflow, features
+# cuda,http-client) from a branch that has the segments router; the serve
 # images carry python3 + ffmpeg but no fv-gpucheck or scripts, so the result
 # server is python3's http.server and fetch_taehv.sh travels in the env. H100 has no NVENC: the segments
 # encoder is `libx264` there and `nvenc` on L40S / RTX PRO 6000.
@@ -52,8 +52,8 @@ SEGS="${FV_SEG_SECONDS:-6}"
 SEG_MODEL="${FV_SEG_MODEL:-}"
 SEG_RES="${FV_SEG_RES:-480p}"
 # FV_SEG_VOLUME=<network volume id>: mount it read-only at /workspace and
-# serve the image's own preset (FV_CONFIG) from its weights instead of
-# fetching SF-Wan: the clip-path smoke on the h3-turbo / ltx variant images
+# serve FV_SEG_CONFIG (required then) from its weights instead of
+# fetching SF-Wan: the clip-path smoke on the CUDA image
 # with the EU volume (scripts/gpu/volumes.sh). The pod then runs in the
 # volume's data center on its GPUs (FV_EU_GPUS, NVENC).
 VOLUME="${FV_SEG_VOLUME:-}"
@@ -63,6 +63,13 @@ VOLUME="${FV_SEG_VOLUME:-}"
 # the volume plus a fetched LoRA); FV_SEG_WEIGHTS: the FV_WEIGHTS the server
 # gets (default: the volume's /workspace/weights, else the fetched SF-Wan).
 SEG_CONFIG="${FV_SEG_CONFIG:-}"
+# The serve images bake no config (one image, docs/adr/0011-deploy-section.md; the CUDA image carries only
+# runpod-fake.toml): the SF-Wan path ships configs/serve/runpod-sfwan.toml, and a volume / R2 run names its config.
+if [[ -z "$SEG_CONFIG" ]]; then
+  if [[ -z "${FV_SEG_VOLUME:-}${FV_SEG_R2_TREES:-}" ]]; then SEG_CONFIG="$ROOT/configs/serve/runpod-sfwan.toml"
+  else echo "FV_SEG_VOLUME / FV_SEG_R2_TREES: set FV_SEG_CONFIG (the serve images bake no config to fall back to)" >&2; exit 2
+  fi
+fi
 SEG_PREP="${FV_SEG_PREP:-}"
 SEG_WEIGHTS="${FV_SEG_WEIGHTS:-}"
 # FV_SEG_R2_TREES="h3-base …": no volume; the pod fetches these trees from
@@ -285,10 +292,10 @@ echo "\$FV_TAE_B64" | base64 -d >/fetch_taehv.sh
 FV_AUX_DIR=/nonexistent bash /fetch_taehv.sh /fvscratch/tae >"\$OUT/tae.log" 2>&1 || say "tae fetch failed"
 fi
 say "fv-serve"
-# The image's production preset (runpod-sfwan.toml on the sfwan image:
-# engine.backend = cuda, [[models]] sfwan21-1.3b; the variant's FV_CONFIG
-# otherwise), no auth, local artifacts.
-CFG="\${FV_CONFIG:-/etc/fv/runpod-sfwan.toml}"; [ -n "$VOLUME$R2_TREES" ] || CFG=/etc/fv/runpod-sfwan.toml
+# The shipped config (FV_SEG_CONFIG; default configs/serve/runpod-sfwan.toml:
+# engine.backend = cuda, [[models]] sfwan21-1.3b), no auth, local artifacts.
+# /etc/fv/runpod-sfwan.toml only on an image that still carries it (debug).
+CFG=/etc/fv/runpod-sfwan.toml
 if [ -n "\$FV_SEG_CONFIG_B64" ]; then echo "\$FV_SEG_CONFIG_B64" | base64 -d >/fvscratch/serve.toml; CFG=/fvscratch/serve.toml; fi
 say "fv-serve --config \$CFG"
 FV_WEIGHTS=\$WEIGHTS FASTVIDEO_TAE_DIR=/fvscratch/tae FV_AUTH_MODE=none FV_BIND=0.0.0.0:8080 \

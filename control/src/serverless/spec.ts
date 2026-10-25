@@ -31,7 +31,7 @@ import {
   SLS_PRESET_IDS,
   legacyVariant,
 } from "../enums";
-import { CONFIG_NAMES, MAX_WORKER_TOML_BYTES, workerConfigProblem } from "../worker-config";
+import { CONFIG_NAMES, cpuConfigProblem, MAX_WORKER_TOML_BYTES, workerConfigProblem } from "../worker-config";
 import { PRESET_OWNED, presetOwned, slsPreset } from "./presets";
 import { SLS_MAX_DISK_GB, slsHubDiskGb, slsHubPlan, slsR2DiskGb, slsTrees } from "./weights";
 import { missingTrees } from "../volumes";
@@ -192,6 +192,9 @@ export const EndpointSpecZ = z
     if (s.config && s.config_toml) add("config", "one of config / config_toml");
     // The images bake no config (one image, 2026-10-25): an endpoint without one would never boot.
     if (!s.config && !s.config_toml) add("config", s.preset ? "the preset's config is missing" : "a custom endpoint names its worker config: config (a configs/serve file) or config_toml");
+    // CPU workers (the default compute of a custom endpoint, as before the one image) run the fake engine only.
+    const cpuWhy = cpuConfigProblem(s);
+    if (cpuWhy) add("compute", cpuWhy);
     // An inline config works in both modes: the template's start (payloads.ts SLS_BOOT) decodes FV_WORKER_TOML_B64.
     const p = s.preset ? slsPreset(s.preset) : undefined;
     if (p) {

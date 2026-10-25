@@ -13,6 +13,7 @@ import { brevDiskIssues, brevNoStopWarnings, brevOutlook, isOtherPool, poolDph, 
 import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
 import { tunnelSettings } from "../tunnels";
 import { upsamplerIssue } from "../upsampler";
+import { poolConfigIssues } from "../worker-config";
 
 /**
  * Checks that need live data (the Runpod GPU catalog, 5-minute cache): a
@@ -137,6 +138,8 @@ export async function checkSpec(env: Env, doc: unknown, existing?: { id: string;
     if (extra) extra.forEach(add);
     else add(pathOf(ex.message));
   }
+  // A stored spec loads as it is (migrateSpec), so the configs a launch could not send are named here too.
+  for (const i of poolConfigIssues((doc as any)?.pools)) if (!issues.some((x) => x.path.join(".") === i.path.join("."))) add(i);
   const name = (doc as any)?.name;
   if (existing && name !== existing.name) add({ path: ["name"], message: `the name is fixed (${existing.name}); clone the cluster to use another name` });
   if (!existing && typeof name === "string" && name && !issues.some((i) => i.path[0] === "name")) {

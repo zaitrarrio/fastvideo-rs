@@ -2,7 +2,8 @@
 # Release channels and deployments of fv-serve (docs/serve/releases.md).
 #
 #   release.sh list [--verify]              the current release of every channel, digests per image
-#                                           (--verify: the channel tags in GHCR still match)
+#                                           (--verify: the channel tags in GHCR still match, and every
+#                                           image has a digest in the head; exits 1 otherwise)
 #   release.sh history [--channel C] [--limit N]
 #   release.sh deployed [--probe] [--json]  live fv-serve pods / endpoints: version (git sha),
 #                                           age, the channels naming their digest, drift vs the
@@ -11,7 +12,9 @@
 #                                           point :<channel> and :<image>-<channel> at that
 #                                           build (no rebuild), update the Runpod templates when
 #                                           <channel> is the templates' channel, record it in D1
-#   release.sh rollback [channel] [--to ID] re-promote the channel's previous release
+#   release.sh rollback [channel] [--to ID] re-promote the channel's previous release (refused when
+#                                           it lacks an image the channel has, e.g. one from before the
+#                                           one CUDA image, unless --allow-partial)
 #   release.sh reconcile [--dry-run] [--adopt] [--fix]
 #                                           match the account's pods / endpoints / templates to
 #                                           the deployments table: gone rows are marked deleted,
@@ -240,7 +243,7 @@ cmd_promote() {
 }
 
 cmd_rollback() {
-  local ch="${ARGS[0]:-${CHANNEL_OPT:-stable}}" cur target k ref
+  local ch="${ARGS[0]:-${CHANNEL_OPT:-stable}}" cur target k ref miss
   check_channel "$ch"
   if [[ "$MODE" == dispatch && "$DRY" == 0 ]]; then dispatch rollback "" "$ch"; return; fi
   need_d1
@@ -255,6 +258,16 @@ cmd_rollback() {
     [[ -n "$target" ]] || die "$ch has no earlier release to roll back to (history: release.sh history --channel $ch)"
   fi
   log "rollback $ch: release $(jq -r .id <<<"$cur") ($(short "$(jq -r .git_sha <<<"$cur")")) -> release $(jq -r .id <<<"$target") ($(short "$(jq -r .git_sha <<<"$target")"))"
+  # A release from before an image existed (e.g. before the one CUDA image, 2026-10-25: variant keys, no `cuda`) has
+  # no digest for it: rolling back would move the other tags and leave that image's :<key>-<channel> tag and
+  # templates on the current build. Refused unless --allow-partial, which names what stays.
+  miss="$(missing_keys "$(jq -c '.digests | fromjson' <<<"$target")" | xargs)"
+  if [[ -n "$miss" ]]; then
+    local stay="" k2
+    for k2 in $miss; do stay+=" :$(fv_key_channel_tags "$k2" "$ch" | cut -d' ' -f1)"; done
+    ((PARTIAL)) || die "release $(jq -r .id <<<"$target") has no image for: $miss; a rollback would leave${stay} (and its templates) on the current build (an older release predates those images: roll the deployments back instead, docs/serve/images.md; --allow-partial moves the rest)"
+    log "WARNING: release $(jq -r .id <<<"$target") has no image for $miss: ${stay# } and its templates stay on the current build"
+  fi
   # The recorded digests must still exist (GHCR retention).
   fv_ghcr_init || die "cannot read $FV_SERVE_REPO"
   for k in $(jq -r '.digests | fromjson | keys[]' <<<"$target"); do
@@ -268,7 +281,7 @@ cmd_rollback() {
 
 cmd_list() {
   need_d1
-  local heads k tag live mark row
+  local heads k tag live mark row problems=0
   heads="$(fv_release_heads)"
   [[ "$heads" != '[]' ]] || { echo "no releases recorded yet (release.sh promote <sha> stable)"; return 0; }
   ((VERIFY)) && fv_ghcr_init
@@ -281,11 +294,24 @@ cmd_list() {
       if ((VERIFY)); then
         tag="$(fv_key_channel_tags "$k" "$(jq -r .channel <<<"$row")" | cut -d' ' -f1)"
         live="$(fv_ghcr_digest "$tag" 2>/dev/null || echo missing)"
-        [[ "$live" == "$(jq -r --arg k "$k" '.digests | fromjson | .[$k] | split("@")[1]' <<<"$row")" ]] && mark="  :$tag ok" || mark="  :$tag DIFFERS ($live)"
+        if [[ "$live" == "$(jq -r --arg k "$k" '.digests | fromjson | .[$k] | split("@")[1]' <<<"$row")" ]]; then mark="  :$tag ok"
+        else mark="  :$tag DIFFERS ($live)"; problems=$((problems + 1))
+        fi
       fi
       printf '    %-9s %s%s\n' "$k" "$(jq -r --arg k "$k" '.digests | fromjson | .[$k]' <<<"$row")" "$mark"
     done
+    # An image the release has no digest for (a release from before it existed, or a partial one): its channel
+    # tag was not set by this release.
+    if ((VERIFY)); then
+      for k in $(missing_keys "$(jq -c '.digests | fromjson' <<<"$row")"); do
+        tag="$(fv_key_channel_tags "$k" "$(jq -r .channel <<<"$row")" | cut -d' ' -f1)"
+        live="$(fv_ghcr_digest "$tag" 2>/dev/null || echo missing)"
+        printf '    %-9s NOT IN RELEASE  :%s is %s\n' "$k" "$tag" "$live"
+        problems=$((problems + 1))
+      done
+    fi
   done < <(jq -c '.[]' <<<"$heads")
+  if ((VERIFY && problems)); then echo "verify: $problems image tag(s) do not match their channel's release"; return 1; fi
 }
 
 cmd_history() {

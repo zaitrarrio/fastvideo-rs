@@ -67,6 +67,26 @@ export function presetOwned(p: SlsPreset): Record<(typeof PRESET_OWNED)[number],
   return { compute: p.compute, config: p.config, config_toml: p.config_toml };
 }
 
+/**
+ * A spec naming a preset with the preset's owned fields (compute, config by name) as the preset has them now. A
+ * stored spec from before the one image may carry none (its preset's config was the variant image's baked default)
+ * or an inline snapshot of the config text; read through this, the stored spec and any update of it agree on what
+ * the preset owns, so scaling or editing an unrelated field never looks like a config change (specDiff), and an
+ * edited configs/serve file reaches the endpoint at its next template update, by name. A spec naming no (or an
+ * unknown) preset is returned as is.
+ */
+export function withPresetOwned<T extends Record<string, any>>(spec: T): T {
+  const p = slsPreset(spec.preset);
+  if (!p) return spec;
+  const out: Record<string, any> = { ...spec };
+  const own = presetOwned(p);
+  for (const k of PRESET_OWNED) {
+    delete out[k];
+    if (own[k] !== undefined) out[k] = own[k];
+  }
+  return out as T;
+}
+
 /** The preset a spec without one runs anyway (same compute and the same config text), or null (a custom spec). */
 export function inferPreset(spec: { compute: string; config?: string; config_toml?: string }): SlsPresetId | null {
   const mine = configOf(spec).text;
@@ -153,7 +173,7 @@ export function servingView(spec: SpecLike): { preset: string | null; preset_inf
  * reads as its compute (enums.ts legacyVariant).
  */
 export function mergeSpec(prevIn: Record<string, any>, patchIn: Record<string, any>): Record<string, any> {
-  const prev = legacyVariant({ ...prevIn });
+  const prev = withPresetOwned(legacyVariant({ ...prevIn }));
   const patch = legacyVariant({ ...patchIn });
   const base = { ...prev };
   if ("preset" in patch && patch.preset !== prev.preset) for (const k of PRESET_OWNED) delete base[k];

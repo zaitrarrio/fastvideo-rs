@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fv-boot GPU smoke (plan C2 gate; docs/adr/0014-fv-boot.md §8). Runs ON a GPU pod started from a serve image
-# (ghcr.io/zaitrarrio/fastvideo-rs-serve:<variant>-…, e.g. ltx or h3-turbo) with the EU weights volume mounted at
+# (ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-…) with the EU weights volume mounted at
 # /workspace, with a release `fv-boot` built on the build pod (and optionally a `fv-serve`) downloaded onto it. The
 # pod's own entrypoint must not be serving (start it with a command that fetches the binaries and runs this script).
 #
@@ -13,7 +13,8 @@
 # Env (inputs):
 #   FV_BOOT_BIN          the fv-boot binary (required; chmod +x is done here)
 #   FV_SMOKE_SERVE_BIN   a fv-serve to run instead of the image's (/opt/fastvideo-rs/bin/fv-serve)
-#   FV_SMOKE_CONFIG      the config (default: the image's FV_CONFIG)
+#   FV_SMOKE_CONFIG      the config, passed as --config (default: FV_WORKER_CONFIG, else /etc/fv/runpod-fake.toml, the
+#                        one config the CUDA image carries: a GPU smoke ships a configs/serve file and names it here)
 #   FV_SMOKE_SOURCE      FV_WEIGHTS_SOURCE (default volume; the EU volume holds H3 + LTX trees)
 #   FV_SMOKE_WEIGHTS     FV_WEIGHTS (default /workspace/weights)
 #   FV_SMOKE_GENERATE    1 (default): one tiny job through the native API; 0: boot only
@@ -28,7 +29,9 @@ set -uo pipefail
 : "${FV_BOOT_BIN:?FV_BOOT_BIN: the fv-boot binary}"
 OUT="${FV_SMOKE_OUT:-/tmp/fv-boot-smoke}"
 case "$OUT" in /workspace/*) echo "FV_SMOKE_OUT must not be on the weights volume" >&2; exit 2 ;; esac
-CFG="${FV_SMOKE_CONFIG:-${FV_CONFIG:-}}"
+# The serve images bake no config (one image, docs/adr/0011-deploy-section.md): FV_SMOKE_CONFIG, else the boot env's
+# FV_WORKER_CONFIG, else the one config the CUDA image carries (the fake engine). An old image's FV_CONFIG is not read.
+CFG="${FV_SMOKE_CONFIG:-${FV_WORKER_CONFIG:-/etc/fv/runpod-fake.toml}}"
 WAIT_S="${FV_SMOKE_WAIT_S:-900}"
 JOB_WAIT_S="${FV_SMOKE_JOB_WAIT_S:-600}"
 SINK_PORT=18765

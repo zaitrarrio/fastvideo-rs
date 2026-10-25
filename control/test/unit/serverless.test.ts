@@ -14,6 +14,7 @@ import {
   resolveImage,
   scaleEndpoint,
   serverlessTick,
+  specOf,
   updateEndpoint,
   type SlsRow,
 } from "../../src/serverless/ops";
@@ -35,7 +36,7 @@ import { checkEndpointSpec, defaultEndpointSpec, normalizeEndpointSpec, specDiff
 import { CUDA_VERSIONS } from "../../src/enums";
 import { d1 } from "./d1shim";
 import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
-import { SLS_PRESETS } from "../../src/serverless/presets";
+import { mergeSpec, SLS_PRESETS } from "../../src/serverless/presets";
 
 const IMG = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:" + "a".repeat(64);
 const KEY = "rpa_TESTKEY_0123456789";
@@ -379,6 +380,73 @@ describe("serverless operations", () => {
     expect(u.image).toBe(IMG2);
     expect(mock.m.templates.get(up.template_id!)!.imageName).toBe(IMG2);
     await expect(updateEndpoint(env, who, u, { ...JSON.parse(u.spec), network_volume: "bz0ofkfx45" })).rejects.toThrow(/network_volume: cannot change in place/);
+  });
+
+  it("a stored preset endpoint from before the one image: specOf carries the preset's config; a scale or a workers-only update never touches the template", async () => {
+    // The three shapes an older fv-control stored for a preset endpoint: the variant image's baked config (no config at
+    // all), a path in the variant image, or an inline snapshot of the config text.
+    const legacyShapes = (p: (typeof SLS_PRESETS)[number], n: any) => {
+      const base: any = { ...n };
+      delete base.config;
+      delete base.config_toml;
+      const variant = p.compute === "CPU" ? "cpu" : "h3-turbo";
+      return [
+        { ...base, variant },
+        { ...base, variant, config: `/etc/fv/${p.config ?? "runpod.toml"}` },
+        { ...base, variant, config_toml: "# an older snapshot of the preset's config\n[engine]\nbackend = \"cuda\"\n" },
+      ];
+    };
+    for (const p of SLS_PRESETS) {
+      mock = mockRunpod();
+      vi.stubGlobal("fetch", mock.fetchMock);
+      env = { DB: d1(), RUNPOD_API_KEY: KEY, BALANCE_FLOOR: "8" };
+      const name = `l-${p.id}`.slice(0, 31);
+      const row0 = await createEndpoint(env, who, { name, preset: p.id }, { image: IMG });
+      const n = specOf(row0);
+      for (const [i, stored] of legacyShapes(p, n).entries()) {
+        await env.DB.prepare("UPDATE serverless_endpoints SET spec = ?, status = 'active' WHERE id = ?").bind(JSON.stringify(stored), row0.id).run();
+        const row = await getRow(env, row0.id);
+        // What GET /:id, /serves and /outlook read: the preset's compute and config by name, never "no config".
+        const so = specOf(row);
+        expect([so.preset, so.compute, so.config, so.config_toml, (so as any).variant], `${p.id} #${i}`).toEqual([p.id, p.compute, p.config, undefined, undefined]);
+        const before = mock.m.calls.length;
+        const down = await scaleEndpoint(env, who, row, { workers_max: 0 });
+        expect(down.status, `${p.id} #${i}`).toBe("scaled-down");
+        expect(down.image, `${p.id} #${i}: the image never rolls on a scale`).toBe(row0.image);
+        const writes = mock.m.calls.slice(before).filter((c) => c.method !== "GET" && !c.url.includes("graphql")).map((c) => `${c.method} ${new URL(c.url).pathname}`);
+        expect(writes, `${p.id} #${i}`).toEqual([`PATCH /v1/endpoints/${row0.endpoint_id}`]);
+        // A whole-document update that changes only the worker counts (the PUT route merges over the stored spec) is a scale too.
+        await env.DB.prepare("UPDATE serverless_endpoints SET spec = ?, status = 'active' WHERE id = ?").bind(JSON.stringify(stored), row0.id).run();
+        const before2 = mock.m.calls.length;
+        const u = await updateEndpoint(env, who, await getRow(env, row0.id), mergeSpec(stored, { workers_max: 0 }));
+        expect(u.image, `${p.id} #${i}`).toBe(row0.image);
+        expect(mock.m.calls.slice(before2).some((c) => c.method !== "GET" && c.url.includes("/templates")), `${p.id} #${i}: no template write`).toBe(false);
+      }
+    }
+  });
+
+  it("presets own their config by name: after a configs/serve file changes, preset endpoints still scale and update", async () => {
+    const row = await createEndpoint(env, who, { name: "ref", preset: "h3-ref2v" }, { image: IMG });
+    const prev = specOf(row);
+    expect([prev.config, prev.config_toml]).toEqual(["runpod-h3-ref2v.toml", undefined]);
+    const file = "runpod-h3-ref2v.toml";
+    const orig = WORKER_CONFIGS[file]!;
+    try {
+      // The file was edited and fv-control redeployed (the generated table carries the new text).
+      WORKER_CONFIGS[file] = orig + "\n# edited after the endpoint was created\n";
+      expect(() => normalizeEndpointSpec(mergeSpec(prev, { workers_max: 0 }))).not.toThrow();
+      expect(() => normalizeEndpointSpec(mergeSpec(prev, { execution_timeout_s: 900 }))).not.toThrow();
+      const down = await scaleEndpoint(env, who, row, { workers_max: 0 });
+      expect(down.status).toBe("scaled-down");
+      // The next template update sends the edited text.
+      mock.m.balance = 30;
+      const IMG2 = IMG.replace(/a{64}/, "c".repeat(64));
+      const u = await updateEndpoint(env, who, down, { ...specOf(down), image: { ref: IMG2 } }, { image: IMG2 });
+      const tpl = mock.m.templates.get(u.template_id!)!;
+      expect(Buffer.from(tpl.env.FV_WORKER_TOML_B64, "base64").toString("utf8")).toBe(WORKER_CONFIGS[file]);
+    } finally {
+      WORKER_CONFIGS[file] = orig;
+    }
   });
 
   it("invoke: /runsync, timings, cold start flag, output scrubbed of secrets", async () => {

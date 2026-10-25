@@ -5,6 +5,7 @@
 // (a configs/serve file fv-control carries, cluster/worker-configs.ts). The name is resolved at launch, so a pool or
 // endpoint picks up an edited config on its next start.
 import { WORKER_CONFIGS } from "./cluster/worker-configs";
+import { HttpError } from "./util";
 
 /**
  * The largest FV_WORKER_TOML_B64 a launch sends (bytes of base64). Runpod documents no limit on one env value (only
@@ -42,11 +43,63 @@ export function workerConfigProblem(x: { config?: string; config_toml?: string }
   return null;
 }
 
-/** The config's text: the inline one, else the named one's. Throws when there is none (validation refuses that first). */
+/** The config's text: the inline one, else the named one's. Throws a 409 when there is none (validation refuses that
+ * first; a spec stored by an older fv-control can still carry one, which poolConfigIssues reports before a launch). */
 export function workerConfigText(x: { config?: string; config_toml?: string }): string {
   const why = workerConfigProblem(x);
-  if (why) throw new Error(why);
+  if (why) throw new HttpError(409, `config: ${why}`, { issues: [{ path: [x.config_toml ? "config_toml" : "config"], message: why }] });
   return x.config_toml || namedConfig(x.config)!;
+}
+
+/** The engine a config runs (`[engine] backend`, fv-serve's default `cuda` when unset), or null when there is no config
+ * fv-control can send. A small line reader: the worker configs keep `[engine]` a plain table. */
+export function workerConfigEngine(x: { config?: string; config_toml?: string }): string | null {
+  if (workerConfigProblem(x)) return null;
+  const text = x.config_toml || namedConfig(x.config)!;
+  let inEngine = false;
+  for (const raw of text.split("\n")) {
+    const l = raw.replace(/#.*$/, "").trim();
+    if (l.startsWith("[")) {
+      inEngine = l === "[engine]";
+      continue;
+    }
+    const m = inEngine ? /^backend\s*=\s*["']([^"']*)["']/.exec(l) : null;
+    if (m) return m[1]!;
+  }
+  return "cuda";
+}
+
+/** Why a CPU worker cannot run this config, or null: the CPU image has no CUDA, so CPU workers run the fake engine
+ * only (as before the one image, when CPU workers ran the cpu variant and its fake config). */
+export function cpuConfigProblem(x: { compute?: string; config?: string; config_toml?: string }): string | null {
+  if (x.compute !== "CPU") return null;
+  const e = workerConfigEngine(x);
+  return e && e !== "fake" ? `CPU workers run the fake engine (the CPU image has no CUDA); this config's engine is ${e}: compute GPU, or a fake-engine config (runpod-fake.toml)` : null;
+}
+
+type PoolLike = { config?: unknown; config_toml?: unknown; compute?: unknown; provider?: unknown };
+/** Why each pool of a (stored) cluster spec could not be launched as it is: a config fv-control cannot send (a path
+ * outside configs/serve such as /workspace/x.toml, a name it does not carry, an inline config over the env size
+ * guard: an older fv-control accepted those) or a CUDA config on CPU workers. A stored spec loads anyway (migrateSpec);
+ * these surface in checkSpec (the editor and the deploy plan) and refuse the ops that create pods (assertPoolConfigs). */
+export function poolConfigIssues(pools: unknown): { path: (string | number)[]; message: string }[] {
+  const out: { path: (string | number)[]; message: string }[] = [];
+  (Array.isArray(pools) ? pools : []).forEach((p: PoolLike, i) => {
+    if (!p || typeof p !== "object") return;
+    const x = { config: typeof p.config === "string" ? p.config : undefined, config_toml: typeof p.config_toml === "string" ? p.config_toml : undefined };
+    const why = workerConfigProblem(x);
+    if (why) out.push({ path: ["pools", i, x.config_toml ? "config_toml" : "config"], message: why });
+    else {
+      const cpu = p.provider && p.provider !== "runpod" ? null : cpuConfigProblem({ ...x, compute: typeof p.compute === "string" ? p.compute : undefined });
+      if (cpu) out.push({ path: ["pools", i, "compute"], message: cpu });
+    }
+  });
+  return out;
+}
+/** Refuses (409, typed issues) an op that would create pods from a stored spec whose pool configs cannot be sent. */
+export function assertPoolConfigs(spec: { pools?: unknown }): void {
+  const issues = poolConfigIssues(spec.pools);
+  if (issues.length) throw new HttpError(409, `${issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}. Edit the cluster spec first.`, { issues });
 }
 
 /** The env that carries a launch's config: FV_WORKER_TOML_B64. Throws as workerConfigText. */

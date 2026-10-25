@@ -192,6 +192,17 @@ impl RunpodApi {
         .await
     }
 
+    /// A template's `env` (REST v1 `GET /templates/{templateId}`; an absent `env` is empty).
+    pub async fn template_env(&self, id: &str) -> Result<Map<String, Value>, ProviderError> {
+        let v = self
+            .send(
+                self.http.get(format!("{}/templates/{id}", self.rest)),
+                "GET template",
+            )
+            .await?;
+        Ok(template_env_of(&v))
+    }
+
     pub async fn delete_pod(&self, id: &str) -> Result<(), ProviderError> {
         self.send(
             self.http.delete(format!("{}/pods/{id}", self.rest)),
@@ -200,6 +211,19 @@ impl RunpodApi {
         .await
         .map(|_| ())
     }
+}
+
+/// The `env` of a REST v1 template object, as strings (a non-string value is skipped).
+pub fn template_env_of(v: &Value) -> Map<String, Value> {
+    v.get("env")
+        .and_then(Value::as_object)
+        .map(|m| {
+            m.iter()
+                .filter(|(_, x)| x.is_string())
+                .map(|(k, x)| (k.clone(), x.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Endpoint settings from a REST v1 endpoint object.
@@ -581,8 +605,16 @@ impl RunpodPods {
         pool.pod.url_template.replace("{id}", id)
     }
 
-    /// Pod create payloads in preference order: every GPU type in every placement.
-    pub fn payloads(pool: &PoolConfig, name: &str) -> Vec<(String, Value)> {
+    /// Pod create payloads in preference order: every GPU type in every placement. `template_env` is the
+    /// template's own env: REST v1 `POST /pods` documents no rule for a body `env` next to a `templateId`
+    /// (the v2 create documents a per-key merge, body values winning), so a body that sends the worker
+    /// config carries the template's env too (the secret references, the image identity), with the config
+    /// on top: the same pod whichever rule v1 applies.
+    pub fn payloads(
+        pool: &PoolConfig,
+        name: &str,
+        template_env: &Map<String, Value>,
+    ) -> Vec<(String, Value)> {
         let mut v = Vec::new();
         for pl in &pool.pod.placements {
             for gpu in &pool.pod.gpu_types {
@@ -600,7 +632,12 @@ impl RunpodPods {
                 // The template's image bakes no worker config (ADR-0011): the pool's
                 // rides in the pod's env.
                 if !pool.pod.worker_toml_b64.is_empty() {
-                    body["env"] = json!({ "FV_WORKER_TOML_B64": pool.pod.worker_toml_b64 });
+                    let mut env = template_env.clone();
+                    env.insert(
+                        "FV_WORKER_TOML_B64".into(),
+                        Value::String(pool.pod.worker_toml_b64.clone()),
+                    );
+                    body["env"] = Value::Object(env);
                 }
                 v.push((format!("{gpu} in {}", pl.data_center), body));
             }
@@ -628,8 +665,23 @@ impl RunpodPods {
                 b.seq
             )
         };
+        // The template's env rides along with the worker config (see `payloads`); without it the pod
+        // could boot without the template's secret references, so a failed read creates nothing.
+        let template_env = if pool.pod.worker_toml_b64.is_empty() {
+            Map::new()
+        } else {
+            self.api
+                .template_env(&pool.pod.template_id)
+                .await
+                .map_err(|e| {
+                    ProviderError::Api(format!(
+                        "template {}: its env could not be read ({e}); no pod created",
+                        pool.pod.template_id
+                    ))
+                })?
+        };
         let mut last = None;
-        for (label, body) in Self::payloads(pool, &name) {
+        for (label, body) in Self::payloads(pool, &name, &template_env) {
             match self.api.create_pod(&body).await {
                 Ok(v) => {
                     let Some(id) = v.get("id").and_then(Value::as_str).map(str::to_owned) else {
@@ -897,7 +949,7 @@ mod tests {
             },
             ..PoolConfig::default()
         };
-        let p = RunpodPods::payloads(&pool, "fv-as-sfwan-1");
+        let p = RunpodPods::payloads(&pool, "fv-as-sfwan-1", &Map::new());
         let order: Vec<&str> = p.iter().map(|(l, _)| l.as_str()).collect();
         assert_eq!(
             order,
@@ -916,7 +968,23 @@ mod tests {
         assert!(b.get("env").is_none());
         let mut with = pool.clone();
         with.pod.worker_toml_b64 = "W3NlcnZlcl0K".into();
-        let b = &RunpodPods::payloads(&with, "fv-as-sfwan-2")[0].1;
+        // The template's env rides along (REST v1 documents no merge rule), the config on top.
+        let tpl = template_env_of(&json!({"env": {
+            "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+            "FV_WORKER_TOML_B64": "b2xk",
+            "N": 3
+        }}));
+        let b = &RunpodPods::payloads(&with, "fv-as-sfwan-2", &tpl)[0].1;
         assert_eq!(b["env"]["FV_WORKER_TOML_B64"], "W3NlcnZlcl0K");
+        assert_eq!(
+            b["env"]["FV_CF_ACCOUNT_ID"],
+            "{{ RUNPOD_SECRET_fv_cf_account_id }}"
+        );
+        assert!(b["env"].get("N").is_none());
+        // Without a config the template's env applies as it is (no body env).
+        assert!(RunpodPods::payloads(&pool, "x", &tpl)[0]
+            .1
+            .get("env")
+            .is_none());
     }
 }

@@ -335,7 +335,7 @@ await step("serverless presets: an h3-ref2v endpoint (queue and lb) carries the 
   assert.equal(cat.status, 200);
   const pr = cat.j.presets.find((p) => p.id === "h3-ref2v");
   assert.deepEqual(pr.serves.models.map((m) => m.id), ["h3-ref2v-turbo", "h3-ref2v-max"]);
-  assert.ok(pr.inline_config && pr.min_vram_gb === 80);
+  assert.ok(pr.config === "runpod-h3-ref2v.toml" && pr.min_vram_gb === 80, JSON.stringify(pr.config));
   assert.ok(cat.j.presets.some((p) => p.id === "cpu"));
   // The validator: field-level refusals, and what it serves (live in the form).
   const v5090 = await call("/api/v1/serverless/validate", { method: "POST", body: { spec: { name: "r2v-x", preset: "h3-ref2v", gpu_types: ["NVIDIA GeForce RTX 5090"] } }, headers: T() });
@@ -382,9 +382,9 @@ await step("serverless presets: an h3-ref2v endpoint (queue and lb) carries the 
   assert.equal((await call(`/api/v1/serverless/${q.j.endpoint.id}`, { method: "PUT", body: { spec: { gpu_types: ["NVIDIA GeForce RTX 5090"] } }, headers: T() })).status, 400);
   const sw = await call(`/api/v1/serverless/${q.j.endpoint.id}`, { method: "PUT", body: { spec: { preset: "h3-max" } }, headers: T() });
   assert.equal(sw.status, 200, JSON.stringify(sw.j));
-  // The new preset's config, inline in the template (the one image bakes none).
+  // The new preset's config by name, its text inline in the template (the one image bakes none).
   const maxToml = readFileSync(new URL("../../../configs/serve/runpod-h3-max.toml", import.meta.url), "utf8");
-  assert.equal(sw.j.endpoint.spec.config_toml, maxToml);
+  assert.equal(sw.j.endpoint.spec.config, "runpod-h3-max.toml");
   assert.equal(Buffer.from(tplOf(q.j.endpoint.template_id).env.FV_WORKER_TOML_B64, "base64").toString("utf8"), maxToml);
   // The CLI: the preset catalog.
   const { execFile } = await import("node:child_process");
@@ -394,7 +394,7 @@ await step("serverless presets: an h3-ref2v endpoint (queue and lb) carries the 
   const dir = mkdtempSync(`${tmpdir()}/fvc-cli-`);
   writeFileSync(`${dir}/token`, token, { mode: 0o600 });
   const cli = async (...args) => (await promisify(execFile)("bash", [new URL("../../../scripts/serve/fv-control.sh", import.meta.url).pathname, ...args], { env: { ...process.env, FV_CONTROL_URL: B, FV_CONTROL_TOKEN_FILE: `${dir}/token`, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1" } })).stdout;
-  assert.match(await cli("endpoint", "presets"), /^h3-ref2v\tGPU \+ inline config\t>= 80 GB\tweights: h3-base,h3-ref2va\n  serves: h3-ref2v-turbo \[ref2v\]/m);
+  assert.match(await cli("endpoint", "presets"), /^h3-ref2v\tGPU runpod-h3-ref2v\.toml\t>= 80 GB\tweights: h3-base,h3-ref2va\n  serves: h3-ref2v-turbo \[ref2v\]/m);
   assert.match(await cli("endpoint", "serves", "r2v-lb"), /"MiniMax-H3-Turbo"/);
   for (const e of [q.j.endpoint, lb.j.endpoint]) assert.equal((await call(`/api/v1/serverless/${e.id}`, { method: "DELETE", headers: T() })).status, 200);
 });
@@ -693,17 +693,17 @@ await step("templates and pool presets; a legacy gateway block migrates", async 
   assert.equal(r.status, 201, JSON.stringify(r.j));
   const s = r.j.cluster.spec;
   assert.deepEqual(s.pools.map((p) => p.id), ["ltx-family"]);
-  assert.match(s.pools[0].config_toml, /variant = "ltx25-distill-dense"/);
+  assert.equal(s.pools[0].config, "runpod-family-ltx.toml");
   assert.equal(s.gateway, undefined, "the retired gateway block is dropped");
   assert.equal(s.control_plane, "edge");
   assert.equal(s.auth, "keys");
   // A bare preset id fills in; a Plug recipe is refused.
   const ok = await call(`/api/v1/clusters/${r.j.cluster.id}/spec`, { method: "PUT", body: { spec: { ...s, pools: [...s.pools, { id: "longlive", count: 0 }] } }, headers: T() });
   assert.equal(ok.status, 200, JSON.stringify(ok.j));
-  // One image (2026-10-25): no variant; a GPU pool on the CUDA image, its preset's config inline.
+  // One image (2026-10-25): no variant; a GPU pool on the CUDA image, its preset's config by name (sent inline at boot).
   assert.equal(ok.j.cluster.spec.pools[1].variant, undefined);
   assert.equal(ok.j.cluster.spec.pools[1].compute, "GPU");
-  assert.match(ok.j.cluster.spec.pools[1].config_toml, /variant = "longlive/);
+  assert.equal(ok.j.cluster.spec.pools[1].config, "runpod-longlive.toml");
   const bad = await call(`/api/v1/clusters/${r.j.cluster.id}/spec`, { method: "PUT", body: { spec: { ...s, pools: [{ ...s.pools[0], models: [{ id: "x", family: "h3", recipe: "h3-plug-4step" }] }] } }, headers: T() });
   assert.equal(bad.status, 400);
   assert.match(bad.j.error, /not in the fv-serve catalog/);

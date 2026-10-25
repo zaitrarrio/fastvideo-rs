@@ -373,3 +373,25 @@ describe("Runpod errors made readable", () => {
       expect(() => normalizeEndpointSpec(spec)).toThrow(re);
   });
 });
+
+describe("CPU workers run the fake engine only (the CPU image has no CUDA)", () => {
+  const cudaToml = '[engine]\nbackend = "cuda"\n';
+  it("serverless: a custom endpoint defaults to CPU (as before the one image) and refuses a CUDA config; GPU or a fake config is fine", () => {
+    expect(() => normalizeEndpointSpec({ name: "x", config: "runpod-ltx.toml" })).toThrow(/compute: CPU workers run the fake engine.*engine is cuda/);
+    expect(() => normalizeEndpointSpec({ name: "x", compute: "CPU", config: "runpod-h3-max.toml" })).toThrow(/compute: CPU workers run the fake engine/);
+    expect(() => normalizeEndpointSpec({ name: "x", compute: "CPU", config_toml: cudaToml })).toThrow(/compute: CPU workers run the fake engine/);
+    expect(normalizeEndpointSpec({ name: "x", compute: "GPU", config: "runpod-ltx.toml" }).compute).toBe("GPU");
+    expect(normalizeEndpointSpec({ name: "x", config: "runpod-fake.toml" }).compute).toBe("CPU");
+    expect(normalizeEndpointSpec({ name: "x" }).config).toBe("runpod-fake.toml");
+  });
+  it("standalone: a CPU pod with a CUDA config is refused", () => {
+    expect(() => standaloneSpec({ name: "s", compute: "CPU", config: "runpod-ltx.toml", fake_models: ["fake-wan"] })).toThrow(/compute: CPU workers run the fake engine/);
+    expect(standaloneSpec({ name: "s", compute: "CPU", config: "runpod-fake.toml", fake_models: ["fake-wan"] }).spec.pools[0]!.compute).toBe("CPU");
+  });
+  it("cluster pools: a CPU pool with a CUDA config is refused", () => {
+    const pool = { id: "c", count: 1, compute: "CPU", cpu_flavors: ["cpu3c"], vcpu: 2, volume: false, fake_models: ["fake-wan"] };
+    expect(() => normalizeSpec({ name: "a", pools: [{ ...pool, config: "runpod-ltx.toml" }] })).toThrow(/pools\.0\.compute: CPU workers run the fake engine/);
+    expect(() => normalizeSpec({ name: "a", pools: [{ ...pool, config_toml: cudaToml }] })).toThrow(/pools\.0\.compute: CPU workers run the fake engine/);
+    expect(normalizeSpec({ name: "a", pools: [{ ...pool, config: "runpod-fake.toml" }] }).pools[0]!.compute).toBe("CPU");
+  });
+});

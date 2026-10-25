@@ -139,6 +139,26 @@ if [[ "$out" == *"no earlier release"* ]]; then ok "rollback twice: nothing earl
 out="$(rel rollback stable --local --to 2)"
 check "rollback --to: an explicit release" bash -c 'grep -q "stable = bbbbbbb (rollback)" <<<"$0"' "$out"
 
+# A release from before the one CUDA image (variant keys, no `cuda`): a rollback to it would leave :cuda-stable and the
+# fv-serve-cuda-* templates on the current build. Refused (naming what stays) unless --allow-partial.
+OLD="$(jq -nc --arg d "$REPO@$(jq -r .debug <<<"$DA")" --arg v "$REPO@$(jq -r .cuda <<<"$DA")" --arg c "$REPO@$(jq -r .cpu <<<"$DA")" '{debug: $d, "h3-turbo": $v, cpu: $c}')"
+sql "INSERT INTO releases (channel, git_sha, digests, action, promoted_at, promoted_by) VALUES ('stable', '0000000aaaa', '$OLD', 'promote', 1, 'test')" >/dev/null
+OLDID="$(sql "SELECT MAX(id) AS n FROM releases" | jq -r '.[0].n')"
+before="$(tag stable) $(tag cuda-stable) $(tag cpu-stable)"
+heads_before="$(sql "SELECT COUNT(*) AS n FROM releases" | jq -r '.[0].n')"
+out="$(bash "$SERVE/release.sh" rollback stable --local --to "$OLDID" 2>&1)"; rc=$?
+check "rollback across the one image: refused, naming the image that would stay" bash -c '[[ "$1" != 0 && "$0" == *"has no image for: cuda"* && "$0" == *":cuda-stable"* ]]' "$out" "$rc"
+check "rollback across the one image: nothing moved, nothing recorded" \
+  test "$(tag stable) $(tag cuda-stable) $(tag cpu-stable) $(sql "SELECT COUNT(*) AS n FROM releases" | jq -r '.[0].n')" = "$before $heads_before"
+out="$(bash "$SERVE/release.sh" rollback stable --local --to "$OLDID" --allow-partial 2>&1)"
+check "rollback --allow-partial: the rest moves, :cuda-stable stays and is named" \
+  bash -c '[[ "$0" == *"cuda-stable and its templates stay"* ]] && [[ "$1" == "$2" ]]' "$out" "$(tag cuda-stable)" "$(jq -r .cuda <<<"$DB")"
+out="$(rel list --verify)"; rc=$?
+check "list --verify: an image absent from the channel head is flagged, and the check fails" \
+  bash -c '[[ "$1" != 0 ]] && grep -q "^    cuda  *NOT IN RELEASE  :cuda-stable is " <<<"$0"' "$out" "$rc"
+# Back to a full release for the checks below.
+rel rollback stable --local --to 2 >/dev/null
+
 # --- CI record -----------------------------------------------------------------
 printf 'cuda\t%s\t1000\ncpu\t%s\t300\n' "$REPO@$(jq -r .cuda <<<"$DA")" "$REPO@$(jq -r .cpu <<<"$DA")" >"$T/images.tsv"
 out="$(rel record-build latest "$A" "$T/images.tsv" "$REPO@$(jq -r .debug <<<"$DA")")"

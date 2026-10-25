@@ -34,6 +34,9 @@ on:
       - "scripts/gpu/fv-lab-retired.sh"
       - "scripts/gpu/tests/fv-lab-route.test.sh"
       - "scripts/gpu/runpod.sh"
+      - "scripts/gpu/fv-boot-smoke-pod.sh"
+      - "scripts/serve/e2e/segments-pod.sh"
+      - "scripts/serve/tests/no-baked-config.test.sh"
       - "lab/tiers.toml"
       - "crates/fastvideo-lab/fixtures/**"
       - "scripts/gpu/runpod-cuda.sh"
@@ -75,6 +78,9 @@ on:
       - "scripts/gpu/fv-lab-retired.sh"
       - "scripts/gpu/tests/fv-lab-route.test.sh"
       - "scripts/gpu/runpod.sh"
+      - "scripts/gpu/fv-boot-smoke-pod.sh"
+      - "scripts/serve/e2e/segments-pod.sh"
+      - "scripts/serve/tests/no-baked-config.test.sh"
       - "lab/tiers.toml"
       - "crates/fastvideo-lab/fixtures/**"
       - "scripts/gpu/runpod-cuda.sh"
@@ -132,3 +138,6 @@ jobs:
       - name: runpod-http.sh routes the retired families to fv-lab, refusing what fv-lab would not honour (ADR-0019 §10)
         working-directory: .
         run: bash scripts/gpu/tests/fv-lab-route.test.sh
+      - name: the pod scripts send a config the serve images can boot (one image, ADR-0011)
+        working-directory: .
+        run: bash scripts/serve/tests/no-baked-config.test.sh

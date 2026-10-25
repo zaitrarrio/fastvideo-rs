@@ -157,62 +157,106 @@ serverless specs saved with a `variant` still load: the field is dropped,
 `cpu` becomes `compute = "CPU"`, and a pool or spec with no config takes
 the config its variant image used to bake (`enums.ts` `legacyVariant`,
 `LEGACY_VARIANT_CONFIGS`; tests in `payloads.test.ts` and
-`serverless.test.ts`).
+`serverless.test.ts`). A preset owns its config **by name** (`config =
+"runpod.toml"`, its text read at each launch), so an edited
+`configs/serve` file reaches the next launch and never makes a stored
+preset spec invalid; a stored serverless spec naming a preset reads with the
+preset's compute and config, whatever an older fv-control stored (none, a
+path in a variant image, an inline snapshot). A scale (or an update that
+changes only the worker counts) keeps the stored spec and never touches the
+template or the image. CPU workers run the fake engine only: a CPU pool,
+standalone pod or serverless endpoint whose config's `[engine] backend` is
+not `fake` is refused (a custom serverless endpoint still defaults to CPU, as
+before, so a CUDA config there needs `compute: GPU`). A stored cluster spec
+whose pool config cannot be sent (a path outside `configs/serve`, an inline
+config over 12 KiB, a CUDA config on CPU) loads, is named by the editor's
+check, and up / scale / roll / start refuse it with a 409 naming the field.
 
 ### One image: the live steps
 
 The change ships as code; the live resources move only when the owner runs
-these, in order (none of them was run by the change itself):
+these, in order (none of them was run by the change itself).
 
-1. **Merge and build.** The push to main runs `serve-image.yml`, which builds
-   and pushes `:cuda-sha-<sha>`, `:cuda`, `:cuda-latest` and the same for
-   `cpu` (plus the debug image), and records the `latest` release with the
-   keys `debug cuda cpu`. The old variant tags (`:h3-turbo-stable`, …) stay
-   where they are; nothing moves them again.
-2. **Promote.** `scripts/serve/release.sh promote <sha> stable`. It creates
+**What the old fv-control resolves, and the window.** The deployed (old)
+fv-control resolves a pool's or endpoint's image as `<variant>-<channel>`:
+`h3-turbo-stable`, `ltx-latest`, …, and `cpu-<channel>` for CPU workers.
+The merge-time CI build moves `:cpu-latest` / `:cpu` (and `:latest`, the
+debug image), never a CUDA variant tag; the promotion (step 4) moves
+`:cpu-stable`. The new CPU image bakes no config, and the old fv-control
+creates CPU **serverless** endpoints without one (its CPU cluster pools and
+standalone pods send theirs: `config_toml` inline, or `FV_WORKER_CONFIG` of
+the fake config, which the image carries). So from the merge build until the
+new fv-control is deployed, a CPU serverless endpoint **created or updated**
+on channel `latest` would refuse to boot; from the promotion, the same on
+`stable`. Endpoints and pods already running pin a digest and are not
+affected. Hence: deploy fv-control right after the merge, before the
+promotion, and create or update no CPU serverless endpoint in between.
+
+1. **Merge and build.** The push to main runs `serve-image.yml`, which pushes
+   `:cuda-sha-<sha>`, `:cuda`, `:cuda-latest`, `:cpu-sha-<sha>`, `:cpu`,
+   `:cpu-latest` and the debug image's `:sha-<sha>` / `:latest`, and records
+   the `latest` release with the keys `debug cuda cpu`. The old CUDA variant
+   tags (`:h3-turbo-stable`, `:ltx-latest`, …) stay where they are; nothing
+   moves them again. The templates move only if the repository variable
+   `FV_TEMPLATE_CHANNEL` is `latest` (default: `stable`, so they do not);
+   check it before merging.
+2. **Deploy fv-control** (`control/`, wrangler deploy) from that main, as
+   soon as the build is green. From then on every cluster, serverless
+   endpoint and standalone launch resolves `:cuda-<channel>` /
+   `:cpu-<channel>` and sends its config inline. Until the promotion,
+   `:cuda-stable` does not exist and a `stable` launch falls back to
+   `:cuda-latest` (`ghcr.ts`, as before the first promotion of any image).
+   Running pods and endpoints keep their old images and configs until
+   relaunched or rolled.
+3. **Verify on something small first**: a CPU cluster (`tiny-cpu`), then
+   one GPU cluster pool and one serverless endpoint (both on `latest`);
+   check `/health` reports the new image and the expected served models.
+   Optionally a hand smoke on one GPU pod:
+   `FV_SERVE_CONFIG=runpod.toml scripts/serve/runpod-pod.sh up` and a job,
+   then `down` (a few cents).
+4. **Promote.** `scripts/serve/release.sh promote <sha> stable`. It creates
    `:cuda-stable` / `:cpu-stable` and, because the templates follow
    `stable`, runs `runpod-templates.sh sync` for `cuda` and `cpu`: this
    **creates** `fv-serve-cuda-sls` and `fv-serve-cuda-pod` and moves
-   `fv-serve-cpu-pod` to the new CPU image. Check `release.sh list --verify`.
+   `fv-serve-cpu-pod` to the new CPU image. `release.sh list --verify` must
+   pass (it fails when a channel head lacks one of `debug cuda cpu`).
    `fv-serve-cpu-pod` and `:cpu-stable` now name an image with no baked
-   config: anything that starts them must send one (the deployed fv-control's
-   CPU pools already send theirs inline, `FV_WORKER_TOML_B64`; a hand-started
-   pod needs `FV_WORKER_CONFIG=/etc/fv/runpod-fake.toml` or `--config`).
-3. **Smoke the image by hand on one GPU pod** (optional, costs a few cents):
-   `FV_SERVE_CONFIG=runpod.toml scripts/serve/runpod-pod.sh up` and a job,
-   then `down`.
-4. **Deploy fv-control** (`control/`, wrangler deploy). From then on every
-   cluster, serverless endpoint and standalone launch resolves `:cuda-<channel>`
-   / `:cpu-<channel>` and sends its config inline. Running pods and
-   endpoints keep their old images and configs until relaunched or rolled.
-5. **Verify on something small first**: a CPU cluster (`tiny-cpu`), then
-   one GPU cluster pool and one serverless endpoint; check `/health` reports
-   the new image and the expected served models.
-6. **Roll what is running.** Existing clusters: roll each to its channel
+   config: a hand-started pod needs `FV_WORKER_CONFIG=/etc/fv/runpod-fake.toml`
+   or `--config`.
+5. **Roll what is running.** Existing clusters: roll each to its channel
    (Releases page, or the cluster's roll action); a stored spec with
-   `variant` loads through the read-compat mapping. Existing serverless
-   endpoints: update or relaunch each from fv-control; a template edit alone
-   no longer changes what an endpoint serves.
-7. **Autoscaler.** Put the id of `fv-serve-cuda-pod`
+   `variant` loads through the read-compat mapping, and one whose pool
+   config the new fv-control cannot send (a path outside `configs/serve`, an
+   inline config over 12 KiB) is named by the editor's check and refused by
+   up / scale / roll (409) until edited. Existing serverless endpoints: a
+   scale never touches their template or image; update or relaunch each
+   from fv-control to move it to the new image (a template edit alone no
+   longer changes what an endpoint serves).
+6. **Autoscaler.** Put the id of `fv-serve-cuda-pod`
    (`scripts/serve/runpod-templates.sh id cuda pod`) in `deploy/deploy.toml`
    `sfwan-live` `template_id` (replacing `REPLACE_FV_SERVE_CUDA_POD_TEMPLATE_ID`)
-   and run `node control/gen-configs.mjs`. Before leaving `dry_run`, start
-   one pod from that template with an `env` of only `FV_WORKER_TOML_B64` and
-   check the template's own env (the `{{ RUNPOD_SECRET_fv_* }}` references)
-   is still there: whether Runpod merges a pod's env with its template's or
-   replaces it is UNVERIFIED.
-8. **Retire the old resources** only after 4-7 hold for a while: the
+   and run `node control/gen-configs.mjs`. The autoscaler reads the
+   template's env (`GET /templates/{id}`) and sends it with the worker config
+   on top, because REST v1 `POST /pods` documents no rule for a body `env`
+   next to a `templateId` (the v2 create documents a per-key merge, body
+   values winning). Before leaving `dry_run`, start one pod through it and
+   check its env has both the `{{ RUNPOD_SECRET_fv_* }}` references and
+   `FV_WORKER_TOML_B64`.
+7. **Retire the old resources** only after 2-6 hold for a while: the
    `fv-serve-<variant>-sls` / `-pod` templates of the six CUDA variants (no
    code names them any more; `runpod-templates.sh list` shows them). Leave
    the old GHCR tags: they are immutable history and what the previous
    fv-control deployment boots.
 
-**Rollback.** Before step 4, nothing changed for running workloads. After
-it, roll fv-control back to the previous deployment: it boots the old
-variant tags, which still exist. `release.sh rollback` cannot cross this
-change (an older release has no `cuda` / `cpu` digests; it refuses unless
-`--allow-partial`, which then moves only the debug image). From here on a
-rollback or pin is per image, no longer per variant.
+**Rollback.** Before step 2, only CPU serverless creates on `latest` are
+affected (above). After it, roll fv-control back to the previous
+deployment: it boots the old CUDA variant tags, which still exist; its CPU
+serverless endpoints need a `:cpu-<channel>` from before the change
+(`release.sh promote <old sha> latest --allow-partial` moves `:cpu-latest`
+back). `release.sh rollback` cannot cross this change: an older release has
+no `cuda` digest, so it refuses and names the tags that would stay, unless
+`--allow-partial`. From here on a rollback or pin is per image, no longer per
+variant.
 
 ## Prebuilt binaries (compile on the build pod, assemble on GitHub)
 
@@ -319,6 +363,12 @@ Deploy scripts boot what the templates name:
   `fv-serve-cuda-pod`, with the config in its env the same way.
 - Without templates (no API key, not yet synced) the scripts fall back to the
   GHCR tag `:cuda`.
+- Both start the image's entrypoint, fv-boot, with the config in the env and
+  no `--config` argument, so they need an image with fv-boot (plan C2,
+  #159, 2026-10-24, and later). A hand-passed `FV_SERVE_IMAGE` / `[image]`
+  from before it does not serve the config sent (its `fv-entry.sh` reads only
+  the baked `FV_CONFIG`, not `FV_WORKER_TOML_B64` / `FV_WORKER_CONFIG`); use
+  an older checkout of the scripts for such an image.
 
 ### Required GitHub secrets
 

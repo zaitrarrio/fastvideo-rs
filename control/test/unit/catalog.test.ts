@@ -5,7 +5,7 @@ import CATALOG from "../../src/cluster/catalog.json";
 import { defaultSpec, presetPool } from "../../src/cluster/spec";
 import { b64, randomBytes } from "../../src/crypto";
 import { readDoc, saveDoc } from "../../src/docs";
-import { envKeyOptions } from "../../src/dynamic";
+import { envKeyOptions, launchableShas } from "../../src/dynamic";
 import type { Env } from "../../src/env";
 import { poolScopeId, resolvePlain, resolveView, setVar } from "../../src/envvars";
 import { d1 } from "./d1shim";
@@ -85,5 +85,12 @@ describe("pool env scope", () => {
     expect(await readDoc(env, "env", "pool:c_1:ltx-pro")).toEqual({ FASTVIDEO_ATTN_SAGE: { value: "0", secret: false } });
     await expect(saveDoc(env, "env", "pool:c_1:nope", {}, { version: 0, actor: "t" })).rejects.toMatchObject({ status: 404 });
     await expect(saveDoc(env, "env", "pool:c_1:ltx-pro", { FV_INTERNAL_TOKEN: { value: "x", secret: false } }, { version: 1, actor: "t" })).rejects.toThrow(/set by the controller/);
+  });
+});
+
+describe("launchable image shas", () => {
+  it("only commits with the one CUDA image (cuda-sha-*): builds from before it (variant tags, an old cpu-sha) are not offered", () => {
+    const tags = ["latest", "h3-turbo-sha-1111111", "cpu-sha-1111111", "sha-1111111", "cuda-sha-2222222", "cpu-sha-2222222", "cuda-latest", "cuda-sha-3333333", "ltx-sha-4444444"];
+    expect(launchableShas(tags)).toEqual(["3333333", "2222222"]);
   });
 });

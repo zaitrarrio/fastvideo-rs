@@ -19,6 +19,7 @@ import { mustVariant } from "../../src/families";
 import { configModelRefs } from "../../src/presets";
 import { OUTPUTS } from "../../gen-configs.mjs";
 import { WORKER_CONFIGS } from "../../src/cluster/worker-configs";
+import { DEPLOY_FAMILY_PRESETS, DEPLOY_PRESETS } from "../../src/deploy-gen";
 
 const repo = new URL("../../../", import.meta.url).pathname;
 
@@ -125,12 +126,12 @@ describe("spec", () => {
     expect(normalizeSpec({ name: "a" }).regions).toEqual(["eu"]);
     const t = normalizeSpec({ name: "tiny", template: "tiny-cpu" });
     expect(t.pools[0]!.compute).toBe("CPU");
-    expect(normalizeSpec({ name: "a", pools: [{ id: "wan", count: 2 }] }).pools[0]).toMatchObject({ id: "wan", compute: "GPU", count: 2, config_toml: WORKER_CONFIGS["runpod-wan5b.toml"] });
+    expect(normalizeSpec({ name: "a", pools: [{ id: "wan", count: 2 }] }).pools[0]).toMatchObject({ id: "wan", compute: "GPU", count: 2, config: "runpod-wan5b.toml" });
     expect(s.control_plane).toBe("edge");
     expect(s.auth).toBe("keys");
     expect("variant" in t.pools[0]!).toBe(false);
     // Every standard pool sends its config (the one image bakes none).
-    for (const p of s.pools) expect(p.config_toml, p.id).toBeTruthy();
+    for (const p of s.pools) expect(WORKER_CONFIGS[p.config!], p.id).toBeTruthy();
     // A config the images used to carry but fv-control does not know, or none at all: refused before any pod.
     expect(() => normalizeSpec({ name: "a", pools: [{ id: "x", compute: "GPU", count: 1, config: "/etc/fv/nope.toml", models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }] })).toThrow(/pools\.0\.config: not a worker config fv-control carries/);
     expect(() => normalizeSpec({ name: "a", pools: [{ id: "x", compute: "GPU", count: 1, models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }] })).toThrow(/config or config_toml is required/);
@@ -188,10 +189,8 @@ describe("spec", () => {
   });
 });
 
-// The inline config file of each preset (by its content's [gateway] pool line).
-const WORKER_CONFIG_OF: Record<string, string> = Object.fromEntries(
-  POOL_PRESETS.filter((p) => p.pool.config_toml).map((p) => [p.id, Object.entries(WORKER_CONFIGS).find(([, v]) => v === p.pool.config_toml)![0]]),
-);
+// The config file of each preset, from deploy/deploy.toml (the generated tables).
+const WORKER_CONFIG_OF: Record<string, string> = Object.fromEntries([...DEPLOY_PRESETS, ...DEPLOY_FAMILY_PRESETS].map((p) => [p.id, p.config]));
 describe("templates and pool presets", () => {
   it("every template is a valid spec; the presets fill a bare pool id", () => {
     for (const k of Object.keys(TEMPLATES)) {
@@ -200,9 +199,9 @@ describe("templates and pool presets", () => {
     }
     const s = normalizeSpec({ name: "a", pools: [{ id: "ltx-pro", count: 2 }, { id: "longlive" }] });
     expect(s.pools[0]).toMatchObject({ id: "ltx-pro", compute: "GPU", count: 2, models: [{ id: "ltx25-distill-dense", family: "ltx2", recipe: "ltx-pro" }] });
-    expect(s.pools[0]!.config_toml).toMatch(/^variant = "ltx25-distill-dense"$/m);
+    expect(WORKER_CONFIGS[s.pools[0]!.config!]).toMatch(/^variant = "ltx25-distill-dense"$/m);
     expect(s.pools[1]).toMatchObject({ id: "longlive", compute: "GPU", count: 1 });
-    // A pool's own config wins over the preset's inline one.
+    // A pool's own config wins over the preset's.
     const own = normalizeSpec({ name: "b", pools: [{ id: "ltx-pro", config: "/etc/fv/runpod-ltx-pro.toml" }] }).pools[0]!;
     expect(own.config).toBe("/etc/fv/runpod-ltx-pro.toml");
     expect(own.config_toml).toBeUndefined();
@@ -215,8 +214,9 @@ describe("templates and pool presets", () => {
       expect("variant" in p, pr.id).toBe(false);
       expect(p.compute, pr.id).toBe("GPU");
       expect(p.id).toMatch(/^[a-z][a-z0-9-]{0,30}$/);
-      const toml = p.config_toml!;
-      expect(WORKER_CONFIG_OF[pr.id], pr.id).toBeTruthy();
+      expect(p.config_toml, pr.id).toBeUndefined();
+      const toml = WORKER_CONFIGS[p.config!]!;
+      expect(WORKER_CONFIG_OF[pr.id], pr.id).toBe(p.config);
       expect(toml, pr.id).toBe(readFileSync(join(repo, "configs/serve", WORKER_CONFIG_OF[pr.id]!), "utf8"));
       // The worker config names variants (plan A3); the preset's models are the same ids, families and variants.
       const cfg = configModelRefs(toml);

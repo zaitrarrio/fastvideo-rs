@@ -333,11 +333,20 @@ running endpoint serves until it is relaunched.
 - **(4) Stored specs** naming a `variant` load: the field is dropped, `cpu`
   becomes `compute = "CPU"`, and a spec without a config takes the config
   its variant image baked (`enums.ts` `legacyVariant`); tested for cluster,
-  standalone and serverless specs.
+  standalone and serverless specs. Presets own their config by name (read
+  at launch), a stored preset spec reads with the preset's current compute
+  and config (`withPresetOwned`), and a scale never re-validates the stored
+  spec or touches the template / image (`scaledSpec`). A stored cluster
+  pool whose config cannot be sent loads, is reported by `checkSpec` and is
+  refused (409) by the ops that create pods (`poolConfigIssues`). CPU
+  workers take fake-engine configs only (`cpuConfigProblem`).
 - **(5) The CPU image stays separate** (`cpu`, its own build, no CUDA).
 - **(6) The CUDA image carries `runpod-fake.toml`**, checked by
   `gen-configs.mjs --check` and used by the smoke check.
-- **(7) Autoscaler.** `sfwan-live` names the template placeholder
+- **(7) Autoscaler.** The pod create sends the template's env (read with
+  REST v1 `GET /templates/{id}`) with the worker config on top: v1 `POST
+  /pods` documents no rule for a body `env` beside `templateId` (the v2
+  create documents a per-key merge). `sfwan-live` names the template placeholder
   `REPLACE_FV_SERVE_CUDA_POD_TEMPLATE_ID` and `worker_config =
   "runpod-sfwan.toml"`; `fastvideo-autoscale` resolves the config at start
   (`--serve-configs`, default `<config dir>/serve`) and refuses a pod pool
@@ -348,8 +357,10 @@ running endpoint serves until it is relaunched.
   distinction; `image-configs.ts`; five GHCR tag families going forward.
 
 **Live steps.** No live resource moved with the change. The owner's
-ordered steps (build, promote, smoke, deploy fv-control, verify, roll,
-re-point the autoscaler, retire the old templates) and the rollback are in
+ordered steps (merge and build, deploy fv-control before the promotion,
+verify, promote, roll, re-point the autoscaler, retire the old templates),
+the window in which the old fv-control could create a CPU serverless
+endpoint the new CPU image refuses, and the rollback are in
 `docs/serve/images.md` "One image: the live steps".
 
 ## Consequences

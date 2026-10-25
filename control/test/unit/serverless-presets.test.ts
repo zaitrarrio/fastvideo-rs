@@ -43,13 +43,14 @@ describe("presets: one catalog", () => {
   });
   it("every preset sends its config inline: the standard ones too (the one image bakes none)", () => {
     const max = normalizeEndpointSpec({ name: "m", preset: "h3-max" });
-    expect(max.config).toBeUndefined();
-    expect(max.config_toml).toBe(WORKER_CONFIGS["runpod-h3-max.toml"]);
+    // Owned by name, sent as its text (the one image bakes none).
+    expect(max.config).toBe("runpod-h3-max.toml");
+    expect(max.config_toml).toBeUndefined();
     expect(v2TemplateBoot(max).dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
     expect(templateCreatePayload(max, IMG, "t").dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
     expect(b64(templateCreatePayload(max, IMG, "t").env.FV_WORKER_TOML_B64!)).toBe(WORKER_CONFIGS["runpod-h3-max.toml"]);
     const r = normalizeEndpointSpec({ name: "r", preset: "h3-ref2v" });
-    expect(r).toMatchObject({ compute: "GPU", config_toml: WORKER_CONFIGS["runpod-h3-ref2v.toml"], execution_timeout_s: 3600 });
+    expect(r).toMatchObject({ compute: "GPU", config: "runpod-h3-ref2v.toml", execution_timeout_s: 3600 });
     expect(normalizeEndpointSpec({ name: "a", preset: "ltx-a2v" }).container_disk_gb).toBe(60);
   });
   it("the preset owns compute and config: repeating them is fine, changing them is refused; an old variant is ignored", () => {
@@ -146,10 +147,11 @@ describe("validation before create", () => {
   it("an update merges: a preset switch drops the old preset's config; a variant or config without a preset is custom", () => {
     const prev = normalizeEndpointSpec({ name: "r", preset: "h3-ref2v" });
     const sw = normalizeEndpointSpec(mergeSpec(prev, { preset: "h3-max" }));
-    expect(sw).toMatchObject({ preset: "h3-max", compute: "GPU", config_toml: WORKER_CONFIGS["runpod-h3-max.toml"] });
+    expect(sw).toMatchObject({ preset: "h3-max", compute: "GPU", config: "runpod-h3-max.toml" });
+    expect(sw.config_toml).toBeUndefined();
     const custom = mergeSpec(prev, { config_toml: "[engine]\nbackend = \"fake\"\n" });
     expect(custom.preset).toBeUndefined();
-    expect(mergeSpec(prev, { workers_max: 2 })).toMatchObject({ preset: "h3-ref2v", config_toml: prev.config_toml, workers_max: 2 });
+    expect(mergeSpec(prev, { workers_max: 2 })).toMatchObject({ preset: "h3-ref2v", config: prev.config, workers_max: 2 });
     expect(mergeSpec(prev, { preset: null }).preset).toBeUndefined();
     // A stored spec from before the one image (a variant, no config): the merge reads it as its compute and config.
     const old = mergeSpec({ name: "o", mode: "queue", variant: "ltx", compute: "GPU", image: { channel: "stable" } }, { workers_max: 2 });
@@ -172,7 +174,7 @@ describe("what an endpoint serves", () => {
     ]);
     // The variants' public names (families/h3.toml), as fv-serve maps them (CapabilityTable::public_aliases).
     expect(v.serves.aliases).toEqual(expect.arrayContaining([{ name: "MiniMax-H3-Turbo", model: "h3-ref2v-turbo", via: "manifest" }, { name: "MiniMax-H3-Max", model: "h3-ref2v-max", via: "manifest" }]));
-    expect(v.serves).toMatchObject({ swap: true, engine: "cuda", source: { kind: "inline" }, weights: ["h3-base", "h3-ref2va"] });
+    expect(v.serves).toMatchObject({ swap: true, engine: "cuda", source: { kind: "named" }, weights: ["h3-base", "h3-ref2va"] });
     expect(v.serves.protocols).toEqual(expect.arrayContaining(["native", "minimax", "fal", "openai_videos"]));
     expect(v.serves.protocols).not.toContain("ltx");
     expect(v.serves.fal_apps).toContain("minimax/h3-turbo");

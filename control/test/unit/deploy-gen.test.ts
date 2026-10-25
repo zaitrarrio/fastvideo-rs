@@ -52,8 +52,10 @@ describe("deploy/deploy.toml", () => {
       expect("variant" in p.pool, p.id).toBe(false);
       expect(p.pool.compute, p.id).toBe("GPU");
       expect(p.pool.models, p.id).toEqual(d.models.map(({ id, family, recipe }) => ({ id, family, recipe })));
-      expect(p.pool.config, p.id).toBeUndefined();
-      expect(p.pool.config_toml, p.id).toBe(WORKER_CONFIGS[d.config]);
+      // Owned by name (sent as its text at launch, so an edited config reaches the next launch).
+      expect(p.pool.config, p.id).toBe(d.config);
+      expect(p.pool.config_toml, p.id).toBeUndefined();
+      expect(WORKER_CONFIGS[d.config], p.id).toBeTruthy();
     }
     // Every Runpod worker config, the presets' first: fv-control sends any of them at boot.
     expect(Object.keys(WORKER_CONFIGS)).toEqual(workerConfigNames(dep));
