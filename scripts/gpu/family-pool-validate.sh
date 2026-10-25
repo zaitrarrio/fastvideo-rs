@@ -10,6 +10,7 @@
 #   family-pool-validate.sh status <pod>    status.tsv, jobs.tsv, the log tail, DONE
 #   family-pool-validate.sh fetch <pod> DIR the results (logs, job JSON, clips) into DIR
 #   family-pool-validate.sh down <pod>      delete the pod, check it is gone, drop the staged bundle
+#   family-pool-validate.sh print-start     the pod's start command (what up sends)
 #
 # The pod: the h3-max serve image (FV_SERVE_IMAGE; it carries python3, curl and the CUDA libraries fv-serve links),
 # RTX PRO 6000 Server or Workstation Edition, secure cloud, any data centre with stock; the trees come from the R2
@@ -42,8 +43,18 @@ rest() {
 gql() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$RUNPOD_API_KEY") -H 'content-type: application/json' "$GQL" --data-binary @-; }
 balance() { gql <<<'{"query":"{ myself { clientBalance } }"}' | jq -r '.data.myself.clientBalance // empty'; }
 
+# The pod's start command, as `up` sends it (`print-start` prints it): the
+# self-delete library first (fv_self_delete, docs/adr/0023-lab-report-and-ci-bridge.md §4),
+# then the run; 20 min after DONE the pod deletes itself, retried each minute.
+start_cmd() {
+  printf '%s\n' "$(<"$HERE/lib/self-delete.sh")"
+  printf '%s' 'mkdir -p /opt/fv /srv && cd /opt/fv && curl -fsSL --retry 5 -o b.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  b.tgz" | sha256sum -c - >/srv/log.txt 2>&1 && tar xzf b.tgz \
+&& (cd /srv && python3 -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/family-pool-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
+sleep 1200; if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then until fv_self_delete /tmp/self-delete.log; do sleep 60; done; fi; sleep infinity'
+}
 cmd="${1:-}"
 case "$cmd" in
+  print-start) start_cmd ;;
   up)
     bin="${2:?release fv-serve}"
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
@@ -77,11 +88,7 @@ case "$cmd" in
     log "balance \$$bal; bundle ${sha:0:12} ($(du -h "$tmp/bundle.tgz" | cut -f1)) staged"
     # The pod deletes itself 20 min after DONE (Runpod injects a pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the local
     # backstop deletes it regardless.
-    start='mkdir -p /opt/fv /srv && cd /opt/fv && curl -fsSL --retry 5 -o b.tgz "$FV_BUNDLE_URL" && echo "$FV_BUNDLE_SHA256  b.tgz" | sha256sum -c - >/srv/log.txt 2>&1 && tar xzf b.tgz \
-&& (cd /srv && python3 -m http.server 8000 >/dev/null 2>&1 &) && bash /opt/fv/family-pool-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
-sleep 1200; if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then until fv_self_delete /tmp/self-delete.log; do sleep 60; done; fi; sleep infinity'
-    # fv_self_delete: GraphQL podTerminate with the pod-scoped key, retried each minute (ADR-0023 §4).
-    start="$(<"$HERE/lib/self-delete.sh")"$'\n'"$start"
+    start="$(start_cmd)"
     export FVX_URL="$url"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"

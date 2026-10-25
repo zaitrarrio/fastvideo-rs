@@ -8,6 +8,7 @@
 #   h3-graphs-validate.sh status <pod>    status.tsv, the log tail, DONE
 #   h3-graphs-validate.sh fetch <pod> DIR results.tgz into DIR
 #   h3-graphs-validate.sh down <pod>      delete the pod and check it is gone (GET: 404)
+#   h3-graphs-validate.sh print-start     the pod's start command (what up sends)
 #
 # Nothing is written to R2 or a volume. With stock in EU-RO-1 the pod mounts the EU weight volume read only (h3-base,
 # the h3-turbo MXFP8 tree and LoRA); otherwise (or FV_NO_VOLUME=1) h3-base's text encoder / tokenizer / VAEs come from
@@ -37,8 +38,20 @@ rest() {
 gql() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$RUNPOD_API_KEY") -H 'content-type: application/json' "$GQL" --data-binary @-; }
 balance() { gql <<<'{"query":"{ myself { clientBalance } }"}' | jq -r '.data.myself.clientBalance // empty'; }
 
+# The pod's start command, as `up` sends it (`print-start` prints it): the
+# self-delete library first (fv_self_delete, docs/adr/0023-lab-report-and-ci-bridge.md §4),
+# then the run; 10 min after DONE the pod deletes itself, retried each minute.
+start_cmd() {
+  printf '%s\n' "$(<"$HERE/../lib/self-delete.sh")"
+  printf '%s' 'mkdir -p /opt/fv /srv && printf %s "$FV_POD_SCRIPT_B64" | base64 -d | gunzip >/opt/fv/pod.sh \
+&& (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
+&& export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
+&& unset FV_POD_SCRIPT_B64 && bash /opt/fv/pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
+sleep 600; if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then until fv_self_delete /tmp/self-delete.log; do sleep 60; done; fi; sleep infinity'
+}
 cmd="${1:-}"
 case "$cmd" in
+  print-start) start_cmd ;;
   up)
     image="${2:?fastvideo-rs runtime image}"
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
@@ -100,13 +113,7 @@ PYEOF
     token="$(head -c 24 /dev/urandom | base64 | tr -d '/+=')"
     # The runtime image has curl and coreutils but no Python: uv brings one. The pod deletes itself 10 min after
     # DONE (Runpod's pod-scoped RUNPOD_API_KEY / RUNPOD_POD_ID); the backstop deletes it regardless.
-    start='mkdir -p /opt/fv /srv && printf %s "$FV_POD_SCRIPT_B64" | base64 -d | gunzip >/opt/fv/pod.sh \
-&& (curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uvbin UV_NO_MODIFY_PATH=1 sh) >>/srv/log.txt 2>&1 \
-&& export PATH=/opt/uvbin:$PATH UV_PYTHON_INSTALL_DIR=/opt/uvpy && uv python install 3.12 >>/srv/log.txt 2>&1 && export PY="$(uv python find 3.12)" \
-&& unset FV_POD_SCRIPT_B64 && bash /opt/fv/pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; \
-sleep 600; if [ -n "${RUNPOD_API_KEY:-}" ] && [ -n "${RUNPOD_POD_ID:-}" ]; then until fv_self_delete /tmp/self-delete.log; do sleep 60; done; fi; sleep infinity'
-    # fv_self_delete: GraphQL podTerminate with the pod-scoped key, retried each minute (ADR-0023 §4).
-    start="$(<"$HERE/../lib/self-delete.sh")"$'\n'"$start"
+    start="$(start_cmd)"
     gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
     payload="$(jq -n --arg name "fv-h3graphs-$(date -u +%m%d%H%M)" --arg image "$image" --arg vol "$FV_EU_VOLUME_ID" \

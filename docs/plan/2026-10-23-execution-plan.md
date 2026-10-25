@@ -1101,3 +1101,12 @@ ran (pod id, $/hr), result, cost.
   a 2xx or 404. Branch `claude/pod-self-delete-graphql` (draft PR); build
   pod gates green (`cargo test --workspace --lib` 2123, fastvideo-deploy
   138); no GPU cost. Live check by the coordinator pending.
+- 2026-10-25, coordinator: #183's self-delete verified live on a CPU pod
+  (`inuqqmjr86ah47`, the library then `sleep 60; until fv_self_delete …`:
+  gone on the first attempt, 17:01:57Z). Review fixes, Claude
+  (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): launchers render through
+  `start_cmd` / `print-start`, the check runs each rendered self-delete and
+  checks order, aliases and every path (`self-delete.yml`); the key goes to
+  curl on stdin, `.resp` removed, `_fvsd_code`; goldens regenerated. Build
+  pod: fmt, clippy, fastvideo-deploy (138), fastvideo-lab all features (100),
+  `cargo test --workspace --lib` (2123) green. No GPU cost.

@@ -55,11 +55,11 @@ const WATCHDOG = `(
   command -v curl >/dev/null 2>&1 || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl; } >/fvstate/watchdog-apt.log 2>&1
   bye() {
     echo "[watchdog] $1: deleting \${RUNPOD_POD_ID}" >&2
-    for _ in 1 2 3; do
+    for i in 1 2 3; do
       c=$(curl -sS --max-time 30 -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: Bearer $FV_BACKSTOP_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID")
       case "$c" in 2??|404) break ;; esac
       echo "[watchdog] delete: HTTP \${c:-none}" >&2
-      sleep 5
+      [ "$i" = 3 ] || sleep 5
     done
   }
   n=0

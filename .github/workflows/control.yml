@@ -31,13 +31,6 @@ on:
       - "scripts/gpu/runpod-http.sh"
       - "scripts/gpu/tests/fv-lab-goldens.sh"
       - "scripts/gpu/fv-lab-compare-runs.sh"
-      - "scripts/gpu/lib/**"
-      - "scripts/gpu/tests/self-delete.test.sh"
-      - "scripts/gpu/experiments/**"
-      - "scripts/gpu/*-pod.sh"
-      - "scripts/gpu/*-validate.sh"
-      - "scripts/serve/e2e/**"
-      - "crates/fastvideo-lab/src/pod-start.sh.in"
       - "lab/tiers.toml"
       - "crates/fastvideo-lab/fixtures/**"
       - "scripts/gpu/runpod-cuda.sh"
@@ -76,13 +69,6 @@ on:
       - "scripts/gpu/runpod-http.sh"
       - "scripts/gpu/tests/fv-lab-goldens.sh"
       - "scripts/gpu/fv-lab-compare-runs.sh"
-      - "scripts/gpu/lib/**"
-      - "scripts/gpu/tests/self-delete.test.sh"
-      - "scripts/gpu/experiments/**"
-      - "scripts/gpu/*-pod.sh"
-      - "scripts/gpu/*-validate.sh"
-      - "scripts/serve/e2e/**"
-      - "crates/fastvideo-lab/src/pod-start.sh.in"
       - "lab/tiers.toml"
       - "crates/fastvideo-lab/fixtures/**"
       - "scripts/gpu/runpod-cuda.sh"
@@ -137,6 +123,3 @@ jobs:
       - name: fv-lab goldens are what runpod-matrix.sh / runpod-http.sh do for every lab/tiers.toml tier (ADR-0019 §9.3)
         working-directory: .
         run: bash scripts/gpu/tests/fv-lab-goldens.sh --check
-      - name: Every in-pod self-delete is GraphQL podTerminate, one text (ADR-0023 §4)
-        working-directory: .
-        run: bash scripts/gpu/tests/self-delete.test.sh
