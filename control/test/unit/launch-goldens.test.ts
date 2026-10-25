@@ -443,5 +443,11 @@ describe("every fv-control Runpod GPU launch is a schema-valid Launch, stored sp
     expect(LaunchZ.safeParse(wire(l)).success).toBe(true);
     expect(wire(templateCreatePayload(s, IMAGE, "t")).env.FV_WORKER_TOML_B64).toBe(b64utf8(WORKER_CONFIGS["runpod-ltx.toml"]!));
     expect(wire(endpointCreatePayload(s, "tpl"))).toStrictEqual(wire(runpodEndpointBody(l, "tpl")));
+    // A spec without `compute` reads as GPU, as before C3c: the GPU Launch, template category and endpoint fields.
+    const { compute: _c, ...bare } = s;
+    const nb = bare as EndpointSpec;
+    expect(wire(templateCreatePayload(nb, IMAGE, "t")).category).toBe("NVIDIA");
+    expect(wire(endpointCreatePayload(nb, "tpl"))).toStrictEqual(wire(runpodEndpointBody(endpointLaunch(nb, IMAGE), "tpl")));
+    expect(wire(endpointUpdatePayload(nb))).toMatchObject({ gpuTypeIds: s.gpu_types, minCudaVersion: "13.0" });
   });
 });
