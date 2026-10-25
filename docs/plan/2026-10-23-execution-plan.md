@@ -1255,3 +1255,20 @@ ran (pod id, $/hr), result, cost.
   `pod up --extra-env` refuse what no tier reads (the same keys as
   `runpod-http.sh`), the mode's setting first, all keys in one message;
   `runpod-matrix.sh` names the restored tier. No GPU cost.
+- 2026-10-25 21:45Z, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): serve-image
+  run 286 (c3ceb96c, C4) hung in "Smoke-check the serve images" on the
+  refusal check. Root cause: main's `FV_PREBUILT_STALE=latest` took the
+  newest tools release, tools-v0.1.50 (d428ff46, before C4), whose fv-boot
+  replaced the image's `boot-build` stage (images labelled
+  `dev.fastvideo.tools=tools-v0.1.50`); that fv-boot boots fv-serve's
+  default config when none is given, so `docker run --rm` served forever
+  (reproduced with the release's binaries: 0.1.50 execs fv-serve, 0.1.51
+  refuses in 0 s). Fix (`claude/fix-serve-smoke-hang`, draft PR): fv-boot
+  comes from a release only when it is built from the commit's tools
+  inputs (`prebuilt.sh contexts --stale`); `ci-images.sh smoke` bounds every
+  `docker run` (`FV_SMOKE_TIMEOUT_S`, 120 s, removes the container, names
+  the check); step `timeout-minutes` on both smoke steps; PR CI
+  `serve-boot.yml` runs the fv-boot binary as the smoke does
+  (`tests/fv_boot_bin.rs`, fails on d428ff46's fv-boot), the bounded-smoke
+  test and the tools-release selection tests. Build pod k66zz15an4sktc;
+  no Runpod resource created, no run cancelled or re-run.
