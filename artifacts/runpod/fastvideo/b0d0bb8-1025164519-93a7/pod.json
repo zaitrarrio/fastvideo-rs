@@ -1,0 +1,13 @@
+{
+  "id": "zb3jmg903musx9",
+  "name": "fv-lab-fastvideo-b0d0bb8-1025164519-93a7",
+  "family": "fastvideo",
+  "tag": "b0d0bb8-1025164519-93a7",
+  "sha": "b0d0bb8",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:5f34424f020f3e939f330d00a5201b63d8b96b5b4ebd51bcd80b651d703982a2",
+  "url": "https://zb3jmg903musx9-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792946723.836217,
+  "cap_s": 14400
+}

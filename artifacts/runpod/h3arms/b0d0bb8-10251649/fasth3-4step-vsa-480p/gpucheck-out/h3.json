@@ -1,0 +1,276 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "streamed",
+        "device_gib": 0.0,
+        "free_gib_before_load": 94.28277587890625,
+        "load_seconds": 0.0,
+        "requested": "Streamed"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 1.656357788,
+        "dit_residency": "resident",
+        "dit_s": 103.744741332,
+        "refiner_s": 0.070982925,
+        "seconds": 171.583614429,
+        "text_encoder_s": 0.0,
+        "video_vae_s": 57.952025402
+      }
+    },
+    {
+      "limits": {},
+      "name": "cold_generation",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.13366692,
+        "decode_s": 2.154994255,
+        "denoise_s": 6.25120384,
+        "refine_s": 0.005640829,
+        "step_s": [
+          1.5929794921875,
+          1.5732332763671875,
+          1.5423050537109375,
+          1.54253515625
+        ],
+        "text_cache": "miss",
+        "text_encoder": "streamed",
+        "text_s": 206.136323571,
+        "total_s": 214.714731362,
+        "video_decode_s": 2.021327335,
+        "video_encode_s": 0.053207756,
+        "video_push_s": 0.000034389999999999994,
+        "video_rgb_s": 0.051598475001128796,
+        "video_vae_s": 1.9604959653019904,
+        "video_wait_s": 0.15842876800000003,
+        "write_s": 0.12421683
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.054196369,
+        "decode_s": 2.088551788,
+        "denoise_s": 6.236885046,
+        "load_s": 171.583614429,
+        "peak_mib": 38566,
+        "refine_s": 0.000392167,
+        "step_s": [
+          1.5836579589843751,
+          1.5502093505859376,
+          1.5519661865234375,
+          1.55085107421875
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.224616718,
+        "total_s": 8.725654291,
+        "video_decode_s": 2.034355419,
+        "video_encode_s": 0.053725352,
+        "video_push_s": 0.00002098,
+        "video_rgb_s": 0.053319725004221726,
+        "video_vae_s": 1.970596840649843,
+        "video_wait_s": 0.161838182,
+        "warm": true,
+        "write_s": 0.132153382
+      }
+    },
+    {
+      "limits": {
+        "expected": "hit (or disabled)"
+      },
+      "name": "warm_text_is_a_cache_hit",
+      "ok": true,
+      "values": {
+        "text_cache": "hit",
+        "text_s": 0.224616718
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/h3arms/b0d0bb8-10251649/fasth3-4step-vsa-480p/frames/frame-062.png",
+        "mean": 0.5003052013963039,
+        "std": 0.27012450827235995
+      }
+    },
+    {
+      "limits": {
+        "expected": "output.mp4 with an audio track"
+      },
+      "name": "mp4_written",
+      "ok": true,
+      "values": {
+        "mp4": "/fvscratch/runs/h3arms/b0d0bb8-10251649/fasth3-4step-vsa-480p/frames/output.mp4"
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/h3arms/b0d0bb8-10251649/fasth3-4step-vsa-480p/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 53.87927266955376,
+        "stages": [
+          {
+            "gib": 51.905614107847214,
+            "stage": "text"
+          },
+          {
+            "gib": 48.275975435972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 53.87927266955376,
+            "stage": "denoise"
+          },
+          {
+            "gib": 46.546623677015305,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 49.436656683683395,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 11.871074885129929,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 10.91245412826538,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.3855392932891846,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 11.871074885129929,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": "/fvscratch/runs/h3arms/b0d0bb8-10251649/fasth3-4step-vsa-480p/frames/output.mp4",
+      "sequence_length": 14890,
+      "text_tokens": 46,
+      "wav": "/fvscratch/runs/h3arms/b0d0bb8-10251649/fasth3-4step-vsa-480p/frames/audio.wav"
+    },
+    "request": {
+      "attention": "vsa-h3 + to_gate_compress",
+      "height": 480,
+      "num_frames": 124,
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "prompt_set": null,
+      "seconds": 5,
+      "seed": 1024,
+      "techniques": {
+        "plan": [
+          "vsa (sparsity recipe, group default)"
+        ],
+        "profile": null,
+        "settings": [],
+        "sources": [
+          {
+            "from": "recipe",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": "/fvscratch/h3-text-cache",
+      "text_weights": "/workspace/weights/h3-base",
+      "video_vae": "official",
+      "warm": true,
+      "width": 832
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 32.518759093247354,
+          "peak_reserved_gib": 32.625,
+          "peak_used_gib": 32.518759093247354,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 32.51921971794218,
+          "peak_reserved_gib": 32.625,
+          "peak_used_gib": 32.524286589585245,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 32.52396901603788,
+          "peak_reserved_gib": 36.6875,
+          "peak_used_gib": 36.24700915720314,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 32.52396901603788,
+          "peak_reserved_gib": 32.75,
+          "peak_used_gib": 32.65562137123197,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 32.529129586182535,
+          "peak_reserved_gib": 33.65625,
+          "peak_used_gib": 33.32403322216123,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 395.352340381,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

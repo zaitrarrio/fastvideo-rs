@@ -1,0 +1,5 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/trace/b0d0bb8-1025164725-29e7 artifacts/runpod/trace/b0d0bb8-10251650
+same fasth3-4step-vsa-768p: {"exit":0,"skipped":null}, 248 frames byte-identical
+same fasth3-8step-768p: {"exit":null,"skipped":"weights incomplete"}, no frames
+2 arm(s) the same (1 ran with byte-identical frames, 1 skipped in both, 0 failed in both), 0 report(s) the same, 0 difference(s)
+exit=0

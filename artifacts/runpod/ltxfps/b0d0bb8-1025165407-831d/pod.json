@@ -1,0 +1,13 @@
+{
+  "id": "scxiq3gxzfj70z",
+  "name": "fv-lab-ltxfps-b0d0bb8-1025165407-831d",
+  "family": "ltxfps",
+  "tag": "b0d0bb8-1025165407-831d",
+  "sha": "b0d0bb8",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:5f34424f020f3e939f330d00a5201b63d8b96b5b4ebd51bcd80b651d703982a2",
+  "url": "https://scxiq3gxzfj70z-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792947250.9167416,
+  "cap_s": 14400
+}

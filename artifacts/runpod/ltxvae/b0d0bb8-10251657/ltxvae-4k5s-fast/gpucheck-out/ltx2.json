@@ -1,0 +1,355 @@
+{
+  "checks": [],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast",
+    "request": {
+      "height": 2176,
+      "latent_shape": [
+        1,
+        128,
+        16,
+        68,
+        120
+      ],
+      "latents": null,
+      "load_s": 4.431629816,
+      "num_frames": 121,
+      "seed": 7,
+      "tiling": "TileSizeConfig { frames: DimSize { tile_size: 80, overlap: 24 }, height: DimSize { tile_size: 448, overlap: 64 }, width: DimSize { tile_size: 768, overlap: 64 } }",
+      "width": 3840
+    },
+    "runs": [
+      {
+        "decode_video_s": 12.227541944,
+        "decoder": "fast",
+        "frames_written": 121,
+        "gpu_trace_decode": {
+          "busy_s": 12.195800321,
+          "by_category": [
+            {
+              "calls": 11016,
+              "category": "conv",
+              "share": 0.8683242943958093,
+              "total_s": 10.135771027
+            },
+            {
+              "calls": 13808,
+              "category": "norm_modulate_elementwise",
+              "share": 0.11126918474153387,
+              "total_s": 1.2988223250000002
+            },
+            {
+              "calls": 4614,
+              "category": "layout",
+              "share": 0.01264788241612145,
+              "total_s": 0.147636132
+            },
+            {
+              "calls": 48,
+              "category": "cast",
+              "share": 0.003915787354431614,
+              "total_s": 0.045708181
+            },
+            {
+              "calls": 448,
+              "category": "other",
+              "share": 0.0038428510921038168,
+              "total_s": 0.044856811
+            }
+          ],
+          "dropped_records": 0,
+          "gap_count": 27400,
+          "gap_histogram": [
+            {
+              "bucket": "<5us",
+              "count": 27368,
+              "idle_s": 0.011226655
+            },
+            {
+              "bucket": "5-50us",
+              "count": 14,
+              "idle_s": 0.00026896
+            },
+            {
+              "bucket": "50-500us",
+              "count": 15,
+              "idle_s": 0.004583379
+            },
+            {
+              "bucket": ">500us",
+              "count": 3,
+              "idle_s": 0.004075699
+            }
+          ],
+          "host": {
+            "device_tail_s": -0.0005211830139160156,
+            "enqueue_s": 12.217111969000001,
+            "first_activity_lag_s": 0.0006356239318847656
+          },
+          "host_launches": 18918,
+          "idle_frac": 0.0016498663409370673,
+          "idle_s": 0.020154693,
+          "kernel_count": 29934,
+          "kernel_s": 11.672794476,
+          "largest_gaps": [
+            {
+              "after": "memcpy HtoD",
+              "at_s": 7.030000000000001e-7,
+              "before": "memcpy HtoD",
+              "gap_us": 1763.291
+            },
+            {
+              "after": "memset",
+              "at_s": 0.001996953,
+              "before": "ltxv_latent_in",
+              "gap_us": 1582.3310000000001
+            },
+            {
+              "after": "memset",
+              "at_s": 0.003846644,
+              "before": "ltxv_norm_silu",
+              "gap_us": 730.077
+            },
+            {
+              "after": "block_copy",
+              "at_s": 11.824030379,
+              "before": "memcpy DtoH",
+              "gap_us": 381.599
+            },
+            {
+              "after": "memcpy DtoH",
+              "at_s": 12.169885733000001,
+              "before": "memcpy DtoH",
+              "gap_us": 372.031
+            },
+            {
+              "after": "block_copy",
+              "at_s": 5.7820042560000005,
+              "before": "memcpy DtoH",
+              "gap_us": 336.927
+            },
+            {
+              "after": "mx_block_copy",
+              "at_s": 6.035021113,
+              "before": "memcpy DtoH",
+              "gap_us": 314.367
+            },
+            {
+              "after": "bcast_binary",
+              "at_s": 11.916520109,
+              "before": "memcpy DtoH",
+              "gap_us": 313.055
+            },
+            {
+              "after": "cast_bf16_f32_bias_act",
+              "at_s": 5.876983213,
+              "before": "memcpy DtoH",
+              "gap_us": 311.519
+            },
+            {
+              "after": "block_copy",
+              "at_s": 11.978163823000001,
+              "before": "memcpy DtoH",
+              "gap_us": 310.23900000000003
+            }
+          ],
+          "memcpy": {
+            "DtoH": {
+              "bytes": 3033169920,
+              "count": 16
+            },
+            "HtoD": {
+              "bytes": 27208,
+              "count": 14
+            }
+          },
+          "memset": {
+            "bytes": 19289920,
+            "count": 2906
+          },
+          "pass": "ltx2/decode",
+          "step": 0,
+          "sync_count": 96,
+          "top_kernels": [
+            {
+              "calls": 9934,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x128x64_stage3_warpsize2x2x1_g1_tensor16x8x1…",
+              "share": 0.7862948902142565,
+              "total_s": 9.178258651
+            },
+            {
+              "calls": 10152,
+              "category": "norm_modulate_elementwise",
+              "name": "ltxv_norm_silu",
+              "share": 0.08585124136815994,
+              "total_s": 1.002123896
+            },
+            {
+              "calls": 270,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128x32_stage3_warpsize4x2x1_g1_tensor16x8x1…",
+              "share": 0.03744924849818798,
+              "total_s": 0.43713738100000005
+            },
+            {
+              "calls": 300,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_indexed_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tenso…",
+              "share": 0.023540991539342512,
+              "total_s": 0.27478915600000003
+            },
+            {
+              "calls": 792,
+              "category": "norm_modulate_elementwise",
+              "name": "ltxv_d2s_bias",
+              "share": 0.019906120893137192,
+              "total_s": 0.232360058
+            },
+            {
+              "calls": 360,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x32x64_stage1_warpsize4x1x1_…",
+              "share": 0.01571690766741467,
+              "total_s": 0.183460233
+            },
+            {
+              "calls": 3894,
+              "category": "layout",
+              "name": "block_copy",
+              "share": 0.01037476417913417,
+              "total_s": 0.12110249000000001
+            },
+            {
+              "calls": 130,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x64x64_stage3_warpsize2x2x1_g1_tensor16x8x16…",
+              "share": 0.005156922031289605,
+              "total_s": 0.060195691
+            },
+            {
+              "calls": 1440,
+              "category": "norm_modulate_elementwise",
+              "name": "bcast_binary",
+              "share": 0.002995873102357876,
+              "total_s": 0.034970211
+            },
+            {
+              "calls": 360,
+              "category": "other",
+              "name": "ltxv_out_unpatch",
+              "share": 0.0029201908823191037,
+              "total_s": 0.034086788
+            },
+            {
+              "calls": 720,
+              "category": "layout",
+              "name": "mx_block_copy",
+              "share": 0.0022731182369872815,
+              "total_s": 0.026533642000000003
+            },
+            {
+              "calls": 24,
+              "category": "cast",
+              "name": "cast_bf16_f32_bias_act",
+              "share": 0.0020217713974594953,
+              "total_s": 0.023599722
+            },
+            {
+              "calls": 24,
+              "category": "cast",
+              "name": "cast_f32_bf16",
+              "share": 0.0018940159569721187,
+              "total_s": 0.022108459
+            },
+            {
+              "calls": 720,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_binary",
+              "share": 0.0017940261042937598,
+              "total_s": 0.020941298
+            },
+            {
+              "calls": 16,
+              "category": "other",
+              "name": "pack_rgb_u8",
+              "share": 0.0008940865035753072,
+              "total_s": 0.010436488
+            },
+            {
+              "calls": 4,
+              "category": "norm_modulate_elementwise",
+              "name": "elem_add",
+              "share": 0.00043962934587352706,
+              "total_s": 0.0051317030000000005
+            },
+            {
+              "calls": 700,
+              "category": "norm_modulate_elementwise",
+              "name": "lincomb3",
+              "share": 0.0002822939277115736,
+              "total_s": 0.003295159
+            },
+            {
+              "calls": 22,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_indexed_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize64x32x64_stage5_warpsize2x2x1_g1_tensor…",
+              "share": 0.00016533444531795935,
+              "total_s": 0.0019299150000000001
+            },
+            {
+              "calls": 72,
+              "category": "other",
+              "name": "ltxv_latent_in",
+              "share": 0.00002857370620940589,
+              "total_s": 0.00033353500000000004
+            }
+          ],
+          "wall_s": 12.227493684,
+          "window_s": 12.215955014
+        },
+        "peak_vram_mib": 17232,
+        "video_encode_s": 0.00004826,
+        "video_push_s": 0.00005863,
+        "video_rgb_s": 0.7259614050004144,
+        "video_vae_s": 12.095053542137148,
+        "video_wait_s": 0.14140239200000002,
+        "warm_s": 12.602136574,
+        "write_s": 1.007154483,
+        "writer": {
+          "active_at_spawn": 0,
+          "buffer_budget_gib": 43.61822509765625,
+          "buffered_peak_gib": 2.824859619140625,
+          "ffmpeg_feed_s": 0.0,
+          "frames": 121,
+          "png_deferred": 121,
+          "png_gib": 1.673609227873385,
+          "png_inline": 0,
+          "png_mode": "deferred",
+          "png_s": 1.007074722,
+          "video_tail_s": 0.00004733
+        }
+      }
+    ]
+  },
+  "elapsed_s": 31.087733464,
+  "env": {
+    "FASTVIDEO_GPU_TRACE_DECODE": "1",
+    "FASTVIDEO_LTX_VAE_CHECK": "1"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "ltx2",
+  "status": "pass"
+}
