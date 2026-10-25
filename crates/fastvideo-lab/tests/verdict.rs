@@ -14,10 +14,16 @@
 //! `runpod-matrix.sh` is that script cut to its shared frame, the `b4a`
 //! branch and the fallback branch, every kept line unchanged (`git show
 //! 8b18d89f:scripts/gpu/runpod-matrix.sh | sed -n '1,446p;1618,1743p;3197,3223p'`),
-//! and `b4-verdict.sh` is that commit's file whole. What they source besides
-//! (`cuda-13.pins`, `fv-lab-retired.sh`) is data, copied as committed. So a
-//! change to fv-lab's verdict step is still held to the script's bytes, and
-//! a change to the live scripts no longer moves the reference.
+//! and `b4-verdict.sh`, `cuda-13.pins` and `fv-lab-retired.sh` are that
+//! commit's files whole. So a change to fv-lab's verdict step is still held
+//! to the script's bytes, and a change to `scripts/gpu/` no longer moves the
+//! reference. What the frame reads from fixed host paths is kept out: its
+//! CUDA library links are faked (`fake_libs`), and the image's build id
+//! (`host_build_id`) reads as `unknown`. Its `PATH` puts
+//! `/opt/fastvideo-rs/target/release` and `/usr/local/bin` before the fake
+//! `bin/`, as on a pod; a host with an `nvidia-smi` there would shadow the
+//! fake one, as it would have before the branch was frozen (the cut cannot
+//! change that line).
 //!
 //! The fake box's default makes one cell pass, one fail on its evidence
 //! only, and one fail on everything (exit, reuse, identity, evidence). Its
@@ -140,19 +146,47 @@ impl Fake {
     }
 }
 
+/// `fixtures/b4a-script/`: `runpod-matrix.sh` and what it sources, as at
+/// main `8b18d89f` (the commit before the branch was deleted).
+const FROZEN: [&str; 4] = [
+    "runpod-matrix.sh",
+    "b4-verdict.sh",
+    "cuda-13.pins",
+    "fv-lab-retired.sh",
+];
+
+/// The CUDA library links the script's frame makes under `<scratch>/fv-libs`,
+/// faked: with them present the frame neither runs the image's
+/// `/opt/fastvideo-rs/scripts/gpu/remote.sh` nor links a host library.
+fn fake_libs(scratch: &Path) {
+    let libs = scratch.join("fv-libs");
+    std::fs::create_dir_all(&libs).unwrap();
+    for l in ["libcudnn.so", "libcupti.so"] {
+        std::fs::write(libs.join(l), "").unwrap();
+    }
+}
+
+/// The frame logs `matrix start image=<build id>` from a fixed path, the
+/// runtime image's (`/opt/fastvideo-rs/target/release/fv-gpucheck.build-id`),
+/// which the frozen cut cannot redirect: on a host that has the file, its
+/// id reads as the goldens' `unknown`.
+fn host_build_id() -> Option<String> {
+    std::fs::read_to_string("/opt/fastvideo-rs/target/release/fv-gpucheck.build-id")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
 fn fake(name: &str) -> Fake {
     let dir = std::env::temp_dir().join(format!("fv-lab-verdict-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let f = Fake { dir };
     let gpu = f.root().join("scripts/gpu");
     std::fs::create_dir_all(&gpu).unwrap();
-    // The script as it last ran b4a (frozen), and what it sources.
+    // The script as it last ran b4a and everything it sources, frozen.
     let frozen = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/b4a-script");
-    for s in ["runpod-matrix.sh", "b4-verdict.sh"] {
+    for s in FROZEN {
         std::fs::copy(frozen.join(s), gpu.join(s)).unwrap();
-    }
-    for s in ["cuda-13.pins", "fv-lab-retired.sh"] {
-        std::fs::copy(repo_root().join("scripts/gpu").join(s), gpu.join(s)).unwrap();
     }
     script(
         &gpu.join("verify-weights.sh"),
@@ -178,9 +212,7 @@ fn fake(name: &str) -> Fake {
         "case \"$1\" in\n  --query-gpu=memory.used) echo 0 ;;\n  -L) echo 'GPU 0: Fake' ;;\n  *) echo 'Fake, 1 MiB' ;;\nesac\n",
     );
     for side in ["script", "lab"] {
-        let libs = f.dir.join(side).join("fv-libs");
-        std::fs::create_dir_all(&libs).unwrap();
-        std::fs::write(libs.join("libcudnn.so"), "").unwrap();
+        fake_libs(&f.dir.join(side));
     }
     std::fs::create_dir_all(f.dir.join("work/weights")).unwrap();
     f
@@ -355,7 +387,7 @@ fn the_frozen_script_dry_runs_as_the_frozen_golden() {
     let (work, scratch) = (f.dir.join("dry-work"), f.dir.join("dry-scratch"));
     std::fs::create_dir_all(work.join("weights/auxiliary/tae")).unwrap();
     std::fs::write(work.join("weights/auxiliary/tae/.complete"), "").unwrap();
-    std::fs::create_dir_all(&scratch).unwrap();
+    fake_libs(&scratch);
     let o = Command::new("bash")
         .arg(f.root().join("scripts/gpu/runpod-matrix.sh"))
         .arg("b4a")
@@ -381,9 +413,17 @@ fn the_frozen_script_dry_runs_as_the_frozen_golden() {
         .map(|l| l.get(11..).unwrap_or(""))
         .filter(|l| l.contains("[b4a] "))
         .map(|l| {
-            l.replace(&s, "/fvscratch")
+            let l = l
+                .replace(&s, "/fvscratch")
                 .replace(&w, "/workspace")
-                .replace(&r, "/opt/fastvideo-rs")
+                .replace(&r, "/opt/fastvideo-rs");
+            match host_build_id() {
+                Some(id) => l.replace(
+                    &format!("matrix start image={id}"),
+                    "matrix start image=unknown",
+                ),
+                None => l,
+            }
         })
         .collect();
     let golden = text(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/b4a-dry-run.txt"));

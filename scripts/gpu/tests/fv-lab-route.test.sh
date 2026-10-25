@@ -161,6 +161,16 @@ dry "b4a: FV_BASELINE_SHA in FV_EXTRA_ENV passes to --extra-env" 0 \
 dry "b4a: FV_B4A_CELLS refused, FV_CELLS named" 1 \
   "reads no FV_B4A_CELLS from FV_EXTRA_ENV (FV_B4A_CELLS: b4a selects by arm, as every tier: FV_CELLS=\"<cell>-base <cell>-pr\"" \
   FV_FAMILY=b4a FV_EXTRA_ENV="FV_BASELINE_SHA=e93e357 FV_B4A_CELLS=b4a-h3-4step-tea"
+dry "FV_B4A_CELLS in FV_EXTRA_ENV of another tier: no b4a in the answer" 1 \
+  "(FV_B4A_CELLS: fv-lab selects by arm: FV_CELLS (fv-lab pod up --cells), not FV_B4A_CELLS" \
+  FV_FAMILY=rtx6000 FV_EXTRA_ENV="FV_B4A_CELLS=b4a-h3-4step-tea"
+# The pair selectors set in the host environment (not FV_EXTRA_ENV): refused,
+# not ignored (fv-lab would run every cell of the tier).
+for kv in "b4a FV_B4A_CELLS=b4a-h3-4step-tea" "techniques FV_TECH_CELLS=h3-480p-fullopt" "b6 FV_B6_CELLS=b6-solh3-tree"; do
+  read -r fam setting <<<"$kv"
+  dry "host env refused: ${setting%%=*} ($fam)" 1 "which has no ${setting%%=*}: it selects by arm, FV_CELLS" \
+    FV_FAMILY="$fam" FV_BASELINE_SHA=e93e357 "$setting"
+done
 mx "matrix: b4a is retired" "FATAL: b4a is retired to fv-lab (fv-lab-retired.sh): fv-lab run b4a " \
   FV_BASELINE_SHA=e93e357 b4a
 

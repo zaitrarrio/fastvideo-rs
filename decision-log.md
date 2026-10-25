@@ -1770,4 +1770,14 @@ Project code: FVID
 - Reversibility: high (the branch is in git history and in the frozen copy)
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §9.1, §11, §11.6, §12
-- Verification: `tests/verdict.rs` (the frozen script against fv-lab, and the frozen script's dry run equal to `fixtures/b4a-dry-run.txt`), `tests/dry_run.rs::retired_families_are_frozen_tiers_without_a_branch`, `tests/knobs.rs`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh` (b4a routed, `FV_B4A_CELLS` refused, the matrix refuses `b4a`), `b4-verdict.test.sh`, `FV_DRY_RUN=1 runpod-matrix.sh <family>` before and after for the 32 remaining families; open follow-up: `gpucheck-runtime-image` should run its checks before pushing `sha-<7>` (run 40233480444 pushed a `sha-e82b6b7` whose fv-lab could not parse `[verdict]`)
+- Verification: `tests/verdict.rs` (the frozen script, with everything it sources vendored and its host paths faked, against fv-lab, and the frozen script's dry run equal to `fixtures/b4a-dry-run.txt`), `tests/dry_run.rs::retired_families_are_frozen_tiers_without_a_branch`, `tests/knobs.rs`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh` (b4a routed, `FV_B4A_CELLS` refused in `FV_EXTRA_ENV` and, with `FV_TECH_CELLS` / `FV_B6_CELLS`, in the host environment, review of #195; the matrix refuses `b4a`), `b4-verdict.test.sh`, `FV_DRY_RUN=1 runpod-matrix.sh <family>` before and after for the 32 remaining families; open follow-up: `gpucheck-runtime-image` should run its checks before pushing `sha-<7>` (run 40233480444 pushed a `sha-e82b6b7` whose fv-lab could not parse `[verdict]`)
+
+### FVID · 2026-10-25 · FVID-2026-10-25-restored-tiers-gpu-check
+- Trigger: FVID-2026-10-25-restore-dropped-test-modes left its GPU verification pending (ADR-0019 §12, proposed)
+- Options: accept §12 on the coordinator's GPU check; keep it proposed
+- Decision: §12 accepted: the coordinator's check passed for both restored tiers, fv-lab at main `8b18d89` (image `sha-8b18d89`, tools compiled) against `runpod-http.sh` at `5987e6a4` in each mode, on the 4k5s cells
+- Reason: `ltxvae-gen` (`ltx25-4k5s-gen`, `-gen-streaming`) 121 frames per arm byte-identical, 4 reports the same; `precision-nvfp4` (`ltx25-4k5s-sol-bf16`, `-nvfp4`) 242 frames per arm byte-identical, 3 reports the same including the gate report (lossy verdict `fail` on both, as in 2026-09); `fv-lab-compare-runs.sh` exit 0 and `matrix_exit=0` on all four pods
+- Reversibility: high (a record; the tiers are unchanged)
+- Executed by: coordinator (GPU run, pods `wgzwvt5mjcn1nv`, `ymrchzi0z3eixy`, `64opofps1163h8`, `kxhdp1v19w151y`, all deleted); recorded by Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §12 "Result"
+- Verification: `artifacts/runpod/ltxvae-gen/compare-8b18d89.txt`, `artifacts/runpod/precision-nvfp4/compare-8b18d89.txt` and the four run directories under `artifacts/runpod/{ltxvae-gen,ltxvae,precision-nvfp4,precision}/`

@@ -4,8 +4,9 @@
   `lab/cells/*.toml` schemas, the dry-run and payload goldens; GPU gate passed) and D1b (nine more families as tiers,
   four additive cell-schema fields, a golden per tier, §9; GPU gate passed for all nine). The ten families' script
   branches are deleted and the tiers are fv-lab only, with frozen goldens (§10, 2026-10-25). D1d's first slice
-  (§11: a typed verdict step in the cell schema, `b4a` as a tier, `fv-lab gate`) is proposed, its GPU gate pending.
-  Two dropped modes are tiers again, frozen from the script at `5987e6a4` (§12, proposed; GPU check pending).
+  (§11: a typed verdict step in the cell schema, `b4a` as a tier, `fv-lab gate`) is accepted: its GPU gate passed on
+  `e82b6b7` and `b4a` is retired from the script like the ten (§11.6). Two dropped modes are tiers again, frozen
+  from the script at `5987e6a4` (§12, accepted; GPU check passed on `8b18d89`).
   D1c (`report`), the rest of D1d (`oracle`) and the retirement of the rest of `runpod-matrix.sh`, `runpod-http.sh`
   and the port one-offs follow (§8)
 - Date: 2026-10-24
@@ -779,11 +780,20 @@ whole: `b4_exit_ok`, `b4_identical` and `b4_family_verdict` are also `b4b` / `b4
 3). `tests/verdict.rs` ran the script's live `b4a` branch, which now refuses `b4a` (exit 2); it runs a frozen copy
 instead, `crates/fastvideo-lab/fixtures/b4a-script/`: `runpod-matrix.sh` as of main `8b18d89f`, cut to its shared
 frame, the `b4a` branch and the fallback branch with every kept line unchanged (`git show
-8b18d89f:scripts/gpu/runpod-matrix.sh | sed -n '1,446p;1618,1743p;3197,3223p'`), and that commit's `b4-verdict.sh`
-whole, so later changes to the live scripts cannot move the reference. A new test there runs the frozen copy's dry
-run and finds it equal to `fixtures/b4a-dry-run.txt`, line for line. `runpod-http.sh run` / `plan` route
+8b18d89f:scripts/gpu/runpod-matrix.sh | sed -n '1,446p;1618,1743p;3197,3223p'`), and that commit's `b4-verdict.sh`,
+`cuda-13.pins` and `fv-lab-retired.sh` whole, so changes under `scripts/gpu/` no longer move the reference. What
+the frame reads from fixed host paths is kept out where the test can do it without editing the cut: the CUDA
+library links under `<scratch>/fv-libs` are faked (so the image's `remote.sh` never runs and no host library is
+linked), and the `matrix start image=` line, read from the hard-coded
+`/opt/fastvideo-rs/target/release/fv-gpucheck.build-id`, reads as `unknown` when a host has that file. One host
+dependency is left, as it was before the freeze: the frame's `PATH` puts `/opt/fastvideo-rs/target/release` and
+`/usr/local/bin` before the fake `bin/`, so a host `nvidia-smi` there would shadow the fake one. A new test runs the
+frozen copy's dry run and finds it equal to `fixtures/b4a-dry-run.txt`, line for line. `runpod-http.sh run` / `plan` route
 `FV_FAMILY=b4a` to `fv-lab pod up` (§10 item 2), and refuse `FV_B4A_CELLS` in `FV_EXTRA_ENV` with "b4a selects by arm,
-as every tier: `FV_CELLS="<cell>-base <cell>-pr"`" (`fv-lab-route.test.sh`). The gate's script-side command is now
+as every tier: `FV_CELLS="<cell>-base <cell>-pr"`" (for another tier, a message without `b4a`). The review of #195
+added: the pair selectors `FV_B4A_CELLS`, `FV_TECH_CELLS` and `FV_B6_CELLS` set in the host environment (not
+`FV_EXTRA_ENV`) are refused too for every retired tier, where they were ignored and the run covered every cell
+(`fv-lab-route.test.sh`). The gate's script-side command is now
 refused (it sets `FV_FETCH_SKIP`, `FV_FETCH_TREE=1` and `FV_B4A_CELLS`, none of which fv-lab honours; the first
 refusal answers); its fv-lab equivalent is
 `FV_FAMILY=b4a FV_CELLS="b4a-h3-4step-tea-base b4a-h3-4step-tea-pr" FV_BASELINE_SHA=e93e357 runpod-http.sh run <7>`.
@@ -802,8 +812,8 @@ refusal answers); its fv-lab equivalent is
 
 ### 12. Two dropped modes restored as tiers: `precision-nvfp4`, `ltxvae-gen`
 
-Status: proposed 2026-10-25 (owner decision "restore dropped test modes"); CPU part done, GPU check pending (the
-coordinator's, below). §10 item 4 dropped two modes of retired families with their branches. They come back as
+Status: accepted 2026-10-25 (owner decision "restore dropped test modes"); CPU part done, GPU check passed (the
+coordinator's, "Result" below). §10 item 4 dropped two modes of retired families with their branches. They come back as
 tiers of their own, each reproducing what the script ran in that mode at `5987e6a4` (main before #185), the last
 commit with the branches.
 
@@ -951,6 +961,33 @@ with "no release matches") is another commit's gpucheck.
 - **Only the NVFP4 arm differs** (the bf16 arm is byte-identical): cuBLASLt picks its FP4 algorithm per driver, so
   compare the two pods' `box.txt` driver versions before calling it a regression.
 
+**Result (2026-10-25): pass, both tiers.** fv-lab at main `8b18d89` (#191's merge; image `sha-8b18d89`, tools
+compiled, build id `1fb053d232522a86`), the script at `5987e6a4` (image `sha-5987e6a`, build id `2327ed48ab74bffe`),
+the 4k5s cells of each mode; four RTX PRO 6000 pods in EU-RO-1 on the volume `bz0ofkfx45`, driver 595.91.07, all
+deleted:
+
+- `ltxvae-gen`:
+  - fv-lab: `fv-lab pod up --sha 8b18d89 --family ltxvae-gen --cells ltx25-4k5s-gen ltx25-4k5s-gen-streaming --yes
+    --wait` (pod `wgzwvt5mjcn1nv`) → `artifacts/runpod/ltxvae-gen/8b18d89-1025215640-5305`.
+  - The script: `FV_FAMILY=ltxvae FV_EXTRA_ENV="FV_VAE_GEN=1" FV_CELLS="ltx25-4k5s-gen ltx25-4k5s-gen-streaming"
+    runpod-http.sh run 5987e6a` → `artifacts/runpod/ltxvae/5987e6a-10252157`.
+  - `fv-lab-compare-runs.sh` (`artifacts/runpod/ltxvae-gen/compare-8b18d89.txt`): exit 0, "2 arm(s) the same (2 ran
+    with byte-identical frames, 0 skipped in both, 0 failed in both), 4 report(s) the same, … 0 difference(s)": 121
+    frames per arm; the gen / streaming compare `pass` on both, the three unselected compares `skipped` on both.
+- `precision-nvfp4`:
+  - fv-lab: `fv-lab pod up --sha 8b18d89 --family precision-nvfp4 --cells ltx25-4k5s-sol-bf16 ltx25-4k5s-sol-nvfp4
+    --yes --wait` (pod `ymrchzi0z3eixy`) → `artifacts/runpod/precision-nvfp4/8b18d89-1025215713-20dd`.
+  - The script: `FV_FAMILY=precision FV_EXTRA_ENV="FV_PRECISION_ARM=ltx-nvfp4" FV_CELLS="ltx25-4k5s-sol-bf16
+    ltx25-4k5s-sol-nvfp4" runpod-http.sh run 5987e6a` → `artifacts/runpod/precision/5987e6a-10252158`.
+  - `fv-lab-compare-runs.sh` (`artifacts/runpod/precision-nvfp4/compare-8b18d89.txt`): exit 0, 2 arms the same, 242
+    frames per arm byte-identical (the NVFP4 arm too), 3 reports the same (the 4k5s compare, the unselected
+    1080p20s compare skipped on both, and the gate report present on both).
+  - The lossy gate's verdict is `fail` on both sides, as the 2026-09-27 run's 4k5s gate was: no run failure.
+- Both script pods (`64opofps1163h8`, `kxhdp1v19w151y`) and both fv-lab pods end `matrix_exit=0`.
+
+Byte identity held, so the generation source between `5987e6a4` and `8b18d89` (the deploy section of
+`fastvideo-manifest` aside) and the other tools build left these arms' frames unchanged.
+
 **Refused, not ignored (review of #191).**
 - `fv-lab` refuses the settings no tier reads (`crates/fastvideo-lab/src/knobs.rs`):
   - `fv-lab run` refuses the retired families' mode knobs (§9.4) in its environment.
@@ -1008,7 +1045,7 @@ D1b, GPU (the coordinator's): §9.5 per moved family, on one commit whose runtim
 fv-lab; expected `fv-lab-compare-runs.sh` exit 0 (arms, frames, compare reports) and `matrix_exit=0` on both sides.
 Passed for all nine (§9.5).
 
-§11 (D1d), CPU: `tests/verdict.rs` (the script's `b4a` branch and `fv-lab run b4a` on one fake box: verdicts,
+§11 (D1d), CPU: `tests/verdict.rs` (the frozen copy of the script's last `b4a` branch and `fv-lab run b4a` on one fake box: verdicts,
 evidence and diffs byte-identical; `fv-lab gate` reproduces them), `tests/fv_lab_bin.rs` (`b4a` dry run,
 `gate_evaluates_a_finished_runs_verdicts_offline`), `tests/dry_run.rs` and `tests/payload_golden.rs` with the `b4a`
 fixtures, `fv-lab-goldens.sh --check` (with compare-runs' verdict-file cases); GPU: §11.6.

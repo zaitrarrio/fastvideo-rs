@@ -567,6 +567,11 @@ fv_lab_route() {
   for v in FV_KEEP_POD FV_FETCH_TREE RUNPOD_NO_VOLUME; do
     [[ "${!v:-0}" != 1 ]] || refuse "has no $v=1"
   done
+  # The retired families' pair selectors (ADR-0019 §9.4, §11.5): ignored, the
+  # run would cover every cell of the tier.
+  for v in FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS; do
+    [[ -z "${!v:-}" ]] || refuse "has no $v: it selects by arm, FV_CELLS (fv-lab pod up --cells)"
+  done
   # The tier's values (lab/tiers.toml).
   same FV_GEN_TIMEOUT_S "$cell_s"
   same FV_CONTAINER_DISK_GB "$disk"
@@ -616,7 +621,11 @@ fv_lab_route() {
         why+=("$k: the restored tiers (precision-nvfp4, ltxvae-gen) have one cell per workload; narrow them by arm with FV_CELLS (ADR-0019 §12)") ;;
       FV_B4A_CELLS)
         keys+=("$k")
-        why+=("$k: b4a selects by arm, as every tier: FV_CELLS=\"<cell>-base <cell>-pr\" (fv-lab pod up --cells; ADR-0019 §11.5, §11.6)") ;;
+        if [[ "$FAMILY" == b4a ]]; then
+          why+=("$k: b4a selects by arm, as every tier: FV_CELLS=\"<cell>-base <cell>-pr\" (fv-lab pod up --cells; ADR-0019 §11.5, §11.6)")
+        else
+          why+=("$k: fv-lab selects by arm: FV_CELLS (fv-lab pod up --cells), not FV_B4A_CELLS (ADR-0019 §11.5, §11.6)")
+        fi ;;
       *)
         if [[ " $(echo $FV_LAB_NOT_READ) " == *" $k "* ]]; then
           keys+=("$k")

@@ -1,0 +1,15 @@
+[21:59:01] [precision] matrix start image=2327ed48ab74bffe
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-fcd3e93e-f62f-8438-3f14-38781146d156)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[21:59:02] [precision] ▶ ltx25-4k5s-sol-bf16  /opt/fastvideo-rs/target/release/fv-gpucheck --techniques ltx2/ltx25_distill_sol --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --workload 4k5s --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --warm --no-text-cache --clip /fvscratch/runs/precision/5987e6a-10252158/ltx25-4k5s-sol-bf16/frames  (wall cap 3600s; 0=none)
+[22:06:45] [precision] ok ltx25-4k5s-sol-bf16  463s  
+[22:06:51] [precision] ▶ ltx25-4k5s-sol-nvfp4  /opt/fastvideo-rs/target/release/fv-gpucheck --techniques ltx2/ltx25_distill_sol_nvfp4 --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --workload 4k5s --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --warm --no-text-cache --clip /fvscratch/runs/precision/5987e6a-10252158/ltx25-4k5s-sol-nvfp4/frames  (wall cap 3600s; 0=none)
+[22:13:14] [precision] ok ltx25-4k5s-sol-nvfp4  383s  
+[22:13:22] [precision] compare ltx25-4k5s-sol-bf16--ltx25-4k5s-sol-nvfp4 exit=0 "psnr_mean":18.865877104702207 
+[22:13:22] [precision] gate ltx25-4k5s-sol-bf16--ltx25-4k5s-sol-nvfp4 exit=1 gate verdict: "fail"
+[22:13:22] [precision] skip ltx25-1080p20s-sol-bf16 (not in FV_CELLS)
+[22:13:22] [precision] skip ltx25-1080p20s-sol-nvfp4 (not in FV_CELLS)
+[22:13:22] [precision] skip compare ltx25-1080p20s-sol-bf16--ltx25-1080p20s-sol-nvfp4 (frames missing)
+[22:13:22] [precision] skip gate ltx25-1080p20s-sol-bf16--ltx25-1080p20s-sol-nvfp4 (benchmark.json missing)
+[22:13:22] [precision] matrix done
+matrix_exit=0

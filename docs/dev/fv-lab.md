@@ -107,7 +107,8 @@ that fv-lab would not honour is refused, not dropped, unless fv-lab does the sam
 
 - no equivalent, refused when set: `FV_POD_FILES`, `FV_POD_SCRIPT`, `FV_POD_FILE`, `FV_PROMPTS`, `FV_PROMPT`,
   `FV_SEED`, `FV_AVOID_MACHINES`, `FV_CREATE_WAIT_S`, `FV_FETCH_SKIP`, `FV_FETCH_MAX_MB`, `RUNPOD_ALLOWED_CUDA`,
-  `FV_KEEP_POD=1`, `FV_FETCH_TREE=1`, `RUNPOD_NO_VOLUME=1`;
+  `FV_KEEP_POD=1`, `FV_FETCH_TREE=1`, `RUNPOD_NO_VOLUME=1`, and the retired pair selectors `FV_TECH_CELLS`,
+  `FV_B6_CELLS`, `FV_B4A_CELLS` (select by arm with `FV_CELLS`);
 - refused unless equal to the tier's value in `lab/tiers.toml`: `FV_GEN_TIMEOUT_S` (`cell_timeout_s`),
   `FV_CONTAINER_DISK_GB`, `RUNPOD_CLOUD_TYPE`, `RUNPOD_GPU_TYPE`, `FV_SKIP_TAE=1` on a `tae = true` tier, and
   `RUNPOD_GPU_MAX_DPH` below the tier's `max_usd_per_hr` (above it is moot: fv-deploy holds the tier's);
