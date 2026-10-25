@@ -426,9 +426,9 @@ impl App {
             Some(u) => crate::upload::DirectStore::new(artifacts, u.clone()),
             None => artifacts,
         };
-        // A direct worker (clients call it, `gateway.direct`) keeps its
+        // A direct worker (clients call it, `cluster.direct`) keeps its
         // own API auth; validate() refused trust-gateway for it.
-        let direct = worker_role && config.gateway.direct;
+        let direct = worker_role && config.cluster.direct;
         // A front behind the edge: the edge authenticates, this worker
         // applies each API's policy to its verdict (docs/serve/edge-control-plane.md).
         let front = worker_role && config.dispatch.front;
@@ -557,7 +557,7 @@ impl App {
             (Some(fc), Some(d1s), Some(fg)) => {
                 let store = Arc::new(crate::front::store::FrontJobStore::new(
                     d1s.clone(),
-                    Duration::from_millis(config.gateway.watch_poll_ms.max(50)),
+                    Duration::from_millis(config.cluster.watch_poll_ms.max(50)),
                 ));
                 store.set_insert_behind(Arc::new(|_| true));
                 store.set_waiter(crate::front::DoWaiter::new(fc, fg.families()));
@@ -743,10 +743,10 @@ impl App {
         if worker_role {
             let drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
             if let (Some(pool), Some(d), Some(url), true, Mode::Http) = (
-                &config.gateway.pool,
+                &config.cluster.pool,
                 &d1,
                 &config.server.public_base_url,
-                config.gateway.register,
+                config.cluster.register,
                 config.server.mode,
             ) {
                 let reg = crate::worker::Registration {
@@ -765,7 +765,7 @@ impl App {
                 gate.clone(),
                 d1.clone(),
                 worker.clone(),
-                config.gateway.pool.clone(),
+                config.cluster.pool.clone(),
                 config.limits.queue_max,
             )
             .with_drain(drained, registration.clone());
@@ -799,7 +799,7 @@ impl App {
                 let link = |scope: Scope| crate::edge_link::LinkCfg {
                     do_url: do_url.clone(),
                     scope,
-                    token: config.gateway.internal_token.expose().to_owned(),
+                    token: config.cluster.internal_token.expose().to_owned(),
                     capacity: config.dispatch.capacity,
                     status_every: std::time::Duration::from_secs(config.dispatch.status_s.max(1)),
                     endpoint: endpoint.clone(),
@@ -824,7 +824,7 @@ impl App {
                             Some(fam.clone()),
                         ));
                     }
-                } else if let Some(pool) = &config.gateway.pool {
+                } else if let Some(pool) = &config.cluster.pool {
                     background.push(crate::edge_link::spawn(
                         st.clone(),
                         link(Scope::Pool(pool.clone())),
@@ -839,7 +839,7 @@ impl App {
         if worker_role {
             router = crate::worker::token_layer(
                 router,
-                Arc::from(config.gateway.internal_token.expose()),
+                Arc::from(config.cluster.internal_token.expose()),
                 direct,
                 front,
             );

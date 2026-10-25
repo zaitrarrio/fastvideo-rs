@@ -13,6 +13,7 @@ import { b64, randomBytes } from "../../src/crypto";
 import type { Env } from "../../src/env";
 import { gmi, toContainer } from "../../src/gmi";
 import { brevStartup } from "../../src/brev-park";
+import { REGISTER_OFF_SH } from "../../src/fv-boot";
 import { brevRun, budgetCheck, CLOUDFLARED, deleteOtherPod, otherPodState, endpointUrlOk, isOtherPod, podKey, poolTrees, PROVIDER_BOOT, providerEnv, providerImpl, providerIssues, splitKey, weightsPlan, weightsSource } from "../../src/providers";
 import { validate } from "../../src/schemas";
 import { standaloneSpec } from "../../src/standalone";
@@ -174,6 +175,8 @@ describe("the pod env and start command", () => {
     expect(PROVIDER_BOOT).toContain('report tunnel "$U"');
     expect(PROVIDER_BOOT).toContain("fetch-hub-tree.py");
     expect(PROVIDER_BOOT.trim().endsWith(`exec "$FV_SERVE_BIN" --config /fv-worker.toml`)).toBe(true);
+    // The registration edit is the cluster workers' (fv-boot.ts REGISTER_OFF_SH: `[cluster]` or `[gateway]`, never both).
+    expect(PROVIDER_BOOT).toContain(REGISTER_OFF_SH);
     // The preflight: the binary, the worker config and fv-serve's own config check, before the weights and the tunnel.
     expect(PROVIDER_BOOT).toContain("FV_SERVE_BIN=/opt/fastvideo-rs/bin/fv-serve");
     expect(PROVIDER_BOOT).toContain('--print-config 2>&1 >/dev/null)" || fail "fv-serve config: ');

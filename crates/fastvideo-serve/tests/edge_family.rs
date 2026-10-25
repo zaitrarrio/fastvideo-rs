@@ -1095,7 +1095,7 @@ impl Env {
         c.dispatch.status_s = 2;
         c.dispatch.direct_upload = direct;
         c.dispatch.front = true;
-        c.gateway.watch_poll_ms = 100;
+        c.cluster.watch_poll_ms = 100;
         self.serve(c).await
     }
 }

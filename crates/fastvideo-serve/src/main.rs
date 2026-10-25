@@ -87,6 +87,9 @@ fn main() -> ExitCode {
         eprintln!("fv-serve: {e}");
         return ExitCode::from(2);
     }
+    for note in &config.deprecations {
+        tracing::warn!("config: {note}");
+    }
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

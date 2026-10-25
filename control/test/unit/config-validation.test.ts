@@ -91,6 +91,10 @@ describe("cluster-spec", () => {
     expect(bad("cluster-spec", G({ config_toml: undefined, config: "/etc/fv/nope.toml" }))).toContain("pools.0.config");
     expect(bad("cluster-spec", G({ config_toml: undefined, config: undefined }))).toContain("pools.0.config");
     expect(bad("cluster-spec", G({ config_toml: "#".repeat(13000), config: undefined }))).toContain("pools.0.config_toml");
+    // Stage 1 of the [gateway] → [cluster] rename (ADR-0011 "Renaming a worker-config section"): an inline config may
+    // not say [cluster] yet (an older image refuses it); its old name [gateway] is fine.
+    expect(bad("cluster-spec", G({ config_toml: '[cluster]\npool = "a"\n', config: undefined }))).toContain("pools.0.config_toml");
+    ok("cluster-spec", G({ config_toml: '[gateway]\npool = "a"\n', config: undefined }));
     expect(bad("cluster-spec", P({ models: [{ id: "fasth3", family: "h3", recipe: "h3-turbo" }] }))).toContain("pools.0.models");
     expect(bad("cluster-spec", P({ job_timeout_s: 100, stale_after_s: 200 }))).toContain("pools.0.stale_after_s");
     expect(bad("cluster-spec", P({ id: "gateway" }))).toContain("pools.0.id");
@@ -381,6 +385,7 @@ describe("CPU workers run the fake engine only (the CPU image has no CUDA)", () 
     expect(() => normalizeEndpointSpec({ name: "x", compute: "CPU", config: "runpod-h3-max.toml" })).toThrow(/compute: CPU workers run the fake engine/);
     expect(() => normalizeEndpointSpec({ name: "x", compute: "CPU", config_toml: cudaToml })).toThrow(/compute: CPU workers run the fake engine/);
     expect(normalizeEndpointSpec({ name: "x", compute: "GPU", config: "runpod-ltx.toml" }).compute).toBe("GPU");
+    expect(() => normalizeEndpointSpec({ name: "x", compute: "GPU", config_toml: '[engine]\nbackend = "cuda"\n\n[cluster]\nregister = false\n' })).toThrow(/config_toml: the config sets a \[cluster\] table/);
     expect(normalizeEndpointSpec({ name: "x", config: "runpod-fake.toml" }).compute).toBe("CPU");
     expect(normalizeEndpointSpec({ name: "x" }).config).toBe("runpod-fake.toml");
   });

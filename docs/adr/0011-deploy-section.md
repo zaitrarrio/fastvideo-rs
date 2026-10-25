@@ -1,6 +1,6 @@
 # ADR-0011: The deployment data (`deploy/deploy.toml`)
 
-- Status: Accepted; amended 2026-10-25 (owner decision: one image with boot-time config, below)
+- Status: Accepted; amended 2026-10-25 (owner decision: one image with boot-time config, below; plan F3b: renaming a worker-config section, below)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-deploy-section
 - Crate: `fastvideo-manifest`, module `deploy`; schema
@@ -362,6 +362,77 @@ verify, promote, roll, re-point the autoscaler, retire the old templates),
 the window in which the old fv-control could create a CPU serverless
 endpoint the new CPU image refuses, and the rollback are in
 `docs/serve/images.md` "One image: the live steps".
+
+## Renaming a worker-config section (plan F3b, 2026-10-25)
+
+**Context.** The owner kept the Runpod load-balancer endpoints (2026-10-25,
+option A of plan F3b), so `multiworker.rs` and `server.workers_max` stay
+and F3b is reduced to renames: fv-serve's `[gateway]` table (a worker's
+cluster settings, named after the retired gateway) becomes `[cluster]`.
+Since the one-image decision above, a worker config and the fv-serve that
+reads it ship separately: fv-control, fv-deploy, fv-autoscale's pod pools
+and the launch scripts send the `configs/serve` files as they are
+(`FV_WORKER_TOML_B64`) to whatever image the pool, endpoint, template or
+channel names: a pinned `sha`, the `stable` channel, a Runpod template, or
+a load-balancer endpoint that starts one more worker of the image it was
+created with. fv-serve's `Config` refuses unknown tables
+(`deny_unknown_fields`), so an image built before the rename exits on
+`[cluster]` ("unknown field `cluster`"; fv-boot's `--print-config`
+preflight fails the boot): writing the new name into the shipped configs
+would brick every pool of an older image at its next scale-up.
+
+**Decision: readers first, then writers.**
+
+- **Stage 1 (plan F3b).** fv-serve reads `[cluster]`, and `[gateway]` as
+  its deprecated name (`#[serde(alias)]`; a warning in the log at startup,
+  `Config::deprecations`); a file with both is refused; a config
+  serializes as `[cluster]` (`--print-config`). fv-boot's
+  `register = false` edit (`boot::config::register_off`) goes under
+  whichever name the config has and appends `[gateway]` when it has
+  neither: fv-boot normally runs its own image's fv-serve, but
+  `FV_SERVE_BIN` can point it at another (the fv-boot smoke pod's
+  `FV_SMOKE_SERVE_BIN`), possibly an older one. fv-control's shell boots
+  (`REGISTER_OFF_SH`, for images without fv-boot) do the same. So
+  **nothing writes `[cluster]` in stage 1**: `register_off` is tested
+  never to introduce it. **The writers are unchanged:** every `configs/serve` file keeps `[gateway]`, so
+  `worker-configs.ts`, the fv-deploy goldens and the worker configs every
+  launcher sends are byte-identical (fv-control's start commands change
+  only in the shell boots' edit); `fastvideo-serve`
+  `config::tests::shipped_configs_round_trip_under_both_names` fails on a
+  shipped config that says `[cluster]` (its rename step reads the
+  header as TOML does: spaces, quotes, a trailing comment). fv-control
+  refuses an inline `config_toml` that sets a top-level `cluster` table
+  or key (`worker-config.ts` `setsClusterTable`, in the cluster-pool,
+  standalone and serverless schemas and at launch), naming this section:
+  a pool can run a pre-stage-1 image (a pinned `sha`, `stable`), whose
+  `--print-config` preflight would fail.
+- **Stage 2 (a later change).** Once every image a launcher can boot
+  carries stage 1 (the `stable` channel, every pinned `sha`, every Runpod
+  template and every running endpoint's image at or after the stage-1
+  merge), the writers switch, in one change: (1) the shipped configs say
+  `[cluster]` (one rename, then `node control/gen-configs.mjs` and the
+  fv-deploy goldens regenerated) and the guard
+  `shipped_configs_round_trip_under_both_names` flips to require it;
+  (2) fv-boot's `register_off` appends `[cluster]` (and its stage-1
+  assertion flips); (3) fv-control's `REGISTER_OFF_SH` appends `[cluster]`
+  (the C3c payload corpus regenerated for it), or is deleted with the
+  shell boots once every image carries fv-boot (ADR-0014 §6); (4)
+  fv-control stops refusing `[cluster]` in `config_toml`
+  (`setsClusterTable` and its tests). The alias stays for stored specs'
+  inline configs until a separate decision removes it.
+- **Not renamed.** The environment variables (`FV_GATEWAY_POOL`,
+  `FV_INTERNAL_TOKEN`, `FV_WORKER_DIRECT`): fv-control and the edge set
+  them on running fleets, a contract of its own. The D1 table
+  `gw_workers`: pod workers with `[cluster] register` (on by default)
+  upsert their row every 10 s, and fv-autoscale's pod pools read a pod's
+  in-flight work from it before deleting the pod; workers of every image
+  age write it, so a new name would hide the older workers' rows from the
+  autoscaler and let it delete pods that hold jobs. Only the retired
+  gateway's own tables (`gw_dispatch`, `gw_sessions`), which nothing reads
+  or writes, are no longer created (existing ones stay).
+- **The rule.** Any rename or removal of a key the shipped worker configs
+  use follows the same two stages: every reader first, the writers once
+  no image without the reader can be booted.
 
 ## Consequences
 

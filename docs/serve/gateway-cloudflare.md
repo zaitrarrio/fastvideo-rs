@@ -4,7 +4,8 @@
 > against was removed; the edge Worker with family Durable Objects is the only
 > control plane ([edge-control-plane.md](edge-control-plane.md) §9, "Stage 4 as built"). The
 > scripts named below (`runpod-gateway.sh`, `edge-gpu-test.sh`) are gone. Kept
-> as the design record.
+> as the design record. fv-serve's `[gateway]` table is `[cluster]` since
+> plan F3b (the old name is still read).
 
 Status: design 2026-09-29; **phases 0, 1 and 2 are implemented as a
 parallel path** (the owner: "let's test durable objects as a parallel deployment

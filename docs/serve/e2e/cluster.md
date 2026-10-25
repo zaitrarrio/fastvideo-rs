@@ -36,7 +36,8 @@ the serve code is the same). Raw smoke result:
 
 - **Worker discovery**: the gateway lists the worker pods in
   `FV_POOL_<ID>_URLS`. Self-registration is turned off on each worker
-  (`[gateway] register = false`, appended by the start command).
+  (`[gateway] register = false`, appended by the start command; the table
+  is `[cluster]` since plan F3b, the old name still read).
   Registration writes the worker's `server.public_base_url` into
   `gw_workers`, and here that URL is the gateway's. The gateway would then
   probe itself as a worker. Ordering: the script creates the gateway first

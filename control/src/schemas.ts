@@ -53,7 +53,7 @@ import {
   legacyVariant,
   type NameKind,
 } from "./enums";
-import { CONFIG_NAMES, cpuConfigProblem, MAX_WORKER_TOML_BYTES, workerConfigProblem } from "./worker-config";
+import { CONFIG_NAMES, CLUSTER_TABLE_PROBLEM, cpuConfigProblem, inlineSizeProblem, MAX_WORKER_TOML_BYTES, setsClusterTable, workerConfigProblem } from "./worker-config";
 import { EndpointSpecZ } from "./serverless/spec";
 export { noVolumePod } from "./enums";
 import { HttpError } from "./util";
@@ -150,7 +150,8 @@ export const configTomlZ = z
   .string()
   .min(1)
   .max(MAX_WORKER_TOML_BYTES)
-  .refine((t) => !workerConfigProblem({ config_toml: t }), { message: `over the FV_WORKER_TOML_B64 size guard (${MAX_WORKER_TOML_BYTES} bytes of TOML)` })
+  .refine((t) => !inlineSizeProblem(t), { message: `over the FV_WORKER_TOML_B64 size guard (${MAX_WORKER_TOML_BYTES} bytes of TOML)` })
+  .refine((t) => !setsClusterTable(t), { message: CLUSTER_TABLE_PROBLEM })
   .meta({ "x-ui": "textarea" });
 const channel = z.string().regex(CHANNEL_RE, { message: "a channel: a lower-case word" }).meta({ "x-dynamic": "channels" });
 const sha = z.string().regex(SHA_RE, { message: "7-40 lower-case hex characters" }).meta({ "x-dynamic": "shas", "x-rule": "a git commit: 7-40 hex characters" });

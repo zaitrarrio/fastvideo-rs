@@ -418,7 +418,7 @@ fn the_config_forms_and_explicit_arguments() {
         "[server]\n"
     );
 
-    // 2. named: a controller worker's FV_WORKER_CONFIG, copied with the gateway off
+    // 2. named: a controller worker's FV_WORKER_CONFIG, copied with registration off (its `[gateway]`)
     let p = go(
         base(&[
             ("FV_SERVE_ROLE", s("worker")),
