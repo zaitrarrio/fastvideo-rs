@@ -122,7 +122,7 @@ impl FrontCfg {
         let do_url = c.dispatch.do_url.clone()?;
         c.dispatch.front.then(|| Self {
             do_url: do_url.trim_end_matches('/').to_owned(),
-            token: c.gateway.internal_token.expose().to_owned(),
+            token: c.cluster.internal_token.expose().to_owned(),
             dispatch: c.dispatch.clone(),
             input_url_ttl: Duration::from_secs(6 * 3600),
         })

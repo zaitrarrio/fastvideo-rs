@@ -311,7 +311,8 @@ applies exactly this environment to every `gcp-*.toml` and runs fv-serve's
 - the models match their Runpod twin;
 - the dispatch family is the models' family (`ltx2` → `ltx`).
 
-The configs set no `[gateway] pool`, so the worker opens one socket per
+The configs set no `[cluster] pool` (`[gateway]` in the shipped configs
+until every image reads the new name, ADR-0011), so the worker opens one socket per
 family, never the per-pool socket.
 
 ## 7. Cost safety

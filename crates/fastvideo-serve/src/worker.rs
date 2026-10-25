@@ -4,7 +4,7 @@
 //! - [`token_layer`]: every route but health, `/metrics` and the signed
 //!   `/files` / `/uploads` needs `x-fv-internal-token` (the gateway's
 //!   shared secret); API auth itself is the gateway's (`trust-gateway`).
-//!   A direct worker (`gateway.direct`, no gateway in front) needs the
+//!   A direct worker (`cluster.direct`, nothing in front) needs the
 //!   token only on `/fv/v1/internal/*`; its APIs use its own `auth.mode`
 //!   (docs/control/gateway-less-auth.md).
 //! - [`routes`][]: `/fv/v1/internal/*`:
@@ -750,7 +750,7 @@ impl Registration {
             ))
             .await;
         if let Err(e) = r {
-            tracing::warn!(error = %e, "worker: gateway registration failed");
+            tracing::warn!(error = %e, "worker: registration in gw_workers failed");
         }
     }
 }
@@ -759,9 +759,9 @@ impl Registration {
 pub fn spawn_registration(reg: Registration) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if let Err(e) = registry_schema::migrate(&reg.db).await {
-            tracing::warn!(error = %e, "worker: gateway tables");
+            tracing::warn!(error = %e, "worker: gw_workers table");
         }
-        tracing::info!(pool = %reg.pool, url = %reg.url, "worker: registering with the gateway pool");
+        tracing::info!(pool = %reg.pool, url = %reg.url, "worker: registering in gw_workers");
         loop {
             reg.write(false).await;
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -769,33 +769,22 @@ pub fn spawn_registration(reg: Registration) -> tokio::task::JoinHandle<()> {
     })
 }
 
-/// Pod workers' `gw_workers` registration tables.
+/// Pod workers' registration table, `gw_workers`.
 mod registry_schema {
-    // The `gw_*` D1 tables of the retired gateway (docs/serve/gateway.md §3,
-    // §5): pod workers still register in `gw_workers`; the tables stay (their
-    // data is the owner's to drop). All are `IF NOT EXISTS`.
+    // The registration table keeps the retired gateway's name (docs/serve/gateway.md
+    // §5.3): fv-autoscale's pod pools read a pod's in-flight work from it
+    // before deleting the pod, and workers of every image age write it, so a
+    // rename would hide old workers' rows from the autoscaler. One row per
+    // pod worker: pool, id, URL, state, load, heartbeat. `IF NOT EXISTS`.
     //
-    // - `gw_dispatch`: one row per dispatched job: pool, kind, target (pod URL
-    //   or endpoint id), ref (Runpod job id or worker id), attempt, state
-    //   (`active` → `done` | `lost`), the input URLs (for a re-dispatch), and
-    //   the run/queue durations once finished (metrics).
-    // - `gw_sessions`: stream and peer-session leases (session id → pool,
-    //   worker URL or Runpod job, owner, lease key).
-    // - `gw_workers`: pod workers that registered themselves (pool, id, URL,
-    //   state, load, heartbeat).
+    // The gateway's own tables (`gw_dispatch`, `gw_sessions`) are no longer
+    // created (plan F3b: nothing reads or writes them since the gateway was
+    // retired); existing ones are left in place (dropping data is the
+    // owner's call).
 
     use fastvideo_serve_kit::d1::{D1Client, D1Error, Stmt};
 
     pub const TABLES: &[&str] = &[
-        "CREATE TABLE IF NOT EXISTS gw_dispatch (job_id TEXT PRIMARY KEY, pool TEXT NOT NULL, kind TEXT NOT NULL, \
-         target TEXT, ref TEXT, attempt INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL, inputs TEXT, \
-         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, finished_at INTEGER, run_s REAL, wait_s REAL)",
-        "CREATE INDEX IF NOT EXISTS gw_dispatch_pool_state ON gw_dispatch (pool, state, finished_at)",
-        "CREATE TABLE IF NOT EXISTS gw_sessions (id TEXT PRIMARY KEY, pool TEXT NOT NULL, kind TEXT NOT NULL, \
-         target TEXT, ref TEXT, owner TEXT, lease_key TEXT, state TEXT NOT NULL, body TEXT, \
-         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
-        "CREATE INDEX IF NOT EXISTS gw_sessions_lease ON gw_sessions (lease_key, state)",
-        "CREATE INDEX IF NOT EXISTS gw_sessions_pool ON gw_sessions (pool, state)",
         "CREATE TABLE IF NOT EXISTS gw_workers (pool TEXT NOT NULL, worker_id TEXT NOT NULL, url TEXT NOT NULL, \
          state TEXT NOT NULL, running INTEGER NOT NULL DEFAULT 0, sessions INTEGER NOT NULL DEFAULT 0, \
          updated_at INTEGER NOT NULL, PRIMARY KEY (pool, worker_id))",

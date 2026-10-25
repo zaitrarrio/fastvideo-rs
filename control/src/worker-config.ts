@@ -32,12 +32,38 @@ export function b64utf8(s: string): string {
   return btoa(bin);
 }
 
-/** Why a config cannot be sent, or null: none given, a name fv-control does not carry, or over the env size guard. */
-export function workerConfigProblem(x: { config?: string; config_toml?: string }): string | null {
-  if (x.config_toml) {
-    const n = b64utf8(x.config_toml).length;
-    return n > MAX_WORKER_TOML_B64 ? `the config is ${n} bytes as FV_WORKER_TOML_B64, over the ${MAX_WORKER_TOML_B64}-byte guard on one Runpod env value` : null;
+/** Why an inline config is too large to send, or null. */
+export function inlineSizeProblem(toml: string): string | null {
+  const n = b64utf8(toml).length;
+  return n > MAX_WORKER_TOML_B64 ? `the config is ${n} bytes as FV_WORKER_TOML_B64, over the ${MAX_WORKER_TOML_B64}-byte guard on one Runpod env value` : null;
+}
+
+/** Why an inline config may not say `[cluster]` yet (stage 1 of the rename, docs/adr/0011-deploy-section.md
+ * "Renaming a worker-config section"). */
+export const CLUSTER_TABLE_PROBLEM =
+  "the config sets a [cluster] table: images built before plan F3b refuse it (fv-serve: unknown field `cluster`), and a pool can run one (a pinned sha, the stable channel); until every image reads [cluster] (docs/adr/0011-deploy-section.md, \"Renaming a worker-config section\", stage 2), write it under its old name [gateway], which every fv-serve reads";
+
+/** Whether a worker config's TOML sets the top-level `cluster` table, by any spelling: a `[cluster]` or
+ * `[cluster.x]` header, an array of tables, a quoted name, or a top-level `cluster = …` / `cluster.x = …` key before
+ * the first header. A line reader (no TOML parser in fv-control): a multi-line string whose line looks like one of
+ * these counts too, which only refuses a config that could be written another way. */
+export function setsClusterTable(toml: string): boolean {
+  const name = String.raw`(?:cluster|"cluster"|'cluster')`;
+  const header = new RegExp(String.raw`^\s*\[\[?\s*${name}\s*[\].]`);
+  const key = new RegExp(String.raw`^\s*${name}\s*[=.]`);
+  let topLevel = true;
+  for (const line of toml.split(/\r?\n/)) {
+    if (header.test(line)) return true;
+    if (/^\s*\[/.test(line)) topLevel = false;
+    else if (topLevel && key.test(line)) return true;
   }
+  return false;
+}
+
+/** Why a config cannot be sent, or null: none given, a name fv-control does not carry, over the env size guard, or
+ * an inline one that says `[cluster]` before every image reads it. */
+export function workerConfigProblem(x: { config?: string; config_toml?: string }): string | null {
+  if (x.config_toml) return inlineSizeProblem(x.config_toml) ?? (setsClusterTable(x.config_toml) ? CLUSTER_TABLE_PROBLEM : null);
   if (!x.config) return "no worker config: config (a configs/serve file name) or config_toml (the images bake none)";
   if (!namedConfig(x.config)) return `${x.config} is not a worker config fv-control carries (configs/serve: ${CONFIG_NAMES.join(", ")}); an inline config goes in config_toml`;
   return null;
