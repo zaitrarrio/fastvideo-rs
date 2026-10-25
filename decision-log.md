@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-10-24 · FVID-2026-10-24-metronome-deadline-slack
+- Trigger: `stream_causal`'s paused-time session-limit tests hung twice (CI job 120998352681, `check.sh` on the build pod). Root cause: when the first block reaches the causal pacer while tokio's paused clock stands at a timer-wheel slot boundary (e.g. 1.984 s) rather than a whole second, the metronome schedule is anchored on a millisecond that f64 cannot represent; later the clock lands exactly on a deadline that the f64 schedule places a few ulps later (64.109 s vs 64.10900000000001 s), `Metronome::poll` asks for a 7e-15 s wait, `Duration::from_secs_f64` makes it 0 ns, tokio fires that sleep at once without advancing the paused clock, and the pacer spins forever without ticking or closing `ticks`
+- Options: a tokio timeout or retry in the test; round the wait up in the causal pacer only; let `Metronome::poll` treat a deadline within a small slack as reached
+- Decision: `Metronome::poll` ticks when `now` is within `DEADLINE_SLACK_S` (1 µs) of the deadline, so every wait it returns moves any clock; the two paused-time tests run on their own thread under a 60 s real-time guard (`paused_time`) that fails with a clear message instead of hanging. No ADR: in real time a tick due within 1 µs now fires at that poll instead of after a zero-length sleep, which nothing can observe
+- Reason: the defect is in the scheduler's contract (a wait shorter than any timer's resolution), shared by the clip pacer and the fal director; the guard only bounds a future hang
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: none
+- Verification: `metronome_waits_always_move_a_millisecond_clock` (replays the paused clock for 1003 anchors; fails before the fix, e.g. at the 1.984 s anchor); a Python replay of tokio 1.53.1's millisecond wheel and Rust's float conversions: 6370 of 20000 whole-ms anchors spun before, 0 after, 0 of 20000 slow-first-block runs after; on the build pod the test fails with the slack set to 0 and passes with it, 20 of 20 repeated runs of the session-limit tests pass, and fmt, workspace clippy, the engine-service tests, the workspace lib tests and `scripts/serve/check.sh` are green
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-gold-tier-gpu-and-settings
 - Trigger: review of PR #151 (plan D2): two gold files carried oracle numbers measured on an H100 for an RTX PRO 6000 tier (`fasth3-4step-vsa` PSNR / LPIPS, `ltx25-ref2v` PSNR), and H3 latencies measured before the MXFP8 video-decoder default (2026-10-14) sat in the fields while `fasth3-trim-nvfp4` gapped its numbers for the same reason
 - Options: keep the numbers with a note; gap every number not measured in the served configuration; keep a number measured under a non-default setting only when that exact setting is named

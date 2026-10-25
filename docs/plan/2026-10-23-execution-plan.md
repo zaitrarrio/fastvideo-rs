@@ -1077,3 +1077,17 @@ ran (pod id, $/hr), result, cost.
   tests about $0.80. Cargo gates on 83c5d6e1 (build pod): fmt, workspace
   clippy, fastvideo-lab clippy (all features), fastvideo-lab tests (100),
   `cargo test --workspace --lib` (2121) green.
+- 2026-10-24, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): `stream_causal`
+  session-limit hang root-caused and fixed on `claude/fix-causal-limit-hang`
+  (draft PR): `Metronome::poll` could ask for a sub-nanosecond wait that
+  tokio's paused clock never gets past (first block at a wheel slot
+  boundary, then f64 deadline a few ulps after the clock); it now ticks
+  within 1 µs of the deadline, and the paused-time tests run under a 60 s
+  real-time guard. Verified by the coordinator on the replacement build
+  pod `awavskcvtbs0ub` (`l3d75u8a8zhw47`'s host had no free vCPU; cloned onto
+  the same `fv-build` volume and the old pod deleted): the regression test
+  passes and fails with the slack set to 0 (anchor 3 ms: a 2.2e-16 s wait);
+  20 of 20 repeated runs of the session-limit tests pass; fmt, workspace
+  clippy, `cargo test -p fastvideo-engine-service` (141),
+  `cargo test --workspace --lib` (2109) and `scripts/serve/check.sh` green.
+  No GPU cost.
