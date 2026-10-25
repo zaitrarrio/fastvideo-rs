@@ -61,9 +61,11 @@ MATRIX="$ROOT/scripts/gpu/runpod-matrix.sh"
 # A family's `case` branch in runpod-matrix.sh: a label of the top-level
 # `case "$FAMILY" in` (two-space indent; `name)`, `name )`, `a|name)`, a
 # trailing comment all count; nested cases' labels do not).
+# grep reads all of its input (no -q): under pipefail an early exit would
+# SIGPIPE sed and read as "no branch" whenever the branch is found.
 has_branch() {
   sed -n '/^case "\$FAMILY" in$/,/^esac$/p' "$MATRIX" \
-    | grep -qE "^  ([A-Za-z0-9_-]+ *\| *)*$1( *\| *[A-Za-z0-9_-]+)* *\)"
+    | grep -E "^  ([A-Za-z0-9_-]+ *\| *)*$1( *\| *[A-Za-z0-9_-]+)* *\)" >/dev/null
 }
 for f in $FV_LAB_RETIRED; do
   grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: retired family $f is no tier of lab/tiers.toml" >&2; exit 2; }
