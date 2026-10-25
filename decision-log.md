@@ -1672,6 +1672,26 @@ Project code: FVID
 - ADR: docs/adr/0023-lab-report-and-ci-bridge.md §4
 - Verification: the check fails on each of the review's mutations and eight more (ADR-0023 §4 lists them) and passes on the head; `pod::tests::every_pod_deletes_itself_at_its_wall_cap` (stdin key, `rm -f "$1.resp"`, no `Bearer $RUNPOD_API_KEY`); `edge.test.ts` (no pause after the last attempt); goldens regenerated and `--check` green; build-pod gates. The changed function text is not yet live-checked
 
+### FVID · 2026-10-25 · FVID-2026-10-25-retire-gated-script-families
+- Trigger: the coordinator's GPU gates (ADR-0019 §8, §9.5) passed for all ten fv-lab tiers: `rtx6000` (D1a, #171), `techniques`, `b6`, `precision`, `rtx5090` (#176) and `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae` (#184); every arm that ran was byte-identical; the coordinator asked for the branches' retirement in the next D1 PR
+- Options: delete the ten `case` branches and route the families to fv-lab, with their fixtures frozen; keep the branches until the whole script goes
+- Decision: (coordinator) delete them. `scripts/gpu/fv-lab-retired.sh` lists the retired families; `runpod-http.sh run` / `plan` for one runs `fv-lab pod up` (FV_CELLS, FV_BASELINE_SHA, FV_EXTRA_ENV, FV_LPIPS mapped; settings fv-lab lacks refused; `FV_LAB_BIN` / PATH / `./fv-lab`; `FV_DRY_RUN=1` prints the command); their goldens are frozen (fv-lab's own since the gate, changed only on purpose with the cell in one PR); `runpod.sh rtx6000` deleted; `headline` runs its cells of the retired tiers through `fv-lab run --runs-dir`; `precision`'s `ltx-nvfp4` mode and `ltxvae`'s `FV_VAE_GEN` arms are dropped with the branches (a tier each if wanted)
+- Reason: two runners for one tier drift; the gate showed they are equal, so the script copy only costs upkeep
+- Reversibility: cheap (git history has the branches; a family returns by restoring its branch and leaving the list)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §10
+- Verification: `fv-lab-goldens.sh --check` (frozen fixtures present, branches gone, the guards fail when not), `tests/dry_run.rs::retired_families_are_frozen_tiers_without_a_branch`, `tests/fv_lab_bin.rs::runs_dir_replaces_the_run_directory`, every remaining family's dry run equal before and after, `runpod-http.sh` dry runs and a fake `FV_LAB_BIN`; gates on the build pod
+
+### FVID · 2026-10-25 · FVID-2026-10-25-retire-gated-script-families-review
+- Trigger: independent review of PR #185 (coordinator): host settings fv-lab ignores were dropped silently (worst: `FV_POD_CAP_S=1800` became the tier's 14400 s), `FV_EXTRA_ENV` passed the dropped modes' knobs to a pod that ignores them, `headline` ignored `FV_PROMPTS` / `FV_PROMPT` / `FV_SEED` and swallowed a missing fv-lab, host-side globbing of `FV_CELLS` / `FV_EXTRA_ENV`, truncated usage texts, stale lab comments, a CI path filter, `FV_FAMILY=gold runpod-http.sh run` creating a pod that runs nothing, `FV_GEN_TIMEOUT_S` compared with a literal
+- Options: fix in #185; follow-ups
+- Decision: (coordinator) fix in #185. `fv-lab pod up --wall-cap-s` lowers a tier's cap and `FV_POD_CAP_S` maps to it; every other script-path setting is refused unless fv-lab does the same (the tier's value from `lab/tiers.toml`, or fv-lab's fixed one); `FV_EXTRA_ENV` keys no tier reads are refused; `headline` exits 2 on a missing fv-lab or a prompt / seed override and logs a failed tier as the recursive run did; `gold` refused for `run` / `all`; lists read with `read -ra`; usage printed to the end of the header; `has_branch` reads the top-level `case "$FAMILY"` labels as bash does
+- Reason: "refused, not dropped" must hold for every setting, or a run silently differs from what was paid for
+- Reversibility: cheap
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §10
+- Verification: `scripts/gpu/tests/fv-lab-route.test.sh` (67 checks; each fix's mutation fails it), `tests/fv_lab_bin.rs::wall_cap_can_only_be_lowered`, `tests/dry_run.rs::branch_labels_are_read_as_bash_reads_them`; gates on the build pod
+
 ### FVID · 2026-10-25 · FVID-2026-10-25-one-image-boot-config
 - Trigger: ADR-0011's open owner decision (one CUDA image whose worker config is always supplied at boot, review §7.4)
 - Options: keep seven variant images with baked configs; one CUDA image + the CPU image, config sent at boot

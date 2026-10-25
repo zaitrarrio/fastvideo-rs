@@ -174,8 +174,9 @@ fasth3-4step-vsa-768p (on the EU volume it loads the served
 encoder), h3-480p-fullopt (`sol-h3-rtx`: no adapter, since
 `is_sol_h3_recipe` excludes `-rtx`; it covers the plan's quant and placement
 and TeaCache installed in fuse), ltx25-512p-sol (LTX-2.5 two-stage). The
-paths those cells do not reach run in the `b6` family of
-`scripts/gpu/runpod-matrix.sh` (baseline binary against this build, the same
+paths those cells do not reach run in the `b6` family (first of
+`scripts/gpu/runpod-matrix.sh`; the `b6` tier of `lab/` since, fv-lab only after
+its GPU gate, ADR-0019 §10) (baseline binary against this build, the same
 command line, `compare-clips --off-identity`), on trees of the EU volume
 only:
 
