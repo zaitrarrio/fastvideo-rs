@@ -1701,3 +1701,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0011-deploy-section.md "One image with boot-time config"; docs/serve/images.md "One image: the live steps"
 - Verification: `fastvideo-deploy` `an_image_started_without_a_config_refuses_to_boot`, `boot::config::tests::no_config_refuses_to_boot`, `payload_goldens::every_worker_config_fits_the_env_size_guard`; `fastvideo-manifest` deploy tests (one GPU image, smoke config carried); fv-control `payloads.test.ts` (read-compat, size guard), `gen-configs.mjs --check`; `ci-images.sh smoke` asserts the refusal (runs in CI on the image build); live steps pending the owner
+
+### FVID · 2026-10-25 · FVID-2026-10-25-fv-lab-verdict-step
+- Trigger: plan D1d (first slice): `b4a` stayed in `runpod-matrix.sh` because its verdict (reuse counts, cache evidence, the evidence diff, per-cell and family verdict files) was neither a compare nor a gate (ADR-0019 §9.1); `gate` was not an fv-lab subcommand
+- Options: a shell hook per cell; a typed `[verdict]` in the cell schema; keep `b4a` in the script
+- Decision: a typed, optional `[verdict]` table (cell v1, additive): fresh verdict arms, per-arm exit / evidence files / line counts, per-cell `--off-identity` pairs and evidence diffs, `<family>-<cell>.verdict.json` and `<family>.verdict.json` as the script writes them; `b4a` moved as a tier (3 cells, goldens from the script; the branch stays until its GPU gate); `fv-lab gate <run dir>` re-evaluates a finished run's promotion gates and verdicts offline; the promotion rule stays `fv-gpucheck gate` (aliased, not moved); `fv-lab pod fetch` also takes the verdict files; line patterns are substrings with `*`, no regex dependency
+- Reason: equality with the script needs the same files, which a typed step gives by construction and a test can hold (the script's own branch and fv-lab on one fake box); typed data is validated by `fv-lab check` and can be re-evaluated offline; the frame generalises to `determinism` / `oracle` by adding checks, not steps
+- Reversibility: high (an optional table; the script branch is untouched until the GPU gate)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §11
+- Verification: `tests/verdict.rs` (script vs fv-lab verdicts, evidence and diffs byte-identical on fakes; FV_B4A_CELLS vs --cells; stale verdicts; `fv-lab gate` offline), `tests/{dry_run,payload_golden,fv_lab_bin,schema}.rs` with the `b4a` fixtures, `fv-lab-goldens.sh --check`; GPU gate (§11.6) pending, the coordinator's
