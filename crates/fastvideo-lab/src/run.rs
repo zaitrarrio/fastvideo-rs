@@ -18,7 +18,12 @@
 //!   compare/compare-clips-<b>--<c>[-<prompt>].json, <tag>.{stdout,stderr}.log
 //!   gate/gate-<b>--<c>.json, <tag>.{stdout,stderr}.log
 //!   lpips-fetch.log             (FV_LPIPS=1)
+//!   <family>-<cell>.verdict.json, <family>.verdict.json, <cell>.<diff>,
+//!   <arm>/<evidence file>       (a cell's [verdict], D1d: b4a's files)
 //! ```
+//!
+//! [`Runner::regate`] is `fv-lab gate`: the same gates and verdicts evaluated
+//! again from a finished run directory, with nothing run and nothing removed.
 //!
 //! The weight gate is `verify-weights.sh` and the clip metrics and the
 //! promotion gate are `fv-gpucheck compare-clips` / `gate`: called, never
@@ -1544,6 +1549,48 @@ mod tests {
             c.paths().baseline.as_deref(),
             Some(Path::new("/fvscratch/baseline-7654321/fv-gpucheck"))
         );
+    }
+
+    /// `b4-verdict.sh`'s `b4_exit_ok` and `b4_identical` on the stub shapes
+    /// of `scripts/gpu/tests/b4-verdict.test.sh` (pretty-printed reports).
+    #[test]
+    fn exit_and_identity_read_as_b4_verdict_sh() {
+        let d = std::env::temp_dir().join(format!("fv-lab-b4-pieces-{}", std::process::id()));
+        let _ = fs::create_dir_all(&d);
+        let f = d.join("x.json");
+        for (body, ok) in [
+            ("{\"cell\":\"a\",\"exit\":0,\"seconds\":12}\n", true),
+            ("{\n  \"exit\": 0\n}\n", true),
+            ("{\"exit\":10,\"seconds\":1}", false),
+            ("{\"exit\":01}", false),
+            (
+                "{\"cell\":\"a\",\"exit\":null,\"skipped\":\"weights incomplete\"}",
+                false,
+            ),
+        ] {
+            fs::write(&f, body).unwrap();
+            assert_eq!(summary_exit_ok(&f), ok, "{body}");
+        }
+        assert!(!summary_exit_ok(&d.join("missing.json")));
+        let report = |ok: &str, frames: &str, status: &str| {
+            format!(
+                "{{\n  \"checks\": [\n    {{\n      \"name\": \"off_identity\",\n      \"ok\": {ok},\n      \"values\": {{}}\n    }},\n    {{\n      \"name\": \"off_identity_frame_count\",\n      \"ok\": {frames}\n    }}\n  ],\n  \"status\": \"{status}\"\n}}\n"
+            )
+        };
+        for (body, ok) in [
+            (report("true", "true", "pass"), true),
+            (report("false", "true", "fail"), false),
+            (report("true", "false", "fail"), false),
+            (
+                "{\"stage\":\"compare-clips-a--b\",\"status\":\"skipped\",\"reason\":\"frames missing\"}".to_owned(),
+                false,
+            ),
+        ] {
+            fs::write(&f, &body).unwrap();
+            assert_eq!(compare_identical(&f), ok, "{body}");
+        }
+        assert!(!compare_identical(&d.join("missing.json")));
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
