@@ -1,0 +1,21 @@
+[16:56:34] [ltxvae] matrix start image=8537f0c0b1bf0d87
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-d7218fc2-d0b9-ea0a-27ba-bd7d21e70774)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[16:56:38] [ltxvae] ▶ ltxvae-4k5s-fast  env FASTVIDEO_GPU_TRACE_DECODE=1 FASTVIDEO_LTX_VAE_CHECK=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 4k5s --decoder fast --warm --clip /fvscratch/runs/ltxvae/b0d0bb8-1025165621-b3c7/ltxvae-4k5s-fast/frames  (wall cap 3600s; 0=none)
+[16:57:13] [ltxvae] ok ltxvae-4k5s-fast  35s  /fvscratch/runs/ltxvae/b0d0bb8-1025165621-b3c7/ltxvae-4k5s-fast/stderr.log:ltx2 vae-bench fast: decode 12.15s (vae 12.00s, rgb 0.77s, push 0.00s, wait 0.15s, mp4 tail 0.00s), png frames after 1.11s, peak Some(16496) MiB
+[16:57:16] [ltxvae] ▶ ltxvae-4k5s-streaming  env FASTVIDEO_GPU_TRACE_DECODE=1 FASTVIDEO_LTX_VAE_CHECK=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 4k5s --decoder streaming --warm --clip /fvscratch/runs/ltxvae/b0d0bb8-1025165621-b3c7/ltxvae-4k5s-streaming/frames  (wall cap 3600s; 0=none)
+[16:58:16] [ltxvae] ok ltxvae-4k5s-streaming  59s  /fvscratch/runs/ltxvae/b0d0bb8-1025165621-b3c7/ltxvae-4k5s-streaming/stderr.log:ltx2 vae-bench streaming: decode 29.50s (vae 29.23s, rgb 1.16s, push 0.00s, wait 0.21s, mp4 tail 0.00s), png frames after 1.10s, peak Some(16304) MiB
+[16:58:21] [ltxvae] compare ltxvae-4k5s-streaming--ltxvae-4k5s-fast exit=0 "psnr_mean":53.21866967005178 
+[16:58:21] [ltxvae] skip ltxvae-4k5s-fast-untraced (not in FV_CELLS)
+[16:58:21] [ltxvae] skip ltxvae-4k5s-streaming-untraced (not in FV_CELLS)
+[16:58:21] [ltxvae] skip ltxvae-4k5s-fast-mp4 (not in FV_CELLS)
+[16:58:21] [ltxvae] skip ltxvae-4k5s-fast-tune (not in FV_CELLS)
+[16:58:21] [ltxvae] skip ltxvae-1080p20s-fast (not in FV_CELLS)
+[16:58:21] [ltxvae] skip ltxvae-1080p20s-streaming (not in FV_CELLS)
+[16:58:21] [ltxvae] skip compare ltxvae-1080p20s-streaming--ltxvae-1080p20s-fast (frames missing)
+[16:58:21] [ltxvae] skip ltxvae-1080p20s-fast-untraced (not in FV_CELLS)
+[16:58:21] [ltxvae] skip ltxvae-1080p20s-streaming-untraced (not in FV_CELLS)
+[16:58:21] [ltxvae] skip ltxvae-1080p20s-fast-mp4 (not in FV_CELLS)
+[16:58:21] [ltxvae] skip ltxvae-1080p20s-fast-tune (not in FV_CELLS)
+[16:58:21] [ltxvae] matrix done
+matrix_exit=0

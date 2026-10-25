@@ -1,0 +1,45 @@
+[16:45:49] [fastvideo] matrix start image=8537f0c0b1bf0d87
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-29c8ec8c-40f0-d9c8-7d1b-02040f42d70d)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[16:45:49] [fastvideo] skip h3-base-768p (not in FV_CELLS)
+[16:45:49] [fastvideo] skip fasth3-8step-768p (not in FV_CELLS)
+[16:45:49] [fastvideo] skip fasth3-4step-vsa-768p (not in FV_CELLS)
+[16:45:49] [fastvideo] skip fasth3-8step-768p-taeh3 (not in FV_CELLS)
+[16:45:49] [fastvideo] skip fasth3-4step-vsa-768p-taeh3 (not in FV_CELLS)
+[16:45:49] [fastvideo] skip compare fasth3-8step-768p--fasth3-8step-768p-taeh3 (frames missing)
+[16:45:49] [fastvideo] skip compare fasth3-4step-vsa-768p--fasth3-4step-vsa-768p-taeh3 (frames missing)
+[16:45:49] [fastvideo] skip gate fasth3-8step-768p--fasth3-8step-768p-taeh3 (benchmark.json missing)
+[16:45:49] [fastvideo] skip gate fasth3-4step-vsa-768p--fasth3-4step-vsa-768p-taeh3 (benchmark.json missing)
+[16:45:49] [fastvideo] skip h3-base-480p (not in FV_CELLS)
+[16:45:49] [fastvideo] SKIP fasth3-8step-480p: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:45:50] [fastvideo] ▶ fasth3-4step-vsa-480p  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --height 480 --width 832 --adaln-cache /fvscratch/runs/fastvideo/b0d0bb8-1025164519-93a7/fasth3-4step-vsa-480p-adaln.cache --clip-dir /fvscratch/runs/fastvideo/b0d0bb8-1025164519-93a7/fasth3-4step-vsa-480p/frames --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder auto --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --warm  (wall cap 3600s; 0=none)
+[16:48:19] [fastvideo] ok fasth3-4step-vsa-480p  149s  /fvscratch/runs/fastvideo/b0d0bb8-1025164519-93a7/fasth3-4step-vsa-480p/stderr.log:[INFO] h3/timings {"audio_decode_s":0.052986403,"decode_s":2.0854410839999997,"denoise_s":6.211378391,"load_s":131.057548877,"peak_mib":62980,"refine_s":0.000409109,"step_s":[1.57440234375,1.54350830078125,1.545150390625,1.5481436767578125],"text_cache":"hit","text_encoder":"cache","text_s":0.227812261,"total_s":8.624410674,"video_decode_s":2.032454681,"video_encode_s":0.055875694,"video_push_s":0.00005385000000000001,"video_rgb_s":0.05904144099450218,"video_vae_s":1.964515952467918,"video_wait_s":0.163913954,"warm":true,"write_s":0.06019672}
+[16:48:19] [fastvideo] SKIP fasth3-8step-480p-taeh3: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:48:20] [fastvideo] ▶ fasth3-4step-vsa-480p-taeh3  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --height 480 --width 832 --taeh3-weights /workspace/weights/auxiliary/tae/taeh3.safetensors --adaln-cache /fvscratch/runs/fastvideo/b0d0bb8-1025164519-93a7/fasth3-4step-vsa-480p-adaln.cache --clip-dir /fvscratch/runs/fastvideo/b0d0bb8-1025164519-93a7/fasth3-4step-vsa-480p-taeh3/frames --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder auto --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --warm  (wall cap 3600s; 0=none)
+[16:48:42] [fastvideo] ok fasth3-4step-vsa-480p-taeh3  22s  /fvscratch/runs/fastvideo/b0d0bb8-1025164519-93a7/fasth3-4step-vsa-480p-taeh3/stderr.log:[INFO] h3/timings {"audio_decode_s":0.053080724,"decode_s":0.377938292,"denoise_s":6.240494974,"load_s":7.156125415,"peak_mib":56420,"refine_s":0.000379338,"step_s":[1.5785618896484375,1.5554357910156251,1.5539835205078125,1.5523388671875],"text_cache":"hit","text_encoder":"cache","text_s":0.255437939,"total_s":6.983085901,"video_decode_s":0.324857568,"video_encode_s":0.075140759,"video_push_s":0.086679132,"video_rgb_s":0.03973313200081825,"video_vae_s":0.1378044440075755,"video_wait_s":0.113648292,"warm":true,"write_s":0.059025554}
+[16:48:42] [fastvideo] skip compare fasth3-8step-480p--fasth3-8step-480p-taeh3 (frames missing)
+[16:48:43] [fastvideo] compare fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3 exit=0 "psnr_mean":31.123621627268943 
+[16:48:43] [fastvideo] skip gate fasth3-8step-480p--fasth3-8step-480p-taeh3 (benchmark.json missing)
+[16:48:43] [fastvideo] gate fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3 exit=1 gate verdict: "fail"
+[16:48:43] [fastvideo] skip fasth3-4step-dense-768p (not in FV_CELLS)
+[16:48:43] [fastvideo] skip ltx25-4k5s (not in FV_CELLS)
+[16:48:43] [fastvideo] skip ltx25-4k5s-taehv (not in FV_CELLS)
+[16:48:43] [fastvideo] skip compare ltx25-4k5s--ltx25-4k5s-taehv (frames missing)
+[16:48:43] [fastvideo] skip gate ltx25-4k5s--ltx25-4k5s-taehv (benchmark.json missing)
+[16:48:43] [fastvideo] skip ltx25-1080p20s (not in FV_CELLS)
+[16:48:43] [fastvideo] skip ltx25-1080p20s-taehv (not in FV_CELLS)
+[16:48:43] [fastvideo] skip compare ltx25-1080p20s--ltx25-1080p20s-taehv (frames missing)
+[16:48:43] [fastvideo] skip gate ltx25-1080p20s--ltx25-1080p20s-taehv (benchmark.json missing)
+[16:48:43] [fastvideo] skip ltx25-512p (not in FV_CELLS)
+[16:48:43] [fastvideo] skip ltx25-512p-taehv (not in FV_CELLS)
+[16:48:43] [fastvideo] skip compare ltx25-512p--ltx25-512p-taehv (frames missing)
+[16:48:43] [fastvideo] skip gate ltx25-512p--ltx25-512p-taehv (benchmark.json missing)
+[16:48:43] [fastvideo] matrix done

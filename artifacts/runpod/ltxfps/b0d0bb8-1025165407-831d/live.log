@@ -1,0 +1,14 @@
+[16:54:19] [ltxfps] matrix start image=8537f0c0b1bf0d87
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-5741baa1-9470-83b8-d0e9-6889c444453c)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[16:54:20] [ltxfps] ▶ ltx25-1080p-25fps  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --workload 1080p20s --num-frames 121 --frame-rate 25 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --clip /fvscratch/runs/ltxfps/b0d0bb8-1025165407-831d/ltx25-1080p-25fps/frames --sink-check  (wall cap 3600s; 0=none)
+[16:59:37] [ltxfps] ok ltx25-1080p-25fps  316s  
+[16:59:37] [ltxfps] skip ltx25-1080p-48fps (not in FV_CELLS)
+[16:59:37] [ltxfps] skip ltx25-1080p-50fps (not in FV_CELLS)
+[16:59:37] [ltxfps] skip ltx25-1080p-50fps-silent (not in FV_CELLS)
+[16:59:39] [ltxfps] SKIP fasth3-8step-sink: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:59:39] [ltxfps] matrix done
