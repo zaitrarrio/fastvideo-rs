@@ -83,14 +83,14 @@ parallel agents.
 |---|---|---|---|---|---|
 | C1 | `[deploy]` section of the family manifest; presets, variant tables, `families.tsv`, autoscale pools and the Dockerfile variant stages generated from it | `--check` green; one image with boot-time config if the owner decides so | pod | A4 | merged (#156; single image: owner decision, ADR-0011) |
 | C2 | `fv-boot` in `fastvideo-deploy`: driver check, config materialization, weights plan (volume / registry `hydrate` / hub / none), sidecar, tunnel and phase reports, watchdog, exec; fake provider and fake chunk source tests; the ten boot variants deleted | one boot script in the tree; fv-control sends env only | pod; **GPU** one pod boot on the EU volume | C1, registry WO-002 for the `hydrate` source (volume and hub sources first) | merged (#159: fv-boot is the images' entrypoint and every fv-control boot prefers it, ADR-0014; GPU gate green for the image kind on the EU volume (ltx); open per-kind gates before lifting `FV_BOOT_LEGACY` (cluster worker, serverless r2 streaming, edge watchdog, GMI / Brev, upsampler; ADR-0014 §6); remaining: C2b deletes the shell boots and sends env only after the image promotion, the `registry` source after WO-002, the upsampler launcher in Rust) |
-| C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo (C3a pr #169: Runpod pods and serverless queue endpoints, the `Provider` trait in `fastvideo-deploy`, the `Launch` schema, the shared guards and backstop, `fv-deploy plan|up|status|logs|smoke|down`, ADR-0018; live gate passed on Runpod EU (h3-turbo smoke); next: C3b Vast + GCP, C3c fv-control on the generated `Launch` types, C3d templates / release / D1 ledger) |
+| C3 | `fv-deploy` with the `Provider` trait (from `fastvideo-autoscale`): `runpod::{Pod,Serverless}`, `vast`, `gcp`; shared money guards, backstop, ledger, templates, release promote/rollback; fv-control on the shared `Launch` schema | `fv-deploy up` per provider with the same smoke | pod; **GPU** one `fv-deploy up` on Runpod EU | C2 | todo (C3a pr #169: Runpod pods and serverless queue endpoints, the `Provider` trait in `fastvideo-deploy`, the `Launch` schema, the shared guards and backstop, `fv-deploy plan|up|status|logs|smoke|down`, ADR-0018; live gate passed on Runpod EU (h3-turbo smoke); C3c: fv-control on the generated `Launch` types: `control/src/launch-gen.ts` (types + zod from the committed schemas, `gen-configs.mjs --check`), every Runpod GPU pod and GPU serverless endpoint built as a `Launch` with bodies by the Rust builders' rules, payloads unchanged, fv-deploy goldens field by field with the intended differences, ADR-0018 §7; CPU / GMI / Brev outside Launch v1 until the schema gains them (after C3b); next: C3b Vast + GCP, C3d templates / release / D1 ledger) |
 | C4 | One image with boot-time config (owner decision 2026-10-25, ADR-0011): one CUDA serve image plus the CPU image instead of seven variant images; every launch path sends the worker config at boot; an image started without one refuses to boot; `variant` fields, `VARIANTS`, the thin Dockerfile stages, `image-configs.ts` and `fv_variant_for_config` removed, stored specs read through a mapping | gates green; no live resource changed; the owner's live steps written (`docs/serve/images.md` "One image: the live steps") | pod; CI image build on main; live steps by the owner | C1, C2, C3a | merged (#186, c3ceb96c; no live resource changed; the owner's ordered live steps are in `docs/serve/images.md` "One image: the live steps") |
 
 ### Phase 5: validation driver and gold standards (Workstream D)
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | active (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); D1b merged #176: `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` as tiers (cell schema: baseline arms, TAE arms, bare `env`, paired gates), a golden per tier, the family inventory in ADR-0019 §9; GPU fv-lab = script for all nine moved tiers (`techniques`, `b6`, `precision`, `rtx5090` 2026-10-24; `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae` 2026-10-25, #184; every arm that ran byte-identical); the ten tiers retired from the script in #185 (ADR-0019 §10: branches deleted, `runpod-http.sh run`/`plan` call `fv-lab pod up`, goldens frozen, `scripts/gpu/fv-lab-retired.sh`); next: D1c `report`, D1d `gate`/`oracle` (+ `b4a`'s verdict), D1e one-offs, the remaining script families) |
+| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | active (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); D1b merged #176: `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` as tiers (cell schema: baseline arms, TAE arms, bare `env`, paired gates), a golden per tier, the family inventory in ADR-0019 §9; GPU fv-lab = script for all nine moved tiers (`techniques`, `b6`, `precision`, `rtx5090` 2026-10-24; `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae` 2026-10-25, #184; every arm that ran byte-identical); the ten tiers retired from the script in #185 (ADR-0019 §10: branches deleted, `runpod-http.sh run`/`plan` call `fv-lab pod up`, goldens frozen, `scripts/gpu/fv-lab-retired.sh`); D1d first slice in PR `claude/d1d-gate-verdict` (ADR-0019 §11): a typed `[verdict]` step in the cell schema, `b4a` as a tier (goldens from the script, branch kept), `fv-lab gate <run dir>` (gates and verdicts re-evaluated offline), GPU gate for `b4a` pending (§11.6, ~$1.10); next: D1c `report`, D1d `oracle`, D1e one-offs, the remaining script families) |
 | D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | merged (#151) |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | active (CPU part in PR `claude/d3-d4-lab-report`, ADR-0023: `fv-lab report tiers [--runs <run set>] [--check]` renders one run set, a fixture run-set golden; `docs/perf/tiers.md` committed with `Run set: none`, every variant not measured, because no committed run set measured a gold cell; next: the GPU gold runs, `fv-lab pod up --family gold` or `gold-run.yml`, then the table and the gold files' `[last_validated]` from that run set) |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | active (PR `claude/d3-d4-lab-report`, ADR-0023: `fv-lab gold check` (parse, resolve against `families/`, `git cat-file -e`, the age table; warn-only, `--max-age-days` opt-in) in `gold-check.yml` with the table in the job summary; the `gold` tier (one serve-engine cell per gold file, generated by `fv-lab gold cells`, drift-tested) and `fv-lab run gold --all`; `gold-run.yml`, `workflow_dispatch` only, refuses without `RUNPOD_API_KEY`: **owner decision** to add that secret) |
@@ -1164,3 +1164,46 @@ ran (pod id, $/hr), result, cost.
   after a host vCPU shortage). No GPU cost. Open with the owner: LB keep or
   retire; whether `precision`'s `ltx-nvfp4` mode or `ltxvae`'s `FV_VAE_GEN`
   arms come back as tiers; C4's live steps.
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): D1d first slice on
+  `claude/d1d-gate-verdict` (draft PR, ADR-0019 §11): the cell schema's
+  `[verdict]` (fresh verdict arms, evidence files, line counts, identity
+  pairs, evidence diffs, per-cell and family verdict files as the script
+  writes them), `b4a` as a tier with goldens from the script (its branch
+  stays until its GPU gate), `fv-lab gate <run dir>` (promotion gates via
+  `fv-gpucheck gate` and verdicts, offline), `pod fetch` and
+  `fv-lab-compare-runs.sh` cover the verdict files; `fv-lab-goldens.sh`'s
+  `has_branch` pipefail bug fixed. The script's own `b4a` branch and
+  `fv-lab run b4a` write byte-identical verdicts on one fake box
+  (`tests/verdict.rs`). Gates on build pod `k66zz15an4sktc`. No GPU cost;
+  the `b4a` GPU gate (one 4-step pair per side, ~$1.10) is the
+  coordinator's.
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): #188 review fixes
+  (F1-F8): `fv-lab run` records its arm selection and `fv-lab gate` reads it
+  (no guessing a cut-short run), writes beside the run (`<run>.regate`),
+  `--check` compares with the run's files, fails a gate whose arms ran
+  without `benchmark.json`; the script's evidence grep / sed / diff pinned
+  to bytes; `fv-lab-compare-runs.sh --expect-verdicts`; `FV_B4A_CELLS`
+  refused by fv-lab. New script-vs-fv-lab cases (UTF-8 locale, CRLF, NUL,
+  empty stderr, missing compare, skipped arms, one-arm selection,
+  interrupted run). b4a dry run unchanged. No GPU cost.
+- 2026-10-25 20:30Z: C3c (`claude/c3c-control-launch`, draft PR): fv-control
+  on fv-deploy's `Launch` (ADR-0018 §7). `gen-configs.mjs` generates
+  `control/src/launch-gen.ts` (TypeScript + zod) from
+  `crates/fastvideo-deploy/schemas/*.v1.json` (`--check` in `control.yml`,
+  which now runs on schema changes); cluster workers, edge fronts, standalone
+  pods and GPU serverless endpoints are schema-checked `Launch` values whose
+  Runpod bodies follow `pod.rs` / `serverless.rs`; payloads unchanged (a
+  committed corpus of 1024 bodies from main's builders, `payload-corpus.test.ts`); `launch-goldens.test.ts` holds the TS builders to the C3a
+  goldens and h3-turbo / h3-max / ltx / ltx-pro to fv-deploy field by field
+  (intended differences listed). CPU pods / endpoints, GMI / Brev and the v2
+  envelope stay outside Launch v1 (proposal: a CPU section and `gmi` /
+  `brev` kinds after C3b). No Rust change, no live resource. No GPU cost.
+- 2026-10-25 21:00Z: C3c review fixes on #189: the payload corpus committed
+  (`control/test/unit/fixtures/payload-corpus.json`, 1024 cases written from
+  main's builders at 2258aec2, regenerate command in the test); intended
+  differences pinned per context (standalone / direct / edge / serverless)
+  and checked for staleness per test; `gen-configs.mjs` refuses any JSON
+  Schema keyword it does not translate; serverless guards fail-closed and
+  named (`SLS_GUARDS_NOT_CHECKED`, proposal for `null` in ADR-0018 §7.3); a
+  Launch that fails the schema is a 400 / 409 before the op and a clean
+  "no pod" inside it; schema errors never carry a value (tested).

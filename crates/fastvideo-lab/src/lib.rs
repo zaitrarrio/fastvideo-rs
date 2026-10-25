@@ -14,7 +14,9 @@
 //!   ([`Lab`]): types, validation and the rendering of a tier into command
 //!   lines.
 //! - [`run`]: `fv-lab run`, the on-pod cell runner (the port of
-//!   `scripts/gpu/runpod-matrix.sh`'s frame) and its `--dry-run`.
+//!   `scripts/gpu/runpod-matrix.sh`'s frame, and a cell's verdict step) and
+//!   its `--dry-run`; `fv-lab gate`, a finished run's gates and verdicts
+//!   evaluated again offline.
 //! - [`pod`]: `fv-lab pod`, a tier's Runpod pod on fv-deploy's `Provider`
 //!   trait, guards and lifecycle.
 //! - [`goldcheck`]: `fv-lab gold check`, the CI bridge (plan D4): every
@@ -47,5 +49,5 @@ pub use gold::{
     check_date, load_dir, Cost, Gap, Gold, GoldError, LastValidated, Latency, Measures, Model,
     Quality, Source, TierSpec, Upstream, Workload, CITABLE_FIELDS, GOLD_SCHEMA, NUMERIC_FIELDS,
 };
-pub use plan::{Arm, CellFile, Lab, LabError, Step, Tier, Tiers};
+pub use plan::{Arm, CellFile, Lab, LabError, Step, Tier, Tiers, Verdict};
 pub use profiles::{comment_of, measurement_claims, Claim};

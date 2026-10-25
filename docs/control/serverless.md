@@ -9,6 +9,11 @@ Status: 2026-10-06, branch `feat/fvc-serverless`. Code: `control/src/serverless/
 (`control/public/serverless.js`, `control/ui/forms/serverless.ts`,
 `serves.ts`), the CLI `scripts/serve/fv-control.sh endpoint …`.
 
+Since 2026-10-25 (plan C3c, [ADR-0018 §7](../adr/0018-fv-deploy.md)) a GPU endpoint is a `Launch` of fv-deploy's schema
+(`payloads.ts endpointLaunch`): its template, endpoint, both REST v1 PATCHes and the fields of the REST v2 create
+come from that one value, the template and endpoint by the Rust provider's rules (`control/src/launch.ts`). CPU
+endpoints and the v2 envelope keep their own shapes (Launch v1 has no CPU compute; LB mode is an open owner decision).
+
 fv-control creates, updates, scales, invokes and deletes Runpod serverless
 endpoints of fv-serve: one image variant behind Runpod's **queue** (`/run`,
 `/runsync`; the worker runs `FV_SERVE_MODE=runpod-queue` and takes the native

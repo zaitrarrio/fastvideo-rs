@@ -1701,3 +1701,33 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0011-deploy-section.md "One image with boot-time config"; docs/serve/images.md "One image: the live steps"
 - Verification: `fastvideo-deploy` `an_image_started_without_a_config_refuses_to_boot`, `boot::config::tests::no_config_refuses_to_boot`, `payload_goldens::every_worker_config_fits_the_env_size_guard`; `fastvideo-manifest` deploy tests (one GPU image, smoke config carried); fv-control `payloads.test.ts` (read-compat, size guard), `gen-configs.mjs --check`; `ci-images.sh smoke` asserts the refusal (runs in CI on the image build); live steps pending the owner
+
+### FVID · 2026-10-25 · FVID-2026-10-25-fv-lab-verdict-step
+- Trigger: plan D1d (first slice): `b4a` stayed in `runpod-matrix.sh` because its verdict (reuse counts, cache evidence, the evidence diff, per-cell and family verdict files) was neither a compare nor a gate (ADR-0019 §9.1); `gate` was not an fv-lab subcommand
+- Options: a shell hook per cell; a typed `[verdict]` in the cell schema; keep `b4a` in the script
+- Decision: a typed, optional `[verdict]` table (cell v1, additive): fresh verdict arms, per-arm exit / evidence files / line counts, per-cell `--off-identity` pairs and evidence diffs, `<family>-<cell>.verdict.json` and `<family>.verdict.json` as the script writes them; `b4a` moved as a tier (3 cells, goldens from the script; the branch stays until its GPU gate); `fv-lab gate <run dir>` re-evaluates a finished run's promotion gates and verdicts offline; the promotion rule stays `fv-gpucheck gate` (aliased, not moved); `fv-lab pod fetch` also takes the verdict files; line patterns are substrings with `*`, no regex dependency
+- Reason: equality with the script needs the same files, which a typed step gives by construction and a test can hold (the script's own branch and fv-lab on one fake box); typed data is validated by `fv-lab check` and can be re-evaluated offline; the frame generalises to `determinism` / `oracle` by adding checks, not steps
+- Reversibility: high (an optional table; the script branch is untouched until the GPU gate)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §11
+- Verification: `tests/verdict.rs` (script vs fv-lab verdicts, evidence and diffs byte-identical on fakes; FV_B4A_CELLS vs --cells; stale verdicts; `fv-lab gate` offline), `tests/{dry_run,payload_golden,fv_lab_bin,schema}.rs` with the `b4a` fixtures, `fv-lab-goldens.sh --check`; GPU gate (§11.6) pending, the coordinator's
+
+### FVID · 2026-10-25 · FVID-2026-10-25-fv-lab-verdict-step-review
+- Trigger: independent review of PR #188 (D1d first slice): nothing blocking in the on-pod verdict step; `fv-lab gate` and its tooling needed eight fixes
+- Options: per finding, as the review proposed or documented instead; F4 either reproduce the script's cell order or document it
+- Decision: `fv-lab run` records its arm selection (`<tier>.arms.json`, fetched) and `fv-lab gate` reads it, refusing to guess without it unless the run holds every arm (F1); `gate` never writes into the run directory (`--out` default `<run>.regate`) and `--check` compares the derived files with the run's (F2); a gate whose arms both ran without `benchmark.json` fails and skipped gates are counted (F3); F4 documented, not reproduced: fv-lab lists a family verdict's cells in the tier's order and `fv-lab-compare-runs.sh` compares `cells` / `why` as sets; a reused `--out` is cleared first (F5); the script's evidence `grep` / `sed` / `diff` pinned to bytes (`LC_ALL=C`, `-a`) as fv-lab reads them, the runtime image being in the C locale anyway (F6; `diff -a` also keeps run paths out of an evidence diff); `fv-lab-compare-runs.sh --expect-verdicts N` (F7); `FV_B4A_CELLS` refused by `run` and `pod up`, a duplicate evidence `diff` name refused (F8)
+- Reason: an offline judge must not pass a run it cannot see whole, nor overwrite the evidence it judges; the rest closes gaps where a check could pass on nothing
+- Reversibility: high (fv-lab and two script helpers; the b4a dry run is unchanged)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §11.1, §11.3, §11.4, §11.5, §11.6
+- Verification: `tests/verdict.rs` (edge cases in a UTF-8 locale, one-arm selection, interrupted run, `--out` refusal, `--check`, gates skipped / failed, script vs fv-lab byte for byte), `tests/fv_lab_bin.rs` (`gate` record / `--cells` / `--check` / `--out`, `FV_B4A_CELLS` refused), `plan` validation test, `fv-lab-goldens.sh --check` (compare-runs `--expect-verdicts`, family verdict order)
+
+### FVID · 2026-10-25 · FVID-2026-10-25-c3c-control-launch
+- Trigger: plan C3 slice C3c (fv-control on the shared `Launch` schema), coordinator's work package
+- Options: hand-written TS types kept in sync by review; TS types + zod validators generated from fv-deploy's committed JSON Schemas, with fv-control's Runpod bodies derived from a `Launch` by the Rust builders' rules; or extending the Rust schema first for CPU / GMI / Brev
+- Decision: generate `control/src/launch-gen.ts` (types + zod) from `crates/fastvideo-deploy/schemas/*.v1.json` in `gen-configs.mjs` (`--check` in CI); every Runpod GPU pod and GPU serverless endpoint of fv-control is a schema-checked `Launch` whose bodies come from `control/src/launch.ts` (the port of `pod.rs create_body`, `serverless.rs template_body` / `endpoint_body`); CPU pods / endpoints, GMI / Brev, the REST v2 envelope and build pods stay outside Launch v1 (no CPU compute or provider kind in it); no Rust change (the schema extension is proposed for after C3b, which edits the same types)
+- Reason: one source for the launch shape, drift fails CI, no new dependency (zod was already fv-control's); payloads unchanged (`control/test/unit/payload-corpus.test.ts`: 1024 cases against a snapshot of main's builders at 2258aec2)
+- Reversibility: high (code only; no live resource, stored shape or API response changed)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §7
+- Verification: `control/test/unit/payload-corpus.test.ts` (fv-control's bodies = main's at 2258aec2), `control/test/unit/launch-goldens.test.ts` (the C3a payload goldens from TS; h3-turbo, h3-max, ltx, ltx-pro field by field against fv-deploy with the intended differences of ADR-0018 §7.4; schema drift fails `--check` on a copy of the tree; stored specs launch), `node gen-configs.mjs --check`, `npm run typecheck`, `npx vitest run test/unit`; `cargo test --locked -p fastvideo-deploy` (schemas current)
