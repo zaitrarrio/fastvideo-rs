@@ -3,6 +3,8 @@
 //! makes no request, `schema` prints the committed schemas.
 #![cfg(feature = "cli")]
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -59,6 +61,53 @@ fn dry_run_prints_the_scripts_lines() {
     .unwrap();
     assert_eq!(stripped, fixture.lines().collect::<Vec<_>>());
     assert!(out.lines().all(|l| l.as_bytes().get(9) == Some(&b']')));
+}
+
+/// The restored modes (ADR-0019 §11) through the binary: each tier's dry run
+/// is the script's in that mode at 5987e6a4, the family named by the tier;
+/// a gen cell of `ltxvae-gen` runs in that tier, a shared cell in `ltxvae`
+/// (the first tier listing it) unless `--family` says otherwise.
+#[test]
+fn restored_modes_dry_run_as_the_script_did() {
+    for r in common::restored() {
+        let out = stdout(fv_lab().args([
+            "run",
+            &r.tier,
+            "--dry-run",
+            "--work",
+            "/workspace",
+            "--scratch",
+            "/fvscratch",
+            "--tag",
+            "1234567-10241200",
+        ]));
+        let ours: Vec<&str> = out.lines().map(|l| l.get(11..).unwrap_or("")).collect();
+        let fixture = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("fixtures/{}-dry-run.txt", r.tier)),
+        )
+        .unwrap();
+        let theirs: Vec<String> = fixture.lines().map(|l| r.dry_run_line(l)).collect();
+        assert_eq!(ours, theirs, "{}", r.tier);
+    }
+    let out = stdout(fv_lab().args(["run", "ltxvae-gen-4k5s", "--dry-run"]));
+    assert!(
+        out.contains("[ltxvae-gen] dry-run ltx25-4k5s-gen: "),
+        "{out}"
+    );
+    let out = stdout(fv_lab().args(["run", "ltxvae-4k5s", "--dry-run"]));
+    assert!(out.contains("[ltxvae] dry-run ltxvae-4k5s-fast: "), "{out}");
+    let out = stdout(fv_lab().args(["run", "ltxvae-4k5s", "--family", "ltxvae-gen", "--dry-run"]));
+    assert!(
+        out.contains("[ltxvae-gen] dry-run ltxvae-4k5s-fast: "),
+        "{out}"
+    );
+    let out = stdout(fv_lab().arg("check"));
+    assert!(
+        out.contains("precision-nvfp4: 2 cell(s), 4 arm(s)"),
+        "{out}"
+    );
+    assert!(out.contains("ltxvae-gen: 6 cell(s), 16 arm(s)"), "{out}");
 }
 
 /// `pod up --wall-cap-s` lowers the tier's cap (runpod-http.sh maps

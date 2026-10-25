@@ -1,0 +1,42 @@
+# The ltxvae family's FV_VAE_GEN=1 arms at 4k5s (runpod-matrix.sh `ltxvae`
+# before #185 deleted its branch; restored in the `ltxvae-gen` tier,
+# ADR-0019 §11): one cold (no --warm) LTX-2.5 generation that saves its latents
+# (FASTVIDEO_LTX2_SAVE_LATENTS) and decodes them with the fast decoder, traced
+# (FASTVIDEO_GPU_TRACE_DECODE=1, FV_VAE_TRACE's default); then `vae-bench`
+# decodes those latents with the f32 streaming decoder, for a real-content PSNR
+# of the fast decoder. The second arm reads what the first wrote
+# ({runs}/latents-4k5s), so they run in this order, in one tier run. In the tier
+# this cell follows ltxvae-4k5s and ltxvae-4k5s-untraced, as the arms followed
+# them in the script. Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "ltxvae-gen-4k5s"
+description = "LTX-2.5 at 4k5s: a cold generation saving its latents, the streaming decoder on them, compared"
+
+[workload]
+model = "ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; the reference's 4k5s workload (--workload), dense stage 2"
+
+[[arm]]
+name = "ltx25-4k5s-gen"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_LTX2_SAVE_LATENTS={runs}/latents-4k5s",
+  "FASTVIDEO_GPU_TRACE_DECODE=1",
+]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "4k5s", "--dense-stage2", "--prompt", "{prompt}", "--seed", "{seed}",
+  "--two-stage", "--text", "streamed", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx25-4k5s-gen-streaming"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "vae-bench", "--weights", "{weights}/ltx25", "--workload", "4k5s", "--latents",
+  "{runs}/latents-4k5s", "--decoder", "streaming", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "ltx25-4k5s-gen-streaming"
+candidate = "ltx25-4k5s-gen"

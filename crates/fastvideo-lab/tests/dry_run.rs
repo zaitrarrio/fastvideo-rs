@@ -10,6 +10,12 @@
 //! fixtures are the ones written before the branch went, and fv-lab's own
 //! goldens since. A change to such a tier's commands updates its fixture in
 //! the same PR; these tests hold fv-lab to it all the same.
+//!
+//! The restored modes (ADR-0019 §11, `FV_LAB_RESTORED`) started frozen: their
+//! fixtures are the script's dry run in that mode at 5987e6a4, and fv-lab's
+//! equal them with the family's name read as the tier's (`common`).
+
+mod common;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -24,6 +30,16 @@ const BASELINE_SHA: &str = "7654321";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// A tier's dry-run fixture as fv-lab must print it: the script's lines,
+/// with a restored mode's family named by its tier (`common::Restored`).
+fn dry_run_fixture(tier: &str) -> Vec<String> {
+    let text = fixture(&format!("{tier}-dry-run.txt"));
+    match common::restored_tier(tier) {
+        Some(r) => text.lines().map(|l| r.dry_run_line(l)).collect(),
+        None => text.lines().map(str::to_owned).collect(),
+    }
 }
 
 fn fixture(name: &str) -> String {
@@ -71,10 +87,7 @@ fn dry_run_equals_runpod_matrix_sh_for_every_tier() {
     for family in fams {
         let cfg = config(&family);
         let ours = dry_run_lines(&cfg, &steps(&lab, &cfg));
-        let theirs: Vec<String> = fixture(&format!("{family}-dry-run.txt"))
-            .lines()
-            .map(str::to_owned)
-            .collect();
+        let theirs = dry_run_fixture(&family);
         for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
             assert_eq!(a, b, "{family}: line {i} differs");
         }
@@ -214,8 +227,8 @@ fn arms_and_gates_are_the_scripts_and_arms_name_their_trees() {
         }
     }
     // rtx5090 (5), fastvideo (7), h3arms (4) read a tiny autoencoder;
-    // fastvideo (7), h3arms (10), precision (6) gate.
-    assert_eq!((tae_arms, gates_seen), (16, 23));
+    // fastvideo (7), h3arms (10), precision (6), precision-nvfp4 (2) gate.
+    assert_eq!((tae_arms, gates_seen), (16, 25));
 }
 
 /// `FV_LAB_RETIRED` of `scripts/gpu/fv-lab-retired.sh`.
@@ -284,8 +297,28 @@ fn retired_families_are_frozen_tiers_without_a_branch() {
         "ltxfps",
         "ltxvae",
         "precision",
+        "precision-nvfp4",
+        "ltxvae-gen",
     ] {
         assert!(retired.iter().any(|r| r == f), "{f} retired");
+    }
+    // A restored mode (§11) is a mode of a retired family, frozen from the
+    // start: its family's branch is gone too, and it never had one of its own.
+    let restored = common::restored();
+    assert_eq!(
+        restored
+            .iter()
+            .map(|r| (r.tier.as_str(), r.family.as_str(), r.mode.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("precision-nvfp4", "precision", "FV_PRECISION_ARM=ltx-nvfp4"),
+            ("ltxvae-gen", "ltxvae", "FV_VAE_GEN=1"),
+        ]
+    );
+    for r in &restored {
+        assert!(retired.contains(&r.tier), "{}: in FV_LAB_RETIRED", r.tier);
+        assert!(retired.contains(&r.family), "{}: family retired", r.family);
+        assert!(!branch(&r.family), "{}: no branch", r.family);
     }
     let fams = families(&lab);
     for f in &retired {

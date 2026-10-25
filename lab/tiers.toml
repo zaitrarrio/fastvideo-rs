@@ -267,3 +267,53 @@ cells = [
   "gold-wan14b-plug-4step",
   "gold-wan22-ti2v-5b",
 ]
+
+# ---- Restored script modes (docs/adr/0019-fv-lab.md §11, owner decision
+# 2026-10-25 "restore dropped test modes"). Two modes of retired families that
+# #185 dropped with their branches, each a tier of its own, held to that mode's
+# dry run and pod body at 5987e6a4 (scripts/gpu/fv-lab-restored-goldens.sh;
+# frozen from the start, scripts/gpu/fv-lab-retired.sh FV_LAB_RESTORED). The
+# rtx6000 tier's pod, as runpod-http.sh gave every FV_FAMILY.
+
+# Was FV_PRECISION_ARM=ltx-nvfp4 runpod-matrix.sh precision (FV_NVFP4_WORKLOADS
+# "4k5s 1080p20s", its default): only these arms, not the default mode's. NVFP4
+# runs on sm_100 / sm_120; the PRO 6000 (sm_120) is the GPU the mode ran on.
+[[tier]]
+name = "precision-nvfp4"
+description = "NVFP4 video FFN against bf16 on LTX-2.5 Sol at 4k5s and 1080p20s, compare and lossy gate (was precision's FV_PRECISION_ARM=ltx-nvfp4 mode)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["precision-nvfp4-ltx25-4k5s", "precision-nvfp4-ltx25-1080p20s"]
+
+# Was FV_VAE_GEN=1 runpod-matrix.sh ltxvae (FV_VAE_TRACE=1, FV_VAE_UNTRACED=1,
+# FV_VAE_WORKLOADS "4k5s 1080p20s": their defaults): the ltxvae tier's cells
+# with each workload's gen cell after them, in the script's order. The only
+# cells in two tiers (tests/lab_files.rs pins that).
+[[tier]]
+name = "ltxvae-gen"
+description = "The ltxvae tier plus, per workload, a cold generation saving its latents and the streaming decoder on them (was ltxvae's FV_VAE_GEN=1 arms)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["ltxvae-4k5s", "ltxvae-4k5s-untraced", "ltxvae-gen-4k5s", "ltxvae-1080p20s", "ltxvae-1080p20s-untraced", "ltxvae-gen-1080p20s"]

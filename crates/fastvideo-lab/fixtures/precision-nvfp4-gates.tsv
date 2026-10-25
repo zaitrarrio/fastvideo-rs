@@ -1,0 +1,6 @@
+arm	ltx25-4k5s-sol-bf16	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx25-4k5s-sol-nvfp4	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+gate	ltx25-4k5s-sol-bf16	ltx25-4k5s-sol-nvfp4	lossy	-
+arm	ltx25-1080p20s-sol-bf16	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx25-1080p20s-sol-nvfp4	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+gate	ltx25-1080p20s-sol-bf16	ltx25-1080p20s-sol-nvfp4	lossy	-

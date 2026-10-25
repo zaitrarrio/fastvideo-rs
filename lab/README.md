@@ -179,4 +179,5 @@ executes and `fv-lab pod` provisions: [ADR-0019](../docs/adr/0019-fv-lab.md), us
 [docs/dev/fv-lab.md](../docs/dev/fv-lab.md), schemas `crates/fastvideo-lab/schemas/{tiers,cell}.v1.json`. Today:
 ten tiers, each a `runpod-matrix.sh` family ported value for value and held equal by its dry-run golden: `rtx6000`
 (D1a) and `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` (D1b,
-ADR-0019 §9); and `gold`, generated from the gold files (ADR-0023).
+ADR-0019 §9); `precision-nvfp4` and `ltxvae-gen`, two script modes restored as tiers (ADR-0019 §11); and `gold`,
+generated from the gold files (ADR-0023).

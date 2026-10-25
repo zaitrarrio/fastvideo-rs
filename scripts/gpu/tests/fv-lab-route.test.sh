@@ -3,8 +3,9 @@
 # without a network, a key or a GPU:
 #   - runpod-http.sh `run` / `plan` for a retired family: the settings mapped
 #     across, the ones fv-lab would not honour refused (not dropped), the
-#     dropped modes' knobs refused in FV_EXTRA_ENV, lists split without
-#     globbing, and a fake FV_LAB_BIN receiving exactly the command;
+#     dropped modes' knobs refused in FV_EXTRA_ENV (the two restored modes
+#     naming their tier, ADR-0019 §11), lists split without globbing, and a
+#     fake FV_LAB_BIN receiving exactly the command;
 #   - `gold` refused for run / all (its plan still the script's body);
 #   - runpod-matrix.sh `headline` on a fake box: its cells through a fake
 #     fv-lab (FV_RUNS_DIR), a failing fv-lab logged, a missing one and
@@ -75,10 +76,32 @@ dry "refused: a lower price cap" 1 "RUNPOD_GPU_MAX_DPH=2" FV_FAMILY=trace RUNPOD
 dry "refused: FV_POD_CAP_S above the tier's" 1 "never raised" FV_FAMILY=trace FV_POD_CAP_S=20000
 dry "refused: FV_POD_CAP_S not a number" 1 "never raised" FV_FAMILY=trace FV_POD_CAP_S=1h
 # 2. The dropped modes' knobs (ADR-0019 §9.4) in FV_EXTRA_ENV.
-for k in FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_GEN FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS \
+for k in FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS \
   FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_PROMPTS FV_GEN_TIMEOUT_S FV_CELLS; do
   dry "refused in FV_EXTRA_ENV: $k" 1 "reads no $k from FV_EXTRA_ENV" FV_FAMILY=precision FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1"
 done
+# The two modes restored as tiers (ADR-0019 §11): refused, naming the tier, on
+# any retired family (not routed: the run directory and pod name are the tier's).
+for fam in precision ltxvae rtx6000; do
+  dry "restored mode named: FV_PRECISION_ARM=ltx-nvfp4 ($fam)" 1 \
+    "it is the fv-lab tier precision-nvfp4 now: use FV_FAMILY=precision-nvfp4" \
+    FV_FAMILY="$fam" FV_EXTRA_ENV="FASTVIDEO_X=1 FV_PRECISION_ARM=ltx-nvfp4"
+  dry "restored mode named: FV_VAE_GEN=1 ($fam)" 1 "it is the fv-lab tier ltxvae-gen now: use FV_FAMILY=ltxvae-gen" \
+    FV_FAMILY="$fam" FV_EXTRA_ENV="FV_VAE_GEN=1"
+done
+for k in FV_NVFP4_WORKLOADS FV_VAE_WORKLOADS FV_VAE_UNTRACED; do
+  dry "workload knob: narrow by FV_CELLS ($k)" 1 "narrow them by arm with FV_CELLS" \
+    FV_FAMILY=ltxvae-gen FV_EXTRA_ENV="$k=4k5s"
+done
+dry "FV_VAE_GEN=0 is no mode: the generic refusal" 1 "reads no FV_VAE_GEN from FV_EXTRA_ENV" \
+  FV_FAMILY=ltxvae FV_EXTRA_ENV="FV_VAE_GEN=0"
+# The restored tiers themselves are fv-lab only.
+dry "restored tier: precision-nvfp4 through fv-lab" 0 \
+  "fv-lab pod up --sha abc1234 --family precision-nvfp4 --root $ROOT --cells ltx25-4k5s-sol-bf16 ltx25-4k5s-sol-nvfp4 --lpips --yes --wait" \
+  FV_FAMILY=precision-nvfp4 FV_CELLS="ltx25-4k5s-sol-bf16,ltx25-4k5s-sol-nvfp4" FV_LPIPS=1
+dry "restored tier: ltxvae-gen through fv-lab" 0 "--family ltxvae-gen --root $ROOT --yes --wait" FV_FAMILY=ltxvae-gen
+expect "restored tier: all refused" 1 "run \`kernels\`, then \`run\`" -- \
+  RUNPOD_API_KEY=x FV_FAMILY=ltxvae-gen bash "$HTTP" all abc1234
 expect "all: refused for a retired family" 1 "run \`kernels\`, then \`run\`" -- \
   RUNPOD_API_KEY=x FV_FAMILY=precision bash "$HTTP" all abc1234
 expect "plan: fv-lab's plan, without --yes" 0 "--family trace --root $ROOT --tag abc1234-1025120000-abcd" -- \

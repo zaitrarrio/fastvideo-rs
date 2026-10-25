@@ -16,6 +16,13 @@
 //! (ADR-0019 §10): `runpod-http.sh run` hands them to `fv-lab pod up`, so the
 //! body is the one the script sent before its branch went, and fv-lab's pod
 //! must stay it unless a PR changes both on purpose.
+//!
+//! A restored mode (ADR-0019 §11, `FV_LAB_RESTORED`) is the body
+//! `FV_FAMILY=<family> FV_EXTRA_ENV=<K=V> runpod-http.sh plan` sent at
+//! 5987e6a4, read with the family's name as the tier's (pod name, run
+//! directory, runner) and without the mode's `FV_EXTRA_ENV` (`common`).
+
+mod common;
 
 use std::path::PathBuf;
 
@@ -44,6 +51,7 @@ fn fixture(family: &str) -> Value {
 fn pod_body_equals_runpod_http_sh_but_the_runner() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     assert!(lab.tiers.tiers.len() >= 10);
+    let mut restored = 0;
     for tier in &lab.tiers.tiers {
         let family = tier.name.as_str();
         let l = launch(tier, SHA, &StartOptions::for_tier(tier, TAG)).expect("launch");
@@ -56,10 +64,15 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         );
         // Difference 1.
         let mut theirs = fixture(family);
-        let cmd = theirs["dockerStartCmd"][2]
+        let mut cmd = theirs["dockerStartCmd"][2]
             .as_str()
             .expect("a start command")
             .to_owned();
+        if let Some(r) = common::restored_tier(family) {
+            cmd = r.start_command(&cmd);
+            let name = theirs["name"].as_str().expect("a pod name");
+            theirs["name"] = Value::String(r.pod_name(name));
+        }
         let script = format!(
             "bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh {family} >\"$OUT/matrix.out\" 2>&1"
         );
@@ -72,6 +85,7 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
             "{family}: the runner line moved"
         );
         theirs["dockerStartCmd"][2] = Value::String(cmd.replace(&script, &lab_run));
+        restored += usize::from(common::restored_tier(family).is_some());
         if ours != theirs {
             let a = ours["dockerStartCmd"][2].as_str().unwrap_or("");
             let b = theirs["dockerStartCmd"][2].as_str().unwrap_or("");
@@ -81,4 +95,9 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
             assert_eq!(ours, theirs, "{family}");
         }
     }
+    assert_eq!(
+        restored,
+        common::restored().len(),
+        "every restored mode is a tier"
+    );
 }
