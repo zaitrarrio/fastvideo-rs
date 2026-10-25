@@ -23,16 +23,19 @@
 #       Writes to $GITHUB_OUTPUT:
 #         ok=true|false     every requested set is usable (false: compile)
 #         dir, tag, version, exact=true|false, build_id, source_commit
+#         fv_boot=<tag> | compiled@<HEAD sha>   where the images' fv-boot comes
+#                           from (the dev.fastvideo.fv-boot label)
 #         contexts=<name=path lines>   Docker named build contexts that replace
 #                                      the compile stages (see CONTEXT below;
 #                                      boot-build when a serve set has out/fv-boot
-#                                      and the release is exact (see contexts),
+#                                      and the release is exact or pinned (see contexts),
 #                                      lab-build when the gpucheck set has out/fv-lab)
 #       Fallback (ok=false, a loud ::warning::, the workflow compiles as
 #       before) unless FV_PREBUILT_REQUIRE=1, which fails instead.
 #   prebuilt.sh contexts [--stale] <dir> <set>...
 #       The contexts lines fetch writes, for sets already in <dir> (tests);
-#       --stale: the release is not built from HEAD's tools inputs, so its
+#       --stale: the release is not built from HEAD's tools inputs (and is
+#       not a FV_TOOLS_VERSION pin), so its
 #       fv-boot is not used (boot-build compiles this checkout's).
 #   prebuilt.sh run-tests <dir>
 #       Run the gpucheck-tests set (gpucheck-t0's unit tests, compiled on the
@@ -65,9 +68,11 @@ fallback() {
     exit 1
   fi
   echo "::warning title=Prebuilt tools not used: compiling on the runner::$1. This run compiles as before (slow, uses runner minutes). Tools releases: scripts/ci/tools-release.sh status / publish (docs/dev/tools-releases.md)."
-  { echo "ok=false"; echo "exact=false"; echo "contexts="; } >>"$OUT"
+  { echo "ok=false"; echo "exact=false"; echo "contexts="; echo "fv_boot=compiled@$(head_sha)"; } >>"$OUT"
   exit 0
 }
+
+head_sha() { git -c safe.directory="$ROOT" -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown; }
 
 cmd_fetch() {
   (( $# )) || { log "no sets"; exit 2; }
@@ -100,17 +105,25 @@ cmd_fetch() {
       fallback "$tag: $s was built with features '$(jq -r --arg s "$s" '.sets[$s].features // ""' "$m")', '$f' requested"
     fi
   done
-  local contexts stale_arg=()
-  [[ "$exact" == true ]] || stale_arg=(--stale)
+  # fv-boot from the release only when the release is this commit's (exact) or an operator's
+  # FV_TOOLS_VERSION pin (a rollback keeps its fv-boot / fv-serve pair); a stale release's is
+  # replaced by this checkout's (see cmd_contexts).
+  local contexts stale_arg=() fv_boot
+  [[ "$exact" == true || -n "${FV_TOOLS_VERSION:-}" ]] || stale_arg=(--stale)
   contexts="$(cmd_contexts "${stale_arg[@]}" "$dir" "$@")"$'\n'
   local compiles="no cargo compile on this runner"
-  if [[ "$contexts" != *"boot-build="* ]] && [[ " $* " == *" serve-cuda "* || " $* " == *" serve-cpu "* ]]; then
-    if [[ "$exact" == true ]]; then
-      echo "::notice title=fv-boot not in $tag::the image's boot-build stage compiles fv-boot (one small crate) until a tools release carries it"
-    else
-      echo "::notice title=fv-boot compiled from this commit::$tag is older than this commit's tools inputs: its fv-boot is not used (it enforces this commit's image contract, e.g. the refusal without a config), so the boot-build stage compiles this checkout's"
+  if [[ "$contexts" == *"boot-build="* ]]; then
+    fv_boot="$tag"
+  else
+    fv_boot="compiled@$(head_sha)"
+    if [[ " $* " == *" serve-cuda "* || " $* " == *" serve-cpu "* ]]; then
+      if [[ -z "$(release_boot "$dir" "$@")" ]]; then
+        echo "::notice title=fv-boot not in $tag::the image's boot-build stage compiles fv-boot (one small crate) until a tools release carries it"
+      else
+        echo "::notice title=fv-boot compiled from this commit::$tag is older than this commit's tools inputs: its fv-boot is not used (it enforces this commit's image contract, e.g. the refusal without a config), so the boot-build stage compiles this checkout's; the image pairs it with $tag's fv-serve (label dev.fastvideo.fv-boot=$fv_boot)"
+      fi
+      compiles="only the boot-build stage compiles (fv-boot)"
     fi
-    compiles="only the boot-build stage compiles (fv-boot)"
   fi
   if [[ "$contexts" != *"lab-build="* ]] && [[ " $* " == *" gpucheck "* ]]; then
     echo "::notice title=fv-lab not in $tag::the image's lab-build stage compiles fv-lab (ADR-0019) until a tools release carries it"
@@ -126,6 +139,7 @@ cmd_fetch() {
     echo "exact=$exact"
     echo "build_id=$(jq -r .build_id "$m")"
     echo "source_commit=$(jq -r .source_commit "$m")"
+    echo "fv_boot=$fv_boot"
     echo "contexts<<FV_EOF"
     printf '%s' "$contexts"
     echo "FV_EOF"
@@ -135,8 +149,9 @@ cmd_fetch() {
 # The named build contexts of fetched sets in <dir> (one name=path line each). fv-boot
 # (ADR-0014) rides in the serve sets of releases built after it and then replaces the
 # boot-build stage too; a release from before fv-boot has none, and boot-build compiles it.
-# --stale (a release not built from HEAD's tools inputs: main's FV_PREBUILT_STALE=latest,
-# a FV_TOOLS_VERSION pin): its fv-boot is not used either. fv-boot is the image's
+# --stale (fetch passes it for a release not built from HEAD's tools inputs, main's
+# FV_PREBUILT_STALE=latest; not for an operator's FV_TOOLS_VERSION pin, whose fv-boot /
+# fv-serve pair stays together): its fv-boot is not used either. fv-boot is the image's
 # entrypoint and enforces the image contract of the Dockerfile it ships in (since ADR-0011,
 # the refusal of a boot without a config); an older one paired with a newer Dockerfile
 # booted fv-serve's default config instead, and the serve-image smoke's refusal check
@@ -148,11 +163,19 @@ cmd_contexts() {
   local dir="${1:?dir}" set boot="" lab=""; shift
   for set in "$@"; do
     [[ -n "${CONTEXT[$set]:-}" ]] && echo "${CONTEXT[$set]}=$dir/$set"
-    if [[ "$stale" == 0 && -z "$boot" && ( "$set" == serve-cuda || "$set" == serve-cpu ) && -x "$dir/$set/out/fv-boot" ]]; then boot="$dir/$set"; fi
     if [[ "$set" == gpucheck && -x "$dir/$set/out/fv-lab" ]]; then lab="$dir/$set"; fi
   done
+  [[ "$stale" == 1 ]] || boot="$(release_boot "$dir" "$@")"
   [[ -z "$boot" ]] || echo "boot-build=$boot"
   [[ -z "$lab" ]] || echo "lab-build=$lab"
+}
+
+# release_boot <dir> <set>...: the first fetched serve set that carries out/fv-boot, or nothing.
+release_boot() {
+  local dir="$1" set; shift
+  for set in "$@"; do
+    if [[ ( "$set" == serve-cuda || "$set" == serve-cpu ) && -x "$dir/$set/out/fv-boot" ]]; then echo "$dir/$set"; return; fi
+  done
 }
 
 # Test binaries keep the pod's absolute source paths (file!(), CARGO_MANIFEST_DIR

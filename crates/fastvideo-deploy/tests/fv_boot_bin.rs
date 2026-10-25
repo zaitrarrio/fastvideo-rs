@@ -12,7 +12,9 @@
 
 #![cfg(feature = "boot")]
 
+use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -54,51 +56,47 @@ fn stand_in_serve(dir: &Path) -> (PathBuf, PathBuf) {
     (bin, served)
 }
 
-/// Runs fv-boot with exactly `env` (and no arguments); kills it at the deadline.
-/// Returns (exit code, stdout + stderr, elapsed), or panics naming the hang.
-fn boot(env: &[(&str, String)]) -> (Option<i32>, String, Duration) {
+/// Runs fv-boot with exactly `env` (and no arguments) in its own process
+/// group, its output in files under `dir` (no pipe a grandchild could hold
+/// open, none to fill up); kills the group at the deadline. Returns (exit
+/// code, stdout + stderr, elapsed), or panics naming the hang.
+fn boot(dir: &Path, env: &[(&str, String)]) -> (Option<i32>, String, Duration) {
+    let (out_path, err_path) = (dir.join("boot.stdout"), dir.join("boot.stderr"));
+    let file = |p: &Path| File::create(p).unwrap_or_else(|e| panic!("create {}: {e}", p.display()));
+    let read = || {
+        let r = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();
+        format!("{}{}", r(&out_path), r(&err_path))
+    };
     let t0 = Instant::now();
     let mut child = Command::new(BIN)
         .env_clear()
         .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(file(&out_path))
+        .stderr(file(&err_path))
+        .process_group(0)
         .spawn()
         .unwrap_or_else(|e| panic!("spawn {BIN}: {e}"));
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => return (status.code(), read(), t0.elapsed()),
             Ok(None) if t0.elapsed() > DEADLINE => {
+                // The whole group (fv-boot is its leader), then fv-boot itself.
+                let _ = Command::new("kill")
+                    .args(["-KILL", "--", &format!("-{}", child.id())])
+                    .status();
                 let _ = child.kill();
-                let out = child.wait_with_output().ok();
-                let text = out
-                    .map(|o| {
-                        format!(
-                            "{}{}",
-                            String::from_utf8_lossy(&o.stdout),
-                            String::from_utf8_lossy(&o.stderr)
-                        )
-                    })
-                    .unwrap_or_default();
+                let _ = child.wait();
                 panic!(
                     "fv-boot without a config still ran after {DEADLINE:?} (it must refuse at once; \
-                     the serve-image smoke hung on exactly this):\n{text}"
+                     the serve-image smoke hung on exactly this):\n{}",
+                    read()
                 );
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(e) => panic!("wait: {e}"),
         }
     }
-    let o = child
-        .wait_with_output()
-        .unwrap_or_else(|e| panic!("output: {e}"));
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&o.stdout),
-        String::from_utf8_lossy(&o.stderr)
-    );
-    (o.status.code(), text, t0.elapsed())
 }
 
 /// The image's environment (docker/gpucheck.Dockerfile serve-cpu / serve-cuda
@@ -128,7 +126,7 @@ fn the_image_started_without_a_config_refuses_and_exits_at_once() {
     for variant in ["cpu", "cuda"] {
         let dir = Dir::new(variant);
         let (serve, served) = stand_in_serve(&dir.0);
-        let (code, out, took) = boot(&image_env(&dir.0, &serve, variant));
+        let (code, out, took) = boot(&dir.0, &image_env(&dir.0, &serve, variant));
         assert_eq!(code, Some(1), "{variant}: exit code; output:\n{out}");
         assert!(
             out.contains("FAILED: no worker config: the image serves no default"),
@@ -158,7 +156,7 @@ fn a_baked_fv_config_is_refused_the_same_way() {
     let (serve, served) = stand_in_serve(&dir.0);
     let mut env = image_env(&dir.0, &serve, "cpu");
     env.push(("FV_CONFIG", "/etc/fv/runpod.toml".to_owned()));
-    let (code, out, _) = boot(&env);
+    let (code, out, _) = boot(&dir.0, &env);
     assert_eq!(code, Some(1), "{out}");
     assert!(
         out.contains("FV_CONFIG, the old images' baked config, is no longer read"),

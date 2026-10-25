@@ -34,7 +34,15 @@ case "$1" in
     ((detach)) && { echo cid123; exit 0; }
     [[ -n "$name" ]] && : >"$FAKE_DIR/run/$name"
     done_() { [[ -z "$name" ]] || rm -f "$FAKE_DIR/run/$name"; }
-    if [[ "$args" == *" --version "* ]]; then echo "fv-serve 0.0.0"; done_; exit 0; fi
+    if [[ "$args" == *" --version "* ]]; then
+      if [[ "${FAKE_VERSION:-}" == term ]]; then
+        # A container that hangs but exits on the SIGTERM docker run forwards (no TTY): --rm removes it.
+        sleep 300 & pid=$!
+        trap 'kill "$pid" 2>/dev/null; done_; exit 143' TERM
+        wait "$pid"
+      fi
+      echo "fv-serve 0.0.0"; done_; exit 0
+    fi
     if [[ "$args" == *" --entrypoint bash "* ]]; then echo "smoke ok"; done_; exit 0; fi
     if [[ "$args" == *" FV_FAIL_SLEEP_S=0 "* ]]; then
       case "$FAKE_BOOT" in
@@ -50,10 +58,10 @@ SH
 printf '#!/bin/sh\necho ok\n' >"$T/bin/curl"
 chmod +x "$T/bin/docker" "$T/bin/curl"
 
-smoke() { # <FAKE_BOOT> -> sets RC, OUT, TOOK
+smoke() { # <FAKE_BOOT> [env…] -> sets RC, OUT, TOOK
   : >"$T/calls"
-  local t0=$SECONDS
-  OUT="$(PATH="$T/bin:$PATH" FAKE_DIR="$T" FAKE_BOOT="$1" FV_SMOKE_TIMEOUT_S=2 \
+  local t0=$SECONDS boot="$1"; shift
+  OUT="$(env PATH="$T/bin:$PATH" FAKE_DIR="$T" FAKE_BOOT="$boot" FV_SMOKE_TIMEOUT_S=2 "$@" \
     timeout 60 bash "$ROOT/scripts/serve/ci-images.sh" smoke cpu ghcr.io/x/serve@sha256:abc 2>&1)"
   RC=$?
   TOOK=$((SECONDS - t0))
@@ -70,6 +78,17 @@ else
 fi
 grep -q "^removed fv-smoke-" "$T/calls" && ok "the timed-out container is removed (docker rm -f by name)" || bad "hang: container not removed" "$(cat "$T/calls")"
 [[ -z "$(ls "$T/run")" ]] && ok "no container left running" || bad "containers left: $(ls "$T/run")"
+
+smoke refuse FAKE_VERSION=term
+if [[ "$RC" == 124 && "$TOOK" -lt 30 && "$OUT" == *"FATAL: serve-cpu: --version: still running after 2s"* ]]; then
+  ok "a run that ends on the forwarded SIGTERM (container gone) still fails loudly, naming the check"
+else
+  bad "term: rc=$RC after ${TOOK}s" "$OUT"
+fi
+[[ "$OUT" != *"refused without a config"* ]] && ok "the smoke stops at the timed-out check" || bad "term: the smoke went on" "$OUT"
+
+smoke refuse FV_SMOKE_TIMEOUT_S=2m
+[[ "$RC" == 2 && "$OUT" == *"FV_SMOKE_TIMEOUT_S=2m: whole seconds expected"* ]] && ok "FV_SMOKE_TIMEOUT_S=2m is refused up front" || bad "2m: rc=$RC" "$OUT"
 
 smoke boot
 [[ "$RC" == 2 && "$OUT" == *"it booted (exit 0)"* ]] && ok "an image that boots without a config fails the smoke" || bad "boot: rc=$RC" "$OUT"

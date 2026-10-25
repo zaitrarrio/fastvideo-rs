@@ -20,12 +20,14 @@
 # FV_BUILD_TIME (the commit time, for `fv-serve --version`);
 # FV_COMPRESSION (gzip | zstd, default gzip); FV_CACHE_FROM (space list of
 # registry cache refs); FV_CI_OUT (default artifacts/ci/images.tsv);
-# FV_SMOKE_TIMEOUT_S (default 120: the bound on each `docker run` of the smoke, which
+# FV_SMOKE_TIMEOUT_S (whole seconds, default 120: the bound on each `docker run` of the smoke, which
 # then fails, naming the check, and removes the container; FV_SMOKE_PULL_TIMEOUT_S, default
 # 600, bounds the pull); FV_BUILD_CONTEXTS (name=path lines from scripts/ci/prebuilt.sh: directories
 # of build-pod binaries that replace the serve-build / cpu-build stages,
 # so no cargo compile runs; empty: compile in the image); FV_TOOLS_TAG (the
-# tools release they come from, a `dev.fastvideo.tools` label).
+# tools release they come from, a `dev.fastvideo.tools` label); FV_BOOT_SOURCE (prebuilt.sh's
+# fv_boot: that release's tag, or compiled@<sha> when boot-build compiled this checkout's
+# fv-boot; the `dev.fastvideo.fv-boot` label).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -37,19 +39,26 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 2; }
 SMOKE_TIMEOUT_S="${FV_SMOKE_TIMEOUT_S:-120}"
 
-# bounded <what> <docker run args…>: `docker run --rm` under a deadline. The container gets
-# a name, so a run that outlives FV_SMOKE_TIMEOUT_S is removed (`docker rm -f`: killing the
-# client alone leaves it running) and the call returns 124 after a FATAL line naming <what>,
-# instead of waiting forever (serve-image run 286: an fv-boot that served instead of
-# refusing). Otherwise it returns the container's exit status; its output passes through.
+# bounded <what> <docker run args…>: `docker run --rm` under a deadline (FV_SMOKE_TIMEOUT_S),
+# instead of waiting forever (serve-image run 286: an fv-boot that served instead of refusing).
+# A run the deadline ends returns 124 after a FATAL line naming <what>. The container gets a
+# name: `docker run` without a TTY forwards timeout's SIGTERM to it, so it usually exits and
+# --rm removes it, but one that ignores the signal outlives the client and is removed here
+# (`docker rm -f`, when `docker container inspect` still finds it). Otherwise it returns the
+# container's exit status; its output passes through.
 bounded() {
-  local what="$1" name rc=0; shift
+  local what="$1" name rc=0 t0=$SECONDS; shift
   name="fv-smoke-$$-$RANDOM"
   timeout -k 10 "$SMOKE_TIMEOUT_S" docker run --rm --name "$name" "$@" || rc=$?
-  # The container (--rm) is still there only when the deadline, not its own exit, ended the run.
-  if [[ "$rc" == 124 || "$rc" == 137 ]] && timeout 60 docker container inspect "$name" >/dev/null 2>&1; then
-    timeout 60 docker rm -f "$name" >/dev/null 2>&1 || log "warning: could not remove container $name"
-    log "FATAL: $what: still running after ${SMOKE_TIMEOUT_S}s (FV_SMOKE_TIMEOUT_S); container removed"
+  # 124 (timeout) or 137 (its KILL after -k) at the deadline; a container's own exit 124 / 137
+  # (an OOM kill) before it is the container's status.
+  if [[ "$rc" == 124 || "$rc" == 137 ]] && (( SECONDS - t0 >= SMOKE_TIMEOUT_S )); then
+    local removed=""
+    if timeout 60 docker container inspect "$name" >/dev/null 2>&1; then
+      timeout 60 docker rm -f "$name" >/dev/null 2>&1 && removed="; container removed" \
+        || removed="; could not remove container $name"
+    fi
+    log "FATAL: $what: still running after ${SMOKE_TIMEOUT_S}s (FV_SMOKE_TIMEOUT_S)$removed"
     return 124
   fi
   return "$rc"
@@ -104,6 +113,7 @@ build() {
       --label "dev.fastvideo.build-id=${FV_BUILD_ID:-unknown}" \
       --label "dev.fastvideo.variant=$v" \
       --label "dev.fastvideo.tools=${FV_TOOLS_TAG:-compiled}" \
+      --label "dev.fastvideo.fv-boot=${FV_BOOT_SOURCE:-compiled@${GITHUB_SHA:-unknown}}" \
       "${args[@]}" ${cache_to[@]+"${cache_to[@]}"} \
       --output "type=image,\"name=$tags\",push=true,compression=$COMPRESSION,force-compression=$force,oci-mediatypes=true" \
       --metadata-file "$meta"
@@ -118,6 +128,8 @@ build() {
 
 smoke() {
   local v="$1" img="$2" cid ok=0
+  [[ "$SMOKE_TIMEOUT_S" =~ ^[1-9][0-9]*$ ]] \
+    || die "FV_SMOKE_TIMEOUT_S=$SMOKE_TIMEOUT_S: whole seconds expected (e.g. 120), not a duration like 2m"
   timeout -k 10 "${FV_SMOKE_PULL_TIMEOUT_S:-600}" docker pull -q "$img" >/dev/null \
     || die "serve-$v: docker pull $img failed or took over ${FV_SMOKE_PULL_TIMEOUT_S:-600}s"
   docker image inspect "$img" --format "size={{.Size}} entrypoint={{json .Config.Entrypoint}} env={{json .Config.Env}}"
@@ -216,5 +228,5 @@ case "${1:-}" in
   size) shift; size "${1:?image}" ;;
   layers) shift; layers "${1:?image}" ;;
   summary) summary ;;
-  *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

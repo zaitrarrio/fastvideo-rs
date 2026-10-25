@@ -16,7 +16,11 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      # fv-boot's crate, its workspace dependency and the build inputs of both.
       - "crates/fastvideo-deploy/**"
+      - "crates/fastvideo-manifest/**"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
       - "docker/gpucheck.Dockerfile"
       - "scripts/serve/ci-images.sh"
       - "scripts/serve/tests/ci-images.test.sh"
