@@ -1,0 +1,280 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "frame_counts",
+      "ok": true,
+      "values": {
+        "baseline": 121,
+        "candidate": 121,
+        "match": true,
+        "pairs": 121
+      }
+    },
+    {
+      "limits": {},
+      "name": "frame_shape",
+      "ok": true,
+      "values": {
+        "shape_mismatch": null
+      }
+    },
+    {
+      "limits": {},
+      "name": "pixel_metrics",
+      "ok": true,
+      "values": {
+        "mean_abs_pixel_diff": 0.29796826647944596,
+        "mse_max": 0.3715671115451389,
+        "mse_mean": 0.3103654011576113,
+        "pairs": 121,
+        "patch_boundary_ratio_by_size_max": {
+          "16": 1.001978611815819,
+          "32": 1.0018523908291372,
+          "8": 1.0020005454226435
+        },
+        "patch_boundary_ratio_by_size_mean": {
+          "16": 1.0015511411284534,
+          "32": 1.001379129763583,
+          "8": 1.0016103549492705
+        },
+        "patch_boundary_ratio_max": 1.0020005454226435,
+        "patch_boundary_ratio_mean": 1.001613414703705,
+        "psnr_mean": 53.21866967005178,
+        "psnr_min": 52.43043094476803,
+        "sharpness_ratio_mean": 1.0019225720349725,
+        "status": "ok",
+        "temporal_delta_error_max": 0.45004679361979166,
+        "temporal_delta_error_mean": 0.4003207340946905,
+        "temporal_jitter_ratio_max": 1.0027560079216231,
+        "temporal_jitter_ratio_mean": 1.0011831702577139,
+        "temporal_jitter_ratio_min": 0.9997355495048623
+      }
+    },
+    {
+      "limits": {},
+      "name": "off_identity",
+      "ok": true,
+      "values": {
+        "max_abs_diff_uint8": 9,
+        "nonidentical_frames": 121,
+        "pairs": 121,
+        "status": "different"
+      }
+    }
+  ],
+  "context": {
+    "baseline": {
+      "dir": "/fvscratch/runs/ltxvae/b0d0bb8-10251657/ltxvae-4k5s-streaming/frames",
+      "frames": 121,
+      "frames_dir": "/fvscratch/runs/ltxvae/b0d0bb8-10251657/ltxvae-4k5s-streaming/frames",
+      "log": "/fvscratch/runs/ltxvae/b0d0bb8-10251657/ltxvae-4k5s-streaming/stderr.log",
+      "mp4": null,
+      "notes": [
+        "run log exists but output.mp4 is missing or empty"
+      ],
+      "status": "failed"
+    },
+    "candidate": {
+      "dir": "/fvscratch/runs/ltxvae/b0d0bb8-10251657/ltxvae-4k5s-fast/frames",
+      "frames": 121,
+      "frames_dir": "/fvscratch/runs/ltxvae/b0d0bb8-10251657/ltxvae-4k5s-fast/frames",
+      "log": "/fvscratch/runs/ltxvae/b0d0bb8-10251657/ltxvae-4k5s-fast/stderr.log",
+      "mp4": null,
+      "notes": [
+        "run log exists but output.mp4 is missing or empty"
+      ],
+      "status": "failed"
+    },
+    "cuda_feature": true,
+    "lpips": {
+      "reason": "disabled (pass --lpips <weights dir>)",
+      "status": "deferred"
+    },
+    "mode": "exact",
+    "off_identity": {
+      "max_abs_diff_uint8": 9,
+      "nonidentical_frames": 121,
+      "pairs": 121,
+      "status": "different"
+    },
+    "pixel_metrics": {
+      "mean_abs_pixel_diff": 0.29796826647944596,
+      "mse_max": 0.3715671115451389,
+      "mse_mean": 0.3103654011576113,
+      "pairs": 121,
+      "patch_boundary_ratio_by_size_max": {
+        "16": 1.001978611815819,
+        "32": 1.0018523908291372,
+        "8": 1.0020005454226435
+      },
+      "patch_boundary_ratio_by_size_mean": {
+        "16": 1.0015511411284534,
+        "32": 1.001379129763583,
+        "8": 1.0016103549492705
+      },
+      "patch_boundary_ratio_max": 1.0020005454226435,
+      "patch_boundary_ratio_mean": 1.001613414703705,
+      "psnr_mean": 53.21866967005178,
+      "psnr_min": 52.43043094476803,
+      "psnr_per_frame": [
+        53.43941157022496,
+        53.134493863252324,
+        53.221584525192384,
+        53.17553612138237,
+        53.19323159494357,
+        53.16505870152035,
+        53.15107957454348,
+        53.26846797298177,
+        53.294113022044634,
+        53.048367031443,
+        53.1193895427763,
+        53.141621418225505,
+        53.163715952383455,
+        53.15190804773693,
+        53.17524995248705,
+        53.31461062576301,
+        53.347842146105094,
+        53.084595717398074,
+        53.08598037462268,
+        53.066473826422126,
+        53.081685256470976,
+        53.0673214089466,
+        53.0648379740649,
+        53.21075782465257,
+        53.25195375394439,
+        52.991422205822225,
+        53.04119273289701,
+        53.076885172811636,
+        53.086349654968274,
+        53.08900061039697,
+        53.090723758179635,
+        53.22319544247594,
+        53.26825082302639,
+        53.05594790521147,
+        53.10843386653644,
+        53.11684285054816,
+        53.14810442951085,
+        53.159830834064856,
+        53.17584998786798,
+        53.30682168308186,
+        53.306271731716414,
+        53.01191082779616,
+        53.069095929374896,
+        53.06981652900078,
+        53.083279238684604,
+        53.08221128177601,
+        53.08348462428097,
+        53.214694934273524,
+        53.24409969941014,
+        53.06267631283898,
+        53.209611195824856,
+        53.29056934503274,
+        53.373012078322475,
+        53.45704603309133,
+        53.5457269473966,
+        53.74551912688031,
+        53.83360019270435,
+        53.7139056875002,
+        53.73425793567921,
+        53.8029522186924,
+        53.843300843398865,
+        53.85275730742259,
+        53.81657657249534,
+        53.91790318681977,
+        53.93912510863048,
+        53.725121071389864,
+        53.65177968558917,
+        53.59393513664927,
+        53.528786097866174,
+        53.43994393453748,
+        53.35044559647038,
+        53.387721887357145,
+        53.33311044060637,
+        53.01836469309116,
+        53.092743560571805,
+        53.089765223726076,
+        53.12439495822829,
+        53.125796742842425,
+        53.136584051591946,
+        53.275574878940134,
+        53.30951197145243,
+        53.04478833743907,
+        53.112795907579084,
+        53.09840183463183,
+        53.13744158853684,
+        53.12091379297091,
+        53.13537347356078,
+        53.27551200511205,
+        53.30926022127844,
+        53.066317824479825,
+        53.10526447020192,
+        53.09915287623316,
+        53.128083136699125,
+        53.10487397234213,
+        53.10288063851924,
+        53.223965021640396,
+        53.26562495992104,
+        53.020839848885416,
+        53.06182963629286,
+        53.074398427784324,
+        53.09779337408006,
+        53.101660914677204,
+        53.12511767981938,
+        53.27510929434071,
+        53.31631760717747,
+        53.02739420651388,
+        53.07220930188562,
+        53.09254099499739,
+        53.099540684254826,
+        53.09762971872129,
+        53.101359982410486,
+        53.246581472875114,
+        53.28983845180434,
+        53.054623930471934,
+        53.07685162446593,
+        53.05880236550068,
+        53.038063431776806,
+        52.98227702230107,
+        52.8608424770418,
+        52.68120204538583,
+        52.43043094476803
+      ],
+      "sharpness_ratio_mean": 1.0019225720349725,
+      "status": "ok",
+      "temporal_delta_error_max": 0.45004679361979166,
+      "temporal_delta_error_mean": 0.4003207340946905,
+      "temporal_jitter_ratio_max": 1.0027560079216231,
+      "temporal_jitter_ratio_mean": 1.0011831702577139,
+      "temporal_jitter_ratio_min": 0.9997355495048623
+    },
+    "thresholds": {
+      "gemini_absolute_threshold": "disabled_for_lossy_generative_dimensions",
+      "lpips_absolute_threshold": "disabled_for_lossy_generative_dimensions",
+      "off_identity": "not requested",
+      "pixel_metrics": "telemetry (no absolute threshold)",
+      "quality_ranking": {
+        "primary": "aligned_pairwise_gemini_max_artifact_severity",
+        "secondary": "aligned_lpips_max",
+        "tie_breaker": "higher_speedup"
+      },
+      "selection": "best_quality_at_or_above_speed_target",
+      "source": "sol-engine evals/tiers.toml",
+      "speedup_targets": {
+        "high": 3.0,
+        "low": 1.5,
+        "medium": 2.0
+      }
+    }
+  },
+  "elapsed_s": 4.132834234,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "compare-clips-ltxvae-4k5s-streaming--ltxvae-4k5s-fast",
+  "status": "pass"
+}

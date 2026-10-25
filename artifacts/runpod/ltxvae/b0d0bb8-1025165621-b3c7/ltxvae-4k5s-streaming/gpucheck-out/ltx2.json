@@ -1,0 +1,383 @@
+{
+  "checks": [],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast",
+    "request": {
+      "height": 2176,
+      "latent_shape": [
+        1,
+        128,
+        16,
+        68,
+        120
+      ],
+      "latents": null,
+      "load_s": 0.275737064,
+      "num_frames": 121,
+      "seed": 7,
+      "tiling": "TileSizeConfig { frames: DimSize { tile_size: 80, overlap: 24 }, height: DimSize { tile_size: 448, overlap: 64 }, width: DimSize { tile_size: 768, overlap: 64 } }",
+      "width": 3840
+    },
+    "runs": [
+      {
+        "decode_video_s": 29.497691563,
+        "decoder": "streaming",
+        "frames_written": 121,
+        "gpu_trace_decode": {
+          "busy_s": 29.405927653000003,
+          "by_category": [
+            {
+              "calls": 94614,
+              "category": "layout",
+              "share": 0.3390926151567666,
+              "total_s": 9.668404744
+            },
+            {
+              "calls": 12096,
+              "category": "conv",
+              "share": 0.33399001908782483,
+              "total_s": 9.522916574
+            },
+            {
+              "calls": 30728,
+              "category": "norm_modulate_elementwise",
+              "share": 0.16411527256932942,
+              "total_s": 4.679349561
+            },
+            {
+              "calls": 36408,
+              "category": "cast",
+              "share": 0.11356110863760044,
+              "total_s": 3.237920003
+            },
+            {
+              "calls": 36304,
+              "category": "other",
+              "share": 0.049240984548478736,
+              "total_s": 1.403987428
+            }
+          ],
+          "dropped_records": 0,
+          "gap_count": 207942,
+          "gap_histogram": [
+            {
+              "bucket": "<5us",
+              "count": 207891,
+              "idle_s": 0.068957593
+            },
+            {
+              "bucket": "5-50us",
+              "count": 31,
+              "idle_s": 0.000431778
+            },
+            {
+              "bucket": "50-500us",
+              "count": 12,
+              "idle_s": 0.004130547
+            },
+            {
+              "bucket": ">500us",
+              "count": 8,
+              "idle_s": 0.0068596130000000005
+            }
+          ],
+          "host": {
+            "device_tail_s": -0.0007281303405761719,
+            "enqueue_s": 29.487266032,
+            "first_activity_lag_s": 0.00023055076599121094
+          },
+          "host_launches": 161766,
+          "idle_frac": 0.0027259951711964773,
+          "idle_s": 0.080379531,
+          "kernel_count": 210150,
+          "kernel_s": 28.512578310000002,
+          "largest_gaps": [
+            {
+              "after": "memcpy HtoD",
+              "at_s": 7.040000000000001e-7,
+              "before": "memcpy HtoD",
+              "gap_us": 2688.1710000000003
+            },
+            {
+              "after": "pack_rgb_u8",
+              "at_s": 14.244708866000002,
+              "before": "memcpy DtoH",
+              "gap_us": 715.139
+            },
+            {
+              "after": "mx_block_copy",
+              "at_s": 29.061495047,
+              "before": "memcpy DtoH",
+              "gap_us": 649.443
+            },
+            {
+              "after": "block_copy",
+              "at_s": 14.395847339000001,
+              "before": "memcpy DtoH",
+              "gap_us": 622.723
+            },
+            {
+              "after": "memcpy DtoH",
+              "at_s": 14.318757664000001,
+              "before": "memcpy DtoH",
+              "gap_us": 574.114
+            },
+            {
+              "after": "bcast_binary",
+              "at_s": 14.480177045000001,
+              "before": "memcpy DtoH",
+              "gap_us": 553.763
+            },
+            {
+              "after": "bcast_binary",
+              "at_s": 28.982068549,
+              "before": "memcpy DtoH",
+              "gap_us": 533.058
+            },
+            {
+              "after": "block_copy",
+              "at_s": 14.567663661000001,
+              "before": "memcpy DtoH",
+              "gap_us": 523.202
+            },
+            {
+              "after": "mx_block_copy",
+              "at_s": 14.639757379,
+              "before": "memcpy DtoH",
+              "gap_us": 480.738
+            },
+            {
+              "after": "memcpy DtoH",
+              "at_s": 29.418353281,
+              "before": "memcpy DtoH",
+              "gap_us": 474.242
+            }
+          ],
+          "memcpy": {
+            "DtoH": {
+              "bytes": 3033169920,
+              "count": 16
+            },
+            "HtoD": {
+              "bytes": 27208,
+              "count": 14
+            }
+          },
+          "memset": {
+            "bytes": 7020528,
+            "count": 2762
+          },
+          "pass": "ltx2/decode",
+          "step": 0,
+          "sync_count": 96,
+          "top_kernels": [
+            {
+              "calls": 8382,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x128x64_stage3_warpsize2x2x1_g1_tensor16x8x1…",
+              "share": 0.31125283811627347,
+              "total_s": 8.874620921
+            },
+            {
+              "calls": 24192,
+              "category": "layout",
+              "name": "pad_axis",
+              "share": 0.16179651702638323,
+              "total_s": 4.613235862000001
+            },
+            {
+              "calls": 67110,
+              "category": "layout",
+              "name": "block_copy",
+              "share": 0.1371035989975331,
+              "total_s": 3.909177103
+            },
+            {
+              "calls": 10800,
+              "category": "norm_modulate_elementwise",
+              "name": "rms_norm_channels",
+              "share": 0.08232332146464519,
+              "total_s": 2.3472501500000003
+            },
+            {
+              "calls": 24288,
+              "category": "cast",
+              "name": "cast_f32_bf16",
+              "share": 0.07327440925492368,
+              "total_s": 2.089242332
+            },
+            {
+              "calls": 12096,
+              "category": "norm_modulate_elementwise",
+              "name": "add_bias_inplace",
+              "share": 0.04812553779181536,
+              "total_s": 1.372183165
+            },
+            {
+              "calls": 12120,
+              "category": "cast",
+              "name": "cast_bf16_f32_bias_act",
+              "share": 0.04028669938267677,
+              "total_s": 1.1486776710000002
+            },
+            {
+              "calls": 2592,
+              "category": "layout",
+              "name": "gather_nd",
+              "share": 0.0392720680966014,
+              "total_s": 1.119747917
+            },
+            {
+              "calls": 24192,
+              "category": "other",
+              "name": "cudnn::engines_precompiled::nchwToNhwcKernel<__nv_bfloat16>",
+              "share": 0.03273569376476357,
+              "total_s": 0.933379032
+            },
+            {
+              "calls": 4756,
+              "category": "norm_modulate_elementwise",
+              "name": "elem_add",
+              "share": 0.03156884937635793,
+              "total_s": 0.9001092900000001
+            },
+            {
+              "calls": 12096,
+              "category": "other",
+              "name": "cudnn::engines_precompiled::nhwcToNchwKernel<__nv_bfloat16>",
+              "share": 0.016139488438988527,
+              "total_s": 0.46017842800000003
+            },
+            {
+              "calls": 2272,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x64x64_stage3_warpsize2x2x1_g1_tensor16x8x16…",
+              "share": 0.015435608776413036,
+              "total_s": 0.440109004
+            },
+            {
+              "calls": 648,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x32x64_stage1_warpsize4x1x1_…",
+              "share": 0.006367814970150274,
+              "total_s": 0.181562823
+            },
+            {
+              "calls": 1584,
+              "category": "norm_modulate_elementwise",
+              "name": "bcast_binary",
+              "share": 0.0012427382965774308,
+              "total_s": 0.035433673
+            },
+            {
+              "calls": 720,
+              "category": "layout",
+              "name": "mx_block_copy",
+              "share": 0.0009204310362488575,
+              "total_s": 0.026243862000000003
+            },
+            {
+              "calls": 720,
+              "category": "norm_modulate_elementwise",
+              "name": "mx_binary",
+              "share": 0.0007341212980608908,
+              "total_s": 0.020931691000000002
+            },
+            {
+              "calls": 648,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize64x32x64_stage5_warpsize2x2x1_g1_tensor16x8x16_…",
+              "share": 0.0005505423897246983,
+              "total_s": 0.015697383000000002
+            },
+            {
+              "calls": 16,
+              "category": "other",
+              "name": "pack_rgb_u8",
+              "share": 0.0003658023447266422,
+              "total_s": 0.010429968000000001
+            },
+            {
+              "calls": 102,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_indexed_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tenso…",
+              "share": 0.00025653120249159256,
+              "total_s": 0.007314366
+            },
+            {
+              "calls": 700,
+              "category": "norm_modulate_elementwise",
+              "name": "lincomb3",
+              "share": 0.00011559449181219978,
+              "total_s": 0.0032958970000000003
+            },
+            {
+              "calls": 24,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize256x128x32_stage3_warpsize4x2x1_g1_tensor16x8x1…",
+              "share": 0.00008975943782335551,
+              "total_s": 0.0025592730000000004
+            },
+            {
+              "calls": 20,
+              "category": "conv",
+              "name": "sm80_xmma_fprop_implicit_gemm_indexed_bf16bf16_bf16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage5_warpsize2x2x1_g1_tenso…",
+              "share": 0.000036924194948401356,
+              "total_s": 0.001052804
+            },
+            {
+              "calls": 72,
+              "category": "norm_modulate_elementwise",
+              "name": "mul_scalar",
+              "share": 5.109850060417072e-6,
+              "total_s": 0.00014569500000000002
+            }
+          ],
+          "wall_s": 29.497609623,
+          "window_s": 29.486307184
+        },
+        "peak_vram_mib": 16304,
+        "video_encode_s": 0.00008194,
+        "video_push_s": 0.00005071000000000001,
+        "video_rgb_s": 1.1592839644449109,
+        "video_vae_s": 29.226378993988035,
+        "video_wait_s": 0.207505842,
+        "warm_s": 27.851234174,
+        "write_s": 1.096860953,
+        "writer": {
+          "active_at_spawn": 0,
+          "buffer_budget_gib": 43.61444091796875,
+          "buffered_peak_gib": 2.824859619140625,
+          "ffmpeg_feed_s": 0.0,
+          "frames": 121,
+          "png_deferred": 121,
+          "png_gib": 1.6718202121555805,
+          "png_inline": 0,
+          "png_mode": "deferred",
+          "png_s": 1.096782833,
+          "video_tail_s": 0.00008061
+        }
+      }
+    ]
+  },
+  "elapsed_s": 59.466838221,
+  "env": {
+    "FASTVIDEO_GPU_TRACE_DECODE": "1",
+    "FASTVIDEO_LTX_VAE_CHECK": "1"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "ltx2",
+  "status": "pass"
+}

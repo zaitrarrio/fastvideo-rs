@@ -1,0 +1,15 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/fastvideo/b0d0bb8-1025164519-93a7 artifacts/runpod/fastvideo/b0d0bb8-10251648
+same fasth3-4step-vsa-480p: {"exit":0,"skipped":null}, 248 frames byte-identical
+same fasth3-4step-vsa-480p-taeh3: {"exit":0,"skipped":null}, 248 frames byte-identical
+same fasth3-8step-480p: {"exit":null,"skipped":"weights incomplete"}, no frames
+same fasth3-8step-480p-taeh3: {"exit":null,"skipped":"weights incomplete"}, no frames
+same compare/compare-clips-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3.json: {"status":"pass","off_identity":"different"}
+same compare/compare-clips-fasth3-4step-vsa-768p--fasth3-4step-vsa-768p-taeh3.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-fasth3-8step-480p--fasth3-8step-480p-taeh3.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-fasth3-8step-768p--fasth3-8step-768p-taeh3.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-1080p20s--ltx25-1080p20s-taehv.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-4k5s--ltx25-4k5s-taehv.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-512p--ltx25-512p-taehv.json: {"status":"skipped","off_identity":null}
+same gate/gate-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3.json: present
+4 arm(s) the same (2 ran with byte-identical frames, 2 skipped in both, 0 failed in both), 8 report(s) the same, 0 difference(s)
+exit=0

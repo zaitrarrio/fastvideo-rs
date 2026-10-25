@@ -1,0 +1,86 @@
+[16:46:41] [h3arms] matrix start image=8537f0c0b1bf0d87
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-d7218fc2-d0b9-ea0a-27ba-bd7d21e70774)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[16:46:42] [h3arms] SKIP fasth3-8step-768p: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:42] [h3arms] SKIP fasth3-8step-768p-sol: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:42] [h3arms] SKIP fasth3-8step-768p-tea: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:42] [h3arms] SKIP fasth3-8step-768p-soltea: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:42] [h3arms] skip compare fasth3-8step-768p--fasth3-8step-768p-sol (frames missing)
+[16:46:42] [h3arms] skip gate fasth3-8step-768p--fasth3-8step-768p-sol (benchmark.json missing)
+[16:46:42] [h3arms] skip compare fasth3-8step-768p--fasth3-8step-768p-tea (frames missing)
+[16:46:42] [h3arms] skip gate fasth3-8step-768p--fasth3-8step-768p-tea (benchmark.json missing)
+[16:46:42] [h3arms] skip compare fasth3-8step-768p--fasth3-8step-768p-soltea (frames missing)
+[16:46:42] [h3arms] skip gate fasth3-8step-768p--fasth3-8step-768p-soltea (benchmark.json missing)
+[16:46:43] [h3arms] SKIP fasth3-8step-480p: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:43] [h3arms] SKIP fasth3-8step-480p-sol: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:43] [h3arms] SKIP fasth3-8step-480p-tea: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:44] [h3arms] SKIP fasth3-8step-480p-soltea: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:44] [h3arms] SKIP fasth3-8step-480p-sol-taeh3: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:44] [h3arms] SKIP fasth3-8step-480p-tea-taeh3: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:44] [h3arms] SKIP fasth3-8step-480p-soltea-taeh3: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[16:46:44] [h3arms] skip compare fasth3-8step-480p--fasth3-8step-480p-sol (frames missing)
+[16:46:44] [h3arms] skip gate fasth3-8step-480p--fasth3-8step-480p-sol (benchmark.json missing)
+[16:46:44] [h3arms] skip compare fasth3-8step-480p--fasth3-8step-480p-tea (frames missing)
+[16:46:44] [h3arms] skip gate fasth3-8step-480p--fasth3-8step-480p-tea (benchmark.json missing)
+[16:46:44] [h3arms] skip compare fasth3-8step-480p--fasth3-8step-480p-soltea (frames missing)
+[16:46:44] [h3arms] skip gate fasth3-8step-480p--fasth3-8step-480p-soltea (benchmark.json missing)
+[16:46:44] [h3arms] skip compare fasth3-8step-480p-sol--fasth3-8step-480p-sol-taeh3 (frames missing)
+[16:46:44] [h3arms] skip compare fasth3-8step-480p--fasth3-8step-480p-sol-taeh3 (frames missing)
+[16:46:44] [h3arms] skip gate fasth3-8step-480p--fasth3-8step-480p-sol-taeh3 (benchmark.json missing)
+[16:46:44] [h3arms] skip compare fasth3-8step-480p-tea--fasth3-8step-480p-tea-taeh3 (frames missing)
+[16:46:44] [h3arms] skip compare fasth3-8step-480p--fasth3-8step-480p-tea-taeh3 (frames missing)
+[16:46:44] [h3arms] skip gate fasth3-8step-480p--fasth3-8step-480p-tea-taeh3 (benchmark.json missing)
+[16:46:44] [h3arms] skip compare fasth3-8step-480p-soltea--fasth3-8step-480p-soltea-taeh3 (frames missing)
+[16:46:44] [h3arms] skip compare fasth3-8step-480p--fasth3-8step-480p-soltea-taeh3 (frames missing)
+[16:46:44] [h3arms] skip gate fasth3-8step-480p--fasth3-8step-480p-soltea-taeh3 (benchmark.json missing)
+[16:46:45] [h3arms] ▶ fasth3-4step-vsa-480p  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --height 480 --width 832 --adaln-cache /fvscratch/runs/h3arms/b0d0bb8-1025164622-3ab2/fasth3-4step-vsa-480p-adaln.cache --clip-dir /fvscratch/runs/h3arms/b0d0bb8-1025164622-3ab2/fasth3-4step-vsa-480p/frames --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder streamed --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --warm  (wall cap 3600s; 0=none)
+[16:52:47] [h3arms] ok fasth3-4step-vsa-480p  362s  /fvscratch/runs/h3arms/b0d0bb8-1025164622-3ab2/fasth3-4step-vsa-480p/stderr.log:[INFO] h3/timings {"audio_decode_s":0.05671128,"decode_s":2.067051964,"denoise_s":6.215003972,"load_s":132.557202611,"peak_mib":38566,"refine_s":0.00037738,"step_s":[1.5776573486328125,1.54352978515625,1.547347900390625,1.5461632080078125],"text_cache":"hit","text_encoder":"cache","text_s":0.282374383,"total_s":8.729578661,"video_decode_s":2.010340684,"video_encode_s":0.042756201,"video_push_s":0.000039460000000000005,"video_rgb_s":0.037195556004151406,"video_vae_s":1.959873940587044,"video_wait_s":0.158727132,"warm":true,"write_s":0.119892241}
+[16:52:48] [h3arms] ▶ fasth3-4step-vsa-480p-taeh3  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --height 480 --width 832 --taeh3-weights /workspace/weights/auxiliary/tae/taeh3.safetensors --adaln-cache /fvscratch/runs/h3arms/b0d0bb8-1025164622-3ab2/fasth3-4step-vsa-480p-adaln.cache --clip-dir /fvscratch/runs/h3arms/b0d0bb8-1025164622-3ab2/fasth3-4step-vsa-480p-taeh3/frames --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder streamed --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --warm  (wall cap 3600s; 0=none)
+[16:54:30] [h3arms] ok fasth3-4step-vsa-480p-taeh3  101s  /fvscratch/runs/h3arms/b0d0bb8-1025164622-3ab2/fasth3-4step-vsa-480p-taeh3/stderr.log:[INFO] h3/timings {"audio_decode_s":0.05251619,"decode_s":0.391039334,"denoise_s":6.203352043,"load_s":86.372308804,"peak_mib":32004,"refine_s":0.0004755,"step_s":[1.5735816650390626,1.5422139892578126,1.543193603515625,1.5442135009765625],"text_cache":"hit","text_encoder":"cache","text_s":0.264605223,"total_s":7.035304652,"video_decode_s":0.338523144,"video_encode_s":0.082747381,"video_push_s":0.095632191,"video_rgb_s":0.04339350390712649,"video_vae_s":0.1312937265485525,"video_wait_s":0.126518131,"warm":true,"write_s":0.125857192}
+[16:54:30] [h3arms] compare fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3 exit=0 "psnr_mean":31.05147224355886 
+[16:54:30] [h3arms] gate fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3 exit=1 gate verdict: "fail"
+[16:54:30] [h3arms] matrix done

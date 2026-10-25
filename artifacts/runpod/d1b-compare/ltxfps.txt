@@ -1,0 +1,5 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/ltxfps/b0d0bb8-1025165407-831d artifacts/runpod/ltxfps/b0d0bb8-10251654
+same fasth3-8step-sink: {"exit":null,"skipped":"weights incomplete"}, no frames
+same ltx25-1080p-25fps: {"exit":0,"skipped":null}, 121 frames byte-identical
+2 arm(s) the same (1 ran with byte-identical frames, 1 skipped in both, 0 failed in both), 0 report(s) the same, 0 difference(s)
+exit=0
