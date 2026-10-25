@@ -134,6 +134,8 @@ api() {
   return "$rc"
 }
 download_asset() { # <asset id> <dest>
+  # Tests: FV_TOOLS_ASSETS_DIR/<asset id> stands in for the API's asset download.
+  if [[ -n "${FV_TOOLS_ASSETS_DIR:-}" ]]; then cp "$FV_TOOLS_ASSETS_DIR/$1" "$2"; return; fi
   curl -sS --fail -L --retry 3 -H @"$HDR" -H 'Accept: application/octet-stream' \
     -o "$2" "$API/repos/$REPO/releases/assets/$1"
 }

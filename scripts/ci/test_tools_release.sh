@@ -166,6 +166,10 @@ printf '#!/bin/sh\necho fv-boot 0.1.11\n' >"$tmp/pre/serve-cpu/out/fv-boot"; chm
 check "contexts: a release with fv-boot replaces boot-build" "oxide=$tmp/pre/oxide serve-build=$tmp/pre/serve-cuda cpu-build=$tmp/pre/serve-cpu boot-build=$tmp/pre/serve-cpu" \
   "$(bash "$P" contexts "$tmp/pre" oxide serve-cuda serve-cpu | paste -sd' ')"
 check "contexts: no serve set, no boot-build" "oxide=$tmp/pre/oxide" "$(bash "$P" contexts "$tmp/pre" oxide | paste -sd' ')"
+# A release older than HEAD's tools inputs (main's FV_PREBUILT_STALE=latest, a pin): its fv-boot is not used, so
+# the image's entrypoint is always this commit's (serve-image run 286: a pre-ADR-0011 fv-boot in the one image).
+check "contexts --stale: an older release's fv-boot is not used (boot-build compiles)" "oxide=$tmp/pre/oxide serve-build=$tmp/pre/serve-cuda cpu-build=$tmp/pre/serve-cpu" \
+  "$(bash "$P" contexts --stale "$tmp/pre" oxide serve-cuda serve-cpu | paste -sd' ')"
 # fv-lab (ADR-0019) replaces the runtime image's lab-build stage only when the gpucheck set carries it.
 mkdir -p "$tmp/pre/gpucheck/out"
 check "contexts: a release from before fv-lab (lab-build compiles)" "oxide=$tmp/pre/oxide binary=$tmp/pre/gpucheck" \
@@ -174,4 +178,58 @@ printf '#!/bin/sh\necho fv-lab 0.1.11\n' >"$tmp/pre/gpucheck/out/fv-lab"; chmod 
 check "contexts: a release with fv-lab replaces lab-build" "oxide=$tmp/pre/oxide binary=$tmp/pre/gpucheck lab-build=$tmp/pre/gpucheck" \
   "$(bash "$P" contexts "$tmp/pre" oxide gpucheck | paste -sd' ')"
 check "contexts: no gpucheck set, no lab-build" "oxide=$tmp/pre/oxide" "$(bash "$P" contexts "$tmp/pre" oxide | paste -sd' ')"
+# prebuilt.sh fetch end to end (offline: FV_TOOLS_RELEASES_FILE lists the release, FV_TOOLS_ASSETS_DIR serves its
+# assets): which fv-boot the images get. Exact or pinned: the release's; stale (main's FV_PREBUILT_STALE=latest): this
+# checkout's (no boot-build=), and the notice says why; a release without fv-boot says that instead.
+fakerel() { # <dir> <tag> <input-hash> <with fv-boot: 1|0> -> writes <dir>/releases.json and <dir>/assets/
+  local d="$1" tag="$2" ih="$3" boot="$4" set st files='{}' sets='{}' tb
+  rm -rf "$d" && mkdir -p "$d/assets"
+  local n=2 assets='[]'
+  for set in serve-cuda serve-cpu; do
+    st="$d/st-$set"; mkdir -p "$st/out"
+    printf '#!/bin/sh\necho fv-serve\n' >"$st/out/fv-serve"; echo cuda >"$st/out/fv-serve.features"
+    [[ "$boot" == 1 ]] && printf '#!/bin/sh\necho fv-boot\n' >"$st/out/fv-boot"
+    chmod +x "$st/out/"*
+    files="$(cd "$st" && for f in $(find . -type f -printf '%P\n' | LC_ALL=C sort); do jq -n --arg f "$f" --arg h "$(sha256sum "$f" | cut -d' ' -f1)" '{($f): {sha256: $h}}'; done | jq -s 'add')"
+    tb="$set.tar.gz"; tar -C "$st" -czf "$d/assets/$n" .
+    sets="$(jq --arg s "$set" --arg tb "$tb" --arg h "$(sha256sum "$d/assets/$n" | cut -d' ' -f1)" --argjson f "$files" \
+      '. + {($s): {tarball: $tb, sha256: $h, files: $f}}' <<<"$sets")"
+    assets="$(jq --arg n "$tb" --argjson id "$n" '. + [{name: $n, id: $id, size: 1, digest: ""}]' <<<"$assets")"
+    n=$((n + 1))
+  done
+  jq -n --arg t "$tag" --argjson s "$sets" '{tag: $t, version: ($t | ltrimstr("tools-v")), build_id: "b", source_commit: "c", sets: $s}' >"$d/assets/1"
+  jq -n --arg t "$tag" --arg ih "$ih" --arg ms "$(sha256sum "$d/assets/1" | cut -d' ' -f1)" --argjson a "$assets" \
+    '[{tag_name: $t, id: 1, draft: false, prerelease: false, html_url: "u", created_at: "2026-10-01T00:00:00Z",
+       body: "notes\ninput-hash: \($ih)\nsource-commit: c1\nmanifest-sha256: \($ms)",
+       assets: ([{name: "manifest.json", id: 1, size: 1, digest: ""}] + $a)}]' >"$d/releases.json"
+}
+pfetch() { # <dir> [env…] -> the GITHUB_OUTPUT (contexts joined on one line) and the log in <dir>/fetch.log
+  local d="$1"; shift
+  : >"$d/gho"
+  env FV_TOOLS_RELEASES_FILE="$d/releases.json" FV_TOOLS_ASSETS_DIR="$d/assets" FV_PREBUILT_DIR="$d/pre" GITHUB_OUTPUT="$d/gho" \
+    FV_TOOLS_VERSION= FV_PREBUILT_SELECT= FV_PREBUILT_FEATURES= FV_PREBUILT_DISABLE= "$@" \
+    bash "$P" fetch serve-cuda serve-cpu >"$d/fetch.log" 2>&1
+  sed -n '/^contexts<<FV_EOF$/,/^FV_EOF$/{/FV_EOF/d; s/^/ctx:/; p}' "$d/gho" | paste -sd' '
+  grep -E '^(ok|exact|fv_boot)=' "$d/gho" | paste -sd' '
+}
+head_sha="$(git -C "$HERE/../.." rev-parse HEAD)"
+fr="$tmp/fr"
+fakerel "$fr" tools-v0.1.20 abc 1
+got="$(pfetch "$fr" FV_PREBUILT_STALE=latest | paste -sd' ')"
+check "fetch, stale (FV_PREBUILT_STALE=latest): no boot-build=, fv-boot compiled from HEAD" \
+  "ctx:serve-build=$fr/pre/serve-cuda ctx:cpu-build=$fr/pre/serve-cpu ok=true exact=false fv_boot=compiled@$head_sha" "$got"
+grep -q "::notice title=fv-boot compiled from this commit::tools-v0.1.20 is older" "$fr/fetch.log" && echo "ok   (stale notice)" || { echo "FAIL stale notice"; cat "$fr/fetch.log"; fail=1; }
+got="$(pfetch "$fr" FV_TOOLS_VERSION=0.1.20 | paste -sd' ')"
+check "fetch, FV_TOOLS_VERSION pin (not exact): the pinned release's fv-boot stays with its fv-serve" \
+  "ctx:serve-build=$fr/pre/serve-cuda ctx:cpu-build=$fr/pre/serve-cpu ctx:boot-build=$fr/pre/serve-cuda ok=true exact=false fv_boot=tools-v0.1.20" "$got"
+fakerel "$fr" tools-v0.1.20 "$(bash "$T" input-hash HEAD)" 1
+got="$(pfetch "$fr" | paste -sd' ')"
+check "fetch, exact: the release's fv-boot" \
+  "ctx:serve-build=$fr/pre/serve-cuda ctx:cpu-build=$fr/pre/serve-cpu ctx:boot-build=$fr/pre/serve-cuda ok=true exact=true fv_boot=tools-v0.1.20" "$got"
+fakerel "$fr" tools-v0.1.20 abc 0
+got="$(pfetch "$fr" FV_PREBUILT_STALE=latest | paste -sd' ')"
+check "fetch, stale release without fv-boot: compiled" \
+  "ctx:serve-build=$fr/pre/serve-cuda ctx:cpu-build=$fr/pre/serve-cpu ok=true exact=false fv_boot=compiled@$head_sha" "$got"
+grep -q "::notice title=fv-boot not in tools-v0.1.20::" "$fr/fetch.log" && ! grep -q "fv-boot compiled from this commit" "$fr/fetch.log" \
+  && echo "ok   (says the release has no fv-boot)" || { echo "FAIL no-fv-boot notice"; cat "$fr/fetch.log"; fail=1; }
 exit "$fail"
