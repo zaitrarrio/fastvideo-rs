@@ -38,9 +38,9 @@ execution log at the end records what ran where and what it cost.
 - **Pinned public formats.** `fastvideo-manifest` layer 1 is the registry's
   contract; widenings happen before the first publish, with ADRs and
   fixtures; afterwards a change is a versioned schema.
-- **Owner decisions still open** (review §7.10): Vast serving, Runpod LB
-  mode (`multiworker.rs`), one image with boot-time config versus seven
-  variant images, GMI/Brev in Rust or TS. Work packages that depend on one
+- **Owner decisions still open** (review §7.10): Vast serving, GMI/Brev in
+  Rust or TS. Decided: one image with boot-time config (2026-10-25); Runpod
+  LB mode kept (2026-10-25, F3b reduced to the renames). Work packages that depend on one
   are marked and wait.
 
 ## 2. Work packages
@@ -57,7 +57,7 @@ parallel agents.
 | F2 | One formatting commit; fix the 27 clippy lints; `task check` runs `cargo fmt --check` and `clippy -D warnings` as real gates; `gpucheck-t0` runs them | `cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` green | pod | F1 (to avoid churn) | merged (#142) |
 | F3a | Serving hardening from review §7.7: per-job deadline in `StepControl`, bounded engine event channel, per-model duration and queue-wait histograms, residency gauges, `otel` feature implemented | tests in `fastvideo-engine-service` and `fastvideo-serve`; `scripts/serve/check.sh` green | pod | none | merged (#140; `otel` deferred to F3c) |
 | F3c | Implement the `otel` feature (OpenTelemetry export of the trace recorder's spans) | spans visible in an OTLP collector | pod | F3a | merged (#150; live-collector check pending) |
-| F3b | Delete `multiworker.rs` and `server.workers_max`; rename `[gateway]` to `[cluster]`, drop `gw_workers` | config round-trip tests | pod | owner decision (Runpod LB mode) | blocked |
+| F3b | ~~Delete `multiworker.rs` and `server.workers_max`~~ (owner 2026-10-25: keep the Runpod LB endpoints, so both stay); rename `[gateway]` to `[cluster]` (`[gateway]` read as a deprecated alias; the shipped configs keep it until every image reads `[cluster]`, ADR-0011 "Renaming a worker-config section"); `gw_workers` kept (fv-autoscale's pod pools read it), the dead `gw_dispatch` / `gw_sessions` no longer created | config round-trip tests | pod | owner decision (Runpod LB mode: keep) | pr |
 
 ### Phase 1: the manifest (Workstream A)
 
@@ -90,7 +90,7 @@ parallel agents.
 
 | WP | Scope | Exit criterion | Validation | Depends | Status |
 |---|---|---|---|---|---|
-| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | active (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); D1b merged #176: `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` as tiers (cell schema: baseline arms, TAE arms, bare `env`, paired gates), a golden per tier, the family inventory in ADR-0019 §9; GPU fv-lab = script for all nine moved tiers (`techniques`, `b6`, `precision`, `rtx5090` 2026-10-24; `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae` 2026-10-25, #184; every arm that ran byte-identical); the ten tiers retired from the script in #185 (ADR-0019 §10: branches deleted, `runpod-http.sh run`/`plan` call `fv-lab pod up`, goldens frozen, `scripts/gpu/fv-lab-retired.sh`); D1d first slice in PR `claude/d1d-gate-verdict` (ADR-0019 §11): a typed `[verdict]` step in the cell schema, `b4a` as a tier (goldens from the script, branch kept), `fv-lab gate <run dir>` (gates and verdicts re-evaluated offline), GPU gate for `b4a` pending (§11.6, ~$1.10); next: D1c `report`, D1d `oracle`, D1e one-offs, the remaining script families) |
+| D1 | `fv-lab` binary: `pod`, `run`, `report`, `gate`/`oracle` moved; `lab/tiers.toml`, `lab/cells/*.toml`; the 24 port one-offs and `runpod-matrix.sh` retired | `fv-lab run rtx6000` reproduces today's `rtx6000` family | pod; **GPU** one `rtx6000` run | C3 (`Provider`) | active (D1a merged #171: `fv-lab run` + `pod` on fv-deploy's guards, `lab/tiers.toml` and `lab/cells/rtx6000-*.toml`, dry-run and payload goldens from the scripts, ADR-0019; GPU gate passed (fv-lab = script, sol-h3 and ltx25-two-stage frames byte-identical); D1b merged #176: `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`, `precision` as tiers (cell schema: baseline arms, TAE arms, bare `env`, paired gates), a golden per tier, the family inventory in ADR-0019 §9; GPU fv-lab = script for all nine moved tiers (`techniques`, `b6`, `precision`, `rtx5090` 2026-10-24; `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae` 2026-10-25, #184; every arm that ran byte-identical); the ten tiers retired from the script in #185 (ADR-0019 §10: branches deleted, `runpod-http.sh run`/`plan` call `fv-lab pod up`, goldens frozen, `scripts/gpu/fv-lab-retired.sh`); D1d first slice in PR `claude/d1d-gate-verdict` (ADR-0019 §11): a typed `[verdict]` step in the cell schema, `b4a` as a tier (goldens from the script, branch kept), `fv-lab gate <run dir>` (gates and verdicts re-evaluated offline), GPU gate for `b4a` pending (§11.6, ~$1.10); two dropped modes restored as tiers `precision-nvfp4` and `ltxvae-gen` (owner decision 2026-10-25, ADR-0019 §12: goldens from the script at `5987e6a4`, frozen; GPU check vs that commit pending); next: D1c `report`, D1d `oracle`, D1e one-offs, the remaining script families) |
 | D2 | `lab/gold/<variant>.toml` for every served variant from the numbers in `docs/perf`, `docs/oracle.md` and the profile comments; keyed by registry name and `@rev` | every served variant has a gold file; comments in `profiles/` no longer carry numbers | pod | A2 | merged (#151) |
 | D3 | `fv-lab report tiers` and the generated `docs/perf/tiers.md` | table generated from one run set | pod; **GPU** the gold runs | D1, D2 | active (CPU part in PR `claude/d3-d4-lab-report`, ADR-0023: `fv-lab report tiers [--runs <run set>] [--check]` renders one run set, a fixture run-set golden; `docs/perf/tiers.md` committed with `Run set: none`, every variant not measured, because no committed run set measured a gold cell; next: the GPU gold runs, `fv-lab pod up --family gold` or `gold-run.yml`, then the table and the gold files' `[last_validated]` from that run set) |
 | D4 | CI bridge: gold files parse and resolve; `last_validated.commit` age check; an on-demand `fv-lab run gold --all` workflow | visible per-model validation age in CI | CI | D3 | active (PR `claude/d3-d4-lab-report`, ADR-0023: `fv-lab gold check` (parse, resolve against `families/`, `git cat-file -e`, the age table; warn-only, `--max-age-days` opt-in) in `gold-check.yml` with the table in the job summary; the `gold` tier (one serve-engine cell per gold file, generated by `fv-lab gold cells`, drift-tested) and `fv-lab run gold --all`; `gold-run.yml`, `workflow_dispatch` only, refuses without `RUNPOD_API_KEY`: **owner decision** to add that secret) |
@@ -1207,6 +1207,45 @@ ran (pod id, $/hr), result, cost.
   named (`SLS_GUARDS_NOT_CHECKED`, proposal for `null` in ADR-0018 §7.3); a
   Launch that fails the schema is a 400 / 409 before the op and a clean
   "no pod" inside it; schema errors never carry a value (tested).
+- 2026-10-25, F3b (sub-agent of the coordinating session, worktree
+  `claude/f3b-cluster-renames`): owner decision "keep LB endpoints; F3b
+  reduced to the renames". `[gateway]` → `[cluster]` in fv-serve (old name
+  read with a warning, both refused, round-trip tests over every shipped
+  config), fv-boot's and the shell boots' registration edit under either
+  name; shipped configs unchanged (stage 1 of ADR-0011 "Renaming a
+  worker-config section": images built before it refuse `[cluster]`);
+  `gw_workers` kept. Merged main with C3c (#189): the payload corpus
+  regenerated for the one intended change, the shell boots' registration
+  edit (253 of 1024 cases, `pod/*` cluster, edge and standalone bodies,
+  `dockerStartCmd` only; no serverless case). Gates on build pod
+  `k66zz15an4sktc`; control checks local. No GPU cost.
+- 2026-10-25, F3b review fixes on #192 (coordinator's independent review,
+  nothing blocking): fv-boot appends `[gateway]` too (nothing writes
+  `[cluster]` before stage 2; `FV_SERVE_BIN` can name an older fv-serve);
+  fv-control refuses an inline `config_toml` that sets `[cluster]`; the
+  guard renames through a TOML parse; ADR-0011's stage 2 lists the writers
+  to flip. Merged main at e82b6b78 (#188). Gates on build pod
+  `k66zz15an4sktc`; control checks local. No GPU cost.
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): two dropped script
+  modes restored as fv-lab tiers (owner decision 2026-10-25, "restore dropped
+  test modes") on `claude/restore-nvfp4-vaegen` (draft PR, ADR-0019 §12):
+  `precision-nvfp4` (was `FV_PRECISION_ARM=ltx-nvfp4 runpod-matrix.sh
+  precision`, 4 arms) and `ltxvae-gen` (was `FV_VAE_GEN=1 ... ltxvae`, 16
+  arms, `ltxvae`'s cells plus a gen cell per workload); no schema change;
+  fixtures from the script at `5987e6a4` in each mode, frozen
+  (`fv-lab-restored-goldens.sh` reproduces them); `runpod-http.sh` names the
+  tier for the modes' settings. GPU check pending (coordinator: fv-lab at the
+  PR's commit vs `runpod-http.sh` at `5987e6a4`, image `sha-5987e6a`
+  published; about $3.35). No GPU cost.
+- 2026-10-25, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): #191 review fixes
+  (main at `6c13e195` merged in): the byte-identity check's crate list from
+  `cargo tree -p fastvideo-gpucheck --features cuda` (adds
+  `fastvideo-manifest`, changed only in its deploy section) and a note that
+  the PR head's image carries another tools build than `tools-v0.1.49`; the
+  old knobs' exact `--cells` lists in `docs/dev/fv-lab.md`; `fv-lab run` /
+  `pod up --extra-env` refuse what no tier reads (the same keys as
+  `runpod-http.sh`), the mode's setting first, all keys in one message;
+  `runpod-matrix.sh` names the restored tier. No GPU cost.
 - 2026-10-25 21:45Z, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): serve-image
   run 286 (c3ceb96c, C4) hung in "Smoke-check the serve images" on the
   refusal check. Root cause: main's `FV_PREBUILT_STALE=latest` took the

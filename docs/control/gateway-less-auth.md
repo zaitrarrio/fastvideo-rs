@@ -36,7 +36,7 @@ nothing could mint keys.
 The workers authenticate clients themselves, with the same code and the same
 key table the gateway uses. fv-control makes the admin token.
 
-1. **fv-serve: `gateway.direct`** (`FV_WORKER_DIRECT=1`, only with
+1. **fv-serve: `cluster.direct`** (`gateway.direct` before plan F3b; `FV_WORKER_DIRECT=1`, only with
    `server.role = worker`):
    - `auth.mode` is no longer forced to `trust-gateway`. It must be `keys` or
      `none`.

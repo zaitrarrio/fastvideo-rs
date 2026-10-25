@@ -109,7 +109,8 @@ client ─► fv-serve gateway (auth, adapters, D1 job rows)          [as today]
     with `dispatch = "durable-object"`; without it the pool keeps the per-pool
     routes (phase 0–2 behaviour);
   - worker: `[dispatch] families = ["wan", "sfwan"]` (`FV_DISPATCH_FAMILIES`);
-    without it, `[gateway] pool` keeps the single per-pool socket.
+    without it, `[cluster] pool` (`[gateway] pool` before plan F3b) keeps
+    the single per-pool socket.
 - The DO name is `family:{family}` (`idFromName`), so family objects and
   pool objects of the same class never collide.
 - Within a family the DO still filters by model: a worker announces the model

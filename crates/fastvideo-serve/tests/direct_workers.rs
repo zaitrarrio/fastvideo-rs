@@ -1,6 +1,6 @@
 //! Direct workers (fv-control `control_plane: "direct"`,
 //! docs/control/gateway-less-auth.md): fv-serve workers that clients call
-//! at their own URL, with `gateway.direct` (`FV_WORKER_DIRECT=1`). They
+//! at their own URL, with `cluster.direct` (`FV_WORKER_DIRECT=1`). They
 //! check API keys themselves; minted keys live in the shared D1 `api_keys`
 //! table (the SQLite mock here). Moved from the retired `tests/gateway.rs`.
 
@@ -79,8 +79,8 @@ async fn direct_worker(sh: &Shared, tag: &str) -> Running {
     c.engine.fake.step_ms = 5;
     c.protocols.fastwan = false;
     c.server.role = Role::Worker;
-    c.gateway.direct = true;
-    c.gateway.register = false;
+    c.cluster.direct = true;
+    c.cluster.register = false;
     c.server.public_base_url = Some(base.clone());
     c.server.worker_id = Some(format!("direct-{tag}"));
     c.auth.key_store = KeyStoreBackend::D1;

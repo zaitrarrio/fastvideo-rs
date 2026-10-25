@@ -259,7 +259,7 @@ fn base_config(tag: &str, sh: &Shared, s: &Scn) -> Config {
     c.jobs.backend = JobBackend::D1;
     c.jobs.progress_interval_ms = s.progress_ms;
     c.jobs.heartbeat_s = s.heartbeat_s;
-    c.gateway.watch_poll_ms = s.watch_poll_ms;
+    c.cluster.watch_poll_ms = s.watch_poll_ms;
     c.auth.key_store = KeyStoreBackend::Memory;
     c.server.callbacks_allow_private = true;
     c.protocols.fastwan = false;

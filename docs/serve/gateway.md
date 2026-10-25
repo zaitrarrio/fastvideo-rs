@@ -5,7 +5,10 @@
 > `scripts/serve/runpod-gateway.sh`, `runpod-cluster.sh`) was removed in stage 4 of
 > [edge-control-plane.md](edge-control-plane.md) (§9, "Stage 4 as built"). The edge Worker is the
 > only control plane; fv-control clusters are `edge` or `direct`. This page is
-> kept as the design record; its paths and commands no longer exist.
+> kept as the design record; its paths and commands no longer exist. Its
+> `[gateway]` table is fv-serve's `[cluster]` since plan F3b (the old name
+> is still read; [ADR-0011](../adr/0011-deploy-section.md), "Renaming a
+> worker-config section"); the `gw_workers` table keeps its name.
 
 Status: design + implementation (2026-09-28). Owner of the gateway code:
 `crates/fastvideo-serve/src/gateway/`. The autoscaler lives in

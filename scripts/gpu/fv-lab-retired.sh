@@ -13,7 +13,18 @@
 #   crates/fastvideo-lab/tests/dry_run.rs   the same list, the same checks
 #
 # A family joins this list in the PR that deletes its branch, never before.
-FV_LAB_RETIRED="rtx6000 techniques b6 rtx5090 fastvideo h3arms trace ltxfps ltxvae precision"
+# The restored modes below join it in the PR that restores them: their branch
+# was already gone, so they start frozen.
+FV_LAB_RETIRED="rtx6000 techniques b6 rtx5090 fastvideo h3arms trace ltxfps ltxvae precision precision-nvfp4 ltxvae-gen"
+
+# Script modes restored as tiers (ADR-0019 §12, owner decision 2026-10-25):
+# `<tier>:<family>:<K=V>` is the mode `FV_EXTRA_ENV=<K=V> runpod-matrix.sh
+# <family>` ran before #185 deleted the branch. The tier's fixtures are that
+# mode's dry run, gates and `runpod-http.sh plan` body as the script wrote them
+# at 5987e6a4 (scripts/gpu/tests/fv-lab-restored-goldens.sh); fv-lab's equal
+# them but for the family's name (the tier's) and the mode's setting (none).
+# runpod-http.sh refuses <K=V> in FV_EXTRA_ENV and names the tier.
+FV_LAB_RESTORED="precision-nvfp4:precision:FV_PRECISION_ARM=ltx-nvfp4 ltxvae-gen:ltxvae:FV_VAE_GEN=1"
 
 # fv_lab_retired <family>: true when the family is fv-lab only.
 fv_lab_retired() {

@@ -1,5 +1,5 @@
 //! A worker's sockets to Durable Object dispatchers: its pool's object
-//! (`[dispatch] do_url` + `[gateway] pool`, docs/serve/gateway-cloudflare.md
+//! (`[dispatch] do_url` + `[cluster] pool`, docs/serve/gateway-cloudflare.md
 //! §3.2) or one object per model family it serves (`[dispatch] families`,
 //! docs/serve/dispatch-do-family.md). The gateway's `POST
 //! /fv/v1/internal/jobs` keeps working next to them.

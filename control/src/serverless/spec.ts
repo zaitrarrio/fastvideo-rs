@@ -31,7 +31,7 @@ import {
   SLS_PRESET_IDS,
   legacyVariant,
 } from "../enums";
-import { CONFIG_NAMES, cpuConfigProblem, MAX_WORKER_TOML_BYTES, workerConfigProblem } from "../worker-config";
+import { CONFIG_NAMES, CLUSTER_TABLE_PROBLEM, cpuConfigProblem, inlineSizeProblem, MAX_WORKER_TOML_BYTES, setsClusterTable, workerConfigProblem } from "../worker-config";
 import { PRESET_OWNED, presetOwned, slsPreset } from "./presets";
 import { SLS_MAX_DISK_GB, slsHubDiskGb, slsHubPlan, slsR2DiskGb, slsTrees } from "./weights";
 import { missingTrees } from "../volumes";
@@ -147,7 +147,8 @@ export const EndpointSpecZ = z
       .string()
       .min(1)
       .max(MAX_WORKER_TOML_BYTES)
-      .refine((t) => !workerConfigProblem({ config_toml: t }), { message: `over the FV_WORKER_TOML_B64 size guard (${MAX_WORKER_TOML_BYTES} bytes of TOML)` })
+      .refine((t) => !inlineSizeProblem(t), { message: `over the FV_WORKER_TOML_B64 size guard (${MAX_WORKER_TOML_BYTES} bytes of TOML)` })
+      .refine((t) => !setsClusterTable(t), { message: CLUSTER_TABLE_PROBLEM })
       .optional()
       .meta({ "x-ui": "textarea" })
       .describe("Custom: an inline worker config (FV_WORKER_TOML_B64) instead of a named one; queue and load-balancer endpoints alike. Set by the preset."),
