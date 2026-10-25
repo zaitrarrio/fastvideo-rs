@@ -36,10 +36,10 @@ RUNPOD_API_KEY=… ./fv-deploy down <pod id>
 # A serverless queue endpoint of the same preset (smoke through native queue jobs):
 RUNPOD_API_KEY=… ./fv-deploy up --family h3 --preset h3-turbo --kind serverless --channel latest --yes
 
-# Vast (ADR-0018 §7.2): the fake-engine smoke only (no weights volume on Vast; r2 not in fv-deploy yet).
+# Vast (ADR-0018 §8.2): the fake-engine smoke only (no weights volume on Vast; r2 not in fv-deploy yet).
 VAST_API_KEY=… ./fv-deploy up --kind vast --family fake --preset fake --channel latest --yes
 
-# GCP (ADR-0018 §7.3): a deploy/deploy.toml [[gcp]] row; the floor is checked on the run's budget.
+# GCP (ADR-0018 §8.3): a deploy/deploy.toml [[gcp]] row; the floor is checked on the run's budget.
 GCP_SA_KEY_FILE=… FV_GCP_BUDGET_USD=20 ./fv-deploy up --kind gcp --family h3 --preset h3-turbo --channel latest --yes
 ./fv-deploy down <vm name> --kind gcp
 
@@ -118,6 +118,6 @@ the $2.50/hr cap.
 
 `fv-deploy` replaces `scripts/serve/runpod-pod.sh`, the queue half of `runpod-endpoint.sh` and the create / cap half
 of `scripts/gpu/runpod-http.sh`; with `--kind vast` / `--kind gcp` it does what `scripts/serve/vast.sh smoke` and
-`scripts/gcp/vm.sh up` + `wait` do (their live gates are the owner's, ADR-0018 §7.4); the scripts stay until the live gate (ADR-0018 §6 lists which script
+`scripts/gcp/vm.sh up` + `wait` do (their live gates are the owner's, ADR-0018 §8.4); the scripts stay until the live gate (ADR-0018 §6 lists which script
 each subcommand replaces and when it is deleted). `scripts/serve/tests/fv-deploy-goldens.sh --check` keeps the Rust
 payloads equal to what those scripts send.

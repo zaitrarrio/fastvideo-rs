@@ -1,4 +1,4 @@
-//! A Google Compute Engine GPU VM (docs/adr/0018-fv-deploy.md §7.3): the
+//! A Google Compute Engine GPU VM (docs/adr/0018-fv-deploy.md §8.3): the
 //! firewall rule and the instance insert that `scripts/gcp/vm.sh up` sends,
 //! field for field (`fixtures/deploy/gcp-{firewall,instance}.json`, written
 //! from that script's own `firewall_payload` / `instance_payload`;
@@ -11,7 +11,7 @@
 //! environment from `fv-env` (ADR-0011: the config is sent at boot; a
 //! launch's `FV_WORKER_TOML_B64` becomes `fv-config`).
 //!
-//! Money guards that differ from Runpod's (§7.3): the quote is the price
+//! Money guards that differ from Runpod's (§8.3): the quote is the price
 //! table of `scripts/gcp/lib.sh` (`GCP_PRICES`, read from the file, not a
 //! live price: Compute Engine has no price API the scripts use); there is no
 //! account balance, so the floor is checked on the run's budget

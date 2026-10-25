@@ -5,12 +5,14 @@
 import { randomToken, sha256Hex } from "../crypto";
 import { defaults, type Env } from "../env";
 import { resolvePlain } from "../envvars";
+import { LaunchSchemaError } from "../launch";
 import { cpuPrice, runpod } from "../runpod";
 import { fetchWithTimeout, HttpError, now } from "../util";
 import {
   canonical,
   isDirect,
   workerCreatePayload,
+  clusterGuards,
   poolDataCenters,
   workerPlacements,
   workerSystemEnv,
@@ -167,7 +169,17 @@ export async function createWorker(env: Env, c: Cluster, poolId: string, image: 
   const ctx = await envCtx(env, c);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pool: poolId, image });
   for (const pl of workerPlacements(c.spec, pool, env)) {
-    const payload = workerCreatePayload(runpodName(c, poolId), image, pool, pl, full);
+    // The pod's Launch is checked against fv-deploy's schema (src/launch.ts): one that fails it (a stored spec the
+    // op's preflight, assertPoolLaunches, did not see) creates nothing and ends this pool's create like no stock,
+    // with the schema's reason in the log, instead of an exception inside the operation.
+    let payload: ReturnType<typeof workerCreatePayload>;
+    try {
+      payload = workerCreatePayload(runpodName(c, poolId), image, pool, pl, full, clusterGuards(c.spec));
+    } catch (e) {
+      if (!(e instanceof LaunchSchemaError)) throw e;
+      log(`${poolId}: no pod: ${e.message}`);
+      return null;
+    }
     let r: any;
     try {
       r = await runpod.create(env, payload);

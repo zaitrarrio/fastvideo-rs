@@ -70,9 +70,10 @@ the same thing.
 | `control/src/auth.ts` | Access JWT, passphrase sessions, CSRF, API tokens |
 | `control/src/cluster/spec.ts` | the cluster definition, templates and pool presets |
 | `control/src/cluster/catalog.json` | editor suggestions: recipes, model ids, fal apps, engine env keys |
-| `control/gen-configs.mjs` | generates `worker-configs.ts`, `image-configs.ts`, the R2 and Hub tables from `configs/serve` and the weights TSVs, and the family-manifest tables from `families/*.toml` (below) |
+| `control/gen-configs.mjs` | generates `worker-configs.ts`, the R2 and Hub tables from `configs/serve` and the weights TSVs, the family-manifest tables from `families/*.toml` (below), and `launch-gen.ts` from fv-deploy's JSON Schemas |
 | `control/src/families-gen.ts`, `control/src/families.ts` | GENERATED: the family manifests (families, variants, every name a config may use, trees, GPU needs); the helpers over them |
-| `control/src/cluster/payloads.ts` | boot commands, env, pod payloads (edge and direct workers) |
+| `control/src/cluster/payloads.ts` | boot commands, env, pod payloads (edge and direct workers): a GPU worker is a `Launch` (`workerLaunch`) |
+| `control/src/launch-gen.ts`, `control/src/launch.ts` | GENERATED from fv-deploy's schemas (`crates/fastvideo-deploy/schemas`): the `Launch` types and zod validators; the Runpod pod / template / endpoint bodies of a `Launch`, by the Rust provider's rules ([ADR-0018 §7](../adr/0018-fv-deploy.md)) |
 | `control/src/cluster/ops.ts` | create / patch / delete, price projection, admin token, probes |
 | `control/src/cluster/do.ts` | `ClusterOps`: the operations |
 | `control/src/cluster/preflight.ts` | image preflight: each image's revision against the features the spec needs (§4) |

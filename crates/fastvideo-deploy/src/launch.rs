@@ -310,7 +310,7 @@ fn resolve_preset(repo: &Repo, family: &str, preset: &str) -> Result<Resolved, L
 }
 
 /// The launch fv-deploy creates for a preset (docs/adr/0018-fv-deploy.md
-/// §3.2, §7). `stamp` names it (`MMDDHHMMSS`). Runpod: a `[[presets]]` or
+/// §3.2, §8). `stamp` names it (`MMDDHHMMSS`). Runpod: a `[[presets]]` or
 /// `[[family_presets]]` id on the EU volume; GCP: a `[[gcp]]` row
 /// ([`gcp_launch`]); Vast: the fake-engine smoke only ([`vast_launch`]).
 pub fn from_preset(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Launch, LaunchError> {
@@ -494,7 +494,7 @@ fn read_config(repo: &Repo, config: &str) -> Result<(String, String), LaunchErro
     inline_config(&read(&p)?).map_err(|why| LaunchError::Preset(format!("{config}: {why}")))
 }
 
-/// A Vast launch (docs/adr/0018-fv-deploy.md §7.2): what `vast.sh smoke`
+/// A Vast launch (docs/adr/0018-fv-deploy.md §8.2): what `vast.sh smoke`
 /// rents, from fv-deploy. Vast has no weights volume and r2 weights are not
 /// in fv-deploy yet, so the only preset is the fake-engine smoke
 /// ([`FAKE_PRESET`], family `fake`): the CUDA image's channel tag, fv-boot
@@ -505,7 +505,7 @@ fn read_config(repo: &Repo, config: &str) -> Result<(String, String), LaunchErro
 pub fn vast_launch(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Launch, LaunchError> {
     if req.preset != FAKE_PRESET || req.family != FAKE_PRESET {
         return Err(LaunchError::Preset(format!(
-            "Vast: only --family {FAKE_PRESET} --preset {FAKE_PRESET} (the fake-engine smoke) launches: Vast has no weights volume and r2 weights are not in fv-deploy yet (docs/adr/0018-fv-deploy.md §7.2); got {} / {}",
+            "Vast: only --family {FAKE_PRESET} --preset {FAKE_PRESET} (the fake-engine smoke) launches: Vast has no weights volume and r2 weights are not in fv-deploy yet (docs/adr/0018-fv-deploy.md §8.2); got {} / {}",
             req.family, req.preset
         )));
     }
@@ -657,7 +657,7 @@ fn gcp_row<'a>(
     Ok(row)
 }
 
-/// A GCP launch (docs/adr/0018-fv-deploy.md §7.3): what `vm.sh up <row>`
+/// A GCP launch (docs/adr/0018-fv-deploy.md §8.3): what `vm.sh up <row>`
 /// creates, from fv-deploy: the `[[gcp]]` row's config inline (it becomes
 /// the `fv-config` metadata item) and machine type (or `--gpu` machine
 /// types, tried in order), the zone of the region (`eu`:

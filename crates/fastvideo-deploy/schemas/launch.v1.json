@@ -278,7 +278,7 @@
       "additionalProperties": false
     },
     "ProviderKind": {
-      "description": "Which provider, and which kind of instance on it (C3a: the two Runpod\nkinds; C3b: `vast` and `gcp`, docs/adr/0018-fv-deploy.md §7).",
+      "description": "Which provider, and which kind of instance on it (C3a: the two Runpod\nkinds; C3b: `vast` and `gcp`, docs/adr/0018-fv-deploy.md §8).",
       "oneOf": [
         {
           "description": "A Runpod GPU pod (REST v1 `POST /pods`).",

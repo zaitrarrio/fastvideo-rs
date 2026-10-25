@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 pub const LAUNCH_SCHEMA: u32 = 1;
 
 /// Which provider, and which kind of instance on it (C3a: the two Runpod
-/// kinds; C3b: `vast` and `gcp`, docs/adr/0018-fv-deploy.md §7).
+/// kinds; C3b: `vast` and `gcp`, docs/adr/0018-fv-deploy.md §8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {

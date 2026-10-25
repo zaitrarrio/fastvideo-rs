@@ -7,7 +7,7 @@ import type { Env } from "../env";
 import { runpod } from "../runpod";
 import { validate, type Issue } from "../schemas";
 import { HttpError } from "../util";
-import { placementWhere, poolWithoutVolume, workerPlacements } from "./payloads";
+import { placementWhere, poolLaunchIssues, poolWithoutVolume, workerPlacements } from "./payloads";
 import { gpuTypes } from "../dynamic";
 import { brevDiskIssues, brevNoStopWarnings, brevOutlook, isOtherPool, poolDph, providerIssues, r2Outlook, weightsPlan } from "../providers";
 import { normalizeSpec, POOL_PRESETS, REGIONS, type ClusterSpec } from "./spec";
@@ -26,6 +26,8 @@ export async function liveSpecIssues(env: Env, spec: ClusterSpec, prefix: (strin
   const warnings: Issue[] = [];
   // GMI / Brev pools (providers.ts): configured, an allowed GPU product, Hub downloads approved, the price under the cap.
   for (const x of providerIssues(env, spec)) issues.push({ path: [...prefix, ...x.path], message: x.message });
+  // A Runpod GPU pool must make a valid fv-deploy Launch (plan C3c, ADR-0018 §7): a stored spec may not.
+  for (const x of poolLaunchIssues(spec, env)) issues.push({ path: [...prefix, ...x.path], message: x.message });
   // Owner decision 2026-10-13: a Brev type that cannot be stopped is allowed like any other (rule brev_stoppable_only
   // removed); a warning says that a stop deletes it (owner rule 2026-10-13).
   if (spec.pools.some((p) => p.provider === "brev")) for (const x of await brevNoStopWarnings(env, spec)) warnings.push({ path: [...prefix, ...x.path], message: x.message });

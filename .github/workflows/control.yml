@@ -6,7 +6,9 @@
 # only (control/package-lock.json pins the tools). The shell lint runs here
 # too, since the generator writes scripts/gpu/verify-weights.sh. The engine
 # and model crates are inputs as well: test/unit/preset-trees.test.ts and
-# templates.test.ts check the tables' claims against their sources.
+# templates.test.ts check the tables' claims against their sources, and
+# fv-deploy's committed JSON Schemas (crates/fastvideo-deploy/schemas) are the
+# source of control/src/launch-gen.ts (plan C3c, ADR-0018 §7).
 name: control
 
 on:
@@ -24,6 +26,7 @@ on:
       - "scripts/gpu/weights-*.tsv"
       - "scripts/gpu/r2-fetch.py"
       - "crates/fastvideo-deploy/fixtures/**"
+      - "crates/fastvideo-deploy/schemas/**"
       - "scripts/serve/runpod-pod.sh"
       - "scripts/serve/runpod-endpoint.sh"
       - "scripts/serve/tests/fv-deploy-goldens.sh"
@@ -72,6 +75,7 @@ on:
       - "scripts/gpu/weights-*.tsv"
       - "scripts/gpu/r2-fetch.py"
       - "crates/fastvideo-deploy/fixtures/**"
+      - "crates/fastvideo-deploy/schemas/**"
       - "scripts/serve/runpod-pod.sh"
       - "scripts/serve/runpod-endpoint.sh"
       - "scripts/serve/tests/fv-deploy-goldens.sh"
@@ -137,10 +141,10 @@ jobs:
       - name: Shell lint (verify-weights.sh carries a generated region)
         working-directory: .
         run: bash scripts/gpu/lint.sh
-      - name: fv-deploy payload goldens are what runpod-pod.sh / runpod-endpoint.sh / vast.sh / gcp/vm.sh send (ADR-0018 §4, §7)
+      - name: fv-deploy payload goldens are what runpod-pod.sh / runpod-endpoint.sh / vast.sh / gcp/vm.sh send (ADR-0018 §4, §8)
         working-directory: .
         run: bash scripts/serve/tests/fv-deploy-goldens.sh --check
-      - name: gcp/vm.sh creates, deletes and reaps against a local mock of Compute Engine (ADR-0018 §7.3)
+      - name: gcp/vm.sh creates, deletes and reaps against a local mock of Compute Engine (ADR-0018 §8.3)
         working-directory: .
         run: bash scripts/gcp/tests/vm.test.sh
       - name: fv-lab goldens are what runpod-matrix.sh / runpod-http.sh do for every lab/tiers.toml tier, frozen for the retired ones (ADR-0019 §9.3, §10)

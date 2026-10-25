@@ -1,6 +1,6 @@
 //! A Runpod pod created from a template (REST v1 `POST /pods` with a
 //! `templateId`): the autoscaler's pod pools (`fastvideo-autoscale`
-//! `RunpodPods`, docs/adr/0018-fv-deploy.md §8). Written here, beside
+//! `RunpodPods`, docs/adr/0018-fv-deploy.md §9). Written here, beside
 //! fv-deploy's own pod body ([`super::pod_create_body`]), so there is one
 //! place that builds a Runpod pod create; the autoscaler sends it on its
 //! async client.
