@@ -1,0 +1,156 @@
+{
+  "description": "fastvideo-rs fv-serve (fv-owner=fastvideo-rs)",
+  "disks": [
+    {
+      "autoDelete": true,
+      "boot": true,
+      "deviceName": "boot",
+      "initializeParams": {
+        "diskSizeGb": "100",
+        "diskType": "zones/europe-west4-b/diskTypes/hyperdisk-balanced",
+        "labels": {
+          "fv-kind": "serve",
+          "fv-owner": "fastvideo-rs",
+          "fv-run": "1025120000"
+        },
+        "sourceImage": "projects/ubuntu-os-accelerator-images/global/images/family/ubuntu-accelerator-2404-amd64-with-nvidia-580"
+      }
+    },
+    {
+      "autoDelete": false,
+      "deviceName": "fv-weights",
+      "mode": "READ_ONLY",
+      "source": "projects/golden-project/zones/europe-west4-b/disks/fv-weights-hdml-europe-west4-b"
+    }
+  ],
+  "labels": {
+    "fv-deadline": "1790000000",
+    "fv-family": "h3-turbo",
+    "fv-kind": "serve",
+    "fv-owner": "fastvideo-rs",
+    "fv-role": "serve",
+    "fv-run": "1025120000"
+  },
+  "machineType": "zones/europe-west4-b/machineTypes/g4-standard-48",
+  "metadata": {
+    "items": [
+      {
+        "key": "startup-script",
+        "value": "<file>"
+      },
+      {
+        "key": "fv-config",
+        "value": "<file>"
+      },
+      {
+        "key": "fv-role",
+        "value": "serve"
+      },
+      {
+        "key": "fv-image",
+        "value": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "key": "fv-env",
+        "value": {
+          "FV_API_KEYS": "<sha256 of the run key>",
+          "FV_GCP_UDP_PORTS": "40010",
+          "FV_IMAGE_DIGEST": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "FV_SERVE_FORWARD": "1",
+          "FV_SERVE_MODE": "http",
+          "FV_STATE_DIR": "/fvstate",
+          "FV_WEIGHTS": "/workspace/weights",
+          "RUST_LOG": "info"
+        }
+      },
+      {
+        "key": "fv-verify-cells",
+        "value": "fasth3-4step-vsa aux"
+      },
+      {
+        "key": "fv-secrets-mode",
+        "value": "none"
+      },
+      {
+        "key": "fv-secret-names",
+        "value": ""
+      },
+      {
+        "key": "fv-encode-bench",
+        "value": "0"
+      },
+      {
+        "key": "fv-idle-s",
+        "value": "1800"
+      },
+      {
+        "key": "fv-tls",
+        "value": "none"
+      },
+      {
+        "key": "fv-caddy-image",
+        "value": "caddy:2"
+      },
+      {
+        "key": "fv-script-verify-weights",
+        "value": "<file>"
+      },
+      {
+        "key": "fv-script-verify-safetensors",
+        "value": "<file>"
+      },
+      {
+        "key": "fv-manifest",
+        "value": "<file>"
+      },
+      {
+        "key": "fv-sha256",
+        "value": "<file>"
+      }
+    ]
+  },
+  "name": "fv-h3-turbo-1025120000",
+  "networkInterfaces": [
+    {
+      "accessConfigs": [
+        {
+          "name": "External NAT",
+          "networkTier": "PREMIUM",
+          "type": "ONE_TO_ONE_NAT"
+        }
+      ],
+      "network": "projects/golden-project/global/networks/default",
+      "nicType": "GVNIC",
+      "stackType": "IPV4_ONLY"
+    }
+  ],
+  "scheduling": {
+    "automaticRestart": false,
+    "instanceTerminationAction": "DELETE",
+    "maxRunDuration": {
+      "seconds": "1800"
+    },
+    "onHostMaintenance": "TERMINATE",
+    "provisioningModel": "STANDARD"
+  },
+  "serviceAccounts": [
+    {
+      "email": "fv-vm@golden-project.iam.gserviceaccount.com",
+      "scopes": [
+        "https://www.googleapis.com/auth/cloud-platform"
+      ]
+    }
+  ],
+  "shieldedInstanceConfig": {
+    "enableIntegrityMonitoring": true,
+    "enableSecureBoot": false,
+    "enableVtpm": true
+  },
+  "tags": {
+    "items": [
+      "fv-serve",
+      "fv-h3-turbo-1025120000"
+    ]
+  }
+}

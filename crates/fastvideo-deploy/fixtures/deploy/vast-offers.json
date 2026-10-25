@@ -1,0 +1,34 @@
+{
+  "cuda_max_good": {
+    "gte": 13.0
+  },
+  "direct_port_count": {
+    "gte": 1
+  },
+  "disk_space": {
+    "gte": 40
+  },
+  "dph_total": {
+    "lte": 0.60
+  },
+  "limit": 20,
+  "num_gpus": {
+    "eq": 1
+  },
+  "order": [
+    [
+      "dph_total",
+      "asc"
+    ]
+  ],
+  "reliability2": {
+    "gte": 0.95
+  },
+  "rentable": {
+    "eq": true
+  },
+  "type": "on-demand",
+  "verified": {
+    "eq": true
+  }
+}

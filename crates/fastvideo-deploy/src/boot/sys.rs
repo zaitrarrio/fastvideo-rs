@@ -158,6 +158,8 @@ pub enum Method {
     Post,
     Delete,
     Patch,
+    /// Vast's create (`PUT /asks/<offer>/`).
+    Put,
 }
 
 impl Method {
@@ -167,6 +169,7 @@ impl Method {
             Method::Post => "POST",
             Method::Delete => "DELETE",
             Method::Patch => "PATCH",
+            Method::Put => "PUT",
         }
     }
 }

@@ -310,8 +310,18 @@ fn resolve_preset(repo: &Repo, family: &str, preset: &str) -> Result<Resolved, L
 }
 
 /// The launch fv-deploy creates for a preset (docs/adr/0018-fv-deploy.md
-/// §3.2). `stamp` names it (`MMDDHHMMSS`).
+/// §3.2, §8). `stamp` names it (`MMDDHHMMSS`). Runpod: a `[[presets]]` or
+/// `[[family_presets]]` id on the EU volume; GCP: a `[[gcp]]` row
+/// ([`gcp_launch`]); Vast: the fake-engine smoke only ([`vast_launch`]).
 pub fn from_preset(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Launch, LaunchError> {
+    match req.kind {
+        ProviderKind::RunpodPod | ProviderKind::RunpodServerless => runpod_launch(repo, req, stamp),
+        ProviderKind::Vast => vast_launch(repo, req, stamp),
+        ProviderKind::Gcp => gcp_launch(repo, req, stamp),
+    }
+}
+
+fn runpod_launch(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Launch, LaunchError> {
     let r = resolve_preset(repo, &req.family, &req.preset)?;
     let region = region_defaults(&req.region)?;
     let volume = req.volume.clone().unwrap_or(region.volume.clone());
@@ -441,7 +451,395 @@ pub fn from_preset(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Laun
                 serverless: Some(default_serverless()),
             }
         }
+        ProviderKind::Vast | ProviderKind::Gcp => {
+            return Err(LaunchError::Preset(format!(
+                "{} is not a Runpod kind",
+                req.kind
+            )))
+        }
     })
+}
+
+/// The preset id of the fake-engine smoke (`deploy.toml`'s `[[gcp]]` row
+/// `fake`, the config the images carry: `runpod-fake.toml`); its family is
+/// `fake` too.
+pub const FAKE_PRESET: &str = "fake";
+/// A Vast instance's disk (`vast.sh` `VAST_DISK_GB`).
+pub const VAST_DISK_GB: u32 = 40;
+/// Vast's published ports (`vast.sh env_dict`): HTTP, ICE-UDP and ICE-TCP,
+/// symmetric.
+pub const VAST_PORTS: [&str; 3] = ["8000/tcp", "70010/udp", "70000/tcp"];
+
+/// The image of a launch outside Runpod's presets: `--image`, else the
+/// deployment data's one GPU image on the channel.
+fn channel_image(
+    repo: &Repo,
+    req: &PresetRequest,
+) -> Result<(String, Option<String>), LaunchError> {
+    if let Some(i) = &req.image {
+        return Ok((i.clone(), None));
+    }
+    let img = repo
+        .deploy
+        .gpu_image()
+        .ok_or_else(|| LaunchError::Deploy("no GPU image in deploy/deploy.toml".into()))?;
+    Ok((
+        format!("{SERVE_REPO}:{}-{}", img.id, req.channel),
+        Some(req.channel.clone()),
+    ))
+}
+
+fn read_config(repo: &Repo, config: &str) -> Result<(String, String), LaunchError> {
+    let p = repo.root.join("configs/serve").join(config);
+    inline_config(&read(&p)?).map_err(|why| LaunchError::Preset(format!("{config}: {why}")))
+}
+
+/// A Vast launch (docs/adr/0018-fv-deploy.md §8.2): what `vast.sh smoke`
+/// rents, from fv-deploy. Vast has no weights volume and r2 weights are not
+/// in fv-deploy yet, so the only preset is the fake-engine smoke
+/// ([`FAKE_PRESET`], family `fake`): the CUDA image's channel tag, fv-boot
+/// started by the onstart with the config inline (`FV_WORKER_TOML_B64`, the
+/// image bakes none; ADR-0011), the script's env, ports and disk; any GPU
+/// with a CUDA 13 driver unless `--gpu` names Vast GPU names. Secrets are
+/// Vast account env vars and never in the launch.
+pub fn vast_launch(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Launch, LaunchError> {
+    if req.preset != FAKE_PRESET || req.family != FAKE_PRESET {
+        return Err(LaunchError::Preset(format!(
+            "Vast: only --family {FAKE_PRESET} --preset {FAKE_PRESET} (the fake-engine smoke) launches: Vast has no weights volume and r2 weights are not in fv-deploy yet (docs/adr/0018-fv-deploy.md §8.2); got {} / {}",
+            req.family, req.preset
+        )));
+    }
+    let (image, channel) = channel_image(repo, req)?;
+    let mut env = image_ident_env(&image, channel.as_deref());
+    for (k, v) in [
+        ("FV_SERVE_MODE", "http"),
+        ("FV_STATE_DIR", "/fvstate"),
+        ("FV_API_KEYS", req.key_hash.as_str()),
+        ("FV_SERVE_FORWARD", "1"),
+        ("RUST_LOG", "info"),
+        ("FV_WEIGHTS_SOURCE", WeightsSource::None.as_str()),
+    ] {
+        env.insert(k.into(), v.into());
+    }
+    let config = fastvideo_manifest::deploy::SMOKE_CONFIG;
+    let (k, v) = read_config(repo, config)?;
+    env.insert(k, v);
+    Ok(Launch {
+        schema: LAUNCH_SCHEMA,
+        name: format!("fv-deploy-{}-{stamp}", req.preset),
+        provider: ProviderKind::Vast,
+        source: Some(LaunchSource {
+            family: req.family.clone(),
+            preset: req.preset.clone(),
+            image: repo
+                .deploy
+                .gpu_image()
+                .map(|i| i.id.clone())
+                .unwrap_or_default(),
+            config: config.into(),
+        }),
+        image,
+        entrypoint: vec![FV_BOOT_BIN.into()],
+        args: Vec::new(),
+        env,
+        ports: VAST_PORTS.iter().map(|p| (*p).to_owned()).collect(),
+        gpu: GpuSpec {
+            types: req.gpu_types.clone(),
+            count: 1,
+            allowed_cuda: Vec::new(),
+            min_cuda: None,
+        },
+        placement: Placement {
+            region: None,
+            data_centers: Vec::new(),
+            volume: None,
+            cloud: CloudType::Community,
+        },
+        disk: Disk {
+            container_gb: VAST_DISK_GB,
+            volume_gb: 0,
+        },
+        weights: WeightsSource::None,
+        guards: req.guards,
+        serverless: None,
+    })
+}
+
+/// What `scripts/serve/vast.sh` creates (its `create_payload` inputs): the
+/// onstart starts fv-boot with `--config <config>` (a file in the image),
+/// its env object, no image identity, the script's offer filter.
+pub struct ScriptVast<'a> {
+    pub name: &'a str,
+    pub image: &'a str,
+    pub key_hash: &'a str,
+    /// `FV_SERVE_CONFIG` (default `/etc/fv/runpod-fake.toml`).
+    pub config: &'a str,
+    pub disk_gb: u32,
+    /// `VAST_MAX_DPH` in the guards' price cap.
+    pub guards: Guards,
+}
+
+pub fn script_vast(p: &ScriptVast<'_>) -> Launch {
+    let mut env = BTreeMap::new();
+    for (k, v) in [
+        ("FV_SERVE_MODE", "http"),
+        ("FV_STATE_DIR", "/fvstate"),
+        ("FV_API_KEYS", p.key_hash),
+        ("FV_SERVE_FORWARD", "1"),
+        ("RUST_LOG", "info"),
+    ] {
+        env.insert(k.to_owned(), v.to_owned());
+    }
+    Launch {
+        schema: LAUNCH_SCHEMA,
+        name: p.name.into(),
+        provider: ProviderKind::Vast,
+        source: None,
+        image: p.image.into(),
+        entrypoint: vec![FV_BOOT_BIN.into()],
+        args: vec!["--config".into(), p.config.into()],
+        env,
+        ports: VAST_PORTS.iter().map(|x| (*x).to_owned()).collect(),
+        gpu: GpuSpec {
+            types: Vec::new(),
+            count: 1,
+            allowed_cuda: Vec::new(),
+            min_cuda: None,
+        },
+        placement: Placement {
+            region: None,
+            data_centers: Vec::new(),
+            volume: None,
+            cloud: CloudType::Community,
+        },
+        disk: Disk {
+            container_gb: p.disk_gb,
+            volume_gb: 0,
+        },
+        weights: WeightsSource::None,
+        guards: p.guards,
+        serverless: None,
+    }
+}
+
+/// The `[[gcp]]` row of a request: its name is the preset; its dispatch
+/// family must be the request's family (a model family through
+/// `[dispatch]`, or the dispatch family itself); the `fake` row's family is
+/// `fake`.
+fn gcp_row<'a>(
+    repo: &'a Repo,
+    req: &PresetRequest,
+) -> Result<&'a fastvideo_manifest::deploy::GcpRow, LaunchError> {
+    let d = &repo.deploy;
+    let row = d.gcp.iter().find(|r| r.name == req.preset).ok_or_else(|| {
+        LaunchError::Preset(format!(
+            "no [[gcp]] row {} in deploy/deploy.toml (rows: {})",
+            req.preset,
+            d.gcp
+                .iter()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    })?;
+    let ok = match &row.dispatch_family {
+        Some(df) => &req.family == df || d.dispatch.get(&req.family) == Some(df),
+        None => req.family == FAKE_PRESET,
+    };
+    if !ok {
+        return Err(LaunchError::Preset(format!(
+            "[[gcp]] row {} serves dispatch family {}, not {}",
+            row.name,
+            row.dispatch_family.as_deref().unwrap_or(FAKE_PRESET),
+            req.family
+        )));
+    }
+    Ok(row)
+}
+
+/// A GCP launch (docs/adr/0018-fv-deploy.md §8.3): what `vm.sh up <row>`
+/// creates, from fv-deploy: the `[[gcp]]` row's config inline (it becomes
+/// the `fv-config` metadata item) and machine type (or `--gpu` machine
+/// types, tried in order), the zone of the region (`eu`:
+/// `europe-west4-b`), the read-only weights disk of that zone (none for the
+/// `fake` row), the script's container env plus the image identity, the
+/// channel and the weights source. The VM's own settings are
+/// [`gcp_options`].
+pub fn gcp_launch(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Launch, LaunchError> {
+    let row = gcp_row(repo, req)?;
+    let zone = gcp_zone(&req.region)?;
+    let (image, channel) = channel_image(repo, req)?;
+    let fake = row.name == FAKE_PRESET;
+    let weights = if fake {
+        WeightsSource::None
+    } else {
+        WeightsSource::Volume
+    };
+    let mut env = gcp_env(&image, &req.key_hash);
+    if let Some(c) = channel {
+        env.insert("FV_RELEASE_CHANNEL".into(), c);
+    }
+    env.insert("FV_WEIGHTS_SOURCE".into(), weights.as_str().into());
+    let (k, v) = read_config(repo, &row.config)?;
+    env.insert(k, v);
+    let machines = if req.gpu_types.is_empty() {
+        vec![row.machine.clone()]
+    } else {
+        req.gpu_types.clone()
+    };
+    Ok(Launch {
+        schema: LAUNCH_SCHEMA,
+        name: format!("fv-deploy-{}-{stamp}", req.preset),
+        provider: ProviderKind::Gcp,
+        source: Some(LaunchSource {
+            family: req.family.clone(),
+            preset: row.name.clone(),
+            image: repo
+                .deploy
+                .gpu_image()
+                .map(|i| i.id.clone())
+                .unwrap_or_default(),
+            config: row.config.clone(),
+        }),
+        image,
+        entrypoint: Vec::new(),
+        args: Vec::new(),
+        env,
+        ports: GCP_PORTS.iter().map(|p| (*p).to_owned()).collect(),
+        gpu: GpuSpec {
+            types: machines,
+            count: 1,
+            allowed_cuda: Vec::new(),
+            min_cuda: None,
+        },
+        placement: gcp_placement(&zone, !fake, Some(req.region.clone())),
+        disk: Disk {
+            container_gb: crate::provider::gcp::BOOT_DISK_GB,
+            volume_gb: 0,
+        },
+        weights,
+        guards: req.guards,
+        serverless: None,
+    })
+}
+
+/// The ports a GCP VM's firewall rule opens (informational: the rule is
+/// `crate::provider::gcp::firewall_body`).
+pub const GCP_PORTS: [&str; 3] = ["8000/tcp", "40000/tcp", "40010/udp"];
+
+/// `eu` → `europe-west4-b` (`scripts/gcp/lib.sh`); the US is refused as for
+/// Runpod (EU only, CLAUDE.md).
+pub fn gcp_zone(region: &str) -> Result<String, LaunchError> {
+    match region {
+        EU_REGION => Ok(crate::provider::gcp::DEFAULT_ZONE.into()),
+        "us" => Err(LaunchError::Region(guard::US_GONE.into())),
+        other => Err(LaunchError::Region(format!("unknown region {other} (eu)"))),
+    }
+}
+
+fn gcp_placement(zone: &str, disk: bool, region: Option<String>) -> Placement {
+    Placement {
+        region,
+        data_centers: vec![zone.to_owned()],
+        volume: disk.then(|| VolumeMount {
+            id: crate::provider::gcp::weights_disk(zone),
+            mount_path: POD_VOLUME_MOUNT.into(),
+        }),
+        cloud: CloudType::Secure,
+    }
+}
+
+/// `vm.sh env_json` for the serve role.
+fn gcp_env(image: &str, key_hash: &str) -> BTreeMap<String, String> {
+    let mut env = image_ident_env(image, None);
+    for (k, v) in [
+        ("FV_SERVE_MODE", "http"),
+        ("FV_WEIGHTS", "/workspace/weights"),
+        ("FV_STATE_DIR", "/fvstate"),
+        ("RUST_LOG", "info"),
+        ("FV_GCP_UDP_PORTS", crate::provider::gcp::UDP_PORTS),
+        ("FV_API_KEYS", key_hash),
+        ("FV_SERVE_FORWARD", "1"),
+    ] {
+        env.insert(k.into(), v.into());
+    }
+    env
+}
+
+/// The VM's own settings for a `[[gcp]]` launch: the row's labels and
+/// verify cells, the run stamp, and what the command line chose.
+pub fn gcp_options(
+    repo: &Repo,
+    req: &PresetRequest,
+    stamp: &str,
+    source_ranges: Vec<String>,
+    spot: bool,
+    idle_s: u64,
+    secret_manager: bool,
+) -> Result<crate::provider::gcp::GcpOptions, LaunchError> {
+    let row = gcp_row(repo, req)?;
+    Ok(crate::provider::gcp::GcpOptions {
+        family: row.name.clone(),
+        run: stamp.to_owned(),
+        verify_cells: row.verify_cells.clone(),
+        spot,
+        idle_s,
+        source_ranges,
+        secret_manager,
+    })
+}
+
+/// What `scripts/gcp/vm.sh up <family>` creates (`instance_payload` inputs
+/// for the serve role, no secrets set): the row's config and machine, the
+/// weights disk unless `fake`, the script's env.
+pub struct ScriptGcp<'a> {
+    pub name: &'a str,
+    pub image: &'a str,
+    pub key_hash: &'a str,
+    /// `configs/serve/<row config>`'s text.
+    pub config_text: &'a str,
+    pub machine: &'a str,
+    pub zone: &'a str,
+    pub fake: bool,
+    /// `FV_GCP_CAP_S` in `cap_s`.
+    pub guards: Guards,
+}
+
+pub fn script_gcp(p: &ScriptGcp<'_>) -> Launch {
+    let mut env = gcp_env(p.image, p.key_hash);
+    env.insert(
+        "FV_WORKER_TOML_B64".into(),
+        base64::engine::general_purpose::STANDARD.encode(p.config_text.as_bytes()),
+    );
+    Launch {
+        schema: LAUNCH_SCHEMA,
+        name: p.name.into(),
+        provider: ProviderKind::Gcp,
+        source: None,
+        image: p.image.into(),
+        entrypoint: Vec::new(),
+        args: Vec::new(),
+        env,
+        ports: GCP_PORTS.iter().map(|x| (*x).to_owned()).collect(),
+        gpu: GpuSpec {
+            types: vec![p.machine.into()],
+            count: 1,
+            allowed_cuda: Vec::new(),
+            min_cuda: None,
+        },
+        placement: gcp_placement(p.zone, !p.fake, None),
+        disk: Disk {
+            container_gb: crate::provider::gcp::BOOT_DISK_GB,
+            volume_gb: 0,
+        },
+        weights: if p.fake {
+            WeightsSource::None
+        } else {
+            WeightsSource::Volume
+        },
+        guards: p.guards,
+        serverless: None,
+    }
 }
 
 /// `FV_WORKER_TOML_B64` for a worker config's text, or why it is too large
