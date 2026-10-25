@@ -1721,3 +1721,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §11.1, §11.3, §11.4, §11.5, §11.6
 - Verification: `tests/verdict.rs` (edge cases in a UTF-8 locale, one-arm selection, interrupted run, `--out` refusal, `--check`, gates skipped / failed, script vs fv-lab byte for byte), `tests/fv_lab_bin.rs` (`gate` record / `--cells` / `--check` / `--out`, `FV_B4A_CELLS` refused), `plan` validation test, `fv-lab-goldens.sh --check` (compare-runs `--expect-verdicts`, family verdict order)
+
+### FVID · 2026-10-25 · FVID-2026-10-25-c3c-control-launch
+- Trigger: plan C3 slice C3c (fv-control on the shared `Launch` schema), coordinator's work package
+- Options: hand-written TS types kept in sync by review; TS types + zod validators generated from fv-deploy's committed JSON Schemas, with fv-control's Runpod bodies derived from a `Launch` by the Rust builders' rules; or extending the Rust schema first for CPU / GMI / Brev
+- Decision: generate `control/src/launch-gen.ts` (types + zod) from `crates/fastvideo-deploy/schemas/*.v1.json` in `gen-configs.mjs` (`--check` in CI); every Runpod GPU pod and GPU serverless endpoint of fv-control is a schema-checked `Launch` whose bodies come from `control/src/launch.ts` (the port of `pod.rs create_body`, `serverless.rs template_body` / `endpoint_body`); CPU pods / endpoints, GMI / Brev, the REST v2 envelope and build pods stay outside Launch v1 (no CPU compute or provider kind in it); no Rust change (the schema extension is proposed for after C3b, which edits the same types)
+- Reason: one source for the launch shape, drift fails CI, no new dependency (zod was already fv-control's); payloads unchanged (`control/test/unit/payload-corpus.test.ts`: 1024 cases against a snapshot of main's builders at 2258aec2)
+- Reversibility: high (code only; no live resource, stored shape or API response changed)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §7
+- Verification: `control/test/unit/payload-corpus.test.ts` (fv-control's bodies = main's at 2258aec2), `control/test/unit/launch-goldens.test.ts` (the C3a payload goldens from TS; h3-turbo, h3-max, ltx, ltx-pro field by field against fv-deploy with the intended differences of ADR-0018 §7.4; schema drift fails `--check` on a copy of the tree; stored specs launch), `node gen-configs.mjs --check`, `npm run typecheck`, `npx vitest run test/unit`; `cargo test --locked -p fastvideo-deploy` (schemas current)

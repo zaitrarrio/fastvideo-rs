@@ -10,6 +10,8 @@ import { DRIVER_CHECK_SH } from "../driver-check";
 import { UPSAMPLER_START_SH, UPSAMPLER_WAIT_SH, upsamplerDiskGb, upsamplerPodEnv } from "../upsampler";
 import { PREFER_FV_BOOT_SH } from "../fv-boot";
 import { workerConfigEnv } from "../worker-config";
+import { checkLaunch, LAUNCH_SCHEMA, LaunchSchemaError, POD_VOLUME_MOUNT, runpodPodBody, type Guards, type Launch } from "../launch";
+import { HttpError } from "../util";
 
 /** Runpod secret references (values live in Runpod, never here). */
 export const SECRET_ENV_REFS: Record<string, string> = {
@@ -361,11 +363,57 @@ export function bootFor(env: Record<string, string>): string {
   const fetch = env.FV_WEIGHTS_SOURCE === "r2" ? R2_RUNPOD_SH() : env.FV_WEIGHTS_SOURCE === "hub" ? HUB_RUNPOD_SH : "";
   return fetch ? b.replace(`mkdir -p /fvstate\n${ups ? UPSAMPLER_START_SH : ""}`, `mkdir -p /fvstate\n${ups ? UPSAMPLER_START_SH : ""}${fetch}`) : b;
 }
-export function workerCreatePayload(name: string, image: string, pool: PoolSpec, pl: Placement, env: Record<string, string>) {
-  const common = { name, imageName: image, dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [bootFor(env)], env };
+/** The money and readiness rules fv-control applies to a cluster's pods, as a Launch's guards (ADR-0018 §7.2):
+ * a pod billed above max_gpu_dph is deleted right after create (ops.ts createWorker), nothing starts or scales up
+ * below the balance floor, the cron and the pod's watchdog delete it at cap_s, a pod whose image pull outlasts
+ * PULL_DEADLINE_S is replaced, at most MAX_REPLACE times per pool (cluster/do.ts). fv-control enforces them itself;
+ * they ride on the Launch so it says what a pod is held to. */
+export const PULL_DEADLINE_S = 360;
+export const MAX_REPLACE = 2;
+export function clusterGuards(spec: Pick<ClusterSpec, "max_gpu_dph" | "balance_floor" | "cap_s">): Guards {
+  return { max_usd_per_hr: spec.max_gpu_dph, min_balance_usd: spec.balance_floor, cap_s: spec.cap_s, ready_timeout_s: PULL_DEADLINE_S, ready_cycles: 1 + MAX_REPLACE };
+}
+/** What a spec-less caller (tests, tools) gets: a new cluster's guards (defaultSpec). */
+const DEFAULT_CLUSTER_GUARDS: Guards = { max_usd_per_hr: 3.6, min_balance_usd: 8, cap_s: 6000, ready_timeout_s: PULL_DEADLINE_S, ready_cycles: 1 + MAX_REPLACE };
+
+/** A Runpod GPU worker as fv-deploy's Launch (plan C3c, docs/adr/0018-fv-deploy.md §7): the image, the shell boot
+ * (bootFor: an image with fv-boot runs fv-boot first thing) as `bash -c <boot>`, the env, the GPU type of this
+ * placement attempt, the region's network volume at /workspace unless the pool mounts none (weights_source r2 / hub,
+ * or volume off: then no volume, and volumeInGb 0 so Runpod adds no default pod volume), the data centre, the
+ * container disk (the pool's, else sized for r2 / hub trees, else 40 GB), the CUDA filter and the ports. Checked
+ * against the schema. CPU pools are not Launches (the schema has no CPU compute: workerCreatePayload). */
+export function workerLaunch(name: string, image: string, pool: PoolSpec, pl: Placement, env: Record<string, string>, guards: Guards = DEFAULT_CLUSTER_GUARDS): Launch {
+  if (pool.compute === "CPU") throw new Error(`pool ${pool.id}: a CPU pod is not a Launch (fv-deploy's schema has no CPU compute)`);
+  const r2 = env.FV_WEIGHTS_SOURCE === "r2";
+  const hub = env.FV_WEIGHTS_SOURCE === "hub";
+  const volume = pool.volume !== false && !r2 && !hub && pl.region ? { id: REGIONS[pl.region]!.volume, mount_path: POD_VOLUME_MOUNT } : null;
+  return checkLaunch({
+    schema: LAUNCH_SCHEMA,
+    name,
+    provider: "runpod-pod",
+    image,
+    entrypoint: ["bash", "-c"],
+    args: [bootFor(env)],
+    env,
+    ports: ["8000/http", "70000/tcp"],
+    gpu: { types: [pl.gpu!], count: 1, allowed_cuda: podAllowedCuda(pool) },
+    placement: { ...(pl.region ? { region: pl.region } : {}), data_centers: pl.dc ? [pl.dc] : [], volume, cloud: "SECURE" },
+    disk: { container_gb: pool.container_disk_gb ?? (r2 ? Number(env.FV_R2_DISK_GB || 40) : hub ? Number(env.FV_HUB_DISK_GB || 40) : 40), volume_gb: 0 },
+    weights: r2 ? "r2" : hub ? "hub" : env.FV_WEIGHTS_SOURCE === "none" ? "none" : volume ? "volume" : "none",
+    guards,
+  });
+}
+
+/** REST v1 POST /pods of one worker: a GPU pod from its Launch (src/launch.ts runpodPodBody, the Rust provider's
+ * rules), a CPU pod from the pool (outside the Launch schema: CPU flavor, vCPUs, no GPU fields). */
+export function workerCreatePayload(name: string, image: string, pool: PoolSpec, pl: Placement, env: Record<string, string>, guards?: Guards) {
   if (pool.compute === "CPU") {
     return {
-      ...common,
+      name,
+      imageName: image,
+      dockerEntrypoint: ["bash", "-c"],
+      dockerStartCmd: [bootFor(env)],
+      env,
       computeType: "CPU",
       cpuFlavorIds: [pl.cpu!],
       vcpuCount: pool.vcpu ?? 2,
@@ -375,24 +423,35 @@ export function workerCreatePayload(name: string, image: string, pool: PoolSpec,
       ...(pool.volume && pl.region ? { networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : {}),
     };
   }
-  const r2 = env.FV_WEIGHTS_SOURCE === "r2";
-  const hub = env.FV_WEIGHTS_SOURCE === "hub";
-  // No network volume: say volumeInGb 0, or Runpod adds its default pod volume at /workspace and the r2 / hub fetch
-  // into /workspace/weights lands on that small quota (EDQUOT) instead of the container disk sized for the trees.
-  const vol = pool.volume !== false && !r2 && !hub && pl.region ? { volumeInGb: 0, networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : { volumeInGb: 0 };
-  const cuda = podAllowedCuda(pool);
-  return {
-    ...common,
-    cloudType: "SECURE",
-    computeType: "GPU",
-    gpuTypeIds: [pl.gpu!],
-    gpuCount: 1,
-    containerDiskInGb: pool.container_disk_gb ?? (r2 ? Number(env.FV_R2_DISK_GB || 40) : hub ? Number(env.FV_HUB_DISK_GB || 40) : 40),
-    ...vol,
-    ...(pl.dc ? { dataCenterIds: [pl.dc] } : {}),
-    ...(cuda.length ? { allowedCudaVersions: cuda } : {}),
-    ports: ["8000/http", "70000/tcp"],
-  };
+  return runpodPodBody(workerLaunch(name, image, pool, pl, env, guards));
+}
+
+/** Why each Runpod GPU pool of a (stored) spec would not make a schema-valid Launch, at every placement attempt: a
+ * spec older fv-control stored can carry values the Launch schema refuses. Checked from the spec alone (the env's
+ * values are strings by construction): editor issues (liveSpecIssues) and a 409 before an op that creates pods
+ * (assertPoolLaunches), so a create never meets a LaunchSchemaError inside the operation. */
+export function poolLaunchIssues(spec: ClusterSpec, env?: Env): { path: (string | number)[]; message: string }[] {
+  const out: { path: (string | number)[]; message: string }[] = [];
+  spec.pools.forEach((pool, i) => {
+    if (isOtherPool(pool) || pool.compute === "CPU") return;
+    const ws = weightsSource(pool, env);
+    const e: Record<string, string> = ws === "r2" || ws === "hub" ? { FV_WEIGHTS_SOURCE: ws } : {};
+    for (const pl of workerPlacements(spec, pool, env)) {
+      try {
+        workerLaunch(`fvc-${pool.id}`, "check", pool, pl, e, clusterGuards(spec));
+      } catch (err) {
+        if (!(err instanceof LaunchSchemaError)) throw err;
+        out.push({ path: ["pools", i], message: err.message });
+        return;
+      }
+    }
+  });
+  return out;
+}
+/** Refuses (409, typed issues) an op that would create pods from a spec whose GPU pools make no valid Launch. */
+export function assertPoolLaunches(spec: ClusterSpec, env?: Env): void {
+  const issues = poolLaunchIssues(spec, env);
+  if (issues.length) throw new HttpError(409, `${issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}. Edit the cluster spec first.`, { issues });
 }
 
 /** Deterministic JSON (sorted keys) for env hashes. */
