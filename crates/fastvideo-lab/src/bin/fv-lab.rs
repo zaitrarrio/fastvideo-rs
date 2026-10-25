@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! fv-lab run <tier|cell> [--dry-run] [--cells a,b] [--work D] [--scratch D] [--tag T]
-//!                 [--baseline-sha <7>]
+//!                 [--baseline-sha <7>] [--runs-dir D]
 //!                 the on-pod runner (runpod-matrix.sh's frame, the cells of lab/);
 //!                 --dry-run prints each arm's command line and writes nothing
 //! fv-lab check    parse and validate lab/tiers.toml and lab/cells/*.toml
@@ -190,6 +190,10 @@ struct RunArgs {
     /// The run tag: runs/<tier>/<tag> (FV_RUN_TAG).
     #[arg(long)]
     tag: Option<String>,
+    /// The run directory itself, instead of <scratch>/runs/<tier>/<tag>
+    /// (FV_RUNS_DIR; runpod-matrix.sh `headline` runs a tier's cells into its own).
+    #[arg(long)]
+    runs_dir: Option<PathBuf>,
     /// fv-gpucheck (FV_GPUCHECK).
     #[arg(long)]
     gpucheck: Option<PathBuf>,
@@ -370,6 +374,10 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
         .or_else(|| env_nonempty("FV_SCRATCH").map(PathBuf::from))
         .unwrap_or_else(|| cfg.work.clone());
     cfg.tag = a.tag.clone().or_else(|| env_nonempty("FV_RUN_TAG"));
+    cfg.runs_dir = a
+        .runs_dir
+        .clone()
+        .or_else(|| env_nonempty("FV_RUNS_DIR").map(PathBuf::from));
     if let Some(b) = a
         .gpucheck
         .clone()

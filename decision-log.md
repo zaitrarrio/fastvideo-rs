@@ -1651,3 +1651,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ); probes by the coordinator
 - ADR: docs/adr/0023-lab-report-and-ci-bridge.md §4
 - Verification: `pod::tests::every_pod_deletes_itself_at_its_wall_cap`; the rendered function run locally against a fake curl (200 + data: success; 200 + errors and 403: retry; the request body is exactly the probe's); payload goldens regenerated and equal; the coordinator's live cap test on the pushed commit
+
+### FVID · 2026-10-25 · FVID-2026-10-25-retire-gated-script-families
+- Trigger: the coordinator's GPU gates (ADR-0019 §8, §9.5) passed for all ten fv-lab tiers: `rtx6000` (D1a, #171), `techniques`, `b6`, `precision`, `rtx5090` (#176) and `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae` (#184); every arm that ran was byte-identical; the coordinator asked for the branches' retirement in the next D1 PR
+- Options: delete the ten `case` branches and route the families to fv-lab, with their fixtures frozen; keep the branches until the whole script goes
+- Decision: (coordinator) delete them. `scripts/gpu/fv-lab-retired.sh` lists the retired families; `runpod-http.sh run` / `plan` for one runs `fv-lab pod up` (FV_CELLS, FV_BASELINE_SHA, FV_EXTRA_ENV, FV_LPIPS mapped; settings fv-lab lacks refused; `FV_LAB_BIN` / PATH / `./fv-lab`; `FV_DRY_RUN=1` prints the command); their goldens are frozen (fv-lab's own since the gate, changed only on purpose with the cell in one PR); `runpod.sh rtx6000` deleted; `headline` runs its cells of the retired tiers through `fv-lab run --runs-dir`; `precision`'s `ltx-nvfp4` mode and `ltxvae`'s `FV_VAE_GEN` arms are dropped with the branches (a tier each if wanted)
+- Reason: two runners for one tier drift; the gate showed they are equal, so the script copy only costs upkeep
+- Reversibility: cheap (git history has the branches; a family returns by restoring its branch and leaving the list)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §10
+- Verification: `fv-lab-goldens.sh --check` (frozen fixtures present, branches gone, the guards fail when not), `tests/dry_run.rs::retired_families_are_frozen_tiers_without_a_branch`, `tests/fv_lab_bin.rs::runs_dir_replaces_the_run_directory`, every remaining family's dry run equal before and after, `runpod-http.sh` dry runs and a fake `FV_LAB_BIN`; gates on the build pod

@@ -74,6 +74,10 @@ pub struct RunConfig {
     pub scratch: PathBuf,
     /// `FV_RUN_TAG`: `runs/<family>/<tag>`.
     pub tag: Option<String>,
+    /// `FV_RUNS_DIR`: the run directory itself, instead of
+    /// `<scratch>/runs/<family>[/<tag>]` (the script's switch for one family
+    /// running another's cells into its own run directory: `headline`).
+    pub runs_dir: Option<PathBuf>,
     /// `FV_GPUCHECK`.
     pub bin: PathBuf,
     /// The repository / image root (`scripts/gpu/…`, `{root}`).
@@ -108,6 +112,7 @@ impl RunConfig {
             work: PathBuf::from("/workspace"),
             scratch: PathBuf::from("/workspace"),
             tag: None,
+            runs_dir: None,
             bin: PathBuf::from(DEFAULT_GPUCHECK),
             root: root.to_path_buf(),
             cell_timeout_s: 300,
@@ -153,8 +158,11 @@ impl RunConfig {
         self.work.join("weights")
     }
 
-    /// `$RUNS`.
+    /// `$RUNS`: `FV_RUNS_DIR`, else `<scratch>/runs/<family>[/<tag>]`.
     pub fn runs(&self) -> PathBuf {
+        if let Some(d) = &self.runs_dir {
+            return d.clone();
+        }
         let r = self.scratch.join("runs").join(&self.family);
         match &self.tag {
             Some(t) if !t.is_empty() => r.join(t),
@@ -1184,6 +1192,11 @@ mod tests {
         c.scratch = "/fvscratch".into();
         c.tag = Some("abc-1".into());
         assert_eq!(c.runs(), Path::new("/fvscratch/runs/rtx6000/abc-1"));
+        // FV_RUNS_DIR (headline's sub-runs) replaces the whole path.
+        let mut h = c.clone();
+        h.runs_dir = Some("/fvscratch/runs/headline/abc-1".into());
+        assert_eq!(h.runs(), Path::new("/fvscratch/runs/headline/abc-1"));
+        assert_eq!(h.paths().runs, Path::new("/fvscratch/runs/headline/abc-1"));
         assert_eq!(c.weights(), Path::new("/workspace/weights"));
         assert_eq!(c.aux(), Path::new("/workspace/weights/auxiliary"));
         if !Path::new("/workspace/weights/auxiliary/tae/.complete").exists() {

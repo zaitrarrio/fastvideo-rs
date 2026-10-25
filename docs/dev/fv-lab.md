@@ -2,9 +2,12 @@
 
 `fv-lab` runs the lab's run plan (`lab/tiers.toml`, `lab/cells/*.toml`) on a GPU box and makes that box: a Runpod pod
 on fv-deploy's guards (price cap, $8 floor, EU volume, detached backstop, ready within 600 s in at most 3 cycles).
-Design: [ADR-0019](../adr/0019-fv-lab.md). Today it carries ten tiers, each one a `runpod-matrix.sh` family. Each is
-held equal to the script's dry run by a golden ([The families](#the-families)). The other families move in later
-slices. An eleventh, `gold`, is fv-lab's own: every gold variant's canonical cell (ADR-0023).
+Design: [ADR-0019](../adr/0019-fv-lab.md). Today it carries ten tiers that were `runpod-matrix.sh` families. Each
+passed its GPU gate (fv-lab's run and the script's of one commit, frames byte-identical), so its script branch is
+deleted and the tier is fv-lab only ([The families](#the-families), [ADR-0019 §10](../adr/0019-fv-lab.md)). Each is
+held to the script's last dry run by a frozen golden ([below](#keeping-it-equal-to-the-scripts)). The other families
+stay in the script and move in later slices. An eleventh, `gold`, is fv-lab's own: every gold variant's canonical
+cell (ADR-0023).
 
 ## Build
 
@@ -29,8 +32,8 @@ binary; `--root DIR` (or `FV_LAB_ROOT`) elsewhere.
 ./fv-lab run rtx6000 --dry-run --work /workspace --scratch /fvscratch --tag test
 ```
 
-`--dry-run` prints every arm's command line exactly as `FV_DRY_RUN=1 runpod-matrix.sh rtx6000` logs it, and writes
-nothing. A tier lists cells; a cell (`lab/cells/<name>.toml`) is one workload (prompt, seed, length, canvas) and its
+`--dry-run` prints every arm's command line exactly as `FV_DRY_RUN=1 runpod-matrix.sh rtx6000` logged it before the
+branch was deleted (the frozen golden), and writes nothing. A tier lists cells; a cell (`lab/cells/<name>.toml`) is one workload (prompt, seed, length, canvas) and its
 arms; an arm is one run directory, one fv-gpucheck command (with `{weights}`, `{runs}`, `{prompt}`, … placeholders),
 gated on a `verify-weights.sh` cell and naming the weight trees it reads. Edit a cell, then `fv-lab check` and the
 dry run show what will run.
@@ -51,8 +54,37 @@ dry run show what will run.
 | `precision` | `precision-{h3,ltx25}` | 8 | precision switches against f32 activations | the script's default mode only |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)) |
 
-The script keeps the other families. ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is
-not on the EU volume (`h3-8step`) is recorded as skipped (`weights incomplete`), as the script records it.
+All ten are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10): their `runpod-matrix.sh`
+branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps the other families.
+ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is not on the EU volume (`h3-8step`)
+is recorded as skipped (`weights incomplete`), as the script recorded it.
+
+What the retired branches had and the tiers do not, dropped with the branches: the `precision` family's
+`FV_PRECISION_ARM=ltx-nvfp4` mode, `ltxvae`'s `FV_VAE_GEN=1` arms (and the `FV_VAE_*`, `FV_LTXFPS*`,
+`FV_TECH_CELLS`, `FV_B6_CELLS` knobs, ADR-0019 §9.4), and the summaries the branches copied into `live.log`.
+Either variant comes back as its own tier when wanted (git history has the commands).
+
+### `runpod-http.sh` for a retired tier
+
+`runpod-http.sh run [sha]` with `FV_FAMILY` (default `rtx6000`) set to a retired tier runs
+`fv-lab pod up --sha <sha> --family <tier> --root <repo> [--cells …] [--baseline-sha …] [--extra-env …] [--lpips] --yes --wait`
+instead of its own pod, mapping `FV_CELLS`, `FV_BASELINE_SHA`, `FV_EXTRA_ENV` and `FV_LPIPS=1` across; `plan [sha]
+[tag]` prints fv-lab's plan (no `--yes`). The other families keep the script path. Settings fv-lab has no equivalent
+for (`FV_POD_FILES`, `FV_POD_SCRIPT`, `FV_POD_FILE`, `FV_PROMPTS`, `FV_PROMPT`, `FV_SEED`, `RUNPOD_IMAGE`,
+`RUNPOD_GPU_TYPE`, `FV_KEEP_POD=1`, `FV_FETCH_TREE=1`, `RUNPOD_NO_VOLUME=1`, an `FV_GEN_TIMEOUT_S` other than the
+tier's 3600) are refused, not dropped; `all` mode is refused (run `kernels`, then `run`). The binary is `FV_LAB_BIN`,
+else `fv-lab` on `PATH`, else `./fv-lab` at the repository root ([Build](#build)); without one the driver says how to
+build it.
+
+```sh
+FV_DRY_RUN=1 FV_FAMILY=b6 FV_BASELINE_SHA=e93e357 bash scripts/gpu/runpod-http.sh run <7>   # prints the fv-lab command
+FV_DRY_RUN=1 FV_FAMILY=b4a bash scripts/gpu/runpod-http.sh run <7>   # a script family: says what it would run
+```
+
+`FV_DRY_RUN=1` never creates a pod and needs no key. `runpod.sh rtx6000` is retired with the branch (the Taskfile's
+`rtx6000` task runs `runpod-http.sh run`). The script's `headline` family runs its cells of `fastvideo`, `rtx6000`,
+`rtx5090` and `precision` through `fv-lab run <tier> --cells …` into its own run directory (`--runs-dir` /
+`FV_RUNS_DIR`).
 
 Cell fields beyond D1a ([ADR-0019 §9.2](../adr/0019-fv-lab.md)):
 
@@ -87,7 +119,8 @@ fv-lab run rtx6000-ltx25                                                        
 The pod's start command does this. It writes `runpod-matrix.sh`'s run directory (`<scratch>/runs/<tier>/<tag>/`:
 `live.log`, per arm `summary.json`, `stdout.log`, `stderr.log`, `nvidia-smi-{start,end}.txt`, frames,
 `benchmark.json`, `compare/`, `gate/`, `done.json`). Settings, as flags or the script's variables: `--work`
-(`FV_WORK`), `--scratch` (`FV_SCRATCH`), `--tag` (`FV_RUN_TAG`), `--cells` (`FV_CELLS`), `--gpucheck`
+(`FV_WORK`), `--scratch` (`FV_SCRATCH`), `--tag` (`FV_RUN_TAG`), `--runs-dir` (`FV_RUNS_DIR`, the run directory
+itself instead of `<scratch>/runs/<tier>/<tag>`), `--cells` (`FV_CELLS`), `--gpucheck`
 (`FV_GPUCHECK`), `--cell-timeout-s` (`FV_GEN_TIMEOUT_S`, default the tier's), `FV_LPIPS=1`, `FV_GATE_POLICY`. Exit 2
 when the box cannot run anything (no fv-gpucheck, no nvidia-smi, no cuDNN), as the script's FATAL.
 
@@ -178,7 +211,16 @@ bash scripts/gpu/tests/fv-lab-goldens.sh --check   # CI (control.yml)
 
 For every tier of `lab/tiers.toml`, the fixtures are the script's dry run (`<tier>-dry-run.txt`), its weight gates
 (`<tier>-gates.tsv`: the cells the dry run gated, with their `verify-weights.sh --list` needs) and `runpod-http.sh
-plan`'s pod body (`runpod-http-<tier>.json`). The `gold` tier is no script family: only its pod body is written there, and its dry run is fv-lab's own golden
+plan`'s pod body (`runpod-http-<tier>.json`).
+
+**Frozen since the GPU gate.** Once a tier passed its GPU gate and its script branch is deleted (it is listed in
+`scripts/gpu/fv-lab-retired.sh`), the scripts can no longer produce its fixtures. They stay as they were written
+before the branch went and are fv-lab's own goldens from then on: the goldens script does not regenerate them, only
+checks that they exist, that the tier is in `lab/tiers.toml` and that its branch is gone (and that every other script
+tier still has one); `tests/dry_run.rs` checks the same. The Rust tests still compare fv-lab's dry run, gates and pod
+body with them, so a change to a frozen tier's commands or pod is deliberate: edit the cell (or `pod-start.sh.in`)
+and the fixture in the same PR, and say why in the PR. The ten tiers above are all frozen today; `gold` was never a
+script family (only its pod body comes from `runpod-http.sh plan`). The `gold` tier is no script family: only its pod body is written there, and its dry run is fv-lab's own golden
 (`fixtures/gold-dry-run.txt`, `tests/gold_tier.rs`). Once, there is also its `frames_digest` of a sample. A new tier fails
 `--check` until its fixtures are written; `tests/{dry_run,payload_golden,frames_digest,fv_lab_bin}.rs` hold fv-lab to
 them. The script runs every script under `env -i`, so your `FV_*` / `RUNPOD_*` settings do not leak in.

@@ -4,6 +4,12 @@
 //! written from the script by `scripts/gpu/tests/fv-lab-goldens.sh`), and
 //! every arm gates on the script's verify-weights.sh cell
 //! (`fixtures/<tier>-gates.tsv`) and lists that cell's trees.
+//!
+//! Frozen since the GPU gate (ADR-0019 §10): the tiers of
+//! `scripts/gpu/fv-lab-retired.sh` have no script branch left, so their
+//! fixtures are the ones written before the branch went, and fv-lab's own
+//! goldens since. A change to such a tier's commands updates its fixture in
+//! the same PR; these tests hold fv-lab to it all the same.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -45,8 +51,9 @@ fn steps(lab: &Lab, cfg: &RunConfig) -> Vec<Step> {
     Lab::steps(&cells, &cfg.bin, &cfg.paths()).expect("render")
 }
 
-/// The tiers that are runpod-matrix.sh families: every tier but `gold`,
-/// whose cells come from the gold files (tests/gold_tier.rs holds its dry run).
+/// The tiers that are (or were, before fv-lab-retired.sh) runpod-matrix.sh
+/// families: every tier but `gold`, whose cells come from the gold files
+/// (tests/gold_tier.rs holds its dry run).
 fn families(lab: &Lab) -> Vec<String> {
     lab.tiers
         .tiers
@@ -209,4 +216,57 @@ fn arms_and_gates_are_the_scripts_and_arms_name_their_trees() {
     // rtx5090 (5), fastvideo (7), h3arms (4) read a tiny autoencoder;
     // fastvideo (7), h3arms (10), precision (6) gate.
     assert_eq!((tae_arms, gates_seen), (16, 23));
+}
+
+/// `FV_LAB_RETIRED` of `scripts/gpu/fv-lab-retired.sh`.
+fn retired() -> Vec<String> {
+    let p = repo_root().join("scripts/gpu/fv-lab-retired.sh");
+    let t = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let line = t
+        .lines()
+        .find_map(|l| l.strip_prefix("FV_LAB_RETIRED=\""))
+        .and_then(|l| l.strip_suffix('"'))
+        .expect("FV_LAB_RETIRED=\"…\"");
+    line.split_whitespace().map(str::to_owned).collect()
+}
+
+#[test]
+fn retired_families_are_frozen_tiers_without_a_branch() {
+    // The families whose GPU gate passed (ADR-0019 §10): each a tier with its
+    // three fixtures, no `case` branch left in runpod-matrix.sh; every other
+    // script tier still has its branch (fv-lab-goldens.sh checks the same).
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let matrix = std::fs::read_to_string(repo_root().join("scripts/gpu/runpod-matrix.sh"))
+        .expect("runpod-matrix.sh");
+    let branch = |f: &str| matrix.lines().any(|l| l == format!("  {f})"));
+    let retired = retired();
+    for f in [
+        "rtx6000",
+        "techniques",
+        "b6",
+        "rtx5090",
+        "fastvideo",
+        "h3arms",
+        "trace",
+        "ltxfps",
+        "ltxvae",
+        "precision",
+    ] {
+        assert!(retired.iter().any(|r| r == f), "{f} retired");
+    }
+    let fams = families(&lab);
+    for f in &retired {
+        assert!(fams.contains(f), "{f}: a script tier of lab/tiers.toml");
+        assert!(!branch(f), "{f}: its runpod-matrix.sh branch is gone");
+        for fx in [
+            format!("{f}-dry-run.txt"),
+            format!("{f}-gates.tsv"),
+            format!("runpod-http-{f}.json"),
+        ] {
+            assert!(!fixture(&fx).trim().is_empty(), "{fx}: frozen, not empty");
+        }
+    }
+    for f in fams.iter().filter(|f| !retired.contains(f)) {
+        assert!(branch(f), "{f}: no branch and not in fv-lab-retired.sh");
+    }
 }

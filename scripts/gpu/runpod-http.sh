@@ -4,7 +4,12 @@
 # For hosts (sandboxes, CI) that can reach https://*.runpod.io but not TCP 22.
 #
 #   runpod-http.sh run [sha]     create pod, run $FV_FAMILY (default rtx6000), pull
-#                                summaries + logs, destroy the pod
+#                                summaries + logs, destroy the pod. A family retired
+#                                to fv-lab (fv-lab-retired.sh: rtx6000, techniques,
+#                                b6, rtx5090, fastvideo, h3arms, trace, ltxfps,
+#                                ltxvae, precision) runs `fv-lab pod up --yes --wait`
+#                                instead (docs/adr/0019-fv-lab.md §10); FV_DRY_RUN=1
+#                                prints the route and the command, creates nothing
 #   runpod-http.sh weights       weight gate only (verify-weights.sh), no cells
 #   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
 #   runpod-http.sh all [sha]     kernels, then the $FV_FAMILY cells, on one pod
@@ -21,7 +26,8 @@
 #                                price check): the payload golden of fv-lab pod up
 #                                (scripts/gpu/tests/fv-lab-goldens.sh). The volume's
 #                                datacentre comes from FV_PLAN_VOLUME="<id> <dc>" or,
-#                                without it, the API lookup `run` makes.
+#                                without it, the API lookup `run` makes. For a
+#                                retired family: `fv-lab pod up` without --yes (its plan)
 #
 # The pod's start command runs everything; results are published read-only on
 # port 8000 (python http.server over /workspace/runs) and fetched through
@@ -71,6 +77,8 @@ source "$HERE/runpod-price.sh"
 source "$HERE/volumes.sh"
 # shellcheck source-path=SCRIPTDIR source=runpod-cuda.sh
 source "$HERE/runpod-cuda.sh"
+# shellcheck source-path=SCRIPTDIR source=fv-lab-retired.sh
+source "$HERE/fv-lab-retired.sh"
 ROOT="$(cd "$HERE/../.." && pwd)"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GPU="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
@@ -84,7 +92,8 @@ CAP_S="${FV_POD_CAP_S:-14400}"
 FAMILY="${FV_FAMILY:-rtx6000}"
 [[ "${1:-}" == upstream ]] && FAMILY="${FV_FAMILY:-upstream}"
 OUT_ROOT="$ROOT/artifacts/runpod/$FAMILY"
-: "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
+# A dry run (FV_DRY_RUN=1: the route and the command, nothing created) needs no key.
+[[ "${FV_DRY_RUN:-0}" == 1 ]] || : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 
 die() { echo "runpod-http: $*" >&2; exit 1; }
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -464,9 +473,76 @@ wait_up() {
   return 1
 }
 
+# The families retired to fv-lab (fv-lab-retired.sh, docs/adr/0019-fv-lab.md
+# §10) have no runpod-matrix.sh branch: `run` and `plan` hand them to
+# `fv-lab pod up` (its pod on fv-deploy's guards, its run, fetch and delete).
+#
+# The fv-lab binary: FV_LAB_BIN, else `fv-lab` on PATH, else ./fv-lab at the
+# repository root (where docs/dev/fv-lab.md "Build" fetches it).
+fv_lab_bin() {
+  if [[ -n "${FV_LAB_BIN:-}" ]]; then
+    [[ -x "$FV_LAB_BIN" ]] || { echo "runpod-http: FV_LAB_BIN=$FV_LAB_BIN is not an executable" >&2; return 1; }
+    echo "$FV_LAB_BIN"
+  elif command -v fv-lab >/dev/null 2>&1; then
+    command -v fv-lab
+  elif [[ -x "$ROOT/fv-lab" ]]; then
+    echo "$ROOT/fv-lab"
+  else
+    return 1
+  fi
+}
+
+# fv_lab_route run|plan <sha> [tag]: `fv-lab pod up` for $FAMILY with this
+# driver's settings mapped across (FV_CELLS -> --cells, FV_BASELINE_SHA ->
+# --baseline-sha, FV_EXTRA_ENV -> --extra-env, FV_LPIPS=1 -> --lpips, the tag
+# -> --tag); `run` adds --yes --wait, `plan` prints fv-lab's plan (no request).
+# Settings fv-lab has no equivalent for are refused, not dropped: the run would
+# silently differ from what was asked. FV_DRY_RUN=1 prints the command only.
+fv_lab_route() {
+  local what="$1" sha="$2" tag="${3:-}" lab v
+  for v in FV_POD_FILES FV_POD_SCRIPT FV_POD_FILE FV_PROMPTS FV_PROMPT FV_SEED RUNPOD_IMAGE RUNPOD_GPU_TYPE; do
+    [[ -z "${!v:-}" ]] || die "$FAMILY runs through fv-lab (fv-lab-retired.sh), which has no $v; unset it (docs/dev/fv-lab.md)"
+  done
+  for v in FV_KEEP_POD FV_FETCH_TREE RUNPOD_NO_VOLUME; do
+    [[ "${!v:-0}" != 1 ]] || die "$FAMILY runs through fv-lab (fv-lab-retired.sh), which has no $v=1; unset it (docs/dev/fv-lab.md)"
+  done
+  [[ "${FV_GEN_TIMEOUT_S:-3600}" == 3600 ]] \
+    || die "$FAMILY runs through fv-lab: the per-arm cap is the tier's cell_timeout_s (lab/tiers.toml), not FV_GEN_TIMEOUT_S=$FV_GEN_TIMEOUT_S"
+  local args=(pod up --sha "$sha" --family "$FAMILY" --root "$ROOT")
+  [[ -n "$tag" ]] && args+=(--tag "$tag")
+  # shellcheck disable=SC2206 # space-separated lists, as the script path reads them
+  [[ -n "${FV_CELLS:-}" ]] && args+=(--cells ${FV_CELLS})
+  [[ -n "${FV_BASELINE_SHA:-}" ]] && args+=(--baseline-sha "$FV_BASELINE_SHA")
+  # shellcheck disable=SC2206
+  [[ -n "${FV_EXTRA_ENV:-}" ]] && args+=(--extra-env ${FV_EXTRA_ENV})
+  [[ "${FV_LPIPS:-0}" == 1 ]] && args+=(--lpips)
+  [[ "$what" == run ]] && args+=(--yes --wait)
+  if [[ "${FV_DRY_RUN:-0}" == 1 ]]; then
+    lab="$(fv_lab_bin)" || lab=fv-lab
+    echo "runpod-http: dry run: $FAMILY is fv-lab only (fv-lab-retired.sh); nothing created. The command:" >&2
+    printf '%q ' "$lab" "${args[@]}" | sed 's/ $//'
+    echo
+    return 0
+  fi
+  lab="$(fv_lab_bin)" || die "$FAMILY runs through fv-lab, and no fv-lab was found (FV_LAB_BIN, PATH, $ROOT/fv-lab). Build it on the build pod: bash scripts/dev/build-pod.sh run . -- cargo build --release --locked -p fastvideo-lab --features cli --bin fv-lab, then bash scripts/dev/build-pod.sh fetch . release/fv-lab ./fv-lab (docs/dev/fv-lab.md)"
+  log "$FAMILY is fv-lab only (fv-lab-retired.sh): $(printf '%q ' "$lab" "${args[@]}")"
+  exec "$lab" "${args[@]}"
+}
+
 cmd_run() {
   local mode="$1" sha="${2:-}" image tag id rc=0 attempt
   sha="${sha:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
+  if [[ "$mode" == run || "$mode" == all ]] && fv_lab_retired "$FAMILY"; then
+    [[ "$mode" == run ]] || die "\`all\` runs runpod-matrix.sh $FAMILY after the kernels, and $FAMILY is fv-lab only (fv-lab-retired.sh): run \`kernels\`, then \`run\`"
+    fv_lab_route run "$sha"
+    return
+  fi
+  # FV_DRY_RUN=1: say what would run and create nothing (the commands
+  # themselves: FV_DRY_RUN=1 bash scripts/gpu/runpod-matrix.sh <family>).
+  if [[ "${FV_DRY_RUN:-0}" == 1 ]]; then
+    echo "runpod-http: dry run: $mode $FAMILY at $sha on the script path, nothing created: a pod running runpod-matrix.sh $FAMILY${FV_CELLS:+ (FV_CELLS=$FV_CELLS)}; its body: runpod-http.sh plan $sha; its commands: FV_DRY_RUN=1 bash scripts/gpu/runpod-matrix.sh $FAMILY" >&2
+    return 0
+  fi
   image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}"
   if [[ "$mode" == upstream ]]; then
     # UP_IMAGE_TARGET=fastvideo|sol-h3|sol-h3-4step|sol-ltx25 boots the baked
@@ -530,6 +606,10 @@ case "${1:-}" in
   plan)
     # The body `run` would send for <sha> and <tag>; nothing is created.
     sha="${2:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
+    if fv_lab_retired "$FAMILY"; then
+      fv_lab_route plan "$sha" "${3:-}"
+      exit 0
+    fi
     tag="${3:-$sha-$(date -u +%m%d%H%M)}"
     vol="" dc=""
     if [[ "${RUNPOD_NO_VOLUME:-0}" != 1 ]]; then

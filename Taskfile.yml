@@ -188,8 +188,8 @@ tasks:
     cmds: [{ task: run, vars: { TIER: clip } }]
 
   rtx6000:
-    desc: 'Rent one RTX PRO 6000 on Runpod (CI image for HEAD): weight gate, then H3 / FastH3 / LTX-2.5 parity cells (~$2/hr)'
-    cmds: ['bash scripts/gpu/runpod.sh rtx6000']
+    desc: 'The rtx6000 tier on one RTX PRO 6000 (runtime image of origin/main, or `-- <sha7>`) through fv-lab pod up (needs fv-lab, docs/dev/fv-lab.md): weight gate, then H3 / FastH3 / LTX-2.5 parity cells (~$2.5/hr)'
+    cmds: ['FV_FAMILY=rtx6000 bash scripts/gpu/runpod-http.sh run {{.CLI_ARGS}}']
 
   weights:verify:
     desc: 'On a box: prove the H3 / FastH3 / LTX-2.5 weight trees complete (no GPU needed)'
