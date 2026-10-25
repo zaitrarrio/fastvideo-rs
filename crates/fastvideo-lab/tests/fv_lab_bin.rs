@@ -480,6 +480,7 @@ fn mode_knobs_are_refused_naming_the_restored_tier() {
             .args(["run", "precision-nvfp4", "--dry-run"])
             .env("FV_PRECISION_ARM", ""),
     );
+}
 
 /// `fv-lab run b4a --dry-run` (D1d): the script's dry run, verdict lines
 /// included (the arm directories removed, the verdict's description, the

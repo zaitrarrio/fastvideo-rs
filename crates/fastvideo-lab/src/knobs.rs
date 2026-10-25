@@ -190,7 +190,10 @@ mod tests {
     fn a_restored_mode_names_its_tier_first() {
         let e = check_extra_env(
             "precision",
-            &["FV_VAE_TRACE=0 FASTVIDEO_TEST_X=1".into(), "FV_VAE_GEN=1".into()],
+            &[
+                "FV_VAE_TRACE=0 FASTVIDEO_TEST_X=1".into(),
+                "FV_VAE_GEN=1".into(),
+            ],
         )
         .unwrap_err();
         let tier = e.find("it is the fv-lab tier ltxvae-gen now: run ltxvae-gen");
@@ -214,7 +217,10 @@ mod tests {
     fn other_values_and_keys() {
         assert!(check_extra_env(
             "ltxvae",
-            &["FASTVIDEO_TEST_X=1".into(), "FV_BASELINE_SHA=abcdef1".into()]
+            &[
+                "FASTVIDEO_TEST_X=1".into(),
+                "FV_BASELINE_SHA=abcdef1".into()
+            ]
         )
         .is_ok());
         let e = check_extra_env("ltxvae", &["FV_VAE_GEN=0".into()]).unwrap_err();
