@@ -236,6 +236,18 @@ for FAMILY in $FAMILIES; do
   FIXTURES+=("$FAMILY-dry-run.txt" "$FAMILY-gates.tsv" "runpod-http-$FAMILY.json")
 done
 
+# 3a. The script runner's pod for the oracle-r2 GPU check (ADR-0019 §21.7,
+#     §21.8): FV_FAMILY=oracle with FV_R2_TREES=sfwan21-1.3b (the R2 key as the
+#     Runpod secret references, r2-stage.sh before the matrix, FV_WORK the
+#     merged root's parent), the oracle-r2 tier's disk and cell cap.
+#     tests/payload_golden.rs holds its env to fv-lab's references and its
+#     idle limit to the tier's. Without FV_R2_TREES every body above is
+#     unchanged (they are all made without it).
+clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY=oracle \
+  FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 FV_GEN_TIMEOUT_S=5400 \
+  bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-oracle-sfwan13-r2.json"
+FIXTURES+=("runpod-http-oracle-sfwan13-r2.json")
+
 # 3b. The upstream pods of `fv-lab oracle` (ADR-0019 §19): runpod-http.sh
 #     plan-upstream with the settings scripts/gpu/oracle.sh's start_up passes
 #     (image, disk, FV_EXTRA_ENV, UP_CELL_TIMEOUT_S), for one selection per

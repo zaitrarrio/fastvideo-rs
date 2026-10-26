@@ -179,6 +179,8 @@ check_plan "with the Hub token" "{\"HF_TOKEN\":\"{{ RUNPOD_SECRET_fv_hf_token }}
 # scripts/gpu/oracle.sh: sfwan13's r2 step and disk, as lab/upstream.toml's target.
 grep -qF 'fvw="${fvw:+$fvw }r2:sfwan21-1.3b"' "$ROOT/scripts/gpu/oracle.sh" && grep -qx '  fvdisk=180' "$ROOT/scripts/gpu/oracle.sh" \
   && ok "oracle.sh: sfwan13 fetches sfwan21-1.3b on a 180 GB disk" || bad "oracle.sh: sfwan13's r2 step / disk"
+grep -qx '  rt_r2=sfwan21-1.3b' "$ROOT/scripts/gpu/oracle.sh" && grep -qx '  rt_disk="${FV_CONTAINER_DISK_GB:-150}"' "$ROOT/scripts/gpu/oracle.sh" \
+  && ok "oracle.sh: its runtime pod reads sfwan13's tree from R2 (FV_R2_TREES, 150 GB)" || bad "oracle.sh: the runtime side's FV_R2_TREES"
 grep -qF 'r2 = ["sfwan21-1.3b"]' "$ROOT/lab/upstream.toml" && grep -qx 'container_disk_gb = 180' "$ROOT/lab/upstream.toml" \
   && ok "lab/upstream.toml: the same tree and disk" || bad "lab/upstream.toml: sfwan13's r2 / disk"
 

@@ -153,3 +153,48 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     assert_eq!(floors, 1, "one tier with min_ram_gb (gold)");
     assert_eq!(lab.tier("gold").and_then(|t| t.min_ram_gb), Some(256));
 }
+
+/// The script runner's pod for the oracle-r2 GPU check (ADR-0019 §21.8:
+/// `FV_FAMILY=oracle FV_R2_TREES=sfwan21-1.3b runpod-http.sh plan`,
+/// `fixtures/runpod-http-oracle-sfwan13-r2.json`) reads its weights as
+/// fv-lab's `oracle-r2` pod does: the same Runpod secret references
+/// (`weights::r2_env_refs`), the tier's disk and idle limit, fv-lab's link
+/// roots (`TreeSources::link_roots`) and the pinned revision for
+/// `r2-stage.sh`, and the matrix's `$W` the merged root. Without
+/// `FV_R2_TREES` the body is the `oracle` tier's golden (`fv-lab-goldens.sh`).
+#[test]
+fn the_script_side_r2_pod_reads_its_trees_as_the_oracle_r2_tier() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier("oracle-r2").expect("oracle-r2");
+    let body = fixture("oracle-sfwan13-r2");
+    let refs: serde_json::Map<String, Value> = r2_env_refs()
+        .into_iter()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+    assert_eq!(body["env"], Value::Object(refs));
+    assert_eq!(
+        body["containerDiskInGb"].as_u64(),
+        Some(u64::from(tier.container_disk_gb))
+    );
+    let cmd = body["dockerStartCmd"][2].as_str().expect("a start command");
+    let idle = fastvideo_lab::weights::r2_idle_min(tier.cell_timeout_s);
+    assert!(cmd.contains(&format!("lim={idle}; [ \"$used\" = 1 ] && lim={idle}")));
+    assert!(cmd.starts_with("_fvr2_id=\"${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}\""));
+    let sources = fastvideo_lab::weights::TreeSources::load(&repo_root()).expect("trees");
+    let rev = sources
+        .r2
+        .get("sfwan21-1.3b")
+        .map(|t| t.rev.clone())
+        .expect("sfwan21-1.3b in weights-r2.tsv");
+    let want = format!(
+        "$SCRATCH/weights $SCRATCH/r2 \"$OUT\" {} /workspace/weights \"{}\" sfwan21-1.3b@{rev} ",
+        tier.cell_timeout_s,
+        sources.link_roots().join(" ")
+    );
+    assert!(cmd.contains(&want), "{want}");
+    assert!(cmd.contains("env  FV_WORK=$SCRATCH FV_SCRATCH=$SCRATCH "));
+    // Its only differences from the oracle tier's script body.
+    let plain = fixture("oracle");
+    assert_eq!(plain["containerDiskInGb"].as_u64(), Some(120));
+    assert!(plain.get("env").is_none());
+}

@@ -177,6 +177,15 @@ rc=0
 #   delete the upstream pods; the runtime pod goes on alone.
 rt_family="${FV_ORACLE_FAMILY:-oracle}"
 stock_wait="${FV_RUNTIME_STOCK_WAIT_S:-900}"
+# sfwan13's tree is R2-only: the runtime pod fetches it into its merged weight
+# root as fv-lab's oracle-r2 tier does (runpod-http.sh FV_R2_TREES, on a
+# 150 GB disk; docs/adr/0019-fv-lab.md §21.8). Other targets: nothing changes.
+rt_r2="" rt_disk="${FV_CONTAINER_DISK_GB:-}"
+if [[ " $targets " == *" sfwan13 "* ]]; then
+  rt_r2=sfwan21-1.3b
+  rt_disk="${FV_CONTAINER_DISK_GB:-150}"
+fi
+FV_R2_TREES="$rt_r2" FV_CONTAINER_DISK_GB="$rt_disk" \
 FV_FAMILY="$rt_family" FV_POD_FILE="$work/runtime.pod" FV_CREATE_WAIT_S="$stock_wait" \
   FV_EXTRA_ENV="FV_ORACLE_URL='$urls' FV_ORACLE_TARGETS='$targets' FASTVIDEO_DUMP_OPS=$ops${FV_ORACLE_F32:+ FV_ORACLE_F32=$FV_ORACLE_F32}${FV_ORACLE_OWN_TEXT:+ FV_ORACLE_OWN_TEXT=$FV_ORACLE_OWN_TEXT}${FV_ORACLE_EXTRA_ENV:+ $FV_ORACLE_EXTRA_ENV}" \
   FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-5400}" \
