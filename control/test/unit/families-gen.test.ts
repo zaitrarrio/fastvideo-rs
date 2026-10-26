@@ -12,7 +12,7 @@ import { MODEL_PRESETS, POOL_PRESETS, recipeTrees, recipeVramGb } from "../../sr
 import { RECIPE_TREES } from "../../src/recipe-trees";
 import { EU_TREES } from "../../src/volumes";
 import * as GEN from "../../gen-configs.mjs";
-import { configModels, crossChecks, DISPATCH_FAMILY, euVolumeTrees, familiesGenTs, familySet, isAuxTree, loadFamilies, parseFamily, TIER_ALIAS } from "../../gen-configs.mjs";
+import { configModels, crossChecks, DISPATCH_FAMILY, euVolumeTrees, familiesGenTs, familySet, isAuxTree, loadFamilies, parseFamily, sharedFileChecks, sharedFiles, TIER_ALIAS } from "../../gen-configs.mjs";
 
 const repo = new URL("../../../", import.meta.url).pathname;
 const fixture = readFileSync(join(repo, "control/test/unit/fixtures/family-fixture.toml"), "utf8");
@@ -117,6 +117,50 @@ describe("the hand-written copies agree with the manifests (gen-configs.mjs cros
       expect(r[9]!.split(" "), r[0]).toEqual(models.map((m) => m.id));
       expect(r[3], r[0]).toBe(DISPATCH_FAMILY[vs[0]!.family as keyof typeof DISPATCH_FAMILY]);
     }
+  });
+  it("a variant reading a tree with a shared_file entry reads the copy's tree as its text_weights (sharedFileChecks)", () => {
+    const shared = sharedFiles();
+    const shard3 = "vae/diffusion_pytorch_model-00003-of-00003.safetensors";
+    expect(shared.map((f) => f.file)).toEqual([`fasth3-v2-nvfp4/${shard3}`, `fasth3-4step-vsa-nvfp4/${shard3}`]);
+    for (const f of shared) expect(f).toMatchObject({ copy: `h3-base/${shard3}`, bytes: 398539336, sha256: "c05d6ac4b1a33de372799d708531da6320f6a3ce6d1ce6d895e770988e004a39" });
+    // Today: the four NVFP4 variants read h3-base as their text weights and list it.
+    const set = loadFamilies();
+    const readers = [...set.variants.values()].filter((v) => v.trees.some((t) => shared.some((f) => f.file.startsWith(`${t}/`))));
+    expect(readers.map((v) => v.id).sort()).toEqual(["fasth3-4step-vsa-nvfp4", "fasth3-4step-vsa-nvfp4-taeh3", "fasth3-v2-nvfp4", "fasth3-v2-nvfp4-taeh3"]);
+    expect(sharedFileChecks(set, shared)).toEqual([]);
+    // Another text_weights, or h3-base missing from trees: refused, naming the variant and the copy.
+    const broken = (patch: (v: Record<string, unknown>) => Record<string, unknown>) => {
+      const variants = new Map([...set.variants].map(([id, v]) => [id, id === "fasth3-v2-nvfp4" ? patch({ ...v }) : v]));
+      return sharedFileChecks({ ...set, variants }, shared);
+    };
+    expect(broken((v) => ({ ...v, text_weights: "${weights}/h3-8step" }))).toEqual([
+      expect.stringMatching(/fasth3-v2-nvfp4: reads fasth3-v2-nvfp4, which leaves out .*00003-of-00003.*engine\.text_weights is "\$\{weights\}\/h3-8step", not "\$\{weights\}\/h3-base"/),
+    ]);
+    expect(broken((v) => ({ ...v, text_weights: null }))).toHaveLength(1);
+    expect(broken((v) => ({ ...v, trees: ["fasth3-v2-nvfp4"] }))).toEqual([expect.stringMatching(/h3-base is not in its trees/)]);
+    // A script without the table, or with an arm that is not "<copy> <bytes> <sha256>", is an error.
+    expect(() => sharedFiles("#!/bin/bash\n")).toThrow(/no shared_file/);
+    expect(() => sharedFiles('shared_file() {\n  case "$1" in\n    "a/b")\n      echo "c/d 12" ;;\n  esac\n}')).toThrow(/shared_file/);
+  });
+  it("sharedFiles is strict: an arm in another form is an error, never dropped", () => {
+    const sha = "c05d6ac4b1a33de372799d708531da6320f6a3ce6d1ce6d895e770988e004a39";
+    const script = (extra: string) =>
+      `F=f.safetensors\nshared_file() {\n  case "$1" in\n    "a/vae/$F" | "b/vae/\${F}")\n      echo "base/vae/$F 12 ${sha}" ;;\n${extra}    *) return 1 ;;\n  esac\n}\n`;
+    expect(sharedFiles(script(""))).toEqual([
+      { file: "a/vae/f.safetensors", copy: "base/vae/f.safetensors", bytes: 12, sha256: sha },
+      { file: "b/vae/f.safetensors", copy: "base/vae/f.safetensors", bytes: 12, sha256: sha },
+    ]);
+    const bad: [string, string, RegExp][] = [
+      ["an unquoted pattern", `    z/vae/$F)\n      echo "base/vae/$F 12 ${sha}" ;;\n`, /unexpected line: z\/vae/],
+      ["a one-line arm", `    "z/vae/f") echo "other/vae/f 1 ${sha}" ;;\n`, /unexpected line: "z\/vae\/f"\) echo/],
+      ["an echo with no arm", `      echo "base/vae/$F 12 ${sha}" ;;\n`, /an echo with no arm/],
+      ["an arm with no echo", `    "z/vae/f")\n`, /an arm with no echo/],
+      ["an unknown variable", `    "z/vae/$G")\n      echo "base/vae/$F 12 ${sha}" ;;\n`, /z\/vae\/\$G: an unknown variable/],
+      ["an unknown variable in the echo", `    "z/vae/f")\n      echo "base/vae/$H 12 ${sha}" ;;\n`, /unknown variable/],
+      ["a short echo", `    "z/vae/f")\n      echo "base/vae/f 12" ;;\n`, /<copy> <bytes> <sha256>/],
+      ["another statement", `    "z/vae/f")\n      printf x ;;\n`, /unexpected line: printf/],
+    ];
+    for (const [what, extra, err] of bad) expect(() => sharedFiles(script(extra)), what).toThrow(err);
   });
   it("scripts/gpu/verify-weights.sh: a variant:<id> cell per manifest variant, listing its trees", () => {
     const list = execFileSync("bash", [join(repo, "scripts/gpu/verify-weights.sh"), "--list"]).toString();

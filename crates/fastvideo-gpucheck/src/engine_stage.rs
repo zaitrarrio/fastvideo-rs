@@ -1,6 +1,7 @@
 //! `fv-gpucheck engine`: one model through the serve engine (WP-11), end to
-//! end on the GPU: `CudaBackend` loads it resident, `EngineService::submit`
-//! runs a request negotiated from the model's caps, and the job's MP4 and
+//! end on the GPU: the request is negotiated from the model's caps before
+//! anything loads (`EngineService::start_negotiated`), `CudaBackend` loads it
+//! resident, `EngineService::submit` runs the job, and the job's MP4 and
 //! frames are checked. With `--reference <clip dir>` the job's PNG frames are
 //! compared byte for byte with a CLI run (`h3|ltx2|wan gen`) of the same
 //! recipe and seed. With `--cancel-after-step N` a second job is cancelled
@@ -14,8 +15,7 @@ use fastvideo_engine_service::cuda::{
 };
 use fastvideo_engine_service::{EngineConfig, EngineEvent, EngineService, Priority, Readiness};
 use fastvideo_protocol::{
-    negotiate, CanvasSpec, GenerationRequest, JobId, Length, ProtocolId, Snap, StagedInputs,
-    TimingSpec,
+    CanvasSpec, GenerationRequest, JobId, Length, ProtocolId, Snap, StagedInputs, TimingSpec,
 };
 use serde_json::json;
 
@@ -109,31 +109,11 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let t0 = Instant::now();
-    let engine = EngineService::start(
-        EngineConfig {
-            output_dir: a.out.to_path_buf(),
-            ..EngineConfig::default()
-        },
-        vec![Box::new(backend)],
-    )
-    .map_err(|e| anyhow::anyhow!("engine start: {e}"))?;
-    let ready = rt.block_on(engine.wait_ready());
-    let load_s = t0.elapsed().as_secs_f64();
-    report.note("load", json!({"seconds": load_s, "readiness": format!("{ready:?}"), "pool": format!("{:?}", engine.pool())}));
-    report.check(
-        "ready",
-        ready == Readiness::Ready,
-        json!({"readiness": format!("{ready:?}")}),
-        json!({"want": "Ready"}),
-    )?;
 
-    let caps = engine
-        .caps()
-        .get(&model.id)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("model not in the capability table"))?;
-    report.set("caps", &caps);
+    // The request is negotiated against the caps the engine will serve
+    // before the model loads (`EngineService::start_negotiated`): a task the
+    // model does not serve (t2v on a reference- or audio-to-video variant)
+    // is refused without the load (5-199 s in the gold run at 7e580e5).
     let mut req = GenerationRequest::text(ProtocolId::Native, model.id.as_str(), a.prompt);
     req.seed = Some(a.seed);
     if let (Some(w), Some(h)) = (a.width, a.height) {
@@ -152,9 +132,29 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
         },
         fps: None,
     };
-    let job = negotiate(&req, &caps, &StagedInputs::default())
-        .map_err(|e| anyhow::anyhow!("negotiate: {e:?}"))?;
+    let t0 = Instant::now();
+    let (engine, caps, job) = EngineService::start_negotiated(
+        EngineConfig {
+            output_dir: a.out.to_path_buf(),
+            ..EngineConfig::default()
+        },
+        vec![Box::new(backend)],
+        &model.id,
+        &req,
+        &StagedInputs::default(),
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    report.set("caps", &caps);
     report.set("job", &job);
+    let ready = rt.block_on(engine.wait_ready());
+    let load_s = t0.elapsed().as_secs_f64();
+    report.note("load", json!({"seconds": load_s, "readiness": format!("{ready:?}"), "pool": format!("{:?}", engine.pool())}));
+    report.check(
+        "ready",
+        ready == Readiness::Ready,
+        json!({"readiness": format!("{ready:?}")}),
+        json!({"want": "Ready"}),
+    )?;
 
     // ---- one job, to an MP4 ----
     let id = JobId::new();

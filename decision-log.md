@@ -1992,6 +1992,53 @@ Project code: FVID
 - ADR: docs/adr/0019-fv-lab.md §16.7 "Result", §16.10; docs/adr/0023-lab-report-and-ci-bridge.md "What a gold run then does"
 - Verification: `fv-lab report tiers --check`, `fv-lab gold check` (28 validated, 0 errors), `fv-lab gold cells --check` (fv-lab 0.1.68 built at `7e580e5`), every cited path, JSON key and run record present (the checks of `tests/gold_files.rs`), `fv-lab-goldens.sh`, `fv-lab-experiment-goldens.sh`, `fv-lab-report-goldens.sh`, `fv-lab-restored-goldens.sh` with `--check`, `scripts/gpu/lint.sh`
 
+### FVID · 2026-10-26 · FVID-2026-10-26-gold-min-ram-256
+- Trigger: the gold run at `7e580e5` (ADR-0019 §16.7 "Result"): `wan14b-plug-4step` peaked at 156,004 MiB of process memory against the gold tier's 192 GB floor, which is 183,105 MiB (Runpod's GB are 10^9 bytes), with pages of its 84.09 GB fetch not yet written back charged to the same cgroup; §16.7 made raising the floor (or cutting the loader's host copies) a prerequisite of the next gold run (plan D3, follow-up a)
+- Options: 256 GB; 283 GB (what Runpod gave both pods); keep 192 and cut the Wan plug loader's host copies (store an f32 `RawTensor` once; upload an eager DiT map before the text encoder)
+- Decision: (coordinator's request, executed by the agent) `min_ram_gb = 256` for the gold tier: 244,140 MiB, 88,136 MiB above the measured peak, more than the whole fetch (80,195 MiB) even if none of it were written back; the loader is unchanged here, its two cuts described (ADR-0019 §16.10 "Raised to 256") and left to their own change with a GPU byte-identity check
+- Reason: the peak is about twice item 5's estimate because `fastvideo_loader::RawTensor` holds an f32 tensor as both bytes and an f32 vector (the merged DiT about 2 x 57 GB, the UMT5 map about 2 x 23 GB at once); a floor below 283 keeps the hosts the run landed on; each loader cut touches code every model or the MoE plan shares
+- Reversibility: high (one tier value and its golden)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §16.10 "Raised to 256"
+- Verification: `tests/payload_golden.rs` (gold's body `minRAMPerGPU: 256`, equal to `FV_MIN_RAM_GB=256 runpod-http.sh plan`), `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`; UNVERIFIED: how many EU-RO-1 PRO 6000 hosts give 256 GB (both gold pods got 283 GB)
+
+### FVID · 2026-10-26 · FVID-2026-10-26-negotiate-before-load
+- Trigger: the gold run at `7e580e5` (ADR-0019 §16.7 "Result"): `h3-ref2v-max`, `h3-ref2v-turbo`, `ltx25-ref2v` and `ltx25-a2v-guided` loaded their model for 199, 132, 34 and 5 s before `fv-gpucheck engine` negotiated the t2v request and `negotiate` refused it (plan D1 follow-up 4, D3 follow-up b)
+- Options: negotiate against `CudaModel::caps()` from the catalog before the backend is built; negotiate against the started engine's table before waiting for readiness (the executor is already loading); build the table `start` serves without starting it, negotiate, then start
+- Decision: (coordinator's request, executed by the agent) the third: `EngineService::caps_table` builds the table from the backends' declarations by the code `start` now uses (`declare` / `into_table`), and `EngineService::start_negotiated` negotiates against it and starts only an accepted request (`StartNegotiatedError::{UnknownModel, Negotiate, Start}`, the `negotiate: …` text unchanged); `fv-gpucheck engine` calls it after `CudaBackend::new` (device checks and the H3 1080P gate, no model load). fv-serve is unchanged: it loads its resident models at start whatever the requests, and its submit path negotiates before `engine.submit` (so before a swap load); while it loads, `admit` answers `loading` before negotiating, which costs no load
+- Reason: the catalog's `CudaModel::caps()` is not the served table (the table rebinds tiers across models and `CudaBackend::new` may drop the 1080P tier on the device), so only the table `start` builds keeps every acceptance and refusal as it was
+- Reversibility: high (code and tests)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0023-lab-report-and-ci-bridge.md (the gold tier's refusals)
+- Verification: `crates/fastvideo-engine-service/tests/start_negotiated.rs` (the four gold refusals from the real catalog with a backend that counts `load` calls: 0; an unknown model refused with 0 loads; an accepted request starts and loads, its caps and job equal to `negotiate` against the started engine's table; `caps_table` equal to the started engine's table and public aliases for the whole catalog); `cargo check -p fastvideo-gpucheck --features cuda`; UNVERIFIED on a GPU until the next gold run
+
+### FVID · 2026-10-26 · FVID-2026-10-26-h3-vae-shared-files
+- Trigger: plan D1 follow-up 6: `completed_vae_files` (crates/fastvideo-cudarc/src/h3/pipeline.rs) filled any shard a tree's `vae/` index names but the tree lacks from h3-base's `vae/`, while only the NVFP4 trees' shard 3 is known byte-identical (`verify-weights.sh` `shared_file`, #208)
+- Options: one table in the family manifest (a format change); a Rust constant held to `verify-weights.sh`'s table by a test; match by file name only, whatever the tree
+- Decision: (coordinator's request, executed by the agent) `h3::pipeline::SHARED_FILES` (file, copy, bytes, SHA-256; the two NVFP4 trees' `vae/diffusion_pytorch_model-00003-of-00003.safetensors` from `h3-base/vae/`), keyed by the tree directory's name as the script is; the engine fills only a listed file, only from a `base` whose tree is the listed copy's, only when the copy has the listed length (398,539,336 bytes); any other missing shard is an error naming the table; the SHA-256 stays the script's check (no 0.4 GB hash at every load); `verify-weights.sh` stays the source the test and gen-configs.mjs read
+- Reason: the script is what the lab runs before every arm and gen-configs.mjs can read it, so a format change for one row is not needed; a file of the same name in another revision of h3-base would decode wrong silently
+- Reversibility: high (code and tests)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/ops/r2-weights.md §15
+- Verification: `h3::pipeline::tests::{only_the_listed_shared_vae_shard_is_read_from_h3_base, shared_files_mirror_verify_weights_shared_file, the_nvfp4_trees_vae_is_its_default_decoder_completed_from_h3_base}`, `verify-weights.test.sh`
+
+### FVID · 2026-10-26 · FVID-2026-10-26-gen-configs-shared-file-check
+- Trigger: plan D1 follow-up 5: the NVFP4 trees leave out vae shard 3 (`verify-weights.sh` `shared_file`, #208), which the engine reads from its text weights' `vae/`; nothing checked that a variant reading such a tree names that tree as its `text_weights` and in its `trees`
+- Options: a hand list of the NVFP4 variants in gen-configs.mjs; read `verify-weights.sh`'s `shared_file` table and check every variant whose trees include a tree it names
+- Decision: (coordinator's request, executed by the agent) the second: `sharedFiles()` reads the table (plain `NAME=value` assignments, the `"<pattern>" | …)` and `echo "<copy> <bytes> <sha256>" ;;` arms; refuses a script without the function or a malformed arm), `sharedFileChecks()` requires the copy's tree in `trees` and `engine.text_weights = "${weights}/<copy tree>"`; part of `crossChecks`, so `node gen-configs.mjs --check` and `families-gen.test.ts` run it; `parseFamily` carries `text_weights` (not written to any generated file)
+- Reason: one table (the script) for the lab gate, the engine's mirror test and this check; a new tree with a shared file is checked without editing gen-configs.mjs
+- Reversibility: high (a check)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/ops/r2-weights.md §15
+- Verification: `control/test/unit/families-gen.test.ts` (the table's two rows; the four NVFP4 variants pass; another `text_weights`, none, or h3-base missing from `trees` refused naming the variant and the copy; a script without the table or with a bad arm throws), `node gen-configs.mjs --check`, vitest unit, tsc
+
+### FVID · 2026-10-26 · FVID-2026-10-26-gold-followups-review
+- Trigger: the independent review of #213 (nothing blocking): both `shared_file` table parsers (the Rust mirror test, gen-configs.mjs `sharedFiles`) dropped an arm written in another form while another arm parsed; an unknown variable stayed in an expanded field; `caps_table_is_the_started_engines_table` compared models and aliases, not the whole table; an empty backend list gave `UnknownModel`
+- Decision: (coordinator, executed by the agent) both parsers strict: only `case "$1" in`, quoted arms each followed by one `echo "<copy> <bytes> <sha256>" ;;`, `*) return 1 ;;` and `esac`; an echo with no arm, an arm with no echo, any other line, or a field still holding `$` is an error (tests: an unquoted pattern, a one-line arm and five more forms in both); the table compared whole (`CapabilityTable: PartialEq`); `start_negotiated` refuses no backend with `start`'s error; the plan's D1 follow-ups 4-6 and D3 (a)/(b) marked done, the two loader cuts left open as future PRs; `--text-weights` help and r2-weights.md §15 say the NVFP4 and h3-base tree directories keep their R2 names
+- Reversibility: high (tests and docs)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- Verification: `h3::pipeline::tests::the_shared_file_parser_refuses_unexpected_forms`, `families-gen.test.ts` "sharedFiles is strict", `start_negotiated.rs` (`caps_table_is_the_started_engines_table`, `no_backend_is_the_starts_error`)
+
 ### FVID · 2026-10-26 · FVID-2026-10-26-d1f-tiers
 - Trigger: the coordinator's D1f slice: move `b4b`, `b4c`, `b4c2`, `fuse`, `attn3` and `ltx` as fv-lab tiers without retiring a branch, and check §9.1's "h3: retired (rtx6000 covers it)"
 - Options: per family, a tier with no schema change, an additive schema field, or stop (a large addition) and say why; for `ltx`, whose ungated `run_cell`s read weights: lift the "an ungated arm reads no tree" rule (§15.2) or gate the script's arms in lockstep; for `h3`: a tier, retirement, or retirement with a new `rtx6000` arm for what it alone ran

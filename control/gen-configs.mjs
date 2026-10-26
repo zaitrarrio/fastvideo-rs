@@ -31,7 +31,8 @@
 //   node gen-configs.mjs            rewrite them (after the cross-checks below pass)
 //   node gen-configs.mjs --check    exit 1 when they are stale or a cross-check fails
 //                                   (test/unit/payloads.test.ts and families-gen.test.ts run the same)
-// Cross-checks (crossChecks): every family tree is a dest of weights-manifest.tsv / weights-r2.tsv,
+// Cross-checks (crossChecks): every family tree is a dest of weights-manifest.tsv / weights-r2.tsv, a variant reading a
+// tree with a verify-weights.sh shared_file entry reads the copy's tree as its text_weights and lists it (sharedFileChecks),
 // src/cluster/catalog.json names only families, models and recipes the manifests know, volumes.sh's trees are
 // published trees; deployChecks: deploy/deploy.toml's configs exist, the hand-written serve-cuda and serve-cpu
 // stages carry what the data says and bake no config, serve-image.yml's build lists name its images, its GCP cells
@@ -252,6 +253,8 @@ export function parseFamily(label, text) {
       weight_trees: v.trees.filter((t) => !isAuxTree(t)),
       main_tree: main,
       gpu: { min_vram_gib: g.min_vram_gib, min_sm: g.min_sm, needs: [...needs] },
+      // The text encoder's tree (H3: h3-base, whose vae/ also serves a shared_file copy), or null.
+      text_weights: typeof v.engine.text_weights === "string" ? v.engine.text_weights : null,
     };
   });
   return { id: f.id, display: f.display, licence: f.licence, port_doc: f.port_doc, variants };
@@ -805,8 +808,71 @@ export function crossChecks(set = loadFamilies()) {
     if (!v) out.push(`src/serverless/serves.ts RECIPES ${name}: not a name the family manifests know`);
     else if (v.tier !== tier) out.push(`src/serverless/serves.ts RECIPES ${name}: tier ${tier}, the manifests say ${v.tier} (${v.id})`);
   }
+  out.push(...sharedFileChecks(set));
   out.push(...deployChecks(set));
   return out;
+}
+
+/** scripts/gpu/verify-weights.sh `shared_file`: the files a published tree leaves out because they are byte-identical
+ * in another tree, and the copy the engine reads instead (crates/fastvideo-cudarc/src/h3/pipeline.rs SHARED_FILES,
+ * held to the same table by a Rust test): [{ file, copy, bytes, sha256 }], `<tree>/<path>` paths. Reads the script's
+ * plain `NAME=value` assignments and the function's `"<pattern>" | …)` / `echo "<copy> <bytes> <sha256>" ;;` arms. */
+export function sharedFiles(text = readRel("../scripts/gpu/verify-weights.sh")) {
+  const where = "scripts/gpu/verify-weights.sh shared_file";
+  const vars = {};
+  for (const m of text.matchAll(/^([A-Z0-9_]+)=([^\s"$(]+)$/gm)) vars[m[1]] = m[2];
+  // `$NAME` / `${NAME}` of the plain assignments; anything still holding a `$` (an unknown or quoted variable) is refused.
+  const expand = (str) => {
+    const out = str.replace(/\$\{([A-Z0-9_]+)\}|\$([A-Z0-9_]+)/g, (all, a, b) => vars[a ?? b] ?? all);
+    if (out.includes("$")) throw new Error(`${where}: ${str}: an unknown variable`);
+    return out;
+  };
+  const body = /^shared_file\(\) \{\n([\s\S]*?)\n\}$/m.exec(text);
+  if (!body) throw new Error("scripts/gpu/verify-weights.sh: no shared_file() function");
+  // Strict: only `case "$1" in`, quoted arms each followed by one `echo "<copy> <bytes> <sha256>" ;;`, `*) return 1 ;;`
+  // and `esac`; any other line, an echo with no arm, an arm with no echo is an error (never an arm dropped silently).
+  const out = [];
+  let patterns = null;
+  for (const line of body[1].split("\n").map((l) => l.trim())) {
+    if (line === "" || line === 'case "$1" in' || line === "esac") continue;
+    if (line === "*) return 1 ;;") {
+      if (patterns) throw new Error(`${where}: an arm with no echo before: ${line}`);
+      continue;
+    }
+    const arm = /^("[^"]+"(?:\s*\|\s*"[^"]+")*)\)$/.exec(line);
+    if (arm) {
+      if (patterns) throw new Error(`${where}: an arm with no echo before: ${line}`);
+      patterns = [...arm[1].matchAll(/"([^"]+)"/g)].map((p) => expand(p[1]));
+      continue;
+    }
+    const echo = /^echo "([^"]+)" ;;$/.exec(line);
+    if (!echo) throw new Error(`${where}: an unexpected line: ${line}`);
+    if (!patterns) throw new Error(`${where}: an echo with no arm: ${line}`);
+    const f = expand(echo[1]).split(/\s+/);
+    if (f.length !== 3 || !/^[0-9]+$/.test(f[1]) || !/^[0-9a-f]{64}$/.test(f[2])) throw new Error(`${where}: not "<copy> <bytes> <sha256>": ${line}`);
+    for (const p of patterns) out.push({ file: p, copy: f[0], bytes: Number(f[1]), sha256: f[2] });
+    patterns = null;
+  }
+  if (patterns) throw new Error(`${where}: an arm with no echo at the end`);
+  if (!out.length) throw new Error("scripts/gpu/verify-weights.sh: shared_file lists no file");
+  return out;
+}
+
+/** A variant reading a tree that leaves out a shared_file must read the copy: the copy's tree in its `trees` and as its
+ * engine `text_weights` (the H3 loader completes the tree's vae/ from the text weights' vae/, `completed_vae_files`). */
+export function sharedFileChecks(set = loadFamilies(), shared = sharedFiles()) {
+  const out = [];
+  for (const [id, v] of set.variants) {
+    for (const s of shared) {
+      const tree = s.file.split("/")[0];
+      if (!v.trees.includes(tree)) continue;
+      const copyTree = s.copy.split("/")[0];
+      const where = `families/${v.family}.toml ${id}: reads ${tree}, which leaves out ${s.file} (verify-weights.sh shared_file: the copy is ${s.copy})`;
+      if (!v.trees.includes(copyTree)) out.push(`${where}, but ${copyTree} is not in its trees`);
+      if (v.text_weights !== `\${weights}/${copyTree}`) out.push(`${where}, but its engine.text_weights is ${JSON.stringify(v.text_weights)}, not "\${weights}/${copyTree}"`);
+    }
+  }
+  return [...new Set(out)];
 }
 
 /** The hand-written `serve-<id>` stages of the Dockerfile (not serve-build / serve-cuda-bin): the configs each COPYs

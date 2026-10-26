@@ -292,6 +292,9 @@ declare -A checked=()
 #   (weights-manifest.tsv, docs/ops/r2-weights.md §15). The H3 loader reads it from h3-base's vae/
 #   (crates/fastvideo-cudarc/src/h3/pipeline.rs `completed_vae_files`). Size and LFS SHA-256 are the same
 #   in the three Hub repos at their pinned revisions and in h3-8step @ 3da2ddf (Hub API, 2026-10-26).
+# The engine fills only these files from the copy (its `SHARED_FILES`, which a test holds to this table, and
+# the copy's size at load) and refuses any other missing shard; control/gen-configs.mjs reads this table to
+# check that a variant reading such a tree has the copy's tree as its text_weights and in its trees.
 H3_VAE_SHARD3=diffusion_pytorch_model-00003-of-00003.safetensors
 H3_VAE_SHARD3_SIZE=398539336
 H3_VAE_SHARD3_SHA256=c05d6ac4b1a33de372799d708531da6320f6a3ce6d1ce6d895e770988e004a39

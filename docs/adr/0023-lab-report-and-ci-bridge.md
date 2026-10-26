@@ -137,7 +137,10 @@ trim, NVFP4, VDN and turbo-LoRA trees are R2-only. **Since 2026-10-26 (ADR-0019 
 arms that read them, at most 147.86 GB at once (`container_disk_gb = 300`), so all 32 arms run; a tree in neither place
 would still be recorded as skipped (`weights incomplete`), and a failed fetch as `r2 fetch failed`. Variants the engine
 cannot run from a text request (reference-to-video, audio-to-video) fail and are shown as failed: that is a finding,
-not a number.
+not a number. Since 2026-10-26 (plan D1 follow-up 4) `fv-gpucheck engine` negotiates the request against the caps the
+engine will serve before the model loads (`EngineService::start_negotiated`, the table `EngineService::caps_table`
+builds as `start` does), so such an arm fails with the same `negotiate: … does not support task t2v` at once, not after
+a 5-199 s load (the gold run at `7e580e5`); what is accepted or refused is unchanged.
 
 **The engine's progress check on a causal variant (fixed 2026-10-26).** The full gold run on `e9b9435` failed
 `longlive-1.3b` and `sfwan21-1.3b` on `engine/progress` alone (`{"events":28,"last":[28,28]}` vs `{"steps":4}`), their

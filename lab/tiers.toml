@@ -251,19 +251,21 @@ cells = ["b4a-h3-fullopt-env", "b4a-h3-fullopt-prof", "b4a-h3-4step-tea"]
 # 147.86 GB) plus the 120 GB every volume tier has, rounded up to 300 GB.
 # The host-RAM floor (min_ram_gb, Runpod minRAMPerGPU; ADR-0019 §16.10): the
 # largest host load of a gold arm is wan14b-plug-4step's, SIGKILLed (exit 137,
-# nothing printed) 18 s into its load at e9b9435, on a pod with no floor. Its
-# loader (wan::plug::load_merged_transformer) copies the whole DiT out of the
-# mmapped shards into owned host tensors in the on-disk dtype, f32: about
-# 57 GB of the 80.41 GB wan21-t2v-14b tree. It merges the two LoRA trees
-# (3.68 GB) into that copy and keeps it while the pipeline loads the f32 text
-# encoder (about 23 GB) beside it: about 80 GB of process memory at the peak.
-# 192 GB per GPU is that with more than 100 GB of headroom (the page cache the
-# fetch and the copy fill is reclaimable; only pages not yet written back, at
-# most the arm's 84 GB just fetched, are a caveat), and the floor the upstream
-# cells' rerun asked for on a PRO 6000 in EU-RO-1, where Runpod gave 283 GB
-# (docs/oracle.md "Upstream cells: host RAM"). The runner records the pod's
-# RAM limit in box.txt and each arm's peak and OOM kills in its summary.json:
-# the evidence to lower it from.
+# nothing printed) 18 s into its load at e9b9435, on a pod with no floor. At
+# 7e580e5, with a 192 GB floor, it peaked at 156,004 MiB of process memory
+# (anon + shmem, sampled each second; the loader logged a 171.1 GiB peak RSS):
+# its loader keeps every f32 tensor twice on the host (RawTensor's bytes and
+# its f32 view), the merged 14B DiT (about 2 x 57 GB) held while the f32 text
+# encoder (about 2 x 23 GB) is copied beside it. Runpod's GB are 10^9 bytes:
+# 192 GB is 183,105 MiB, too close once pages the arm's 84.09 GB fetch has not
+# written back yet (charged to the same cgroup) are counted. 256 GB is
+# 244,140 MiB: 88,136 MiB above that peak, more than the whole fetch
+# (80,195 MiB) even if none of it were written back yet (ADR-0019 §16.10,
+# "Raised to 256"). Runpod gave both gold pods at 7e580e5 283 GB; a host with
+# less than 256 GB to give is no longer offered, and a create no host can
+# place is fv-deploy's "no capacity" (nothing created, nothing billed). The
+# runner records the pod's RAM limit in box.txt and each arm's peak and OOM
+# kills in its summary.json: the evidence to change it from.
 [[tier]]
 name = "gold"
 description = "The gold runs (fv-lab run gold --all): every gold variant's canonical cell, the served variant through the serve engine at its gold canvas"
@@ -277,7 +279,7 @@ max_usd_per_hr = 2.5
 wall_cap_s = 14400
 cell_timeout_s = 3600
 container_disk_gb = 300
-min_ram_gb = 192
+min_ram_gb = 256
 weights = "volume+r2"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true

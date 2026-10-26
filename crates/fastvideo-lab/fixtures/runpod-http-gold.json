@@ -15,7 +15,7 @@
     "NVIDIA RTX PRO 6000 Blackwell Server Edition"
   ],
   "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-1234567",
-  "minRAMPerGPU": 192,
+  "minRAMPerGPU": 256,
   "name": "fv-lab-gold-1234567-10241200",
   "networkVolumeId": "bz0ofkfx45",
   "ports": [

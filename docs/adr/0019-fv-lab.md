@@ -97,7 +97,7 @@ serde with `deny_unknown_fields` everywhere, schemars JSON Schemas committed as 
 | `wall_cap_s` | the backstop's deadline (≤ 4 h, fv-deploy's bound) | 14400 (`FV_POD_CAP_S`) |
 | `cell_timeout_s` | `timeout --kill-after=15` per arm; 0 none | 3600 (`FV_GEN_TIMEOUT_S` as runpod-http passes it) |
 | `container_disk_gb` | | 120 (`FV_CONTAINER_DISK_GB`) |
-| `min_ram_gb` | optional: the pod's host-RAM floor, whole GB per GPU (Runpod `minRAMPerGPU`, positive); absent, none is asked for (§16.10) | absent (`FV_MIN_RAM_GB` unset); the gold tier's is 192 |
+| `min_ram_gb` | optional: the pod's host-RAM floor, whole GB per GPU (Runpod `minRAMPerGPU`, positive); absent, none is asked for (§16.10) | absent (`FV_MIN_RAM_GB` unset); the gold tier's is 256 (192 until the run at `7e580e5`, §16.10) |
 | `weights` | `volume` today, `registry` later (§4) | `volume` |
 | `preflight` | `verify-weights.sh` cells for `weights.log` at pod start | the six cells runpod-http.sh checks |
 | `tae` | `fetch-tae.sh` at pod start | true (`FV_SKIP_TAE` unset) |
@@ -1982,7 +1982,7 @@ back to back with no GPU arm between (a fetching arm whose gate then fails) at t
 the measured rates the largest fetch is about 4 min.
 
 The pod body golden (`runpod-http-gold.json`) is `runpod-http.sh plan` with `FV_CONTAINER_DISK_GB=300`,
-`FV_IDLE_GPU_MIN` = `FV_IDLE_GPU_GRACE_MIN` = 85 and `FV_MIN_RAM_GB=192` (the tier's `min_ram_gb`, §16.10;
+`FV_IDLE_GPU_MIN` = `FV_IDLE_GPU_GRACE_MIN` = 85 and `FV_MIN_RAM_GB=256` (the tier's `min_ram_gb`, §16.10;
 `fv-lab-goldens.sh`), and its env (the R2 references) is the one allowed difference (`tests/payload_golden.rs`).
 
 #### 16.7 The GPU check (the coordinator's)
@@ -2103,7 +2103,7 @@ is the 269,889 MiB limit), so the 192 GB floor is 183,105 MiB and a pod given ex
 14B plug load about 27,100 MiB (26.5 GiB) by this sample. That does not show such a pod survives: the peak is a
 once-a-second sample, and pages not yet written back (up to the 84 GB the arm had just fetched) are charged to the
 same cgroup (§16.10), so the floor **may not hold**. Raising the gold tier's `min_ram_gb` (or cutting the loader's host
-copies) is a prerequisite of the next gold run (plan D3, follow-up a). The peak supports host-RAM starvation as the cause of `e9b9435`'s exit 137 (below), which
+copies) is a prerequisite of the next gold run (plan D3, follow-up a): raised to 256 GB, §16.10 "Raised to 256". The peak supports host-RAM starvation as the cause of `e9b9435`'s exit 137 (below), which
 that pod, with no floor, could not record.
 
 *Before the fixes: the run at `e9b9435`* (the same split; RTX PRO 6000, EU-RO-1, no host-RAM floor; not committed,
@@ -2199,6 +2199,31 @@ measurement; the first gold run with this change records each arm's peak and the
 be lowered (or the 14B loader made to stream instead of copying). UNVERIFIED: that the 137 at e9b9435 was the cgroup
 OOM killer (that run recorded no cgroup), and that Runpod honours `minRAMPerGPU` on PRO 6000 hosts in EU-RO-1 as on
 the upstream pods.
+
+**Raised to 256 (2026-10-26, after the gold run at `7e580e5`, §16.7 "Result").** The measurement replaced the guess
+of item 5: `wan14b-plug-4step` peaked at 156,004 MiB of process memory (`peak_ram_mib`, anon + shmem sampled each
+second; its own log line `wan load: host peak RSS 171.1 GiB (eager dit)`, which also counts the mapped shards), about
+twice the 80 GB above. The loader holds every f32 tensor twice: `fastvideo_loader::RawTensor` keeps an f32 tensor's
+little-endian `data` bytes and a parallel `values: Vec<f32>` (`from_native`, `from_f32`), so the merged DiT is about
+2 x 57 GB and the UMT5 map, copied while the DiT map is held, about 2 x 23 GB: about 150 GiB with the VAE, the
+sample's 152.3 GiB. Runpod's GB are 10^9 bytes, so 192 GB is 183,105 MiB, 27,101 MiB above that peak; pages of the
+arm's 84.09 GB fetch not yet written back are charged to the same cgroup (item 5), so the floor may not hold.
+
+- *Decision:* the gold tier's `min_ram_gb` is **256**: 244,140 MiB, 88,136 MiB above the peak, which is more than the
+  whole 84.09 GB fetch (80,195 MiB) even if none of it were written back yet. The guards allow it (`min_ram_gb` is a
+  positive `u32`, `Tiers::validate` and `guard::check_min_ram` refuse only 0, the schemas say `minimum: 1`, and
+  `runpod-http.sh` takes any whole positive number), and it is below the 283 GB Runpod gave both pods of the run.
+  The pod body golden (`runpod-http-gold.json`, `FV_MIN_RAM_GB=256`) and `tests/payload_golden.rs` pin it.
+- *Not chosen:* 283 (what the hosts gave: no headroom over today's offers, more `no capacity`); cutting the loader's
+  host copies instead. Either cut is free of numerics but not of review: storing an f32 `RawTensor` once (about
+  76 GiB at the peak) changes the loader every model shares, and uploading the DiT before the text encoder when it
+  comes in as an eager map (about 107 GiB: the DiT map is dropped before UMT5 is copied) changes the device's
+  allocation order and, for a two-expert checkpoint, the free memory the MoE plan reads "after the text encoder".
+  Both are left to their own change with a GPU byte-identity check; with both, about 53 GiB.
+- *Consequences:* fewer hosts qualify: a PRO 6000 host with less than 256 GB to give is no longer offered to the gold
+  pod, and a create no host can place is fv-deploy's `no capacity` (nothing created, nothing billed); the driver
+  then fails the `pod up` as before. UNVERIFIED: how many EU-RO-1 PRO 6000 hosts give 256 GB or more (both gold pods
+  got 283 GB at a 192 floor).
 
 ### 17. D1f: `fuse`, `attn3` and `ltx` as tiers; the B4 families stay; `h3` proposed for retirement
 

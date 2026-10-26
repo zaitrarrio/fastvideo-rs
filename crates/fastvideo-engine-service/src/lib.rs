@@ -59,7 +59,7 @@ pub use pool::{ModelPool, Readiness, Residency, Warmup};
 pub use scheduler::Priority;
 pub use service::{
     CancelOutcome, EngineConfig, EngineCounters, EngineEvent, EngineService, EngineStats,
-    JobHandle, EVENT_CHANNEL_DEPTH,
+    JobHandle, StartNegotiatedError, EVENT_CHANNEL_DEPTH,
 };
 pub use stream::avatar::{
     AvatarConfig, AvatarEvent, AvatarOutputs, AvatarPlan, AvatarPlayer, AvatarStatus, AvatarTake,
