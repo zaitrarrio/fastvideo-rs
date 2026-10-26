@@ -570,6 +570,10 @@ fv_lab_route() {
       [[ -z "${!v:-}" ]] || refuse "reads $v only with FV_FETCH_TREE=1 (fv-lab pod up --fetch-tree)"
     done
   fi
+  # $(( FV_FETCH_MAX_MB << 20 )) reads 010 as octal and 0x10 as hex; fv-lab a decimal.
+  if [[ -n "${FV_FETCH_MAX_MB:-}" && ! "$FV_FETCH_MAX_MB" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    refuse "reads FV_FETCH_MAX_MB as a decimal number of MiB, not $FV_FETCH_MAX_MB"
+  fi
   for v in FV_KEEP_POD RUNPOD_NO_VOLUME; do
     [[ "${!v:-0}" != 1 ]] || refuse "has no $v=1"
   done

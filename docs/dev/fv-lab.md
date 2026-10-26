@@ -287,7 +287,11 @@ what the ledger shows created and not deleted.
 instead (`FV_FETCH_TREE=1`: frames, mp4s, wavs, every file), less what `--fetch-skip` matches (paths
 `<tier>/<tag>/…`; an ERE of alternatives of literal text, `.`, `\`-escaped punctuation, `^` and `$`, e.g.
 `'/frames/'` or `'\.png$|\.cache$'`; anything else is refused before the pod is created) and files above
-`--fetch-max-mb` MiB (default 400, 0 no limit). `up` takes them only with `--wait` (ADR-0019 §13.3).
+`--fetch-max-mb` MiB (default 400, 0 no limit; checked while the file streams). `up` takes them only with `--wait`.
+A pattern starting with `-` is refused (clap reads it as an option). The pod's listing is not trusted: an entry that
+is not a single name inside the run directory (absolute, `..`, `.`, a `/`, `\` or NUL once decoded, a malformed `%`
+escape) is refused and logged, and the walk stops 16 levels down. The top-level listing is retried 5 times, and
+`RUN_FILES` and `DONE` (what the run is judged by) are fetched whatever the skip says (ADR-0019 §13.3).
 
 `fetch` (and `up --wait`) fail (exit 1) unless the fetched `DONE` says `done <tag>` and `matrix.out` holds
 `matrix_exit=0`, and when the host's driver was too old; the files fetched so far are kept. `--down` and `up --wait`
@@ -314,7 +318,7 @@ What the report scripts printed, read from a fetched run directory's files (ADR-
 ```sh
 ./fv-lab report summary artifacts/runpod/b6/<tag>        # the lines b6's script branch copied into live.log
 ./fv-lab report summary artifacts/runpod/<dir> --family h3arms   # the tier when the parent is not its name
-./fv-lab report summary --kind hd artifacts/runpod/hd/<tag> [--jpg-out DIR]  # hd_report.py, without keyframe sharpness
+./fv-lab report summary --kind hd artifacts/runpod/hd/<tag>   # hd_report.py, without keyframe sharpness (no --jpg-out)
 ./fv-lab report summary --kind h3-graphs DIR             # was experiments/h3-graphs-summary.py
 ./fv-lab report summary --kind h3-tier-options DIR --json OUT   # was h3-tier-options-summary.py
 ./fv-lab report summary --kind h3-trim-nvfp4 DIR --json OUT     # was h3-trim-nvfp4-summary.py

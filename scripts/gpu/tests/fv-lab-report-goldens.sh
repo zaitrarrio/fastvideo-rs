@@ -15,10 +15,15 @@
 #                                lines the retired families' runpod-matrix.sh branches
 #                                copied into live.log (frozen from 5987e6a4); for the
 #                                script-side runs in LIVE, every line is also checked to be
-#                                in that run's own live.log
+#                                in that run's own live.log, and (but for PARTIAL) the lines of
+#                                live.log shaped as that family's summary lines are exactly the
+#                                fixture's, in order
 #   hd--<tag>.txt                scripts/gpu/hd_report.py artifacts/runpod/hd/<tag>, with numpy
 #                                and Pillow stood in by empty modules (the committed runs hold no
 #                                keyframes, so neither is called; fv-lab reads no PNG)
+#   hd-synthetic.txt             hd_report.py on fixtures/report/hd-run (mp4s for `## streams`, a
+#                                hidden directory, a failing probe) with fixtures/report/bin/ffprobe,
+#                                a stand-in answering from the file name, first on PATH
 #   h3-graphs.txt                experiments/h3-graphs-summary.py artifacts/perf/h3-denoise-graphs/run-2026-10-14
 #   h3-tier-options.{md,json}    experiments/h3-tier-options-summary.py artifacts/perf/h3-nvfp4-tier-options --json
 #   h3-trim-nvfp4.{md,json}      experiments/h3-trim-nvfp4-summary.py on `layout trim`
@@ -140,6 +145,22 @@ b6/a2ca568-10241146 b6/a2ca568-10241147 b6/a2ca568-10241148 b6/a2ca568-10241149 
 b4a/abccc38-10241423 b4a/abccc38-10241424 b4a/abccc38-10241425 b4a/e82b6b7-10252113
 h3arms/b0d0bb8-10251649 trace/b0d0bb8-10251650 ltxfps/b0d0bb8-10251654
 ltxvae/5987e6a-10252157 ltxvae/b0d0bb8-10251657"
+# The lines of a family's summary, told apart in live.log by their shape (the
+# reverse check: live.log holds no summary line the fixture lacks).
+summary_re() {
+  case "$1" in
+    techniques) echo '^compare-clips-[^ ]*\.json: |^[a-z0-9.-]+-(base|env|prof) ("|$)' ;;
+    b6) echo '^\[b6-[a-z0-9-]+-(base|pr)\] |^compare-clips-b6-[^ ]*\.json: ' ;;
+    b4a) echo '^compare-clips-b4a-[^ ]*\.json: ' ;;
+    h3arms) echo '^\[fasth3-8step-[0-9]+p-(sol|tea|soltea)\] teacache reused steps |^gate-[^ ]*\.json: ' ;;
+    trace) echo '^\[[a-z0-9-]+\] .*/gpu_trace ' ;;
+    ltxfps) echo '^\[(ltx25-1080p|fasth3-8step-sink)[^]]*\] ' ;;
+    ltxvae | ltxvae-gen) echo '^\[(ltxvae|ltx25-[^]]*-gen)[^]]*\] ' ;;
+  esac
+}
+# Committed with only live.log and compare/ (the arm directories were not kept):
+# the forward check holds, the reverse one cannot.
+PARTIAL="techniques/1de80f1-10240618 techniques/93696e5-10240625"
 fail=0
 for r in $SUMMARY_RUNS; do
   fam="${r%%/*}" tag="${r#*/}"
@@ -150,6 +171,11 @@ for r in $SUMMARY_RUNS; do
     while IFS= read -r l; do
       grep -qxF -- "$l" "$TMP/live.txt" || { echo "FAIL: $r: not in its live.log: $l" >&2; fail=1; }
     done <"$o"
+    if [[ " $PARTIAL " != *" $r "* ]] && ! diff <(grep -aE "$(summary_re "$fam")" "$TMP/live.txt") "$o" >"$TMP/rev.diff"; then
+      echo "FAIL: $r: live.log's summary lines are not the fixture's:" >&2
+      head -5 "$TMP/rev.diff" >&2
+      fail=1
+    fi
   fi
 done
 
@@ -175,9 +201,7 @@ else
 fi
 
 # 2. hd_report.py, numpy and Pillow stood in by empty modules.
-for d in "$ROOT"/artifacts/runpod/hd/*/; do
-  t="$(basename "$d")"
-  py -c '
+HD_STUBS='
 import runpy, sys, types
 sys.modules["numpy"] = types.ModuleType("numpy")
 pil = types.ModuleType("PIL")
@@ -185,8 +209,13 @@ pil.Image = types.ModuleType("PIL.Image")
 sys.modules["PIL"], sys.modules["PIL.Image"] = pil, pil.Image
 sys.argv = [sys.argv[1], sys.argv[2]]
 runpy.run_path(sys.argv[0], run_name="__main__")
-' "$ROOT/scripts/gpu/hd_report.py" "${d%/}" >"$GEN/hd--$t.txt"
+'
+for d in "$ROOT"/artifacts/runpod/hd/*/; do
+  t="$(basename "$d")"
+  py -c "$HD_STUBS" "$ROOT/scripts/gpu/hd_report.py" "${d%/}" >"$GEN/hd--$t.txt"
 done
+env -i PATH="$OUT/bin:/usr/local/bin:/usr/bin:/bin" HOME="$TMP" LC_ALL=C python3 -I -c "$HD_STUBS" \
+  "$ROOT/scripts/gpu/hd_report.py" "$OUT/hd-run" >"$GEN/hd-synthetic.txt"
 
 # 3. The experiment summaries (retired).
 X=scripts/gpu/experiments
@@ -229,8 +258,9 @@ cp "$TMP/timings-run/timings.md" "$GEN/timings.md"
 
 # The generated set against the fixtures (the inputs fixtures/report/
 # holds, summary-script.sh, sol-bench-cells/ and timings-run/, are not outputs).
-outputs() { (cd "$1" && find . -type f \( -path './summary/*' -o -name 'hd--*' -o -name 'h3-*' -o -name 'fasth3-*' \
-  -o -name 'sol-bench--*' -o -name 'timings.md' \) | sort); }
+outputs() { (cd "$1" && { find ./summary -maxdepth 1 -type f 2>/dev/null || true
+  find . -maxdepth 1 -type f \( -name 'hd--*' -o -name 'hd-synthetic.txt' -o -name 'h3-*' -o -name 'fasth3-*' \
+    -o -name 'sol-bench--*' -o -name 'timings.md' \); } | sort); }
 if (( CHECK )); then
   if ! diff <(outputs "$GEN") <(outputs "$OUT") >"$TMP/list.diff"; then
     echo "FAIL: the fixture set differs from what the scripts write:" >&2

@@ -43,6 +43,10 @@ on:
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
       - "scripts/gpu/hd_report.py"
       - "scripts/gpu/timings.sh"
+      # the report goldens' inputs (fixtures/report is under crates/fastvideo-lab/fixtures/**)
+      - "artifacts/runpod/**"
+      - "artifacts/perf/**"
+      - "artifacts/ports/**"
       - "scripts/gpu/runpod.sh"
       - "scripts/gpu/fv-boot-smoke-pod.sh"
       - "scripts/serve/e2e/segments-pod.sh"
@@ -95,6 +99,10 @@ on:
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
       - "scripts/gpu/hd_report.py"
       - "scripts/gpu/timings.sh"
+      # the report goldens' inputs (fixtures/report is under crates/fastvideo-lab/fixtures/**)
+      - "artifacts/runpod/**"
+      - "artifacts/perf/**"
+      - "artifacts/ports/**"
       - "scripts/gpu/runpod.sh"
       - "scripts/gpu/fv-boot-smoke-pod.sh"
       - "scripts/serve/e2e/segments-pod.sh"

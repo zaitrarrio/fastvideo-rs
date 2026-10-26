@@ -48,6 +48,13 @@ on:
       # tests/dry_run.rs reads these (the retired families, their branches gone).
       - "scripts/gpu/runpod-matrix.sh"
       - "scripts/gpu/fv-lab-retired.sh"
+      # tests/report.rs and tests/fetch_tree.rs (ADR-0019 §13): the reports'
+      # inputs, the goldens' layout helper, the script fetch_tree is cut from.
+      - "scripts/gpu/runpod-http.sh"
+      - "scripts/gpu/tests/fv-lab-report-goldens.sh"
+      - "artifacts/runpod/**"
+      - "artifacts/perf/**"
+      - "artifacts/ports/**"
       - "profiles/**"
       - "families/**"
       # The shipped serve configs and the certification matrix's TSV (plan
@@ -90,6 +97,13 @@ on:
       # tests/dry_run.rs reads these (the retired families, their branches gone).
       - "scripts/gpu/runpod-matrix.sh"
       - "scripts/gpu/fv-lab-retired.sh"
+      # tests/report.rs and tests/fetch_tree.rs (ADR-0019 §13): the reports'
+      # inputs, the goldens' layout helper, the script fetch_tree is cut from.
+      - "scripts/gpu/runpod-http.sh"
+      - "scripts/gpu/tests/fv-lab-report-goldens.sh"
+      - "artifacts/runpod/**"
+      - "artifacts/perf/**"
+      - "artifacts/ports/**"
       - "profiles/**"
       - "families/**"
       - "configs/serve/**"

@@ -698,12 +698,22 @@ impl Parser<'_> {
                             } else {
                                 hi
                             };
-                            char::from_u32(code).unwrap_or('\u{fffd}')
+                            // A lone surrogate: Python keeps it in a `str`; a
+                            // Rust `String` cannot hold one, so it is refused.
+                            char::from_u32(code)
+                                .ok_or_else(|| format!("a lone surrogate \\u{code:04x}"))?
                         }
                         _ => return Err(format!("bad escape at byte {}", self.i)),
                     };
                     let mut buf = [0u8; 4];
                     out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                }
+                // `json.loads` (strict) refuses a raw control character.
+                c if c < 0x20 => {
+                    return Err(format!(
+                        "a control character in a string at byte {}",
+                        self.i - 1
+                    ))
                 }
                 c => out.push(c),
             }
@@ -711,40 +721,56 @@ impl Parser<'_> {
         String::from_utf8(out).map_err(|e| e.to_string())
     }
 
+    /// JSON's number grammar, as `json.loads` reads it:
+    /// `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?`; an int without a
+    /// fraction or exponent, else a float.
     fn number(&mut self) -> Result<Py, String> {
         let start = self.i;
-        if self.b[self.i] == b'-' {
+        let digits = |p: &mut Self| {
+            let s = p.i;
+            while p.b.get(p.i).is_some_and(u8::is_ascii_digit) {
+                p.i += 1;
+            }
+            p.i - s
+        };
+        if self.b.get(self.i) == Some(&b'-') {
             self.i += 1;
         }
+        let int_start = self.i;
+        let n = digits(self);
+        if n == 0 || (n > 1 && self.b[int_start] == b'0') {
+            return Err(format!("bad number at byte {start}"));
+        }
         let mut float = false;
-        while let Some(&c) = self.b.get(self.i) {
-            match c {
-                b'0'..=b'9' => {}
-                b'.' | b'e' | b'E' | b'+' | b'-' => float = true,
-                _ => break,
-            }
+        if self.b.get(self.i) == Some(&b'.') {
             self.i += 1;
+            if digits(self) == 0 {
+                return Err(format!("bad number at byte {start}"));
+            }
+            float = true;
+        }
+        if matches!(self.b.get(self.i), Some(b'e' | b'E')) {
+            self.i += 1;
+            if matches!(self.b.get(self.i), Some(b'+' | b'-')) {
+                self.i += 1;
+            }
+            if digits(self) == 0 {
+                return Err(format!("bad number at byte {start}"));
+            }
+            float = true;
         }
         let s = std::str::from_utf8(&self.b[start..self.i]).map_err(|e| e.to_string())?;
         if float {
-            s.parse::<f64>()
+            return s
+                .parse::<f64>()
                 .map(Py::Float)
-                .map_err(|_| format!("bad number `{s}`"))
-        } else {
-            let digits = s.strip_prefix('-').unwrap_or(s);
-            if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
-                return Err(format!("bad number `{s}`"));
-            }
-            let trimmed = digits.trim_start_matches('0');
-            let canon = if trimmed.is_empty() {
-                "0".to_owned()
-            } else if s.starts_with('-') {
-                format!("-{trimmed}")
-            } else {
-                trimmed.to_owned()
-            };
-            Ok(Py::Int(canon))
+                .map_err(|_| format!("bad number `{s}`"));
         }
+        Ok(Py::Int(if s == "-0" {
+            "0".to_owned()
+        } else {
+            s.to_owned()
+        }))
     }
 }
 
@@ -770,13 +796,9 @@ pub fn jq_num(x: f64) -> String {
         }
         .into();
     }
-    let sign = if x.is_sign_negative() && x != 0.0 {
-        "-"
-    } else {
-        ""
-    };
+    let sign = if x.is_sign_negative() { "-" } else { "" };
     if x == 0.0 {
-        return "0".into();
+        return format!("{sign}0");
     }
     let (digits, exp) = digits_exp(x);
     let decpt = exp + 1;
@@ -914,6 +936,27 @@ mod tests {
             "[NaN, -Infinity]"
         );
         assert!(loads("{\"a\": 1} x").is_err());
+        // What `json.loads` refuses is refused.
+        for bad in [
+            "01",
+            "-01",
+            "1.",
+            ".5",
+            "1e",
+            "1e+",
+            "-",
+            "\"a\u{1}b\"",
+            "\"\\ud800\"",
+            "\"\\udc00x\"",
+        ] {
+            assert!(loads(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(loads("-0.0").unwrap(), Py::Float(-0.0));
+        assert_eq!(loads("1E+2").unwrap(), Py::Float(100.0));
+        assert_eq!(
+            loads("\"\\ud83d\\ude00\"").unwrap(),
+            Py::Str("\u{1f600}".into())
+        );
     }
 
     #[test]
@@ -955,6 +998,8 @@ mod tests {
             (3.0, "3"),
             (2.5e-7, "2.5e-07"),
             (-12.5, "-12.5"),
+            (-0.0, "-0"),
+            (0.0, "0"),
         ] {
             assert_eq!(jq_num(x), want, "{x}");
         }

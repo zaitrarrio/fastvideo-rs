@@ -4,6 +4,7 @@
 //! (`scripts/gpu/tests/fv-lab-report-goldens.sh`); every one is compared here,
 //! byte for byte.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -95,27 +96,45 @@ fn hd_is_hd_report_without_the_sharpness() {
             continue;
         };
         let run = root().join("artifacts/runpod/hd").join(tag);
-        let ours = summary::hd_summary(&run, None).unwrap();
+        let ours = summary::hd_summary(&run, OsStr::new("ffprobe")).unwrap();
         assert_same(&name, ours.as_bytes(), &read(&p));
         n += 1;
     }
     assert!(n >= 5);
+    // The `## streams` path: mp4s probed by the stand-in ffprobe the golden
+    // used, a hidden directory passed over, a failing probe.
+    let ffprobe = fixtures().join("bin/ffprobe");
+    let ours = summary::hd_summary(&fixtures().join("hd-run"), ffprobe.as_os_str()).unwrap();
+    assert_same(
+        "hd-synthetic.txt",
+        ours.as_bytes(),
+        &read(&fixtures().join("hd-synthetic.txt")),
+    );
+    assert!(ours.contains("\n## streams\nmax-1080p/frames/h3-demo/clip.mp4 [('video', "));
+    // A probe that is not ffprobe's JSON is an error, not a partial report.
+    let d = scratch("hd-badprobe");
+    std::fs::create_dir_all(d.join("a/frames/b")).unwrap();
+    std::fs::write(d.join("a/frames/b/c.mp4"), b"x").unwrap();
+    let echo = d.join("probe");
+    std::fs::write(&echo, "#!/usr/bin/env bash\necho '[1]'\n").unwrap();
+    Command::new("chmod").arg("+x").arg(&echo).status().unwrap();
+    assert!(summary::hd_summary(&d, echo.as_os_str()).is_err());
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
-fn hd_lists_keyframes_it_cannot_measure_and_creates_the_crop_dir() {
+fn hd_lists_keyframes_it_cannot_measure() {
     let d = scratch("hd");
     std::fs::create_dir_all(d.join("max-768p/keyframes/h3-demo")).unwrap();
     std::fs::write(d.join("max-768p/keyframes/h3-demo/0001.png"), b"png").unwrap();
     std::fs::create_dir_all(d.join("max-768p/keyframes/empty")).unwrap();
-    let out = summary::hd_summary(&d, Some(&d.join("crops"))).unwrap();
+    let out = summary::hd_summary(&d, OsStr::new("ffprobe")).unwrap();
     assert!(out.contains(&format!(
         "{:<28} {:<22} not computed: fv-lab reads no PNG (scripts/gpu/hd_report.py)\n",
         "max-768p", "h3-demo"
     )));
     assert!(!out.contains("empty"));
-    assert!(out.ends_with(&format!("## crops -> {}\n", d.join("crops").display())));
-    assert!(d.join("crops").is_dir());
+    assert!(!out.contains("## crops"));
     let _ = std::fs::remove_dir_all(&d);
 }
 

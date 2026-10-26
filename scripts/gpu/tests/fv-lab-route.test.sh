@@ -71,6 +71,9 @@ expect "plan: FV_FETCH_TREE=1 fetches nothing" 0 "--family trace --root $ROOT --
 for kv in FV_FETCH_SKIP=png FV_FETCH_MAX_MB=10; do
   dry "refused without the tree: $kv" 1 "reads ${kv%%=*} only with FV_FETCH_TREE=1" FV_FAMILY=trace "$kv"
 done
+for mb in 010 0x10 1e3 -1; do
+  dry "refused: FV_FETCH_MAX_MB=$mb (not decimal)" 1 "as a decimal number of MiB" FV_FAMILY=trace FV_FETCH_TREE=1 FV_FETCH_MAX_MB="$mb"
+done
 for kv in FV_KEEP_POD=1 RUNPOD_NO_VOLUME=1; do
   dry "refused: $kv" 1 "which has no $kv" FV_FAMILY=trace "$kv"
 done

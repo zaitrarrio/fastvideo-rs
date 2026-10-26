@@ -30,7 +30,7 @@
 //! fv-lab report tiers [--runs artifacts/runpod/<tier>/<tag>] [--check] [--out F]
 //!                 docs/perf/tiers.md from the gold files and one run set
 //! fv-lab report summary <run dir> [--kind tier|hd|h3-graphs|h3-tier-options|h3-trim-nvfp4|fasth3-nvfp4]
-//!                 [--family T] [--json OUT] [--jpg-out DIR]
+//!                 [--family T] [--json OUT]
 //!                 what a run's summary scripts printed, from its files (the retired
 //!                 families' live.log lines, hd_report.py, the experiments' *-summary.py)
 //! fv-lab report table --kind sol-bench|timings <run dir>... [--json F] [--out F] [--stdout]
@@ -215,9 +215,6 @@ enum ReportCmd {
         /// h3-trim-nvfp4 and fasth3-nvfp4 scripts).
         #[arg(long)]
         json: Option<PathBuf>,
-        /// `hd_report.py --jpg-out` (created; the crops are hd_report.py's).
-        #[arg(long)]
-        jpg_out: Option<PathBuf>,
         #[arg(long)]
         root: Option<PathBuf>,
     },
@@ -1067,7 +1064,7 @@ fn finish(
     match tree {
         // FV_FETCH_TREE=1: the whole run directory, as runpod-http.sh mirrors it.
         Some(t) => {
-            fetch_tree(http, &rec.url, &rec.family, &rec.tag, &dest, t, log)
+            fetch_tree(http, &rec.url, &rec.family, &rec.tag, &dest, t, clock, log)
                 .map_err(|e| e.to_string())?;
         }
         None => {
@@ -1590,14 +1587,12 @@ fn cmd_report(c: &ReportCmd) -> Result<ExitCode, String> {
             kind,
             family,
             json,
-            jpg_out,
             root,
         } => cmd_summary(
             run_dir,
             *kind,
             family.as_deref(),
             json.as_deref(),
-            jpg_out.as_deref(),
             root.as_ref(),
         ),
         ReportCmd::Table {
@@ -1620,7 +1615,6 @@ fn cmd_summary(
     kind: SummaryKind,
     family: Option<&str>,
     json: Option<&Path>,
-    jpg_out: Option<&Path>,
     root: Option<&PathBuf>,
 ) -> Result<ExitCode, String> {
     use std::io::Write as _;
@@ -1633,9 +1627,6 @@ fn cmd_summary(
     );
     if json.is_some() && !takes_json {
         return Err("--json: only the h3-tier-options, h3-trim-nvfp4 and fasth3-nvfp4 summaries write a record".into());
-    }
-    if jpg_out.is_some() && kind != SummaryKind::Hd {
-        return Err("--jpg-out: only the hd summary".into());
     }
     if family.is_some() && kind != SummaryKind::Tier {
         return Err("--family: only the tier summary".into());
@@ -1667,7 +1658,7 @@ fn cmd_summary(
             return Ok(ExitCode::SUCCESS);
         }
         SummaryKind::Hd => experiments::Summary {
-            text: summary::hd_summary(run_dir, jpg_out)?,
+            text: summary::hd_summary(run_dir, std::ffi::OsStr::new("ffprobe"))?,
             json: None,
         },
         SummaryKind::H3Graphs => experiments::h3_graphs(run_dir)?,

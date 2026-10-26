@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use fastvideo_deploy::boot::sys::{Http, LogSink, Request, Response, SysError};
+use fastvideo_deploy::boot::sys::{Clock, Http, LogSink, Request, Response, SysError};
 use fastvideo_lab::pod::{fetch_tree, FetchSkip, TreeFetch};
 
 fn root() -> PathBuf {
@@ -92,12 +92,28 @@ impl Http for Fake {
             },
         })
     }
-    fn download(&self, url: &str, _: &Path, _: Duration) -> Result<u64, SysError> {
-        Err(SysError::Http {
-            url: url.into(),
-            why: "not used".into(),
-        })
+    fn download(&self, url: &str, dest: &Path, _: Duration) -> Result<u64, SysError> {
+        let base = format!("https://{POD}-8000.proxy.runpod.net/");
+        let path = url.strip_prefix(&base).unwrap_or("");
+        match self.0.get(path) {
+            Some(b) => {
+                std::fs::write(dest, b).map_err(|e| SysError::io(dest, e))?;
+                Ok(b.len() as u64)
+            }
+            None => Err(SysError::Status {
+                url: url.into(),
+                status: 404,
+            }),
+        }
     }
+}
+
+struct Still;
+impl Clock for Still {
+    fn now(&self) -> f64 {
+        0.0
+    }
+    fn sleep(&self, _: Duration) {}
 }
 
 struct Quiet;
@@ -222,6 +238,7 @@ fn case(name: &str, skip: Option<&str>, max_mb: Option<u64>) {
         "t1",
         &ours_dir,
         &opts,
+        &Still,
         &Quiet,
     )
     .unwrap();

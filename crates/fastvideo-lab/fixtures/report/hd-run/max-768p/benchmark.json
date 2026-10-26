@@ -1,0 +1,15 @@
+{
+  "total_s": 61.25,
+  "denoise_s": 40.5,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "prompts": {
+    "h3-demo": {
+      "total_s": 61.25,
+      "step_seconds": [
+        1.5,
+        1.25
+      ]
+    }
+  },
+  "label": "caf\u00e9"
+}

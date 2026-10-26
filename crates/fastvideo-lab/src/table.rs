@@ -326,29 +326,34 @@ fn name_of(p: &Path) -> String {
 }
 
 /// `sol_timings(cell)`: the `timings` check of a `fv-gpucheck sol` stage
-/// report (LingBot / Cosmos3).
-fn sol_timings(cell: &Path) -> Option<Py> {
+/// report (LingBot / Cosmos3). `Path.glob("*.json")`, sorted: dotfiles too. A
+/// file that does not parse is passed over (the script's `except
+/// ValueError`); a report of the wrong shape raises, as in the script.
+fn sol_timings(cell: &Path) -> R<Option<Py>> {
     let dir = cell.join("gpucheck-out");
     if !dir.is_dir() {
-        return None;
+        return Ok(None);
     }
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .ok()?
+        .map_err(|e| format!("{}: {e}", dir.display()))?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "json") && !name_of(p).starts_with('.'))
+        .filter(|p| name_of(p).ends_with(".json"))
         .collect();
     files.sort();
     for f in files {
         let Ok(j) = pyfmt::load(&f) else { continue };
-        let checks = j.at("checks").or(Py::List(Vec::new()));
-        for c in checks.as_list() {
-            if c.at("name").as_str() == Some("timings") {
-                return Some(c.at("values").or(Py::dict()));
+        let checks = get(&j, "checks")?.or(Py::List(Vec::new()));
+        let Py::List(checks) = checks else {
+            return Err(format!("{}: checks is not a list", f.display()));
+        };
+        for c in &checks {
+            if get(c, "name")?.as_str() == Some("timings") {
+                return Ok(Some(get(c, "values")?.or(Py::dict())));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 fn kw(row: &mut Py, items: Vec<(&str, Py)>) {
@@ -428,7 +433,7 @@ fn load_rows(dirs: &[PathBuf]) -> R<Py> {
                     row.set("extrapolated", Py::Str("denoise x50/15".into()));
                 }
             }
-            let t = if b.exists() { None } else { sol_timings(&c) };
+            let t = if b.exists() { None } else { sol_timings(&c)? };
             if let Some(t) = t.filter(Py::truthy) {
                 if t.get("request_s_median").is_some() {
                     let first = Py::List(vec![Py::dict()]);
@@ -898,6 +903,21 @@ fn json_files(dir: &Path, prefix: &str) -> Vec<PathBuf> {
     v
 }
 
+/// `basename`: the last component, trailing slashes ignored; `.` and `..`
+/// as themselves, `/` for the root.
+fn basename(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    let t = s.trim_end_matches('/');
+    if t.is_empty() {
+        return if s.is_empty() {
+            String::new()
+        } else {
+            "/".into()
+        };
+    }
+    t.rsplit('/').next().unwrap_or(t).to_owned()
+}
+
 /// `timings.sh <run dir>`: `timings.md`'s text.
 pub fn timings(run: &Path) -> R<String> {
     let reports = run.join("remote");
@@ -905,7 +925,7 @@ pub fn timings(run: &Path) -> R<String> {
     if files.is_empty() {
         return Err(format!("no stage reports in {}", reports.display()));
     }
-    let base = name_of(&run.components().collect::<PathBuf>());
+    let base = basename(run);
     let mut out = format!("# Test timings — {base}\n\n");
     let strict = |p: &Path| -> R<Py> { pyfmt::load(p).map_err(|e| format!("jq: {e}")) };
     let s = run.join("summary.json");
@@ -1034,5 +1054,14 @@ mod tests {
             after_gpucheck_out(&Py::Str("/x/gpucheck-out/a/b.mp4".into())).unwrap(),
             "a/b.mp4"
         );
+        for (p, want) in [
+            (".", "."),
+            ("..", ".."),
+            ("a/b/", "b"),
+            ("/", "/"),
+            ("x/..", ".."),
+        ] {
+            assert_eq!(basename(Path::new(p)), want, "{p}");
+        }
     }
 }

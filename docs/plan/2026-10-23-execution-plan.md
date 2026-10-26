@@ -1331,3 +1331,15 @@ ran (pod id, $/hr), result, cost.
   `sol_bench_table.py` and the `*-summary.py` deleted, `hd_report.py` and
   `timings.sh` kept until their callers move. Gates on build pod
   `8gg7uz30x3nesu` (the coordinator's clone of `k66zz15an4sktc`). No GPU cost.
+- 2026-10-26, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): #198 review fixes
+  (ADR-0019 §13.3, §13.4): the tree fetch refuses listing entries that are not
+  a single name inside the run directory (absolute, `..`, `./`, `/` `\` NUL
+  once decoded, malformed `%`), caps the depth at 16, streams each file with a
+  size cap (`Http::download_capped`, additive in fastvideo-deploy, the reqwest
+  client stops on `Content-Length` or mid-stream) into a temporary name,
+  retries the top-level listing 5 times and always fetches `RUN_FILES` / `DONE`;
+  GNU `\<` `\>` `` \` `` `\'` refused in `--fetch-skip`; `FV_FETCH_MAX_MB` must be
+  decimal; strict JSON (Python's grammar, no lone surrogate); `sol_timings`
+  globs dotfiles as `Path.glob`; jq's `-0` and `basename .`; no `--jpg-out`; a
+  synthetic hd run covers `## streams`; a reverse `live.log` check; CI path
+  filters widened. No GPU cost.

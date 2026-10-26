@@ -253,6 +253,39 @@ pub trait Http {
     /// GET `url` into `dest` (created or truncated); the bytes written. A
     /// non-2xx status is an error.
     fn download(&self, url: &str, dest: &Path, timeout: Duration) -> Result<u64, SysError>;
+
+    /// [`Http::download`] with a size cap: a body of more than `max` bytes is
+    /// an error ([`too_large`]) and `dest` is removed. The default downloads
+    /// in full and checks after (the fakes); the reqwest client refuses on the
+    /// response's `Content-Length` and stops mid-stream past `max`, so a large
+    /// file is never held whole. Any other failure removes `dest` too.
+    fn download_capped(
+        &self,
+        url: &str,
+        dest: &Path,
+        timeout: Duration,
+        max: u64,
+    ) -> Result<u64, SysError> {
+        match self.download(url, dest, timeout) {
+            Ok(n) if n <= max => Ok(n),
+            Ok(_) => {
+                let _ = std::fs::remove_file(dest);
+                Err(too_large(url, max))
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(dest);
+                Err(e)
+            }
+        }
+    }
+}
+
+/// The error of [`Http::download_capped`] past its cap.
+pub fn too_large(url: &str, max: u64) -> SysError {
+    SysError::Http {
+        url: url.to_owned(),
+        why: format!("larger than the {max}-byte limit"),
+    }
 }
 
 /// Time.

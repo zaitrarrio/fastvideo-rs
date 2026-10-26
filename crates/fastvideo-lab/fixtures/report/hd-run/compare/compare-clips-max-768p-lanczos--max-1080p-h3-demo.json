@@ -1,0 +1,7 @@
+{
+  "stage": "compare-clips-max-768p-lanczos--max-1080p-h3-demo",
+  "status": "pass",
+  "context": {
+    "psnr_mean": 31.5
+  }
+}

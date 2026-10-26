@@ -12,9 +12,12 @@ wall-clock backstop, polls its `status.tsv` over the HTTPS proxy, fetches the
 results and deletes the pod (`up | status | fetch | down`). `<name>-pod.sh`
 runs on the pod: it fetches the trees from the plan, runs the cells
 (generations, parity, LPIPS / PSNR, timings) and writes `status.tsv` beside
-the artifacts. `<name>-summary.py` (and `<name>-plan.py` where the plan is
-shaped per arm) turns a fetched results directory into the tables quoted in
-the port's write-up. Shared tooling stays one level up in `scripts/gpu/`
+the artifacts. `<name>-plan.py`, where the plan is shaped per arm, builds the
+weights plan. For `h3-graphs`, `h3-tier-options`, `h3-trim-nvfp4` and
+`fasth3-nvfp4`, the tables quoted in the write-up come from `fv-lab report
+summary --kind <name> DIR [--json OUT]`, which replaced their
+`<name>-summary.py` line for line in D1c (docs/adr/0019-fv-lab.md §13).
+Shared tooling stays one level up in `scripts/gpu/`
 (`lib.sh`, `volumes.sh`, `runpod-cuda.sh`, `r2-*.py`, `upstream/`); the
 drivers reach it through `$GPU`. What each experiment measured and found is
 in `docs/ports/*.md` (`h3-trim.md`, `vdn-h3.md`, `h3-turbo-loras.md`,

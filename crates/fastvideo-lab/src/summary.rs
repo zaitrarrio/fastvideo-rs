@@ -19,7 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::pyfmt::{self, dumps, head_chars, ljust, tuple_repr};
+use crate::pyfmt::{self, dumps, head_chars, ljust, tuple_repr, Py};
 
 /// The tiers whose script branch printed summary lines, and the families the
 /// lines came from (a restored tier prints its mode's family's lines).
@@ -348,18 +348,27 @@ pub fn hd_streams(ffprobe_json: &str) -> Result<String, String> {
         ffprobe_json
     };
     let v = pyfmt::loads(text)?;
-    let rows: Vec<String> = v
-        .at("streams")
-        .as_list()
+    // `json.loads(out or "{}").get("streams", [])`: a non-object raises, and
+    // so does a `streams` that is not a list of objects.
+    let Py::Dict(_) = &v else {
+        return Err("ffprobe: the output is not a JSON object".into());
+    };
+    let streams = match v.get("streams") {
+        None => &[][..],
+        Some(Py::List(items)) => items.as_slice(),
+        Some(other) => return Err(format!("ffprobe: streams is {}", pyfmt::repr(other))),
+    };
+    let rows: Vec<String> = streams
         .iter()
-        .map(|s| {
-            tuple_repr(&[
+        .map(|s| match s {
+            Py::Dict(_) => Ok(tuple_repr(&[
                 s.at("codec_type").clone(),
                 s.at("duration").clone(),
                 s.at("nb_frames").clone(),
-            ])
+            ])),
+            other => Err(format!("ffprobe: a stream is {}", pyfmt::repr(other))),
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     Ok(format!("[{}]", rows.join(", ")))
 }
 
@@ -372,10 +381,12 @@ fn glob_names(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// `hd_report.py <run> [--jpg-out DIR]` without the keyframe sharpness:
-/// each keyframe set is listed `not computed` (docs/adr/0019-fv-lab.md §13).
-/// `ffprobe` is a process, as in the script.
-pub fn hd_summary(run: &Path, jpg_out: Option<&Path>) -> Result<String, String> {
+/// `hd_report.py <run>` without the keyframe sharpness: each keyframe set is
+/// listed `not computed` (docs/adr/0019-fv-lab.md §13.4). `ffprobe` (the
+/// program to run, `ffprobe` on `PATH` from the CLI) is a process, as in the
+/// script. The script's `--jpg-out DIR` made the directory and printed a
+/// `## crops` header and wrote no crop; fv-lab has no such option.
+pub fn hd_summary(run: &Path, ffprobe: &std::ffi::OsStr) -> Result<String, String> {
     let mut out = String::from("## cells\n");
     for cell in HD_CELLS {
         let p = run.join(cell).join("benchmark.json");
@@ -433,7 +444,7 @@ pub fn hd_summary(run: &Path, jpg_out: Option<&Path>) -> Result<String, String> 
     }
     mp4s.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
     for rel in mp4s {
-        let o = std::process::Command::new("ffprobe")
+        let o = std::process::Command::new(ffprobe)
             .args([
                 "-v",
                 "error",
@@ -447,10 +458,6 @@ pub fn hd_summary(run: &Path, jpg_out: Option<&Path>) -> Result<String, String> 
             .map_err(|e| format!("ffprobe: {e}"))?;
         let streams = hd_streams(&String::from_utf8_lossy(&o.stdout))?;
         out.push_str(&format!("{} {streams}\n", rel.display()));
-    }
-    if let Some(dir) = jpg_out {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        out.push_str(&format!("## crops -> {}\n", dir.display()));
     }
     Ok(out)
 }
@@ -491,6 +498,15 @@ mod tests {
             "[('video', '5.041667', '121'), ('audio', '5.04', None)]"
         );
         assert_eq!(hd_streams("").unwrap(), "[]");
+        for bad in [
+            "[]",
+            r#"{"streams": {"a": 1}}"#,
+            r#"{"streams": [1]}"#,
+            r#"{"streams": null}"#,
+            "{",
+        ] {
+            assert!(hd_streams(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
