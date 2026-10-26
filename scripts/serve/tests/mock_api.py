@@ -9,8 +9,11 @@
 - fv-serve pods: /pod/<id>/health, /pod/<id>/fv/v1/internal/{drain,status}
 - test hooks: GET /__state, POST /__seed (merge), POST /__tag {tag, digest},
   POST /__build {sha, keys} (a build's images and sha tags), POST /__sql {sql},
-  GET /__log?since=N (the requests from the N-th on: method, path, JSON body;
-  the request goldens of scripts/serve/tests/fv-deploy-goldens.sh)
+  GET /__log?since=N (the requests from the N-th on: n, method, path, JSON
+  body; a /__tag retag is logged too, as method RETAG, so the log is one
+  global sequence; the request goldens of scripts/serve/tests/fv-deploy-goldens.sh),
+  POST /__fail {m, p, sql, status, times} (the next `times` requests with
+  that method and path prefix, and SQL prefix for D1, answer `status`)
 
 A manifest's digest is the SHA-256 of the bytes served, as in a real
 registry (fv-deploy computes it from the body; the scripts read the
@@ -57,6 +60,8 @@ STATE = {
 # Every request but the test hooks, in order: {m, p, body} (body: the JSON
 # sent, or null).
 LOG = []
+# Failure rules (POST /__fail).
+FAIL = []
 
 
 def now_str():
@@ -128,13 +133,24 @@ class H(BaseHTTPRequestHandler):
         if p == "/__log":
             since = int(q.split("since=")[1]) if "since=" in q else 0
             return self.reply(200, {"next": len(LOG), "requests": LOG[since:]})
-        if not p.startswith("/__"):
+        if p == "/__fail":
+            FAIL.append(self.body())
+            return self.reply(200, {"ok": True})
+        if not p.startswith("/__") or p == "/__tag":
             raw = self.raw_body()
             try:
                 logged = json.loads(raw) if raw else None
             except ValueError:
                 logged = raw.decode("utf-8", "replace")
-            LOG.append({"m": m, "p": self.path, "body": logged})
+            LOG.append({"n": len(LOG), "m": "RETAG" if p == "/__tag" else m, "p": self.path, "body": logged})
+            for rule in FAIL:
+                sql = logged.get("sql", "") if isinstance(logged, dict) else ""
+                if rule.get("times", 0) > 0 and rule.get("m") == m and p.startswith(rule.get("p", "")) \
+                        and sql.lstrip().startswith(rule.get("sql", "")):
+                    rule["times"] -= 1
+                    if p.startswith("/client/v4/"):
+                        return self.reply(rule["status"], {"success": False, "errors": [{"message": "injected failure"}]})
+                    return self.reply(rule["status"], {"error": "injected failure"})
         if p == "/__state":
             return self.reply(200, STATE)
         if p == "/__seed":

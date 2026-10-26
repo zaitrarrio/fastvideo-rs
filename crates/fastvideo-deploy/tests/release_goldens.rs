@@ -8,7 +8,8 @@
 //! and asserts the same retags, Runpod writes, D1 writes, dispatches and
 //! stdout, normalized the same way (digests as symbols, times as `<now>`).
 //! The deployments rows of `fv-deploy up` differ from the scripts' only
-//! where §10.3 says. Skipped without python3 (as `boot_r2.rs`).
+//! where §10.3 says. Skipped without python3 (as `boot_r2.rs`), except in CI
+//! (`CI` set), where a missing python3 fails.
 
 use std::cell::RefCell;
 use std::io::{Read as _, Write as _};
@@ -306,6 +307,32 @@ fn effects(
         .filter(|r| p(r).ends_with("/dispatches"))
         .map(|r| r["body"].clone())
         .collect();
+    // One global sequence (the mock logs the docker stub's retags too): the
+    // order of retags, Runpod writes, D1 writes and dispatches.
+    let order: Vec<String> = reqs
+        .iter()
+        .filter_map(|r| {
+            let path = p(r).split('?').next().unwrap_or("").to_owned();
+            let m = r["m"].as_str().unwrap_or("");
+            if m == "RETAG" {
+                Some(format!("retag {}", r["body"]["tag"].as_str().unwrap_or("")))
+            } else if path.starts_with("/v1/") && m != "GET" {
+                Some(format!("{m} {path}"))
+            } else if path.ends_with("/query") {
+                let sql = collapse(r["body"]["sql"].as_str().unwrap_or(""));
+                let w: Vec<&str> = sql.split(' ').collect();
+                match w.first() {
+                    Some(&"INSERT") => Some(format!("d1 INSERT {}", w.get(2).unwrap_or(&""))),
+                    Some(&"UPDATE") => Some(format!("d1 UPDATE {}", w.get(1).unwrap_or(&""))),
+                    _ => None,
+                }
+            } else if path.ends_with("/dispatches") {
+                Some("dispatch".into())
+            } else {
+                None
+            }
+        })
+        .collect();
     normalize(
         json!({
             "ok": ok,
@@ -314,6 +341,7 @@ fn effects(
             "runpod": runpod,
             "d1": d1,
             "dispatch": dispatch,
+            "order": order,
         }),
         syms,
     )
@@ -351,6 +379,11 @@ type Ran = (bool, Vec<String>);
 #[test]
 fn release_templates_and_reconcile_send_what_the_scripts_send() {
     if which("python3", std::env::var("PATH").ok().as_deref()).is_none() {
+        // In CI a missing python3 must fail, not pass by skipping.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "no python3 on PATH in CI: the release goldens cannot run"
+        );
         eprintln!("skipped: no python3 on PATH");
         return;
     }
@@ -683,6 +716,28 @@ fn release_templates_and_reconcile_send_what_the_scripts_send() {
     );
     sc!("registry-endpoint", &[], |c| record(c, &ep_l, &ep_i));
 
+    // ---- partial failures (fv-deploy-release-goldens.sh's order)
+    call(
+        &base,
+        Method::Post,
+        "/__fail",
+        Some(json!({"m": "PATCH", "p": "/v1/templates/", "status": 500, "times": 1})),
+    );
+    sc!("promote-template-fails", &[], |c| promote::promote(
+        c, "aaaaaaa", "stable", &local
+    ));
+    call(
+        &base,
+        Method::Post,
+        "/__fail",
+        Some(
+            json!({"m": "POST", "p": "/client/v4/", "sql": "INSERT INTO releases", "status": 500, "times": 1}),
+        ),
+    );
+    sc!("promote-insert-fails", &[], |c| promote::promote(
+        c, "aaaaaaa", "canary", &local
+    ));
+
     // ---- compare
     let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
     let want_names: Vec<&str> = want.iter().filter_map(|s| s["name"].as_str()).collect();
@@ -707,6 +762,35 @@ fn release_templates_and_reconcile_send_what_the_scripts_send() {
             g, w,
             "scenario {name}: fv-deploy (left) vs the script (right)"
         );
+    }
+    // Review fix (#199): the row names the channel the launch follows
+    // (`up --channel`, its FV_RELEASE_CHANNEL), not this process's.
+    {
+        let env = BootEnv::from_pairs(base_env(&base));
+        let (log, out) = (Lines::default(), Lines::default());
+        let ctx = release::Ctx::new(&repo, &http, &docker, &clock, &env, &log, &out);
+        let (mut l, i) = up_instance(
+            ProviderKind::RunpodPod,
+            &b_cuda,
+            "fv-deploy-h3-turbo-1",
+            "pod-chan-1",
+        );
+        l.env.insert("FV_RELEASE_CHANNEL".into(), "canary".into());
+        let d1 = ctx.d1().unwrap_or_else(|| panic!("no D1"));
+        let reg = Registry::new(&d1, &clock, &env);
+        D1Recorder { registry: &reg }
+            .created(&l, &i)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let row = call(
+            &base,
+            Method::Post,
+            "/__sql",
+            Some(
+                json!({"sql": "SELECT channel, created_by FROM deployments WHERE id = 'pod:pod-chan-1'"}),
+            ),
+        );
+        assert_eq!(row[0]["channel"], "canary", "{row}");
+        assert_eq!(row[0]["created_by"], "test/fv-deploy", "{row}");
     }
     let all = got.iter().map(|(_, v)| v.to_string()).collect::<String>();
     for s in [

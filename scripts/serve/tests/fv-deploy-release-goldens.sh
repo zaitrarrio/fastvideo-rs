@@ -101,7 +101,14 @@ scenario() {
       d1: [$reqs[] | select(.p | endswith("/query")) | .body
            | {sql: (.sql | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ")), params: (.params // [])}
            | select(.sql | test("^(INSERT|UPDATE) ")) | [.sql, .params]],
-      dispatch: [$reqs[] | select(.p | endswith("/dispatches")) | .body]}]' <<<"$SCEN")"
+      dispatch: [$reqs[] | select(.p | endswith("/dispatches")) | .body],
+      order: [$reqs[] | (.p | split("?")[0]) as $path
+        | if .m == "RETAG" then "retag " + .body.tag
+          elif ($path | startswith("/v1/")) and .m != "GET" then .m + " " + $path
+          elif ($path | endswith("/query")) then (.body.sql | gsub("\\s+"; " ") | ltrimstr(" ") | split(" ")) as $w
+            | if $w[0] == "INSERT" then "d1 INSERT " + $w[2] elif $w[0] == "UPDATE" then "d1 UPDATE " + $w[1] else empty end
+          elif ($path | endswith("/dispatches")) then "dispatch"
+          else empty end]}]' <<<"$SCEN")"
   ENVS=()
 }
 ENVS=()
@@ -180,8 +187,18 @@ scenario reconcile-drift release reconcile
 scenario reconcile-fix release reconcile --fix
 
 # ---- the deployments rows of the deploy scripts ------------------------------------------------------------------
+# (after them: partial failures)
 scenario registry-pod registry pod "$(ref "$DB" cuda)"
 scenario registry-endpoint registry endpoint "$(ref "$DB" cuda)"
+
+# ---- partial failures: the order of the effects, and where each stops --------------------------------------------
+# A template PATCH answers 500 after the retags: the sync fails, nothing is recorded in D1.
+hook __fail '{"m": "PATCH", "p": "/v1/templates/", "status": 500, "times": 1}' >/dev/null
+scenario promote-template-fails release promote aaaaaaa stable --local
+# The release INSERT answers 500 after the retags (a channel the templates do not follow): the images moved, the
+# release is not recorded, and the command fails saying so.
+hook __fail '{"m": "POST", "p": "/client/v4/", "sql": "INSERT INTO releases", "status": 500, "times": 1}' >/dev/null
+scenario promote-insert-fails release promote aaaaaaa canary --local
 
 # Normalized: digests as symbols, millisecond times as <now>, created template ids as <new template>.
 jq -S --argjson syms "$SYMS" '

@@ -19,6 +19,7 @@
       "env": [],
       "name": "promote-dry-run",
       "ok": true,
+      "order": [],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -58,6 +59,9 @@
       "env": [],
       "name": "promote-dispatch",
       "ok": true,
+      "order": [
+        "dispatch"
+      ],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -96,6 +100,15 @@
       "env": [],
       "name": "promote",
       "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "PATCH /v1/templates/tpl-cuda-sls",
+        "PATCH /v1/templates/tpl-cuda-pod",
+        "PATCH /v1/templates/tpl-cpu-pod",
+        "d1 INSERT releases"
+      ],
       "prog": "release",
       "retags": [
         [
@@ -224,6 +237,7 @@
       "env": [],
       "name": "promote-again",
       "ok": true,
+      "order": [],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -259,6 +273,14 @@
       "env": [],
       "name": "promote-latest",
       "ok": true,
+      "order": [
+        "retag cpu-latest",
+        "retag cpu",
+        "retag cuda-latest",
+        "retag cuda",
+        "retag latest",
+        "d1 INSERT releases"
+      ],
       "prog": "release",
       "retags": [
         [
@@ -299,6 +321,7 @@
       "env": [],
       "name": "promote-missing-image",
       "ok": false,
+      "order": [],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -333,6 +356,12 @@
       "env": [],
       "name": "promote-digest",
       "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "d1 INSERT releases"
+      ],
       "prog": "release",
       "retags": [
         [
@@ -365,6 +394,7 @@
       "env": [],
       "name": "rollback-dry-run",
       "ok": true,
+      "order": [],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -414,6 +444,13 @@
       "env": [],
       "name": "rollback",
       "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "d1 UPDATE releases",
+        "d1 INSERT releases"
+      ],
       "prog": "release",
       "retags": [
         [
@@ -445,6 +482,7 @@
       "env": [],
       "name": "rollback-again",
       "ok": false,
+      "order": [],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -488,6 +526,16 @@
       "env": [],
       "name": "rollback-to",
       "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "PATCH /v1/templates/tpl-cuda-sls",
+        "PATCH /v1/templates/tpl-cuda-pod",
+        "PATCH /v1/templates/tpl-cpu-pod",
+        "d1 UPDATE releases",
+        "d1 INSERT releases"
+      ],
       "prog": "release",
       "retags": [
         [
@@ -629,6 +677,9 @@
       "env": [],
       "name": "rollback-dispatch",
       "ok": true,
+      "order": [
+        "dispatch"
+      ],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -650,6 +701,7 @@
       "env": [],
       "name": "rollback-partial-refused",
       "ok": false,
+      "order": [],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -694,6 +746,14 @@
       "env": [],
       "name": "rollback-partial",
       "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag stable",
+        "retag h3-turbo-stable",
+        "PATCH /v1/templates/tpl-cpu-pod",
+        "d1 UPDATE releases",
+        "d1 INSERT releases"
+      ],
       "prog": "release",
       "retags": [
         [
@@ -784,6 +844,14 @@
       "env": [],
       "name": "rollback-back",
       "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "PATCH /v1/templates/tpl-cpu-pod",
+        "d1 UPDATE releases",
+        "d1 INSERT releases"
+      ],
       "prog": "release",
       "retags": [
         [
@@ -849,6 +917,7 @@
       ],
       "name": "templates-same",
       "ok": true,
+      "order": [],
       "prog": "templates",
       "retags": [],
       "runpod": [],
@@ -867,6 +936,9 @@
       ],
       "name": "templates-create",
       "ok": true,
+      "order": [
+        "POST /v1/templates"
+      ],
       "prog": "templates",
       "retags": [],
       "runpod": [
@@ -920,6 +992,10 @@
       ],
       "name": "templates-update",
       "ok": true,
+      "order": [
+        "PATCH /v1/templates/tpl-cuda-sls",
+        "PATCH /v1/templates/tpl-cuda-pod"
+      ],
       "prog": "templates",
       "retags": [],
       "runpod": [
@@ -1003,6 +1079,7 @@
       "env": [],
       "name": "templates-unknown",
       "ok": false,
+      "order": [],
       "prog": "templates",
       "retags": [],
       "runpod": [],
@@ -1019,6 +1096,7 @@
       "env": [],
       "name": "templates-tag",
       "ok": false,
+      "order": [],
       "prog": "templates",
       "retags": [],
       "runpod": [],
@@ -1034,6 +1112,7 @@
       "env": [],
       "name": "reconcile-dry-run",
       "ok": true,
+      "order": [],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -1107,6 +1186,11 @@
       "env": [],
       "name": "reconcile-adopt",
       "ok": true,
+      "order": [
+        "d1 UPDATE deployments",
+        "d1 INSERT deployments",
+        "d1 INSERT deployments"
+      ],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -1128,6 +1212,7 @@
       "env": [],
       "name": "reconcile-drift",
       "ok": true,
+      "order": [],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -1158,6 +1243,9 @@
       "env": [],
       "name": "reconcile-fix",
       "ok": true,
+      "order": [
+        "d1 UPDATE deployments"
+      ],
       "prog": "release",
       "retags": [],
       "runpod": [],
@@ -1225,6 +1313,12 @@
       "env": [],
       "name": "registry-pod",
       "ok": true,
+      "order": [
+        "d1 INSERT deployments",
+        "d1 UPDATE deployments",
+        "d1 UPDATE deployments",
+        "d1 UPDATE deployments"
+      ],
       "prog": "registry",
       "retags": [],
       "runpod": [],
@@ -1286,8 +1380,133 @@
       "env": [],
       "name": "registry-endpoint",
       "ok": true,
+      "order": [
+        "d1 INSERT deployments",
+        "d1 UPDATE deployments",
+        "d1 UPDATE deployments",
+        "d1 UPDATE deployments"
+      ],
       "prog": "registry",
       "retags": [],
+      "runpod": [],
+      "stdout": []
+    },
+    {
+      "args": [
+        "promote",
+        "aaaaaaa",
+        "stable",
+        "--local"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "promote-template-fails",
+      "ok": false,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "PATCH /v1/templates/tpl-cuda-sls"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>"
+        ]
+      ],
+      "runpod": [
+        [
+          "PATCH",
+          "/v1/templates/tpl-cuda-sls",
+          {
+            "containerDiskInGb": 20,
+            "env": {
+              "FV_AUTH_MODE": "trust-gateway",
+              "FV_CACHE_DIR": "/fvstate/cache",
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<A.cuda>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "runpod-queue",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/runpod-volume/weights",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "name": "fv-serve-cuda-sls",
+            "readme": "fv-serve cuda (sls), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0
+          }
+        ]
+      ],
+      "stdout": []
+    },
+    {
+      "args": [
+        "promote",
+        "aaaaaaa",
+        "canary",
+        "--local"
+      ],
+      "d1": [
+        [
+          "INSERT INTO releases (channel, git_sha, digests, action, promoted_at, promoted_by, notes, run_url, templates_updated, source_release) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+          [
+            "canary",
+            "aaaaaaa111111111111111111111111111111111",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
+            "promote",
+            "<now>",
+            "test",
+            null,
+            null,
+            0,
+            null
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "promote-insert-fails",
+      "ok": false,
+      "order": [
+        "retag cpu-canary",
+        "retag cuda-canary",
+        "retag canary",
+        "d1 INSERT releases"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-canary",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-canary",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:canary",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>"
+        ]
+      ],
       "runpod": [],
       "stdout": []
     }
