@@ -2088,4 +2088,5 @@ Project code: FVID
 - Reversibility: high (additive fields; the script branch, `oracle.sh` and every pod body unchanged)
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §20
+- Review (2026-10-26, coordinator): the compare rule (values alone differing reported, not a failure) accepted, tightened to ffmpeg SSIM / PSNR values with probe lines byte for byte and the run tag normalised; the GPU check waits for a balance top-up and the merge
 - Verification: `tests/dry_run.rs::the_extra_cells_dry_run_as_the_script_with_their_targets` (145 golden lines, 87 metric commands), `tests/repeats_oracle.rs::clip_metrics_report_as_the_script`, `plan::tests::metrics_*`, `plan::tests::extra_cells_run_on_request`, `tests/oracle_driver.rs::the_plan_takes_the_extra_cells_by_arm`, `tests/schema.rs`, `fv-lab-goldens.sh --check` (the existing `oracle` fixtures unchanged); GPU check §20.7 pending (the coordinator's)

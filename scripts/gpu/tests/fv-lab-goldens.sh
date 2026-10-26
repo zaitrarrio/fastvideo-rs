@@ -343,24 +343,44 @@ for bad in dc dd de; do
   if clean bash "$CMP" "$TMP/da" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a hash or dump difference ($bad)" >&2; rc=1; fi
 done
 # The derived-clip reports (ADR-0019 §20): metrics.txt equal passes; only
-# its values differing passes and is reported; a line missing, another
-# order, or a report in one run only fails.
-cp -a "$TMP/rb" "$TMP/ma"; cp -a "$TMP/rb" "$TMP/mb"
-for r in ma mb; do
-  mkdir -p "$TMP/$r/oracle-t-frames"
-  printf '%s\n' 'ours: stream|codec_type=video|nb_frames=121' 'ours vs reference clip ssim: SSIM All:0.98' >"$TMP/$r/oracle-t-frames/metrics.txt"
-done
+# measured values (ffmpeg's SSIM / PSNR form) differing passes and is
+# reported; a `missing` line naming each run's own tag is the same; a line
+# missing, another order, a probe line differing, an empty or failed value
+# differing, or a report in one run only fails.
+mrep() { # <run dir> <lines…>: oracle-t-frames/metrics.txt
+  local d="$1"; shift
+  mkdir -p "$d/oracle-t-frames"; printf '%s\n' "$@" >"$d/oracle-t-frames/metrics.txt"
+}
+MP='ours: stream|codec_type=video|codec_name=h264|width=768|height=512|r_frame_rate=24/1|nb_frames=121'
+MS='ours vs reference clip ssim: SSIM Y:0.973852 (15.823547) U:0.983741 (17.887766) V:0.985163 (18.285787) All:0.977661 (16.509891)'
+MQ='ours vs reference clip psnr: PSNR y:38.29 u:44.98 v:45.73 average:39.60 min:35.25 max:inf'
+for r in ma mb mc md me mf mg mh mi mj mk ml; do cp -a "$TMP/rb" "$TMP/$r"; done
+mrep "$TMP/ma" "$MP" "$MS" "$MQ"; mrep "$TMP/mb" "$MP" "$MS" "$MQ"
 clean bash "$CMP" "$TMP/ma" "$TMP/mb" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on equal metrics reports" >&2; rc=1; }
-cp -a "$TMP/mb" "$TMP/mc"; sed -i 's/0.98/0.97/' "$TMP/mc/oracle-t-frames/metrics.txt"
+mrep "$TMP/mc" "$MP" "${MS/0.977661/0.977660}" "${MQ/average:39.60/average:39.61}"
 out="$(clean bash "$CMP" "$TMP/ma" "$TMP/mc" || echo FAILED)"
 { grep -q '^metrics oracle-t-frames/metrics.txt: the same measurements, values differ' <<<"$out" && ! grep -q FAILED <<<"$out"; } \
   || { echo "fv-lab-goldens: compare-runs judged a metrics report whose values alone differ" >&2; rc=1; }
-cp -a "$TMP/mb" "$TMP/md"; sed -i '1d' "$TMP/md/oracle-t-frames/metrics.txt"
-cp -a "$TMP/mb" "$TMP/me"; printf '%s\n' 'ours vs reference clip ssim: SSIM All:0.98' 'ours: stream|codec_type=video|nb_frames=121' >"$TMP/me/oracle-t-frames/metrics.txt"
-cp -a "$TMP/mb" "$TMP/mf"; rm "$TMP/mf/oracle-t-frames/metrics.txt"
-for bad in md me mf; do
+# A clip missing in both runs: its line names each run's own directory (the tags differ).
+mrep "$TMP/mk" 'ours missing /fvscratch/runs/oracle/abc1234-1026120000-beef/oracle-t/frames/output.mp4'
+mrep "$TMP/ml" 'ours missing /fvscratch/runs/oracle/abc1234-10261200/oracle-t/frames/output.mp4'
+out="$(clean bash "$CMP" "$TMP/mk" "$TMP/ml" || echo FAILED)"
+{ grep -qx 'same oracle-t-frames/metrics.txt' <<<"$out" && ! grep -q FAILED <<<"$out"; } \
+  || { echo "fv-lab-goldens: compare-runs read a missing clip of two run tags as a difference" >&2; rc=1; }
+mrep "$TMP/md" "$MS" "$MQ"                                         # a line missing
+mrep "$TMP/me" "$MS" "$MP" "$MQ"                                   # another order
+mrep "$TMP/mf" "${MP/nb_frames=121/nb_frames=120}" "$MS" "$MQ"      # a probe line differing
+mrep "$TMP/mg" "$MP" 'ours vs reference clip ssim: ' "$MQ"          # an empty value
+mrep "$TMP/mh" "$MP" 'ours vs reference clip ssim: Conversion failed!' "$MQ"   # a failed one
+mrep "$TMP/mi" "$MP" "${MS/clip ssim/clip psnr}" "$MQ"              # other words
+rm "$TMP/mj/oracle-t-frames" -rf                                   # in one run only
+for bad in md me mf mg mh mi mj; do
   if clean bash "$CMP" "$TMP/ma" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a metrics difference ($bad)" >&2; rc=1; fi
 done
+# The same empty or failed value in both runs is the same report.
+cp -a "$TMP/mg" "$TMP/mg2"; cp -a "$TMP/mh" "$TMP/mh2"
+clean bash "$CMP" "$TMP/mg" "$TMP/mg2" >/dev/null && clean bash "$CMP" "$TMP/mh" "$TMP/mh2" >/dev/null \
+  || { echo "fv-lab-goldens: compare-runs failed on the same empty or failed value in both runs" >&2; rc=1; }
 # Control arms (ADR-0019 §15.7): an arm a cell lists in `[repeats] controls`
 # (the timed-pick control) is reported, not judged. Cells of their own
 # (--cells): r1, r2 and tcx judged, tc a control (a multi-line array), tj a

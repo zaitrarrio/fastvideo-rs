@@ -1370,7 +1370,7 @@ Audio: male speech, clear voice, quiet room"
           done
         done
         cp "$ref/dump/ref.mp4" "$fm/reference.mp4" 2>/dev/null || true
-        sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
+        [[ ! -f "$fm/metrics.txt" ]] || sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
       fi
       # Audio-to-video: -ownaud decodes and encodes the driving audio on our
       # own (no reference waveform or latent injected), then the clips (ours,
@@ -1398,7 +1398,7 @@ Audio: male speech, clear voice, quiet room"
             echo "ours vs reference clip $m: ${r##*] }" >>"$fm/metrics.txt"
           done
         fi
-        sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
+        [[ ! -f "$fm/metrics.txt" ]] || sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
       fi
       # Retake / extend: -ownenc decodes and encodes the source (video and
       # audio) on our own; then the clips (ours, ownenc, the reference's) and
@@ -1441,7 +1441,7 @@ Audio: male speech, clear voice, quiet room"
             echo "ours vs reference clip $m: ${r##*] }" >>"$fm/metrics.txt"
           done
         fi
-        sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
+        [[ ! -f "$fm/metrics.txt" ]] || sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
       fi
       if [[ "$target" == ltx25-i2v || "$target" == ltx25-kf || "$target" == ltx25-a2v-i2v ]]; then
         # (ltx25-a2v-i2v: its -ownaud run above already encodes the image on our own.)
@@ -1473,7 +1473,7 @@ Audio: male speech, clear voice, quiet room"
             done
           done
         done
-        sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
+        [[ ! -f "$fm/metrics.txt" ]] || sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
       fi
       if [[ "$target" == sfwan* ]]; then
         # Frames: the reference's mp4 (its full VAE, bf16 decode, then its

@@ -178,6 +178,10 @@ printf '#!/bin/sh\necho fv-lab 0.1.11\n' >"$tmp/pre/gpucheck/out/fv-lab"; chmod 
 check "contexts: a release with fv-lab replaces lab-build" "oxide=$tmp/pre/oxide binary=$tmp/pre/gpucheck lab-build=$tmp/pre/gpucheck" \
   "$(bash "$P" contexts "$tmp/pre" oxide gpucheck | paste -sd' ')"
 check "contexts: no gpucheck set, no lab-build" "oxide=$tmp/pre/oxide" "$(bash "$P" contexts "$tmp/pre" oxide | paste -sd' ')"
+# A stale release's fv-lab is not used (ADR-0019 §20): the runtime image ships this commit's lab/, which an older
+# fv-lab may refuse (deny_unknown_fields) in the smoke step's `fv-lab check`, after the sha-<7> tag is pushed.
+check "contexts --stale: an older release's fv-lab is not used (lab-build compiles)" "oxide=$tmp/pre/oxide binary=$tmp/pre/gpucheck" \
+  "$(bash "$P" contexts --stale "$tmp/pre" oxide gpucheck | paste -sd' ')"
 # prebuilt.sh fetch end to end (offline: FV_TOOLS_RELEASES_FILE lists the release, FV_TOOLS_ASSETS_DIR serves its
 # assets): which fv-boot the images get. Exact or pinned: the release's; stale (main's FV_PREBUILT_STALE=latest): this
 # checkout's (no boot-build=), and the notice says why; a release without fv-boot says that instead.

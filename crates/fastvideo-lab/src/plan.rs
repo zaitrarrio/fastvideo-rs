@@ -1368,7 +1368,14 @@ impl CellFile {
                         ));
                     }
                     Measure::KeptFramesVsSource { select, fps, .. } => {
+                        // A `,` not written `\,` ends the filter in ffmpeg's graph.
+                        let sb = select.as_bytes();
+                        let commas_escaped = sb
+                            .iter()
+                            .enumerate()
+                            .all(|(i, &c)| c != b',' || (i > 0 && sb[i - 1] == b'\\'));
                         let ok = !select.is_empty()
+                            && commas_escaped
                             && select.bytes().all(|b| {
                                 b.is_ascii_graphic()
                                     && !matches!(b, b'\'' | b'"' | b'{' | b'}' | b';' | b'[' | b']')
@@ -1377,7 +1384,7 @@ impl CellFile {
                             return Err(field(
                                 file,
                                 at("measure"),
-                                format!("`{select}` is not an ffmpeg select expression (printable, no quotes, braces, `;` or brackets)"),
+                                format!("`{select}` is not an ffmpeg select expression (printable, no quotes, braces, `;` or brackets, every `,` as `\\,`)"),
                             ));
                         }
                         if *fps == 0 {
@@ -3363,6 +3370,16 @@ echo = true
             (
                 "select = 'lt(n\\,33)+gte(n\\,89)'",
                 "select = \"a;b\"",
+                "select expression",
+            ),
+            (
+                "select = 'lt(n\\,33)+gte(n\\,89)'",
+                "select = 'lt(n,33)'",
+                "select expression",
+            ),
+            (
+                "select = 'lt(n\\,33)+gte(n\\,89)'",
+                "select = ',lt(n)'",
                 "select expression",
             ),
             ("fps = 24", "fps = 0", "fps"),

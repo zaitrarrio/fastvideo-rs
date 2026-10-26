@@ -3031,7 +3031,7 @@ block, so the first block's lines appear twice in the log, as in the script).
 Validation: `report` a directory below `{runs}/`; `tag` and labels `[a-z0-9][a-z0-9._-]*`, labels unique per metric;
 every path one placeholder of `{runs}` / `{scratch}` / `{ref}` / `{root}` then `/…`, no `.` / `..`, no quotes (`{ref}`
 only in a cell with a `[reference]`); `select` printable without quotes, braces, `;` or brackets (it sits in a
-quoted filter graph); `fps`, `width`, `height` positive; a metric measures or copies something; an unknown key or
+quoted filter graph); every `,` written `\,` (a bare one ends the filter); `fps`, `width`, `height` positive; a metric measures or copies something; an unknown key or
 kind is refused (`deny_unknown_fields`, `probe` a struct variant so a stray key on it is refused too). Nothing
 names the oracle: `hd`'s keyframe metrics are passes over its arms' clips with these kinds or new ones.
 
@@ -3107,7 +3107,11 @@ Not small, so not here (decision 3). What it needs:
    that are not arms' (`compare_one oracle-sfwan13-frames-vs-ref <ref frames> <our frames>`, `-codec-floor`,
    `-legacy-frames-vs-ref`). Its goldens: the script's dry run with `FV_ORACLE_TARGETS=sfwan13` (a second `fam_env`
    of `fv-lab-goldens.sh`), and the pod body `runpod-http.sh plan` with the tier's disk and idle limit, its R2 env the
-   one allowed difference (as `gold`, §16.6).
+   one allowed difference (as `gold`, §16.6). **Before that golden can be made, the script's `sfwan13` branch needs
+   two dry-run fixes** (not made here): `m="$(ls "$RUNS/oracle-$target"/frames/*.mp4 2>/dev/null | head -1)"` fails
+   under `pipefail` when there is no mp4 (`ls` exits 2), which ends the family, in a dry run (exit 2) and in a real
+   run whose arm wrote no mp4; and its two ffmpeg decode commands are not dry-run-aware (they run, or fail, in a dry
+   run instead of being logged as `metric_dry` logs the clip metrics).
 3. **The `sfwan` family's prelude** (`FV_ORACLE_TARGETS=sfwan13 bash runpod-matrix.sh oracle` with `FV_RUNS_DIR`)
    becomes `fv-lab run oracle-r2 --cells <its arms> --runs-dir "$RUNS"` (that pod then needs the R2 key, or the
    prelude is dropped and `sfwan13` runs on its own through `fv-lab oracle --family oracle-r2`).
@@ -3126,8 +3130,9 @@ Until then `sfwan13` runs as it does (`oracle.sh` with `ORACLE_TARGETS=sfwan13`,
 - **Script changes** (`runpod-matrix.sh oracle`):
   - *dry run only*: each metric command is built as an array and passed to `metric_dry <tag> <cmd…>`, which in a dry
     run logs `dry-run metric <tag>: <printf %q>` and skips it, and the clip checks pass in a dry run (before, the
-    dry run wrote `missing` lines into a scratch `metrics.txt` and logged no command); a real run runs the same argv
-    as before;
+    dry run wrote `missing` lines into a scratch `metrics.txt`, echoed them, 35 un-prefixed `[<target>-frames] …
+    missing …` lines, and logged no command); the echo of `metrics.txt` is skipped when there is none (a dry run's
+    `sed: can't read …` ten times); a real run runs the same argv as before;
   - *a real-run change, failures only*: the metric pipelines end in `|| true`. Under `set -euo pipefail` a
     comparison whose ffmpeg printed no `Parsed_` line (`grep` exits 1) or a failing `ffprobe` ended the whole family
     (`matrix_exit` non-zero, the targets after it never run). Now the value is empty and the run goes on; fv-lab
@@ -3137,21 +3142,34 @@ Until then `sfwan13` runs as it does (`oracle.sh` with `ORACLE_TARGETS=sfwan13`,
     path.
 - **Fakes, both runners** (`tests/repeats_oracle.rs::clip_metrics_report_as_the_script`): the live branch and
   `fv-lab run` on one fake box with fake `ffmpeg` / `ffprobe` (a checksum of their inputs' bytes and of the filter
-  graph, behind `] `), the fixtures, and references for `ltx25-kf`, `ltx25-ref2v`, `ltx25-a2v-i2v`, `ltx25-retake`
-  and `ltx25-retake-a` (whose dump has no `ref.mp4`). Every `metrics.txt` and clip copy is byte-identical (paths of
-  either side's scratch read alike), the log's echoed reports equal, the `missing` and `or ref.mp4` lines, the
-  double echo of a2v-i2v, the dumps (`-ownaud` too) gone. The script copy's `PATH` line puts the fakes first (it
+  graph, behind `] `), the fixtures, and references for all ten targets (`ltx25-retake-a`'s dump without `ref.mp4`;
+  `ltx25-a2v-guided`'s arms skipped on their weights, so its clips are missing). The two sides run under different
+  tags, as two real runs do. Every `metrics.txt` and clip copy is byte-identical (each side's run directory and
+  scratch read alike), the log's echoed reports equal, the `missing` and `or ref.mp4` lines, the double echo of
+  a2v-i2v, the dumps (`-ownaud` too) gone. The script copy's `PATH` line puts the fakes first (it
   prepends `/usr/local/bin`, where a real ffmpeg would shadow them); `ORACLE_REFS_DONE` is fv-lab's alone in a run of
   several targets (§15.5).
 - **A fix found by that test:** the log's lines are now written in one `write` each (`run::raw_line`). With five
   references fetched at once, the fetch threads' `writeln!` (text, then newline) interleaved and split a line.
-- **`fv-lab-compare-runs.sh`** compares every `*/metrics.txt` of either run: byte-identical, or, when only the
-  values differ (each line cut at its last `: ` is the same in both), reported (`metrics <file>: the same
-  measurements, values differ …`) and no difference: the values read the clips' mp4 encodes, and those depend on
-  more than the frames (`frames.sha256.json` covers the PNGs; libx264's output depends on its thread count, which
-  follows the pod's CPUs: UNVERIFIED whether the two pods' encodes are byte-identical). A missing line, another
-  order or a report in one run only is a difference. The summary gains `<n> metrics report(s)`. Self-test in
-  `fv-lab-goldens.sh`.
+- **`fv-lab-compare-runs.sh`** compares every `*/metrics.txt` of either run, each with its run directory part
+  `/runs/<family>/<tag>/` read alike (a `missing` line names the clip's path, and two runs' tags always differ):
+  the same; or the same number of lines, every pair equal or differing only in a **measured value**: the same words
+  before the last `: ` and, on both sides, a value of ffmpeg's SSIM / PSNR form (`SSIM Y:0.97 (15.8) … All:0.98
+  (16.5)`, `PSNR y:38.3 … average:39.6 min:35.3 max:43.9`, `inf` allowed). Such a report is reported (`metrics
+  <file>: the same measurements, values differ …`) and is no difference (the coordinator accepted the rule,
+  2026-10-26): the values read the clips' mp4 encodes, and those depend on more than the frames
+  (`frames.sha256.json` covers the PNGs; libx264's output depends on its thread count, which follows the pod's CPUs:
+  UNVERIFIED whether the two pods' encodes are byte-identical). Everything else is a difference: a line missing or
+  added, another order, a probe line (`<label>: stream|…`: codec, size, frame count and rates follow from the frames)
+  not byte-identical, an empty value or one of another form (`Conversion failed!`) unless the same in both, a report
+  in one run only. The summary gains `<n> metrics report(s)`. Self-tests in `fv-lab-goldens.sh` (each case).
+- **The runtime image's fv-lab** (review of #217, blocking). On main the image workflow takes the newest tools
+  release even when it is older than the commit (`FV_PREBUILT_STALE=latest`), and `scripts/ci/prebuilt.sh contexts`
+  passed that release's fv-lab as the `lab-build` stage; an fv-lab from before this change refuses `extra_cells` and
+  `[[metric]]` (`deny_unknown_fields`), so the smoke step's `fv-lab check` would fail after the `sha-<7>` tag was
+  pushed, and the tag would carry an fv-lab that cannot read its own `lab/`. Now a stale release's fv-lab is not used
+  (as its fv-boot was not, ADR-0014): `lab-build` compiles this commit's (`scripts/ci/test_tools_release.sh`:
+  `contexts --stale`). This closes the plan's D1 follow-up (1).
 - **`fv-lab oracle --fetch-tree [--fetch-skip ERE] [--fetch-max-mb N]`** passes `pod up`'s tree fetch to the
   runtime side (`OraclePlan::runtime_fetch`): `metrics.txt` and the copies are files of the tree, not of the default
   fetch's summaries (`runpod-http.sh` needs `FV_FETCH_TREE=1` for them too). Without it nothing changes.
@@ -3169,6 +3187,13 @@ references), the cheapest of their kinds at 512p (retake is one distilled stage;
 a2v on the dev DiT cost more and add no kind). Both runtime runners on one reference, as §19.7; the commit `SHA` on
 GitHub with `fastvideo-rs-runtime:sha-<7>` published (with this PR's `lab/` and fv-lab), `fv-lab` built on the build
 pod. RTX PRO 6000, EU-RO-1, on `bz0ofkfx45`.
+
+**Before it:** confirm the image's tools are this commit's: `docker buildx imagetools inspect
+ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$SHA --format '{{json .Image}}' | jq -r '.config.Labels["dev.fastvideo.tools"]'`
+must be `compiled` (a branch image, `FV_PREBUILT_STALE=compile`) or a tools release built from exactly `$SHA`'s tools
+inputs (`scripts/ci/tools-release.sh input-hash $SHA` equal to the release's `input-hash`). On main a stale release
+labels the image with its tag and ships its fv-gpucheck; only fv-lab and fv-boot are then compiled from the commit.
+Stop the build pod once fv-lab is built (`scripts/dev/build-pod.sh stop`).
 
 ```sh
 SHA=<7>
@@ -3216,8 +3241,14 @@ then held while both runtime sides run), about $1.90-$2.50; each runtime pod abo
 two 512p two-stage and two one-stage LTX runs with dumps, four `compare-dumps`, 22 ffmpeg / ffprobe commands in
 seconds), about $0.85 each: **about $3.60-$4.20** in all. fv-lab's balance guard (§19.1) needs, at these caps, $8 +
 the upstream pod at $2.50/hr over 7,200 + 1,200 s ($5.83) + the runtime pod over 3,600 + 1,200 s ($3.33) = **$17.17**,
-plus what the account already spends over the 2 h cap (a running build pod at $0.96/hr adds $1.92: stop it); with
-the script side's pod (`FV_POD_CAP_S=3600`, at most about $2.50) start at **$20 or more**. The upstream cap stays at
+plus what the account already spends over the 2 h cap: **stop the build pod first** (running at $0.96/hr it adds
+$1.92, so the guard needs about $19.09). The script side's pod has no such guard, so the starting balance must
+cover the worst case too: all three pods at their caps, the upstream pod 2 h and each runtime pod 1 h at the
+$2.50/hr price cap ($5.00 + $2.50 + $2.50) plus fv-deploy's two replaced readiness cycles for each fv-lab pod
+(2 x 600 s x 2 x $2.50/hr, $1.67) and the script side's own retries (up to $0.83): **about $12.50**, so **start at
+$20.50 or more** ($8 + $12.50). With lower caps (`--upstream-wall-cap-s 6000 --wall-cap-s 2700`, `FV_POD_CAP_S=2700`,
+which leaves the references 2,100 s, enough only if the upstream image is cached on the host) the worst case is
+about $10.40 and the start $18.40. The upstream cap stays at
 7,200 s: the references' wait is what the cap leaves after the stock wait and the fetch reserve (§19.1), 3,300 s at
 7,200, and a cold pull plus the pack rebuild may need most of it. The readiness risk of §19.4 (600 s per cycle)
 applies. Stop before the balance would fall below $8 (CLAUDE.md).

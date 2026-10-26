@@ -177,8 +177,8 @@ fn fake(name: &str, mode: &str) -> Fake {
     script(
         &gpu.join("verify-weights.sh"),
         &format!(
-            "echo \"verify $1\"\ncase \"$1\" in fasth3-8step | fastwan22-ti2v-5b) exit 1 ;; esac\ngrep -qw noh3 {} && [ \"$1\" = fasth3-4step-vsa ] && exit 1\nexit 0\n",
-            f.dir.join("mode").display()
+            "echo \"verify $1\"\ncase \"$1\" in fasth3-8step | fastwan22-ti2v-5b) exit 1 ;; esac\ngrep -qw noh3 {m} && [ \"$1\" = fasth3-4step-vsa ] && exit 1\ngrep -qw \"no-$1\" {m} && exit 1\nexit 0\n",
+            m = f.dir.join("mode").display()
         ),
     );
     std::fs::write(gpu.join("gate-policy.toml"), "# policy\n").unwrap();
@@ -336,6 +336,13 @@ fn side(runs: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// `text` with the run directory `runs` (its tag differs between the sides)
+/// read as `<runs>`, then its scratch disk as `<scratch>`.
+fn norm_paths(runs: &Path, text: &str) -> String {
+    text.replace(&runs.display().to_string(), "<runs>")
+        .replace(&side(runs), "<scratch>")
+}
+
 /// The same bytes in both runs for every file that is a pure function of the
 /// outputs (not logs, timings or dates), and the same set of such files (a
 /// path into either side's scratch disk read as `<scratch>`).
@@ -364,11 +371,10 @@ fn assert_same_outputs(a: &Path, b: &Path) {
         a.display(),
         b.display()
     );
-    let (sa, sb) = (side(a), side(b));
     for f in &fa {
         assert_eq!(
-            read(&a.join(f)).map(|v| String::from_utf8_lossy(&v).replace(&sa, "<scratch>")),
-            read(&b.join(f)).map(|v| String::from_utf8_lossy(&v).replace(&sb, "<scratch>")),
+            read(&a.join(f)).map(|v| norm_paths(a, &String::from_utf8_lossy(&v))),
+            read(&b.join(f)).map(|v| norm_paths(b, &String::from_utf8_lossy(&v))),
             "{f}"
         );
     }
@@ -734,11 +740,15 @@ fn a_file_reference_url_is_refused_outside_the_tests() {
 
 // ------------------------------------------------------------------ clip metrics
 
-/// The clip-metric targets the fakes run (ADR-0019 §20): every metric kind
-/// (pinned frames, the clip against the reference's with a required file,
-/// probes, kept frames), a reference without its `ref.mp4` (`retake-a`), and
-/// a target that echoes its report twice (`a2v-i2v`).
-const CLIP_TARGETS: &str = "ltx25-kf ltx25-ref2v ltx25-a2v-i2v ltx25-retake ltx25-retake-a";
+/// The clip-metric targets the fakes run (ADR-0019 §20), all ten: every metric
+/// kind (pinned frames, the clip against the reference's with a required
+/// file, probes, kept frames), a reference without its `ref.mp4`
+/// (`retake-a`), a target that echoes its report twice (`a2v-i2v`), and one
+/// whose arms skip on their weights (`a2v-guided`: its clips are missing).
+/// The script side's run tag in the clip-metric test (fv-lab's is [`TAG`]).
+const SCRIPT_TAG: &str = "t2-script";
+
+const CLIP_TARGETS: &str = "ltx25-i2v ltx25-kf ltx25-ref2v ltx25-a2v ltx25-a2v-i2v ltx25-retake ltx25-retake-v ltx25-retake-a ltx25-extend ltx25-a2v-guided";
 
 /// ffmpeg on the fake box: the comparison's filter (`ssim` / `psnr`, the end
 /// of the graph) and a checksum of its inputs' bytes and of the graph, as the
@@ -771,7 +781,8 @@ echo "unused stderr" >&2
 /// `PATH`; a real ffmpeg there would shadow them), and the clip-metric
 /// targets' references, `ref.mp4` in each dump but `retake-a`'s.
 fn fake_clips(name: &str) -> Fake {
-    let f = fake(name, "");
+    // The guided target's weight gate fails: its arms skip, its clips are missing.
+    let f = fake(name, "no-ltx25-a2v-guided");
     for (tool, body) in [("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)] {
         let p = f.bin().join(tool);
         std::fs::write(&p, format!("#!/bin/bash\n{body}")).unwrap();
@@ -843,7 +854,8 @@ fn clip_metrics_report_as_the_script() {
         .env("LC_ALL", "C")
         .env("FV_WORK", f.dir.join("work"))
         .env("FV_SCRATCH", f.dir.join("script"))
-        .env("FV_RUN_TAG", TAG)
+        // Another tag than fv-lab's: the `missing` lines name the run directory.
+        .env("FV_RUN_TAG", SCRIPT_TAG)
         .env("FV_GPUCHECK", f.bin().join("fv-gpucheck"))
         .env("FV_GEN_TIMEOUT_S", "60")
         .output()
@@ -855,7 +867,7 @@ fn clip_metrics_report_as_the_script() {
         String::from_utf8_lossy(&o.stdout),
         String::from_utf8_lossy(&o.stderr)
     );
-    let s = f.dir.join("script/runs/oracle").join(TAG);
+    let s = f.dir.join("script/runs/oracle").join(SCRIPT_TAG);
     let lab = lab();
     let only: Vec<String> = CLIP_TARGETS
         .split(' ')
@@ -880,10 +892,9 @@ fn clip_metrics_report_as_the_script() {
     // metrics.txt, the clip copies, the arms' records: the same bytes.
     assert_same_outputs(&s, &l);
     let norm = |runs: &Path| -> Vec<String> {
-        let sd = side(runs);
         raw_lines(runs)
             .into_iter()
-            .map(|x| x.replace(&sd, "<scratch>"))
+            .map(|x| norm_paths(runs, &x))
             .collect()
     };
     // The reports echoed into live.log (and the compare-dumps lines), as tee'd.
@@ -924,6 +935,21 @@ fn clip_metrics_report_as_the_script() {
         "{ra}"
     );
     assert!(!ra.contains("vs reference clip"), "{ra}");
+    // The guided target's arms skipped: its two clips are missing (in the run
+    // directory, whose tag differs between the sides), the reference probed.
+    let guided = metrics("ltx25-a2v-guided");
+    assert!(
+        guided.contains("ours missing ") && guided.contains("ownaud missing "),
+        "{guided}"
+    );
+    assert!(guided.contains("reference: stream|"), "{guided}");
+    assert!(!guided.contains("vs reference clip"), "{guided}");
+    for t in CLIP_TARGETS.split(' ') {
+        assert!(
+            l.join(format!("oracle-{t}-frames/metrics.txt")).is_file(),
+            "{t}"
+        );
+    }
     // a2v-i2v echoes its report after each part: the probe lines twice.
     let echoed = norm(&l)
         .into_iter()

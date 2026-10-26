@@ -388,8 +388,9 @@ report directory (`{runs}/oracle-<target>-frames/`): a clip that is not there wr
 `frame-vs-image` (`frame`, `image`, `width`, `height`: cover and centre crop); each comparison writes `ssim` then
 `psnr` lines. `echo = true` copies the whole `metrics.txt` into the log as `[<tag>] <line>`. The commands are the
 script's, word for word, and a dry run lists them (`dry-run metric <tag>: ffmpeg …`). `metrics.txt` is a report:
-nothing judges it. `fv-lab-compare-runs.sh` compares it byte for byte, or reports it when only its values differ
-(the clips' mp4 encodes).
+nothing judges it. `fv-lab-compare-runs.sh` compares it with the run tag read alike: the same, or reported when only
+ffmpeg's SSIM / PSNR values differ (the clips' mp4 encodes); a probe line, an empty or failed value, or another line
+set is a difference (ADR-0019 §20.6).
 
 The goldens: `oracle-extra-dry-run.txt` and `oracle-extra-gates.tsv` are the script's dry run with
 `FV_ORACLE_TARGETS` naming the ten (`tests/dry_run.rs`); `tests/repeats_oracle.rs` runs both runners on fakes of
