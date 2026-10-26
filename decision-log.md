@@ -1841,3 +1841,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §14
 - Verification: CPU: `tests/experiment_tiers.rs` (the four arms equal the pod script's turbo commands under the §14.3 mapping, the tier's dry run equals its golden, the compares), `fv-lab-experiment-goldens.sh --check` (the script's 12 commands, its prompt sets byte for byte; CI `control.yml`), `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, `self-delete.test.sh`, the fastvideo-lab and workspace tests; GPU: §14.4 pending (the coordinator's)
+
+### FVID · 2026-10-26 · FVID-2026-10-26-fv-lab-one-offs-review
+- Trigger: the coordinator's review of #200 at `bfa9a1dc` (nothing blocking; the gawk fix confirmed)
+- Options: fix each in #200; or defer
+- Decision: (coordinator, executed by the D1e agent) fix all in #200. ADR-0019 §14.4 and `scripts/gpu/experiments/README.md` say the commit deleting `h3-graphs-{validate,pod}.sh` must drop its `LOCAL` entry in `self-delete.test.sh` and lower the launcher floor to 2; the §14.2 rows of `h3-tier-options`, `h3-tier-ship`, `h3-fp4attn`, `vdn-h3` (and those docs) say that, until PR #201 (the gold tier on `volume+r2` weights) is merged and the gold run done, their numbers' reproduction is `git show 22a5fd7b:…`; `docs/perf/h3-denoise-graphs.md` uses the §14.4 command (`--wall-cap-s 3600 --fetch-tree --fetch-skip …`); the §14.4 checks fail loudly; the weak "vdn-h3 gold cites the doc" keep reason dropped; the `--warm` cold clip's non-comparison listed among the differences; `--no-renames` on the goldens' deletion lookup; the frames estimate 8-10 GB
+- Reason: the deletion of the kept scripts must not break a test; a deleted experiment's gold numbers must say how to reproduce them until the gold tier can
+- Reversibility: high (docs and a test script)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §14.2-§14.4
+- Verification: `fv-lab-experiment-goldens.sh --check` under gawk, mawk and busybox awk; the shell goldens and route / self-delete tests; the fastvideo-lab tests on the build pod

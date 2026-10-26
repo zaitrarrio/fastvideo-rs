@@ -16,6 +16,8 @@ of `docs/perf/h3-denoise-graphs.md` §5, with the commands cut from
 with a wall-clock backstop, `up | status | fetch | down | print-start`) and
 `h3-graphs-pod.sh` (on the pod) stay until the tier's GPU check (ADR-0019
 §14.4) has passed; then both go, and the goldens script reads the pod script
-from the history. Its tables come from `fv-lab report summary --kind h3-graphs
+from the history. That same commit drops `h3-graphs-validate.sh` from `LOCAL`
+in `scripts/gpu/tests/self-delete.test.sh` and lowers its launcher floor from
+3 to 2, or that test fails. Its tables come from `fv-lab report summary --kind h3-graphs
 DIR` (D1c). Shared tooling stays one level up in `scripts/gpu/` (`volumes.sh`,
 `r2-*.py`, `lib/self-delete.sh`); the drivers reach it through `$GPU`.

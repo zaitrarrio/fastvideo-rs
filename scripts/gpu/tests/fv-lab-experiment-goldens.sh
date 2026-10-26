@@ -56,7 +56,7 @@ source_of() {
     echo "$ROOT/$rel"
     return 0
   fi
-  del="$(git -C "$ROOT" log -1 --diff-filter=D --format=%H HEAD -- "$rel" 2>/dev/null)" || return 1
+  del="$(git -C "$ROOT" log -1 --no-renames --diff-filter=D --format=%H HEAD -- "$rel" 2>/dev/null)" || return 1
   [[ -n "$del" ]] && git -C "$ROOT" cat-file -e "$del^:$rel" 2>/dev/null || return 1
   mkdir -p "$TMP/history/$(dirname "$rel")"
   git -C "$ROOT" show "$del^:$rel" >"$TMP/history/$rel"

@@ -1359,3 +1359,9 @@ ran (pod id, $/hr), result, cost.
   for its retirement. Gates on build pods `8gg7uz30x3nesu` and (after the coordinator's switch) `dbf6gok3crgj9x`;
   the shell goldens locally. No Runpod resource created; the
   `h3-graphs` GPU check (one PRO 6000, ~35 min, ~$1.45) is the coordinator's.
+- 2026-10-26, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ), D1e agent: #200 fixes. CI's gawk read the `-v` patterns of
+  `fv-lab-experiment-goldens.sh` without their backslashes (`^COMMON=(`, an invalid regexp; mawk kept them): the
+  block cuts are plain-string matches through `ENVIRON` now, checked under gawk, mawk and busybox awk. Then the
+  coordinator's review fixes (ADR-0019 §14.2-§14.4: the self-delete floor when the h3-graphs scripts go, the
+  reproduction of the deleted experiments' gold numbers until PR #201's gold run, the `--fetch-tree` command, loud
+  checks, nits). Build pod `dbf6gok3crgj9x`. No GPU cost.

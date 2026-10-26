@@ -203,6 +203,8 @@ prompt and one seed were measured; the five-prompt gate was not run within the b
 tier for the NVFP4 checkpoints, which already fail the gate against bf16 and against upstream (docs/ports/fasth3-nvfp4.md
 §6).
 
+Until PR #201 (`claude/lab-r2-weights`, the gold tier on `volume+r2` weights) is merged and the gold run is done, the reproduction of §3.3-§3.4's numbers is `git show 22a5fd7b:scripts/gpu/experiments/h3-fp4attn-{validate,pod}.sh` (deleted in D1e, docs/adr/0019-fv-lab.md §14.2): the trees are R2-only, and the `gold` tier on the EU volume skips them.
+
 ### 3.5 Cost
 
 One RTX PRO 6000 pod (EUR-IS-2, $2.49/hr): 15:21:44-15:42:16, about $0.85. Every step of the session ran:

@@ -43,7 +43,9 @@ matters for options 5 and 6.**
 
 Scripts: `scripts/gpu/experiments/h3-tier-options-{validate,pod}.sh` (deleted in D1e, docs/adr/0019-fv-lab.md §14; in git at `22a5fd7b`) and `h3-tier-options-summary.py` (since D1c `fv-lab report summary --kind h3-tier-options DIR --json OUT`). Raw results are in
 `artifacts/perf/h3-nvfp4-tier-options/` (`summary.md`, per-cell `benchmark.json` and logs, compare / gate reports,
-middle-frame sheets `frame062-480p-*.jpg`).
+middle-frame sheets `frame062-480p-*.jpg`). Until PR #201 (`claude/lab-r2-weights`, the gold tier on `volume+r2` weights) is merged and the gold run is done,
+the reproduction of these numbers (and of the GPU smoke's, `h3-tier-ship`) is `git show 22a5fd7b:scripts/gpu/experiments/…`:
+the trees are R2-only, and the `gold` tier on the EU volume skips them.
 
 Upstream reference (docs/ports/fasth3-nvfp4.md §5 and docs/ports/fasth3-sparse-fp4-attn.md §3.3, same GPU model):
 - V2-NVFP4 denoise: 10.25 s at 480p and 29.3 s at 768p.
