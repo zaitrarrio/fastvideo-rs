@@ -545,7 +545,7 @@
       ]
     },
     "Workload": {
-      "description": "What every arm of a cell generates. Each value is referenced from the\narms' command lines as a placeholder (`{prompt}`, `{seed}`, …), so the\ndeclared workload is the one that runs; a value no arm uses is an error.\nAn absent value is the pipeline's (or the recipe's) default.",
+      "description": "What every arm of a cell generates. Each value is referenced from the\narms' command lines as a placeholder (`{prompt}`, `{seed}`, …), so the\ndeclared workload is the one that runs; a value no arm uses is an error.\nAn absent value is the pipeline's (or the recipe's) default. In a cell\nwhose arms run two pipelines (`model = \"h3 ltx2\"`), each value describes\nthe arms that reference it: `attn3`'s `seconds = 5` is its H3 arms', while\nits LTX-2.5 arms run the 1080p20s workload their argv names.",
       "type": "object",
       "properties": {
         "frames": {
@@ -565,7 +565,7 @@
           "minimum": 0
         },
         "model": {
-          "description": "The fv-gpucheck pipeline (`h3`, `ltx2`, `wan`, …).",
+          "description": "The fv-gpucheck pipeline (`h3`, `ltx2`, `wan`, …), descriptive: a cell\nwhose arms run two pipelines names both, space-separated (`h3 ltx2`:\na family whose compares follow arms of both, ADR-0019 §17), and a cell\nwithout a generation names what it runs (`kernels`).",
           "type": "string"
         },
         "note": {

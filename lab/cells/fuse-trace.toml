@@ -1,0 +1,45 @@
+# The fuse family's traced steps (runpod-matrix.sh `fuse`, step 2): one CUPTI-traced
+# warm step of each workload with the fusions on (the trace family's command
+# lines; compare with a trace run of the previous build). The script copies each
+# arm's last `/gpu_trace` line into live.log (log only, docs/adr/0019-fv-lab.md
+# §9.4, §17). The fasth3-8step arm is skipped on the EU volume (h3-8step is
+# R2-only), as the script skips it. Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "fuse-trace"
+description = "One CUPTI-traced warm step of FastH3 8-step, FastH3 4-step VSA and LTX-2.5 at 4k5s, block fusions on (the default)"
+
+[workload]
+model = "h3 ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; the H3 recipes' default canvas (the 768p of the arm names), LTX-2.5's 4k5s workload (--workload); two pipelines in one cell, as the script's fuse_h3 / fuse_ltx share a block"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+
+[[arm]]
+name = "trace-fasth3-8step-768p"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+env = ["FASTVIDEO_GPU_TRACE=1"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "trace-fasth3-4step-vsa-768p"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_GPU_TRACE=1"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "trace-ltx25-4k5s-sol"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = ["FASTVIDEO_GPU_TRACE=1", "FASTVIDEO_GPU_TRACE_STEP=9"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit", "{weights}/ltx25",
+  "--workload", "4k5s", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--warm",
+  "--clip", "{runs}/{arm}/frames"]

@@ -1,0 +1,19 @@
+# The fuse family's kernel check (runpod-matrix.sh `fuse`, step 1; Phase 3c
+# DiT block fusions, FASTVIDEO_H3_FUSE / FASTVIDEO_LTX_FUSE): `fv-gpucheck
+# kernels --groups dit_fusion,bf16_act`, every fused kernel bit for bit against
+# its unfused op chain, plus fused / unfused timings at production shapes. An
+# ungated arm (docs/adr/0019-fv-lab.md §15.2 item 6): it reads no weight tree,
+# as the script's bare `run_cell`. The script copies the report's [PASS] /
+# [FAIL] lines into live.log (log only: they are in the arm's stderr.log, which
+# both fetches take; §9.4, §17). Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "fuse-kernels"
+description = "The DiT block-fusion and bf16-activation kernels against their unfused op chains, bit for bit, with timings"
+
+[workload]
+model = "kernels"
+note = "no generation: fv-gpucheck kernels at its own production shapes"
+
+[[arm]]
+name = "kernels-fuse"
+argv = ["--out", "{runs}/{arm}/gpucheck-out", "kernels", "--groups", "dit_fusion,bf16_act"]

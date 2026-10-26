@@ -1,0 +1,3 @@
+arm	ltx25-two-stage	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx23-two-stage	ltx23	-	ltx23:transformer ltx23:vae ltx23:audio_vae ltx23:vocoder ltx23:text_encoder ltx23:text_encoder/gemma ltx23:tokenizer ltx23:text_embedding_projection ltx23:spatial_upscaler
+arm	ltx20-distilled-8step	ltx2	-	ltx2:ltx-2-19b-distilled.safetensors ltx2:text_encoder ltx2:tokenizer ltx2:vae ltx2:audio_vae ltx2:vocoder

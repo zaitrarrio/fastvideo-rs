@@ -611,11 +611,17 @@ impl Verdict {
 /// What every arm of a cell generates. Each value is referenced from the
 /// arms' command lines as a placeholder (`{prompt}`, `{seed}`, …), so the
 /// declared workload is the one that runs; a value no arm uses is an error.
-/// An absent value is the pipeline's (or the recipe's) default.
+/// An absent value is the pipeline's (or the recipe's) default. In a cell
+/// whose arms run two pipelines (`model = "h3 ltx2"`), each value describes
+/// the arms that reference it: `attn3`'s `seconds = 5` is its H3 arms', while
+/// its LTX-2.5 arms run the 1080p20s workload their argv names.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Workload {
-    /// The fv-gpucheck pipeline (`h3`, `ltx2`, `wan`, …).
+    /// The fv-gpucheck pipeline (`h3`, `ltx2`, `wan`, …), descriptive: a cell
+    /// whose arms run two pipelines names both, space-separated (`h3 ltx2`:
+    /// a family whose compares follow arms of both, ADR-0019 §17), and a cell
+    /// without a generation names what it runs (`kernels`).
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
