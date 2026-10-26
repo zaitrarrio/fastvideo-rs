@@ -236,9 +236,16 @@
       ]
     },
     "Compare": {
-      "description": "`compare_cells <baseline> <candidate> [args]`.",
+      "description": "`compare_cells <baseline> <candidate> [args]`: two arms' frames; or, with\n`tag`, `compare_one <tag> <baseline> <candidate> [args]`: two frame\ndirectories that are not arms' (ADR-0019 §21: a reference's decoded clip,\nan arm's decoded mp4), the report `compare/compare-clips-<tag>.json`.",
       "type": "object",
       "properties": {
+        "after": {
+          "description": "Run right after this arm of the cell (its hash, if any) instead of\nafter all of them. At one arm the cell's anchored `[[metric]]`s run\nfirst (a decode makes the frames a compare reads), then its anchored\ncompares, each kind in file order.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "args": {
           "description": "Extra `compare-clips` arguments (`--off-identity`).",
           "type": "array",
@@ -247,13 +254,15 @@
           }
         },
         "baseline": {
+          "description": "An arm of the cell; with `tag`, a frame directory (`{runs}/…`,\n`{ref_dir}/…`, `{ref}/…` or `{scratch}/…`).",
           "type": "string"
         },
         "candidate": {
+          "description": "As `baseline`.",
           "type": "string"
         },
         "gate": {
-          "description": "The promotion gate of the same pair, run right after this compare\n(the script's `compare_cells b c; gate_cells b c …` in one loop\niteration). A `[[gate]]` runs after every compare of the cell instead.",
+          "description": "The promotion gate of the same pair, run right after this compare\n(the script's `compare_cells b c; gate_cells b c …` in one loop\niteration). A `[[gate]]` runs after every compare of the cell instead.\nNot with `tag` (a gate reads two arms' `benchmark.json`).",
           "anyOf": [
             {
               "$ref": "#/$defs/PairedGate"
@@ -261,6 +270,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "tag": {
+          "description": "The report's tag: `baseline` and `candidate` are directories, not\narms. Run when one of the cell's arms is selected.",
+          "type": [
+            "string",
+            "null"
           ]
         }
       },
@@ -511,13 +527,38 @@
             "width",
             "height"
           ]
+        },
+        {
+          "description": "The clip decoded into PNG frames: `ffmpeg -loglevel error -y -i\n<clip> -start_number 0 <dir>/frame-%03d.png`, `dir` made first; no\nline written (the frames are a `[[compare]]`'s input, ADR-0019 §21).\n`dir` is under `{runs}/` or `{ref_dir}/` (removed with the reference).",
+          "type": "object",
+          "properties": {
+            "dir": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "decode"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "dir"
+          ]
         }
       ]
     },
     "Metric": {
-      "description": "A derived-clip measurement (docs/adr/0019-fv-lab.md §20): a pass over\nclips, as the script's `for src in \"<label>:<path>\" …` loops. Into the\nreport directory `report`, for each clip in order:\n\n1. the clip and every `requires` file must be regular files; else, with\n   `missing`, the line `<label> missing <path>` (and ` or <file name>` per\n   `requires` entry) is appended to `metrics.txt`, and the next clip;\n2. with `copy`, the clip is copied to `<report>/<label>.mp4`;\n3. each [`Measure`], in order, appends its lines (SSIM then PSNR for the\n   comparisons).\n\nThen, with `echo`, every line of `metrics.txt` (the whole file) goes into\nthe log as `[<tag>] <line>`. A dry run lists each ffmpeg / ffprobe command\nas `dry-run metric <tag>: <command>`, every clip assumed present. Nothing\njudges the numbers (ADR-0019 §20, decision 2).",
+      "description": "A derived-clip measurement (docs/adr/0019-fv-lab.md §20): a pass over\nclips, as the script's `for src in \"<label>:<path>\" …` loops. Into the\nreport directory `report`, for each clip in order:\n\n1. the clip and every `requires` file must be regular files; else, with\n   `missing`, the line `<label> missing <path>` (and ` or <file name>` per\n   `requires` entry) is appended to `metrics.txt`, and the next clip;\n2. with `copy`, the clip is copied to `<report>/<label>.mp4`;\n3. each [`Measure`], in order, appends its lines (SSIM then PSNR for the\n   comparisons).\n\nThen, with `echo`, every line of `metrics.txt` (the whole file) goes into\nthe log as `[<tag>] <line>`. A dry run lists each ffmpeg / ffprobe command\nas `dry-run metric <tag>: <command>`, every clip assumed present. Nothing\njudges the numbers (ADR-0019 §20, decision 2).\n\nA pass that only decodes (`decode` measures, no `copy`, `missing` or\n`echo`; ADR-0019 §21) writes no report and needs none.",
       "type": "object",
       "properties": {
+        "after": {
+          "description": "Run right after this arm of the cell instead of after the cell's arms,\ncompares and gates ([`Compare::after`]).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "clips": {
           "description": "The clips, in order.",
           "type": "array",
@@ -545,8 +586,11 @@
           "type": "boolean"
         },
         "report": {
-          "description": "The report directory, below `{runs}/` (`metrics.txt`, the copies).",
-          "type": "string"
+          "description": "The report directory, below `{runs}/` (`metrics.txt`, the copies);\nabsent only for a pass that writes nothing there (decodes only).",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "requires": {
           "description": "Files every clip's measures need besides the clip.",
@@ -562,7 +606,6 @@
       },
       "additionalProperties": false,
       "required": [
-        "report",
         "tag",
         "clips"
       ]

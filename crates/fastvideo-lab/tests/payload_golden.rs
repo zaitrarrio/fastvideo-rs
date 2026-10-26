@@ -124,12 +124,29 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         common::restored().len(),
         "every restored mode is a tier"
     );
-    // Only the gold tier reads R2 trees; every other tier's pod is unchanged.
-    assert_eq!(r2_tiers, 1, "one volume+r2 tier (gold)");
-    assert_eq!(
-        lab.tier("gold").map(|t| t.weights),
-        Some(TierWeights::VolumeR2)
+    // Only the gold and oracle-r2 tiers read R2 trees (ADR-0019 §16, §21);
+    // every other tier's pod is unchanged.
+    assert_eq!(r2_tiers, 2, "two volume+r2 tiers (gold, oracle-r2)");
+    for t in ["gold", "oracle-r2"] {
+        assert_eq!(
+            lab.tier(t).map(|t| t.weights),
+            Some(TierWeights::VolumeR2),
+            "{t}"
+        );
+    }
+    // oracle-r2's pod is the oracle tier's but for the disk (150 GB: its
+    // 28.93 GB R2 tree and the 120 GB) and the idle limit (r2_idle_min of
+    // its 5400 s cell cap: 115 min), as runpod-http.sh plan's with those.
+    let r2 = fixture("oracle-r2");
+    let vol = fixture("oracle");
+    assert_eq!(r2["containerDiskInGb"], json!(150));
+    assert_eq!(vol["containerDiskInGb"], json!(120));
+    let cmd = r2["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert!(
+        cmd.contains("lim=115; [ \"$used\" = 1 ] && lim=115"),
+        "the idle limit"
     );
+    assert_eq!(fastvideo_lab::weights::r2_idle_min(5400), 115);
     // Only the gold tier asks for a host-RAM floor (its 14B arm's host load,
     // lab/tiers.toml); every other tier's pod has Runpod's default. 256 GB
     // since the 7e580e5 gold run measured that arm's peak (ADR-0019 §16.10).

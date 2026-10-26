@@ -155,6 +155,26 @@ pub struct StackTarget {
     /// `oracle:` (`weights:<view>`), in order.
     #[serde(default)]
     pub steps: Vec<String>,
+    /// Weight trees its reference reads from the R2 weights store
+    /// (`scripts/gpu/weights-r2.tsv` dests; ADR-0019 §21): each a `pod.sh`
+    /// step `r2:<tree>` after `steps` (`r2-weights.py plan --pin`, then
+    /// `r2-fetch.py --root $UW`, onto the container disk, never the volume).
+    /// A selected target with one gives the pod the R2 key as Runpod secret
+    /// references (`weights::r2_env_refs`), which `pod.sh` hands to that
+    /// step alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub r2: Vec<String>,
+    /// The container disk its reference needs (GB), when more than the
+    /// stack's: the pod gets the largest of the stack's and its selected
+    /// targets', so a run without this target keeps the stack's disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub container_disk_gb: Option<u32>,
+}
+
+/// The `pod.sh` step that fetches an R2 tree (`r2:<tree>`).
+pub fn r2_step(tree: &str) -> String {
+    format!("r2:{tree}")
 }
 
 fn sfield(file: &str, f: String, msg: impl Into<String>) -> LabError {
@@ -331,6 +351,25 @@ impl Stacks {
                         ),
                     ));
                 }
+                let mut trees = BTreeSet::new();
+                if let Some(tree) = t
+                    .r2
+                    .iter()
+                    .find(|tree| !crate::weights::safe_tree(tree) || !trees.insert(tree.as_str()))
+                {
+                    return Err(sfield(
+                        file,
+                        tat("r2"),
+                        format!("`{tree}`: a weights-r2.tsv tree name ([A-Za-z0-9._/-], relative, no `.` or `..`), once"),
+                    ));
+                }
+                if t.container_disk_gb == Some(0) {
+                    return Err(sfield(
+                        file,
+                        tat("container_disk_gb"),
+                        "positive, or leave it out (the stack's)",
+                    ));
+                }
             }
         }
         Ok(())
@@ -345,8 +384,39 @@ impl Stacks {
 
     /// The stacks against the run plan: every stack target is the
     /// `[reference] target` of a cell, and every such cell's target is made
-    /// by a stack.
+    /// by a stack; every `r2` tree is published (`lab.root`'s
+    /// `scripts/gpu/weights-r2.tsv`).
     pub fn check_against(&self, lab: &Lab) -> Result<(), LabError> {
+        if self
+            .stacks
+            .iter()
+            .flat_map(|s| &s.targets)
+            .any(|t| !t.r2.is_empty())
+        {
+            let p = lab.root.join(crate::weights::R2_TABLE);
+            let table = std::fs::read_to_string(&p)
+                .map_err(|e| LabError::Io {
+                    path: p.display().to_string(),
+                    msg: e.to_string(),
+                })
+                .and_then(|t| {
+                    crate::weights::parse_r2_table(&t).map_err(|m| LabError::Syntax {
+                        file: crate::weights::R2_TABLE.to_owned(),
+                        msg: m,
+                    })
+                })?;
+            for (i, s) in self.stacks.iter().enumerate() {
+                for (j, t) in s.targets.iter().enumerate() {
+                    if let Some(tree) = t.r2.iter().find(|tree| !table.contains_key(*tree)) {
+                        return Err(sfield(
+                            UPSTREAM_PATH,
+                            format!("stack[{i}].target[{j}].r2"),
+                            format!("`{tree}` is not a dest of {}", crate::weights::R2_TABLE),
+                        ));
+                    }
+                }
+            }
+        }
         let refs: BTreeSet<&str> = lab
             .cells
             .values()
@@ -495,14 +565,20 @@ pub fn upstream_start_command(o: &UpstreamStart) -> Result<String, String> {
 }
 
 /// `UP_STEPS` for some targets of a stack: `info:box`, the targets' weight
-/// steps (each once, in the stack's target order), `oracle:<targets>`.
+/// steps then their `r2:<tree>` steps (each once, in the stack's target
+/// order), `oracle:<targets>`.
 pub fn up_steps(stack: &Stack, targets: &[String]) -> String {
     let mut steps = vec!["info:box".to_owned()];
     for t in &stack.targets {
         if targets.contains(&t.name) {
-            for s in &t.steps {
-                if !steps.contains(s) {
-                    steps.push(s.clone());
+            for s in t
+                .steps
+                .iter()
+                .cloned()
+                .chain(t.r2.iter().map(|x| r2_step(x)))
+            {
+                if !steps.contains(&s) {
+                    steps.push(s);
                 }
             }
         }
@@ -511,17 +587,37 @@ pub fn up_steps(stack: &Stack, targets: &[String]) -> String {
     steps.join(" ")
 }
 
-/// The `Launch` of an upstream pod: the stack's image at `image_tag`, the EU
-/// volume at `/workspace` (the references read `/workspace/weights`), the
-/// stack's GPU, disk, RAM floor and caps under fv-deploy's guards; with
-/// `hub_token`, `HF_TOKEN` as a Runpod secret reference.
+/// The `Launch` of an upstream pod making `targets` of `stack`: the stack's
+/// image at `image_tag`, the EU volume at `/workspace` (the references read
+/// `/workspace/weights`), the stack's GPU, RAM floor and caps under
+/// fv-deploy's guards, the largest of the stack's and the targets'
+/// container disks; with `hub_token`, `HF_TOKEN` as a Runpod secret
+/// reference; when a target has an `r2` tree, the R2 key as Runpod secret
+/// references (`weights::r2_env_refs`), never values.
 pub fn upstream_launch(
     stack: &Stack,
+    targets: &[String],
     image_tag: &str,
     start: &UpstreamStart,
 ) -> Result<Launch, String> {
     check_image_tag(image_tag)?;
     let cmd = upstream_start_command(start)?;
+    let selected: Vec<&StackTarget> = stack
+        .targets
+        .iter()
+        .filter(|t| targets.contains(&t.name))
+        .collect();
+    let mut env = std::collections::BTreeMap::new();
+    if stack.hub_token {
+        env.insert(HUB_TOKEN_ENV.0.to_owned(), hub_token_ref());
+    }
+    if selected.iter().any(|t| !t.r2.is_empty()) {
+        env.extend(crate::weights::r2_env_refs());
+    }
+    let disk = selected
+        .iter()
+        .filter_map(|t| t.container_disk_gb)
+        .fold(stack.container_disk_gb, u32::max);
     Ok(Launch {
         schema: LAUNCH_SCHEMA,
         name: pod_name(UPSTREAM_FAMILY, &start.tag),
@@ -530,11 +626,7 @@ pub fn upstream_launch(
         image: format!("{UPSTREAM_IMAGE_REPO}-{}:{image_tag}", stack.image),
         entrypoint: Vec::new(),
         args: vec!["/bin/bash".into(), "-c".into(), cmd],
-        env: if stack.hub_token {
-            [(HUB_TOKEN_ENV.0.to_owned(), hub_token_ref())].into()
-        } else {
-            std::collections::BTreeMap::new()
-        },
+        env,
         ports: vec!["8000/http".into()],
         gpu: GpuSpec {
             types: vec![stack.gpu.clone()],
@@ -553,7 +645,7 @@ pub fn upstream_launch(
             cloud: stack.cloud,
         },
         disk: Disk {
-            container_gb: stack.container_disk_gb,
+            container_gb: disk,
             volume_gb: 0,
         },
         weights: WeightsSource::Volume,
@@ -779,7 +871,7 @@ pub fn plan_oracle(lab: &Lab, stacks: &Stacks, r: &OracleRequest) -> Result<Orac
             .ok_or_else(|| format!("no upstream tag for stack `{}`", s.name))?;
         let mut start = UpstreamStart::for_stack(s, tag, &r.up_sha, &up_steps(s, &targets));
         start.cap_s = cap;
-        let l = upstream_launch(s, &r.image_tag, &start)?;
+        let l = upstream_launch(s, &targets, &r.image_tag, &start)?;
         guard::check_guards(&l.guards).map_err(|e| e.to_string())?;
         guard::check_region(&l).map_err(|e| e.to_string())?;
         guard::check_min_ram(&l).map_err(|e| e.to_string())?;

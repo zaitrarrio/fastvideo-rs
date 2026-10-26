@@ -8,6 +8,10 @@
 #   UP_STEPS  space-separated, run in order, e.g.
 #             "setup:fastvideo setup:sol-h3-rtx5090 setup:sol-h3-4step setup:sol-ltx25
 #              weights:h3-fl2va weights:h3-diffusers weights:fasth3-8step info:ltx25 cells"
+#             r2:<tree> fetches a weights-r2.tsv tree from the R2 weights store
+#             into $UW/<tree> (the container disk; never the volume), with the
+#             R2 key the pod's env carries as Runpod secret references
+#             (docs/adr/0019-fv-lab.md §21)
 #   UP_STEPS_BG  steps run in the background alongside UP_STEPS
 #   UP_CELLS  cells for the "cells" step (see cell_* below); default: all
 #   UP_CELL_TIMEOUT_S  per-cell wall cap (default 5400)
@@ -82,6 +86,35 @@ hub_token_init() {
 }
 hub_token_init /workspace/hf/token
 export HF_HUB_DISABLE_TELEMETRY=1
+# r2_key_init: the R2 weights store's read key (FV_WEIGHTS_R2_ACCESS_KEY_ID /
+# FV_WEIGHTS_R2_SECRET_ACCESS_KEY), which fv-lab oracle and runpod-http.sh
+# upstream put in the pod's env as the Runpod secret references
+# {{ RUNPOD_SECRET_fv_r2_access_key_id }} / {{ ..._secret_access_key }} when a
+# step is r2:<tree> (docs/adr/0019-fv-lab.md §21). Read into this shell's own
+# variables and removed from the environment, so no step, cell or reference
+# sees it; weights_r2 hands it to r2-weights.py plan alone. A part that is
+# blank or a reference Runpod did not fill in counts as no key. R2_KEY_SRC
+# says whether there is one, never its value (box.txt's r2_key= line).
+# scripts/gpu/tests/upstream-r2.test.sh runs it.
+r2_key_init() {
+  local id="${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}" sec="${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}" had=""
+  [[ -n "${FV_WEIGHTS_R2_ACCESS_KEY_ID+x}${FV_WEIGHTS_R2_SECRET_ACCESS_KEY+x}" ]] && had=1
+  unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY
+  id="${id//[[:space:]]/}"
+  sec="${sec//[[:space:]]/}"
+  R2_KEY_ID="" R2_KEY_SECRET=""
+  if [[ -n "$id" && -n "$sec" && "$id$sec" != *'{{'* ]]; then
+    R2_KEY_ID="$id" R2_KEY_SECRET="$sec" R2_KEY_SRC=env
+  elif [[ -n "$had" && "$id$sec" == *'{{'* ]]; then
+    R2_KEY_SRC="none (env: unfilled secret reference)"
+  elif [[ -n "$had" ]]; then
+    R2_KEY_SRC="none (env: incomplete)"
+  else
+    R2_KEY_SRC=none
+  fi
+  return 0
+}
+r2_key_init
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LIVE" >&2; }
 pyn() {
@@ -105,6 +138,7 @@ run_step() {
     weights:fasth3-8step) weights_fasth3_8step ;;
     weights:ltx25) weights_ltx25 ;;
     weights:ltx25-dev) weights_ltx25_dev ;;
+    r2:*) weights_r2 "${s#r2:}" ;;
     info:ltx25) info_ltx25 ;;
     info:box) info_box ;;
     lpips:ref) lpips_ref ;;
@@ -139,8 +173,9 @@ info_box() {
     done
     [[ -f "$UP/sol-ltx25/.stamp" ]] && echo "sol-ltx25: $(cat "$UP/sol-ltx25/.stamp")"
     env | grep -E '^(HOME|UV_|XDG_|HF_HOME)=' | sort
-    # Where the Hub token came from, never its value.
+    # Where the Hub token came from, never its value; whether the R2 key is here.
     echo "hf_token=$HF_TOKEN_SRC"
+    echo "r2_key=$R2_KEY_SRC"
   } >"$OUT/box.txt" 2>&1
   return 0
 }
@@ -262,6 +297,51 @@ weights_fasth3_8step() {
   pyn "$HERE/overlay.py" --repo FastVideo/FastVideo-FastH3-8-Step-V2 --rev "$F8_REV" \
     --out "$UW/FastVideo-FastH3-8-Step-V2" --local "$W/h3-8step" --max-download-mb 50 \
     >"$OUT/overlay-fasth3-8step.json"
+}
+
+# weights_r2 <tree>: a tree of the R2 weights store (scripts/gpu/weights-r2.tsv,
+# docs/ops/r2-weights.md) onto the container disk at $UW/<tree>, as fv-lab's
+# runner fetches a volume+r2 tier's trees (docs/adr/0019-fv-lab.md §16.4,
+# §21): `r2-weights.py plan <tree>@<rev> --pin weights-r2.tsv` (the manifest's
+# SHA-256 must be the table's), then `r2-fetch.py --root $UW` (every 64 MiB
+# part checked against the manifest), capped at UP_CELL_TIMEOUT_S. The key goes
+# to the plan step alone, in its environment (never an argv); the plan (bearer
+# URLs) lives in a private directory outside the served $OUT and is removed
+# whatever happened. Never the volume: $UW is checked to be off /workspace.
+# Python: the image's ($UP/tools/bin/python, else python3; standard library
+# only). A tree already complete at its revision is kept.
+weights_r2() {
+  local tree="$1" root="$HERE/../../.." rev py state plan cap rc
+  [[ "$tree" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ && "/$tree/" != */./* && "/$tree/" != */../* ]] \
+    || { echo "r2:$tree: not a tree name"; return 1; }
+  case "$(readlink -m "$UW")/" in
+    /workspace/*) echo "r2:$tree: $UW is on the volume; the tree goes on the container disk"; return 1 ;;
+  esac
+  rev="$(awk -F'\t' -v d="$tree" '$1 == d { print $2; exit }' "$root/scripts/gpu/weights-r2.tsv")"
+  [[ -n "$rev" ]] || { echo "r2:$tree: not in scripts/gpu/weights-r2.tsv"; return 1; }
+  if [[ -f "$UW/$tree/.complete" && "$(cat "$UW/$tree/.fv-revision" 2>/dev/null)" == "$rev" ]]; then
+    echo "r2:$tree: $rev already at $UW/$tree"
+    return 0
+  fi
+  [[ -n "${R2_KEY_ID:-}" && -n "${R2_KEY_SECRET:-}" ]] \
+    || { echo "r2:$tree: no R2 key in the pod's env (r2_key=$R2_KEY_SRC; the Runpod secrets fv_r2_access_key_id / fv_r2_secret_access_key)"; return 1; }
+  py="$UP/tools/bin/python"
+  [[ -x "$py" ]] || py=python3
+  cap="${UP_CELL_TIMEOUT_S:-5400}"
+  state="${UP_R2_STATE:-/root/.r2-state}"
+  mkdir -p "$state" "$UW" && chmod 700 "$state" || return 1
+  plan="$state/plan.json"
+  rm -f "$plan"
+  FV_WEIGHTS_R2_ACCESS_KEY_ID="$R2_KEY_ID" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$R2_KEY_SECRET" \
+    "$py" "$root/scripts/gpu/r2-weights.py" plan "$tree@$rev" --pin "$root/scripts/gpu/weights-r2.tsv" \
+    --ttl "$((cap + 600))" --out "$plan" || { rm -f "$plan"; echo "r2:$tree: r2-weights.py plan failed"; return 1; }
+  ( cd "$state" && env -u FV_R2_SKIP_TREES timeout --signal=TERM --kill-after=15 "$cap" \
+    "$py" "$root/scripts/gpu/r2-fetch.py" --root "$UW" --plan "$plan" --skip-trees '' \
+    --status "$OUT/r2-${tree//\//_}.json" )
+  rc=$?
+  rm -f "$plan"
+  (( rc == 0 )) || { echo "r2:$tree: r2-fetch.py exit $rc"; return 1; }
+  echo "r2:$tree: $rev at $UW/$tree"
 }
 
 # Lightricks/LTX-2.5 single-file packs the sol-engine RTX5090 driver loads,

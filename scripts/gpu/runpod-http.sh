@@ -26,7 +26,10 @@
 #                                the container disk (UP_LOCAL=1). With a weights:ltx25*
 #                                step (or UP_HUB_TOKEN=1) the pod gets HF_TOKEN as the
 #                                Runpod secret reference {{ RUNPOD_SECRET_fv_hf_token }}
-#                                (docs/ops/runpod-secrets.md)
+#                                (docs/ops/runpod-secrets.md); with an r2:<tree> step
+#                                the R2 weights key as the references
+#                                {{ RUNPOD_SECRET_fv_r2_access_key_id }} /
+#                                {{ RUNPOD_SECRET_fv_r2_secret_access_key }} (ADR-0019 §21)
 #   runpod-http.sh attach <pod> <tag>  re-attach to a running pod (wait, collect, delete)
 #   runpod-http.sh status <pod>  print live.log from a running pod
 #   runpod-http.sh down <pod>    destroy a pod
@@ -367,9 +370,22 @@ upstream_hub_token() {
   [[ "$steps" == *" weights:ltx25"* ]]
 }
 
+# upstream_r2_key: whether an upstream pod gets the R2 weights store's key as
+# the Runpod secret references fv-lab's volume+r2 pods carry
+# (crates/fastvideo-lab weights::r2_env_refs; never values): when UP_STEPS or
+# UP_STEPS_BG has an r2:<tree> step (scripts/gpu/upstream/pod.sh weights_r2,
+# which hands it to the plan step alone), as fv-lab oracle's stack targets
+# with `r2` trees (lab/upstream.toml; ADR-0019 §21).
+upstream_r2_key() {
+  local steps
+  steps=" $(printf '%s %s' "${UP_STEPS:-}" "${UP_STEPS_BG:-}" | tr -s '[:space:]' ' ') "
+  [[ "$steps" == *" r2:"* ]]
+}
+
 pod_payload() {
-  local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" files="" f hub=false
+  local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" files="" f hub=false r2=false
   [[ "$mode" == upstream ]] && upstream_hub_token && hub=true
+  [[ "$mode" == upstream ]] && upstream_r2_key && r2=true
   if [[ -n "${FV_POD_FILES:-}" ]]; then
     local ft
     ft="$(mktemp -d)"
@@ -380,9 +396,11 @@ pod_payload() {
   jq -n --arg files "$files" --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
     --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" \
-    --arg ram "${FV_MIN_RAM_GB:-}" --argjson hub "$hub" '
+    --arg ram "${FV_MIN_RAM_GB:-}" --argjson hub "$hub" --argjson r2 "$r2" '
     ((if $files == "" then {} else {FV_POD_FILES_TGZ: $files} end)
-      + (if $hub then {HF_TOKEN: "{{ RUNPOD_SECRET_fv_hf_token }}"} else {} end)) as $env
+      + (if $hub then {HF_TOKEN: "{{ RUNPOD_SECRET_fv_hf_token }}"} else {} end)
+      + (if $r2 then {FV_WEIGHTS_R2_ACCESS_KEY_ID: "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+          FV_WEIGHTS_R2_SECRET_ACCESS_KEY: "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}"} else {} end)) as $env
     | {
       name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
@@ -781,6 +799,12 @@ cmd_run() {
   # The `gold` tier was never a script family: its pod is fv-lab's only.
   if [[ "$FAMILY" == gold && ( "$mode" == run || "$mode" == all ) ]]; then
     die "gold is no runpod-matrix.sh family (docs/adr/0023-lab-report-and-ci-bridge.md): fv-lab pod up --sha $sha --family gold --yes --wait"
+  fi
+  # Nor is a sibling tier (fv-lab-retired.sh FV_LAB_SIBLINGS): its cells are
+  # its family's targets on another pod (oracle-r2: weights from R2).
+  local sib
+  if sib="$(fv_lab_sibling "$FAMILY")" && [[ "$mode" == run || "$mode" == all ]]; then
+    die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib's targets its tier cannot run (docs/adr/0019-fv-lab.md §21): fv-lab oracle --family $FAMILY --sha $sha --cells <arms> --yes, or fv-lab pod up --sha $sha --family $FAMILY --cells <arms> --yes --wait; the script runs them as FV_FAMILY=$sib"
   fi
   # Nor were the tiers made from a port one-off (fv-lab-retired.sh FV_LAB_EXPERIMENTS).
   if fv_lab_experiment "$FAMILY" && [[ "$mode" == run || "$mode" == all ]]; then

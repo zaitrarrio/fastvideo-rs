@@ -1,0 +1,4 @@
+arm	oracle-sfwan13	sfwan21-1.3b	-	sfwan21-1.3b:transformer sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler
+arm	oracle-sfwan13-f32	sfwan21-1.3b	-	sfwan21-1.3b:transformer sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler
+arm	oracle-sfwan13-legacy	sfwan21-1.3b	-	sfwan21-1.3b:transformer sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler
+arm	oracle-sfwan13-composed	sfwan21-1.3b	-	sfwan21-1.3b:transformer sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler

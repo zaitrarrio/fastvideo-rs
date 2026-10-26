@@ -8,17 +8,19 @@
 # on fv-deploy's guards (price cap, $8 floor, EU volume, backstop at
 # wall_cap_s, ready within 600 s in at most 3 cycles), as `fv-lab pod up`'s.
 # Each [[stack.target]] is the `[reference] target` of one oracle cell
-# (lab/cells/oracle-<target>.toml) and the weight steps its reference needs.
+# (lab/cells/oracle-<target>.toml) and the weight steps its reference needs
+# (`steps`; `r2`: trees fetched from the R2 weights store, with the pod's
+# container disk raised to the target's `container_disk_gb`).
 # Values from scripts/gpu/oracle.sh (start_up) and the §15.7 GPU check.
 schema = 1
 
 # FastVideo (FastH3 8-step V2, the FastH3 4-step LoRAs, the H3 Ref2VA
-# pipeline): oracle.sh's `fastvideo` pod. min_ram_gb 192: the LoRA
+# pipeline, SF-Wan 1.3B): oracle.sh's `fastvideo` pod. min_ram_gb 192: the LoRA
 # conversion keeps a host copy of the 35B DiT beside the offloaded text
 # encoder (docs/oracle.md "Upstream cells: host RAM"; the 2026-10-26 rerun).
 [[stack]]
 name = "fastvideo"
-description = "FastVideo references: FastH3 8-step V2, the FastH3 4-step VSA / dense LoRAs, H3 Ref2VA"
+description = "FastVideo references: FastH3 8-step V2, the FastH3 4-step VSA / dense LoRAs, H3 Ref2VA, SF-Wan 1.3B"
 image = "fastvideo"
 gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
 gpu_count = 1
@@ -55,6 +57,18 @@ steps = ["weights:h3-diffusers"]
 [[stack.target]]
 name = "h3-ref2va-4step"
 steps = []
+
+# SF-Wan 1.3B (oracle_sfwan; the oracle-r2 tier's cell, ADR-0019 §21): its
+# tree is R2-only since 2026-10-13, so the step r2:sfwan21-1.3b fetches it
+# (28.93 GB) onto the container disk at $UW/sfwan21-1.3b (pod.sh weights_r2;
+# never the volume), with the R2 key as Runpod secret references in the pod's
+# env, handed to the plan step alone. 180 GB with it (the stack's 150 and the
+# tree); a run without it keeps the stack's 150 and no R2 key.
+[[stack.target]]
+name = "sfwan13"
+steps = []
+r2 = ["sfwan21-1.3b"]
+container_disk_gb = 180
 
 # sol-engine LTX-2.5 (the distilled two-stage): oracle.sh's `sol-ltx25` pod.
 # RECON_ACCEPT_MISMATCH=1: two of the single-file packs rebuilt from the

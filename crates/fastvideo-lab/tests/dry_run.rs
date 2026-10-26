@@ -14,6 +14,14 @@
 //! The restored modes (ADR-0019 §12, `FV_LAB_RESTORED`) started frozen: their
 //! fixtures are the script's dry run in that mode at 5987e6a4, and fv-lab's
 //! equal them with the family's name read as the tier's (`common`).
+//!
+//! A sibling tier (ADR-0019 §21, `FV_LAB_SIBLINGS`: `oracle-r2`, the `oracle`
+//! family's `sfwan13` target) is its family's live branch under the tier's
+//! settings, read with the tier's name (`common::Sibling`); being
+//! `volume+r2`, fv-lab reads `{weights}` from the merged root where the script
+//! reads the volume (`common::merged_root`), and its R2 plan lines (`dry-run
+//! weights …`, `dry-run r2 <arm>: …`, ADR-0019 §16.4) are its own, checked on
+//! their own (`the_oracle_r2_tier_dry_runs_as_the_oracle_family_with_sfwan13`).
 
 mod common;
 
@@ -21,8 +29,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use fastvideo_lab::goldcell::GOLD_TIER;
-use fastvideo_lab::plan::{Lab, Step};
+use fastvideo_lab::plan::{Lab, Step, TierWeights};
 use fastvideo_lab::run::{dry_run_lines, RunConfig};
+use fastvideo_lab::weights::{R2Setup, TreeSources};
 
 // The inputs of fv-lab-goldens.sh.
 const TAG: &str = "1234567-10241200";
@@ -33,13 +42,26 @@ fn repo_root() -> PathBuf {
 }
 
 /// A tier's dry-run fixture as fv-lab must print it: the script's lines,
-/// with a restored mode's family named by its tier (`common::Restored`).
-fn dry_run_fixture(tier: &str) -> Vec<String> {
+/// with a restored mode's or a sibling tier's family named by its tier
+/// (`common::Restored`, `common::Sibling`), and a `volume+r2` tier's weight
+/// root its merged root (`common::merged_root`).
+fn dry_run_fixture(lab: &Lab, tier: &str) -> Vec<String> {
     let text = fixture(&format!("{tier}-dry-run.txt"));
-    match common::restored_tier(tier) {
-        Some(r) => text.lines().map(|l| r.dry_run_line(l)).collect(),
-        None => text.lines().map(str::to_owned).collect(),
+    let r2 = lab
+        .tier(tier)
+        .is_some_and(|t| t.weights == TierWeights::VolumeR2);
+    let root = |l: String| if r2 { common::merged_root(&l) } else { l };
+    match (common::restored_tier(tier), common::sibling_tier(tier)) {
+        (Some(r), _) => text.lines().map(|l| root(r.dry_run_line(l))).collect(),
+        (None, Some(s)) => text.lines().map(|l| root(s.dry_run_line(l))).collect(),
+        (None, None) => text.lines().map(|l| root(l.to_owned())).collect(),
     }
+}
+
+/// fv-lab's own lines of a `volume+r2` run's dry run, which the script has
+/// no counterpart of: its weights line and each arm's R2 step (ADR-0019 §16.4).
+fn r2_line(l: &str) -> bool {
+    l.contains("] dry-run weights ") || l.contains("] dry-run r2 ")
 }
 
 fn fixture(name: &str) -> String {
@@ -59,6 +81,16 @@ fn config(family: &str) -> RunConfig {
     // is complete (as on bz0ofkfx45), so the volume's directory
     // (RunConfig::tae resolves the same; `run::tests::pins_and_paths`).
     c.tae_dir = Some("/workspace/weights/auxiliary/tae".into());
+    // A volume+r2 tier's runner (ADR-0019 §16): the merged root, no key (a
+    // dry run fetches nothing).
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    if lab
+        .tier(family)
+        .is_some_and(|t| t.weights == TierWeights::VolumeR2)
+    {
+        let sources = TreeSources::load(&repo_root()).expect("volumes.sh, weights-r2.tsv");
+        c.r2 = Some(R2Setup::new(sources, &c.scratch, None));
+    }
     c
 }
 
@@ -88,8 +120,11 @@ fn dry_run_equals_runpod_matrix_sh_for_every_tier() {
     assert!(fams.len() >= 10, "rtx6000 and the D1b families: {fams:?}");
     for family in fams {
         let cfg = config(&family);
-        let ours = dry_run_lines(&cfg, &steps(&lab, &cfg));
-        let theirs = dry_run_fixture(&family);
+        let ours: Vec<String> = dry_run_lines(&cfg, &steps(&lab, &cfg))
+            .into_iter()
+            .filter(|l| !r2_line(l))
+            .collect();
+        let theirs = dry_run_fixture(&lab, &family);
         for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
             assert_eq!(a, b, "{family}: line {i} differs");
         }
@@ -288,7 +323,7 @@ fn the_extra_cells_dry_run_as_the_script_with_their_targets() {
     );
     let mut rest = vec![ours[0].clone()];
     rest.extend(ours[skips.len() + 1..].iter().cloned());
-    let theirs = dry_run_fixture("oracle-extra");
+    let theirs = dry_run_fixture(&lab, "oracle-extra");
     for (i, (a, b)) in rest.iter().zip(&theirs).enumerate() {
         assert_eq!(a, b, "oracle-extra: line {i} differs");
     }
@@ -505,6 +540,115 @@ fn retired_families_are_frozen_tiers_without_a_branch() {
         }
     }
     for f in fams.iter().filter(|f| !retired.contains(f)) {
-        assert!(branch(f), "{f}: no branch and not in fv-lab-retired.sh");
+        // A sibling tier (FV_LAB_SIBLINGS) is its family's branch, and has
+        // none of its own.
+        match common::sibling_tier(f) {
+            Some(s) => {
+                assert!(
+                    branch(&s.family),
+                    "{f}: its family {} has a branch",
+                    s.family
+                );
+                assert!(!branch(f), "{f}: a sibling tier has no branch of its own");
+            }
+            None => assert!(branch(f), "{f}: no branch and not in fv-lab-retired.sh"),
+        }
+    }
+}
+
+/// The `oracle-r2` tier (ADR-0019 §20.5, §21): `fv-lab run oracle-r2
+/// --dry-run` is `FV_DRY_RUN=1 FV_ORACLE_TARGETS=sfwan13 runpod-matrix.sh
+/// oracle` (`fixtures/oracle-r2-dry-run.txt`) line for line, read with the
+/// tier's name and its merged weight root: the reference, the tensor-diff
+/// arms, the two decodes (`dry-run metric sfwan13-frames: ffmpeg …`), the
+/// directory compares (`dry-run compare <tag> `) in the script's order, the
+/// pre-fix and composed arms; plus fv-lab's R2 plan, which fetches
+/// sfwan21-1.3b (28.93 GB) once, before its first arm.
+#[test]
+fn the_oracle_r2_tier_dry_runs_as_the_oracle_family_with_sfwan13() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier("oracle-r2").expect("oracle-r2");
+    assert_eq!(tier.weights, TierWeights::VolumeR2);
+    assert_eq!(tier.cells, ["oracle-sfwan13"]);
+    assert!(tier.extra_cells.is_empty());
+    assert_eq!(
+        common::sibling_tier("oracle-r2").map(|s| s.family),
+        Some("oracle".to_owned())
+    );
+    let cfg = config("oracle-r2");
+    let all = dry_run_lines(&cfg, &steps(&lab, &cfg));
+    let r2: Vec<&String> = all.iter().filter(|l| r2_line(l)).collect();
+    assert_eq!(r2.len(), 2, "{r2:?}");
+    assert!(
+        r2[0].starts_with("[oracle-r2] dry-run weights /fvscratch/weights: ")
+            && r2[0].contains("; 1 R2 trees (28.93 GB) fetched before the arms that read them, at most 28.93 GB on the container disk at once"),
+        "{}",
+        r2[0]
+    );
+    assert_eq!(
+        r2[1],
+        "[oracle-r2] dry-run r2 oracle-sfwan13: fetch sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004 (28.93 GB) into /fvscratch/weights"
+    );
+    // The R2 line comes right before the first arm that reads the tree.
+    let i = all.iter().position(|l| l == r2[1]).expect("the r2 line");
+    assert!(all[i + 1].starts_with("[oracle-r2] dry-run oracle-sfwan13: env "));
+    let ours: Vec<String> = all.into_iter().filter(|l| !r2_line(l)).collect();
+    let theirs = dry_run_fixture(&lab, "oracle-r2");
+    assert_eq!(ours, theirs);
+    // The script's order: the arms, the decodes and compares where it runs them.
+    let kinds: Vec<&str> = ours
+        .iter()
+        .map(|l| {
+            let r = l.split_once("] ").map_or("", |(_, r)| r);
+            if r.starts_with("dry-run metric sfwan13-frames: ffmpeg -loglevel error -y -i ") {
+                "decode"
+            } else if r.starts_with("dry-run compare ") {
+                "compare"
+            } else if r.starts_with("dry-run reference ") {
+                "reference"
+            } else if r.starts_with("dry-run oracle-") {
+                "arm"
+            } else {
+                "frame"
+            }
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "frame",
+            "reference",
+            "arm",
+            "arm",
+            "arm",
+            "arm",
+            "arm",
+            "decode",
+            "decode",
+            "compare",
+            "compare",
+            "arm",
+            "arm",
+            "compare",
+            "arm",
+            "arm",
+            "arm",
+            "frame"
+        ]
+    );
+    for want in [
+        "[oracle-r2] dry-run metric sfwan13-frames: ffmpeg -loglevel error -y -i /fvscratch/oracle-ref/sfwan13/dump/ref.mp4 -start_number 0 /fvscratch/oracle-ref/sfwan13/frames/frame-%03d.png ",
+        "[oracle-r2] dry-run compare oracle-sfwan13-frames-vs-ref ",
+        "[oracle-r2] dry-run compare oracle-sfwan13-codec-floor ",
+        "[oracle-r2] dry-run compare oracle-sfwan13-legacy-frames-vs-ref ",
+    ] {
+        assert!(ours.iter().any(|l| l == want), "{want}");
+    }
+    // Every gated arm reads the tree from the merged root, never the volume.
+    for l in ours.iter().filter(|l| l.contains(" --weights ")) {
+        assert!(
+            l.contains(" --weights /fvscratch/weights/sfwan21-1.3b "),
+            "{l}"
+        );
     }
 }

@@ -8,7 +8,7 @@ goldens and the fetched run directories hold only the reference.
 
 | Secret | Pod env | Used by | What it holds |
 |---|---|---|---|
-| `fv_r2_access_key_id`, `fv_r2_secret_access_key` | `FV_WEIGHTS_R2_ACCESS_KEY_ID`, `FV_WEIGHTS_R2_SECRET_ACCESS_KEY` | `fv-lab pod up` for a `weights = "volume+r2"` tier (docs/dev/fv-lab.md, ADR-0019 §16) | the R2 weights store's read key (docs/ops/r2-weights.md) |
+| `fv_r2_access_key_id`, `fv_r2_secret_access_key` | `FV_WEIGHTS_R2_ACCESS_KEY_ID`, `FV_WEIGHTS_R2_SECRET_ACCESS_KEY` | `fv-lab pod up` for a `weights = "volume+r2"` tier (docs/dev/fv-lab.md, ADR-0019 §16); the upstream reference pods when a selected target has an `r2` tree (`fv-lab oracle`, `lab/upstream.toml`: `sfwan13`) or `UP_STEPS` has an `r2:<tree>` step (`runpod-http.sh upstream`; `scripts/gpu/upstream/pod.sh` hands the key to the plan step alone, ADR-0019 §21) | the R2 weights store's read key (docs/ops/r2-weights.md) |
 | `fv_hf_token` | `HF_TOKEN` | the upstream reference pods: `fv-lab oracle` for a stack with `hub_token = true` (`lab/upstream.toml`: `sol-ltx25`), and `runpod-http.sh upstream` when `UP_STEPS` has a `weights:ltx25*` step (or `UP_HUB_TOKEN=1`) | a Hugging Face read token of an account that has accepted the Lightricks LTX-2.5 licence |
 
 The serving templates and endpoints reference their own `fv_*` secrets

@@ -452,7 +452,7 @@ tae = true
 cells = ["determinism-ltx-t2v", "determinism-ltx-i2v", "determinism-h3"]
 
 # runpod-matrix.sh `oracle` with FV_ORACLE_TARGETS naming its nine tensor-diff
-# targets (sfwan13 stays in the script, §20.5; the clip-metric targets are the
+# targets (sfwan13 is the oracle-r2 tier below, §21; the clip-metric targets are the
 # extra cells below, §20): one cell per target,
 # its reference fetched from FV_ORACLE_URL. cell_timeout_s 5400 as
 # scripts/gpu/oracle.sh passes FV_GEN_TIMEOUT_S. `pod up` needs FV_ORACLE_URL
@@ -480,6 +480,33 @@ cells = ["oracle-fasth3-8step", "oracle-fasth3-8step-vsa0", "oracle-fasth3-4step
 # their arms, so the default run above (its goldens, the GPU-checked plan) is
 # unchanged; their goldens are oracle-extra-dry-run.txt / -gates.tsv.
 extra_cells = ["oracle-ltx25-i2v", "oracle-ltx25-kf", "oracle-ltx25-ref2v", "oracle-ltx25-a2v", "oracle-ltx25-a2v-i2v", "oracle-ltx25-retake", "oracle-ltx25-retake-v", "oracle-ltx25-retake-a", "oracle-ltx25-extend", "oracle-ltx25-a2v-guided"]
+
+# runpod-matrix.sh `oracle`'s sfwan13 target (ADR-0019 §20.5, §21): the
+# oracle tier's pod with weights = "volume+r2", since its tree sfwan21-1.3b
+# (28.93 GB) is R2-only since 2026-10-13: fetched onto the container disk
+# before the first arm that reads it (150 GB: the tree and the 120 GB every
+# volume tier keeps), the pod's idle limit weights::r2_idle_min, the R2 key as
+# Runpod secret references. A sibling tier of the `oracle` family
+# (fv-lab-retired.sh FV_LAB_SIBLINGS): its goldens are the script's dry run
+# with FV_ORACLE_TARGETS=sfwan13. `pod up` / `fv-lab oracle --family
+# oracle-r2` need --cells, as the oracle tier.
+[[tier]]
+name = "oracle-r2"
+description = "GPU oracle diff (docs/oracle.md) of SF-Wan 1.3B, its tree from the R2 weights store: our run on the FastVideo reference's injected noise and text, tensor by tensor, the frames against the reference's clip (needs FV_ORACLE_URL)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 5400
+container_disk_gb = 150
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["oracle-sfwan13"]
 
 # ---- D1f (docs/adr/0019-fv-lab.md §17): three more runpod-matrix.sh families as
 # tiers, each held equal to the script's dry run by a golden (fv-lab-goldens.sh).

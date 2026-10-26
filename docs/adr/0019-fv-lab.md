@@ -30,7 +30,10 @@
   typed `[[metric]]` step in the cell, `metrics.txt` a report, the ten LTX clip-metric targets as the `oracle` tier's
   `extra_cells`) is proposed, CPU-tested; its GPU check is §20.7 (a first attempt on `664473b` compared nothing: the
   upstream pod had no Hub token; to be re-run once the owner's secret `fv_hf_token` exists, §20.7 "First attempt").
-  `sfwan13` is a follow-up (§20.5), so `oracle`'s branch stays whole
+  `sfwan13` is a follow-up (§20.5), done in §21 (D1j: `sfwan13` as the `oracle-r2` tier, `weights = "volume+r2"`; its
+  upstream tree fetched from R2 by a typed `r2` step of `lab/upstream.toml`; a `decode` measure, directory
+  `[[compare]]`s and `after` anchors in the cell schema), proposed, CPU-tested; its GPU check is §21.7, which needs the
+  coordinator's decision on the script side's tree (§21.8). Until it passes, `oracle`'s branch stays whole
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -51,6 +54,15 @@
 - §20: `plan.rs` (`Metric`, `Measure`, `Step::Metric`, `Tier::extra_cells`), `run.rs` (`Runner::metric`), `oracle.rs`
   (`runtime_fetch`), `lab/cells/oracle-ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,retake,retake-v,retake-a,extend,a2v-guided}.toml`;
   tests `tests/dry_run.rs`, `tests/repeats_oracle.rs`; fixtures `oracle-extra-{dry-run.txt,gates.tsv}`
+- §21: `plan.rs` (`Measure::Decode`, `Metric::report` optional, `Metric::after`, `Compare::{tag, after}`,
+  `Step::CompareDirs`, `{ref_dir}`), `run.rs` (`MetricLine::Frames`, `Step::CompareDirs`), `oracle.rs`
+  (`StackTarget::{r2, container_disk_gb}`, `r2_step`, `upstream_launch`), `lab/cells/oracle-sfwan13.toml`, the
+  `oracle-r2` tier, `lab/upstream.toml` (`sfwan13`); `scripts/gpu/upstream/pod.sh` (`r2_key_init`, `weights_r2`),
+  `scripts/gpu/upstream/oracle.sh` (`oracle_sfwan`), `scripts/gpu/runpod-http.sh` (`upstream_r2_key`, the sibling
+  refusal), `scripts/gpu/oracle.sh`, `scripts/gpu/fv-lab-retired.sh` (`FV_LAB_SIBLINGS`), `runpod-matrix.sh`'s
+  `sfwan13` dry-run fixes; tests `tests/{dry_run,repeats_oracle,oracle_driver,lab_files,payload_golden,fv_lab_bin}.rs`,
+  `scripts/gpu/tests/upstream-r2.test.sh`; fixtures `oracle-r2-{dry-run.txt,gates.tsv}`, `runpod-http-oracle-r2.json`,
+  `runpod-http-upstream-fastvideo-sfwan13.json`
 - Plan: D1 (`docs/plan/2026-10-23-execution-plan.md`); review `docs/gaps/2026-10-22-architecture-review.md` §7.5
 
 ## Context
@@ -2832,7 +2844,7 @@ The name is equal (`fv-lab-upstream-<tag>`, the golden made with `FV_POD_PREFIX=
 | interrupt | the trap deletes the upstream pods; the runtime driver is left to its own | SIGTERM to the runtime side, the upstream pods deleted without a fetch, the runtime side waited for (600 s, then killed and its pod deleted) | nothing outlives the driver but what a backstop deletes |
 | upstream fetch | when the upstream run wrote `DONE` (before the release) | at the release | the dumps are served until then; the same tree and skip |
 | `UP_AFTER`, `FV_ORACLE_RUN_MODE=all`, `FV_ORACLE_FAMILY`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`, `FV_ORACLE_EXTRA_ENV` | yes | no (`--extra-env` for the runtime run, its refusals `pod up`'s) | not used by the tier's cells; `FV_ORACLE_F32` / `OWN_TEXT` are the tier's defaults (§15.5) |
-| clip-metric targets, `sfwan13` | yes (`runpod-matrix.sh oracle`) | the ten LTX clip-metric targets since §20 (the tier's extra cells); `sfwan13` not yet (§20.5) | |
+| clip-metric targets, `sfwan13` | yes (`runpod-matrix.sh oracle`) | the ten LTX clip-metric targets since §20 (the tier's extra cells); `sfwan13` since §21 (`--family oracle-r2`) | |
 
 #### 19.5 Code and tests
 
@@ -3163,7 +3175,8 @@ plans one `sol-ltx25` pod with `UP_STEPS="info:box weights:ltx25 oracle:ltx25-a2
 
 #### 20.5 `sfwan13`: a follow-up, and what it needs
 
-Not small, so not here (decision 3). What it needs:
+Done in §21 (D1j), as described here but for the choices the coordinator made then (§21.1). Not small, so not here
+(decision 3). What it needs:
 
 1. **Upstream, the tree.** `oracle_sfwan` (`scripts/gpu/upstream/oracle.sh`) reads `$W/sfwan21-1.3b`
    (`/workspace/weights`, the volume; never written, CLAUDE.md), and the tree (28.93 GB, `weights-r2.tsv`) is R2-only
@@ -3420,3 +3433,286 @@ without `--fetch-tree`; `oracle.sh`; the script's real runs of the tensor-diff t
 `plan.rs` (`Metric`, `Clip`, `Measure`, `Step::Metric`, `Tier::extra_cells`, `Lab::resolve_selected`), `run.rs`
 (`Runner::metric`, `metric_value`, the dry-run lines, `raw_line`), `oracle.rs` (`runtime_fetch`), `bin/fv-lab.rs`;
 tests in `plan.rs`, `run.rs`, `tests/{dry_run,repeats_oracle,oracle_driver,fv_lab_bin,lab_files}.rs`.
+
+### 21. D1j: `sfwan13` as cells: the `oracle-r2` tier, the upstream R2 step, `decode` and directory compares
+
+Status: proposed 2026-10-26 (draft PR from `claude/d1j-sfwan13`), CPU-tested; its GPU check is the coordinator's
+(§21.7) and needs one decision first (§21.8: the script side's tree). Decision-id FVID-2026-10-26-d1j-sfwan13. This is
+§20.5's follow-up: the last target of `runpod-matrix.sh oracle` that was not a cell becomes one, so after its check
+`oracle` can retire (§21.9). Nothing is retired here.
+
+#### 21.1 The coordinator's decisions (2026-10-26)
+
+1. **Upstream tree** as §20.5 item 1 describes: a typed per-target `r2 = ["sfwan21-1.3b"]` in `lab/upstream.toml`
+   (additive), rendered as a `UP_STEPS` step `r2:<tree>` that `scripts/gpu/upstream/pod.sh` runs
+   (`r2-weights.py plan --pin weights-r2.tsv`, then `r2-fetch.py --root $UW`); the R2 key as Runpod secret
+   references (`weights::r2_env_refs`) only when a selected target has an `r2` tree, handed to that step alone;
+   `oracle_sfwan` reading the tree from `$UW` when it is there; a **per-target container disk**, so the `fastvideo`
+   stack's pod body and golden are byte-identical when no `r2` target is selected. Never a write to the volume.
+2. **Runtime tier** `oracle-r2` (`weights = "volume+r2"`), one cell `oracle-sfwan13` with §20.5's arms, and the two
+   missing pieces as additive, generic schema features: a **`decode`** measure in `[[metric]]` and a **`[[compare]]`
+   of two frame directories** that are not arms'.
+3. **The script's dry-run fixes first**, then the goldens from the live branch; the other 15 families' dry runs
+   byte-identical before and after.
+4. **The `sfwan` family's prelude is unchanged** in this PR (it goes when `oracle` retires).
+5. **The GPU check procedure** here (§21.7), on one shared reference through `fv-lab oracle --url-file /
+   --hold-upstream`, as §19.7 and §20.7.
+
+#### 21.2 Upstream: `r2` trees on the container disk
+
+`StackTarget` gains `r2` (tree names, `weights::safe_tree`, once each; `Stacks::check_against` requires each to be a
+dest of `scripts/gpu/weights-r2.tsv`, so a typo fails `fv-lab check`, not a pod) and `container_disk_gb` (positive;
+`schemas/upstream.v1.json` regenerated, `deny_unknown_fields` kept). `lab/upstream.toml`'s `fastvideo` stack gains the
+target `sfwan13` (`steps = []`, `r2 = ["sfwan21-1.3b"]`, `container_disk_gb = 180`: the stack's 150 and the 28.93 GB
+tree). For a run's selected targets:
+
+- `oracle::up_steps`: each target's `steps`, then its `r2:<tree>` steps, once each in the stack's target order:
+  `info:box r2:sfwan21-1.3b oracle:sfwan13`; with `fasth3-4step-vsa` too, `info:box weights:h3-diffusers
+  r2:sfwan21-1.3b oracle:fasth3-4step-vsa,sfwan13`.
+- `oracle::upstream_launch(stack, targets, …)`: the pod's `env` adds the two R2 references when a selected target
+  has an `r2` tree (beside the Hub token's for a `hub_token` stack), and its disk is the largest of the stack's and
+  the selected targets'. Without `sfwan13` the body is the one §19.7 measured: 150 GB, no env
+  (`runpod-http-upstream-fastvideo.json` unchanged).
+- `pod.sh`: `r2_key_init` (at the start, beside `hub_token_init`) reads `FV_WEIGHTS_R2_ACCESS_KEY_ID` /
+  `FV_WEIGHTS_R2_SECRET_ACCESS_KEY` into the shell's own variables and **unsets them**, so no step, cell or reference
+  sees the key; a blank part or an unfilled `{{ … }}` reference is no key; `box.txt` gets `r2_key=env|none|none (env:
+  unfilled secret reference)|none (env: incomplete)`, never a value. `weights_r2 <tree>` (the step `r2:<tree>`)
+  refuses a bad name, a tree the table lacks and a `$UW` on `/workspace` (the volume) before anything; keeps a tree
+  already complete at its revision; else runs `r2-weights.py plan <tree>@<rev> --pin weights-r2.tsv --ttl <cap+600>
+  --out <private dir>/plan.json` with the key in **its environment only** (never an argv), then `timeout <cap>
+  r2-fetch.py --root $UW --plan … --skip-trees '' --status $OUT/r2-<tree>.json` without it, and removes the plan
+  whatever happened. The plan's directory (`/root/.r2-state`, mode 700) is outside the served `/root/runs`. Python:
+  the image's (`$UP/tools/bin/python`, else `python3`; standard library only), so no apt step. The cap is
+  `UP_CELL_TIMEOUT_S`; the pod's `net` idle watchdog counts the fetch's own traffic, and a 28.93 GB fetch takes about
+  a minute (§21.7).
+- `upstream/oracle.sh` `oracle_sfwan`: `--model $UW/sfwan21-1.3b` when `$UW/sfwan21-1.3b/.complete` exists, else the
+  volume's path as before.
+- The script path follows: `runpod-http.sh upstream` (`upstream_r2_key`) puts the same two references in the body
+  when `UP_STEPS` or `UP_STEPS_BG` has an `r2:` step (whitespace normalised as for the Hub token), and
+  `scripts/gpu/oracle.sh` gives `sfwan13` the step `r2:sfwan21-1.3b` and a 180 GB disk. Golden:
+  `runpod-http-upstream-fastvideo-sfwan13.json` (`plan-upstream` with those settings); `tests/oracle_driver.rs` holds
+  fv-lab's body to it with the usual differences (the cap watchdog, `env` always sent).
+
+#### 21.3 Runtime: the `oracle-r2` tier and `oracle-sfwan13`
+
+The tier is the `oracle` tier's pod (PRO 6000, EU, the six preflight cells, the TAE fetch, the 5400 s cell cap) with
+`weights = "volume+r2"` and `container_disk_gb = 150` (the 28.93 GB tree and the 120 GB every volume tier keeps;
+`tests/lab_files.rs` checks it holds the largest arm), so its idle limit is `weights::r2_idle_min(5400)` = 115 min
+and its pod carries the R2 references (§16). One cell, `lab/cells/oracle-sfwan13.toml`: the main arm (`wan gen
+--preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --clip-dir`, `FASTVIDEO_WAN_VAE=full`), `-diff`, the f32 control
+(`-f32`, `-f32-diff`, `-bf16-vs-f32`), the two decodes and two compares, `-legacy` (`FASTVIDEO_WAN_CAUSAL_AR=0
+FASTVIDEO_WAN_CAUSAL_FPB=1`) and `-legacy-diff`, the third compare, `-composed` (`FASTVIDEO_WAN_CAUSAL_FLASH=0`),
+`-composed-diff`, `-flash-vs-composed`: ten arms, in the script's order.
+
+Why a tier and not `extra_cells` of `oracle`: §20.1 decision 3 (the `oracle` tier's pod body and fixtures stay; a
+`volume+r2` arm on a `volume` tier would skip). Why its goldens are the `oracle` family's: it has no branch of its
+own. `scripts/gpu/fv-lab-retired.sh` gains `FV_LAB_SIBLINGS="oracle-r2:oracle"` (a tier cut from a live family's
+targets that its own tier cannot run): `fv-lab-goldens.sh` writes `oracle-r2-dry-run.txt` / `-gates.tsv` from
+`runpod-matrix.sh oracle` with `FV_ORACLE_TARGETS=sfwan13 FV_GEN_TIMEOUT_S=5400` and `runpod-http-oracle-r2.json`
+from `runpod-http.sh plan` with the tier's disk and idle limit (as `gold`'s, now for any `volume+r2` tier);
+`runpod-http.sh run` / `all` refuse `FV_FAMILY=oracle-r2` naming fv-lab's command and the script's
+(`FV_FAMILY=oracle`), its `plan` is the body. `tests/dry_run.rs` holds `fv-lab run oracle-r2 --dry-run` to the golden
+line for line with three allowed differences (`common::Sibling`, `common::merged_root`): the tier's name for the
+family's (`[oracle-r2]`, `/runs/oracle-r2/`), the merged weight root `/fvscratch/weights/` for `/workspace/weights/`
+(§16.3), and fv-lab's own R2 lines (`dry-run weights …`, `dry-run r2 oracle-sfwan13: fetch
+sfwan21-1.3b@4b44356… (28.93 GB) into /fvscratch/weights`, right before the first arm), checked on their own.
+
+#### 21.4 Cell schema additions (v1, additive, `deny_unknown_fields` kept)
+
+Every cell file before them parses unchanged; `schemas/cell.v1.json` is regenerated (`tests/schema.rs`). Nothing
+names the oracle.
+
+11. **`decode` measure** (`[[metric]] measure = [{ kind = "decode", dir = "…" }]`): `ffmpeg -loglevel error -y -i
+    <clip> -start_number 0 <dir>/frame-%03d.png`, `dir` made first, no line written (`MetricLine::Frames`); a failed
+    decode leaves no frames and the run goes on. `dir` is below `{runs}/` or `{ref_dir}/` only (frames are written
+    there: never the repository, the scratch root, the dump or a weights tree). The dry run lists it as every metric
+    command (`dry-run metric <tag>: ffmpeg …`).
+12. **A report only when one is written.** `[[metric]] report` is optional for a pass that only decodes (no `copy`,
+    `missing` or `echo`, every measure `decode`); any other pass still needs it (`report directory` refused
+    otherwise). No `metrics.txt`, no empty report directory: the script writes none for `sfwan13`.
+13. **`{ref_dir}`**: the reference's directory, `<scratch>/oracle-ref/<target>` (`{ref}` is its `dump/`), in a cell
+    with a `[reference]` only; what is derived from the reference sits there and goes with it after the cell (the
+    script's `$ref/frames`).
+14. **Directory compares**: `[[compare]] tag = "<tag>"` makes `baseline` / `candidate` frame directories (`{runs}/…`,
+    `{ref_dir}/…`, `{ref}/…`, `{scratch}/…`) instead of arms: `compare_one <tag> <baseline> <candidate> <args>`, the
+    report `compare/compare-clips-<tag>.json`, the dry-run line `dry-run compare <tag> <args>` (`Step::CompareDirs`).
+    Run when an arm of its cell is selected; frames missing on either side is `skip compare <tag> (frames missing)`
+    and a skipped report, as for arms. No paired `gate` (a gate reads two arms' `benchmark.json`).
+15. **`after = "<arm>"`** on `[[compare]]` and `[[metric]]`: the step runs right after that arm (and its hash) instead
+    of after all arms. At one arm the anchored metrics run first (a decode makes the frames a compare reads), then
+    the anchored compares, each kind in file order; unanchored ones keep their place (arms, compares, gates,
+    metrics). An arm compare may not be anchored before one of its arms.
+
+Adjusted from §20.5's sketch: the clip is named (`{runs}/oracle-sfwan13/frames/output.mp4`, what `wan gen
+--clip-dir` writes) rather than a glob rule (§21.6); the reference's frames use a new placeholder (`{ref_dir}`), not
+`{scratch}/oracle-ref/<target>`, so a cell does not spell the runner's layout; and the ordering is a per-step anchor,
+not a reordering of the cell, so every existing cell keeps its order.
+
+#### 21.5 Equality: script fixes, goldens, fakes
+
+- **Script fixes** (`runpod-matrix.sh oracle`, the `sfwan*` block):
+  - *dry run only*: both decodes are built as an array (`dec`, not `cmd`: the `-legacy` / `-composed` runs below read
+    the target's `cmd`) and passed to `metric_dry "$target-frames"`, so a dry run logs them; the reference's decode
+    runs when `ref.mp4` exists or in a dry run; our clip is `frames/output.mp4` in a dry run. Before, the dry run ended
+    after `-bf16-vs-f32` with exit 2 (8 lines); now it lists the target (18 lines) and exits 0;
+  - *a real-run change, failures only*: `ls … | head -1` ends in `|| true` (under `pipefail`, no mp4 ended the whole
+    family), and our decode ends in `|| true` as the reference's already did (a failed decode ended the family under
+    `set -e`). Now both leave the frames missing, the compares log `frames missing`, and the run goes on; fv-lab does
+    the same. A real run with an mp4 runs the same argv as before.
+- **Before / after.** The dry run of every `runpod-matrix.sh` family (`FV_DRY_RUN=1` output, stamps cut, and its
+  `FV_DRY_RUN_GATES` records) before and after the change: the 15 others (`cold`, `eval`, `hd`, `headline`,
+  `ltxoffload`, `mmaudio`, `serve-engine`, `sfquality`, `sfstream`, `sfwan`, `sol-cosmos3`, `sol-lingbot`, `solbench`,
+  `speechtest`, `wan`) and `oracle` at its default and extra targets byte-identical (stdout, stderr and gates);
+  `oracle` with `FV_ORACLE_TARGETS=sfwan13` as above. Every committed fixture is unchanged
+  (`fv-lab-goldens.sh --check`; new: `oracle-r2-{dry-run.txt,gates.tsv}`, `runpod-http-oracle-r2.json`,
+  `runpod-http-upstream-fastvideo-sfwan13.json`).
+- **Fakes, both runners** (`tests/repeats_oracle.rs::sfwan13_decodes_compares_and_cleans_up_as_the_script`): the live
+  branch with `FV_ORACLE_TARGETS=sfwan13` and `fv-lab run oracle-r2` on one fake box (its weights read as a volume's;
+  the R2 staging is `tests/r2_runner.rs`'s), a fake ffmpeg (a decode writes frames from the clip's bytes) and a fake
+  `compare-clips` (a report of both directories' bytes): every record, `compare-dumps` line, decoded frame and compare
+  report the same, the arms and compares in the script's order in `live.log`, the four dumps and the reference (its
+  decoded frames with it) gone; and without `ref.mp4` in the dump, both compares against the reference `frames
+  missing` on both sides and the codec floor still compared.
+- **Upstream** (`scripts/gpu/tests/upstream-r2.test.sh`, in CI): `r2_key_init` / `weights_r2` cut from `pod.sh` with a
+  fake Python: the key unset at once (a child sees nothing), in the plan step's environment only, in no output, argv
+  or file; the plan pinned and removed (a failed fetch too), its directory 700; the fetch into `$UW` with
+  `--skip-trees ''` and a status file; no key, an unfilled reference, half a key, an unpublished tree, four bad names
+  and a `$UW` on the volume refused with nothing called; a complete tree kept. `runpod-http.sh plan-upstream`'s
+  references for `r2:` steps (tabs, `UP_STEPS_BG`, beside the Hub token's) and none without. Mutations caught: the
+  `unset` dropped, the plan kept, the key passed to the fetch, the volume check widened.
+
+#### 21.6 Differences from the script, and why
+
+| | script | fv-lab | why |
+|---|---|---|---|
+| our clip for the decode | the first `frames/*.mp4` by name | `frames/output.mp4` | the one mp4 `wan gen --clip-dir` writes there; typed, as the dry run names it |
+| the decode directories | `$ref/frames` and `mp4frames/` made before the decodes, clip or not | made by the decode that writes them | empty directories only; the compares read "frames missing" either way |
+| run directory, log prefix | `runs/oracle/<tag>`, `[oracle]` | `runs/oracle-r2/<tag>`, `[oracle-r2]` | the tier's name |
+| the tree | `$W/sfwan21-1.3b` on the volume, which lacks it since 2026-10-13: the arms skip (`weights incomplete`) | fetched from R2 into the merged root (§16) | the tier exists for it |
+| `ORACLE_REFS_DONE` | the watcher (§15.5) | when the one reference is fetched | §15.5 |
+
+#### 21.7 The GPU check (the coordinator's)
+
+The ten arms of `oracle-sfwan13` on both runners, on **one** reference made by `fv-lab oracle`'s upstream pod and held
+for the script side, as §19.7 and §20.7. The commit `SHA` must be on GitHub with `fastvideo-rs-runtime:sha-<7>`
+published (its tools this commit's, §20.7 "Before it"), `fv-lab` built from it on the build pod; **stop the build pod
+before the run** (`scripts/dev/build-pod.sh stop`: a running one adds its spend to the balance guard). RTX PRO 6000,
+EU-RO-1, on `bz0ofkfx45`. The Runpod secrets `fv_r2_access_key_id` / `fv_r2_secret_access_key` must exist (they did
+for the gold run, §16.7).
+
+```sh
+SHA=<7>
+CELLS=oracle-sfwan13,oracle-sfwan13-diff,oracle-sfwan13-f32,oracle-sfwan13-f32-diff,oracle-sfwan13-bf16-vs-f32,oracle-sfwan13-legacy,oracle-sfwan13-legacy-diff,oracle-sfwan13-composed,oracle-sfwan13-composed-diff,oracle-sfwan13-flash-vs-composed
+SKIP='/frames/|/mp4frames/'
+D=/tmp/fv-oracle-sfwan13; rm -rf $D; mkdir -p $D
+./fv-lab oracle --family oracle-r2 --sha $SHA --cells $CELLS --upstream-wall-cap-s 7200 --wall-cap-s 3600 \
+  --fetch-tree --fetch-skip "$SKIP"                                 # the plan: one fastvideo pod, 180 GB, the R2 references
+# fv-lab side: the upstream pod (its r2:sfwan21-1.3b step), the reference, the oracle-r2 runtime pod, the release
+RUNPOD_API_KEY=… ./fv-lab oracle --family oracle-r2 --sha $SHA --cells $CELLS --upstream-wall-cap-s 7200 --wall-cap-s 3600 \
+  --fetch-tree --fetch-skip "$SKIP" --url-file $D/urls --hold-upstream $D/hold --yes >$D/report.json 2>$D/lab.log & LAB=$!
+# script side: the same reference, runpod-matrix.sh oracle's sfwan13 target, then lift the hold whatever happened.
+# FV_R2_TREES is the decision of §21.8 (option A), NOT in this PR: without the tree the script's arms skip.
+until [ -s $D/urls ] || ! kill -0 $LAB 2>/dev/null; do sleep 20; done
+if [ -s $D/urls ]; then
+  RUNPOD_API_KEY=… FV_FAMILY=oracle FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 FV_GEN_TIMEOUT_S=5400 FV_POD_CAP_S=3600 \
+    FV_FETCH_TREE=1 FV_FETCH_SKIP="$SKIP" \
+    FV_EXTRA_ENV="FV_ORACLE_URL=$(cat $D/urls) FV_ORACLE_TARGETS=sfwan13 FASTVIDEO_DUMP_OPS=0,1,24,47" \
+    bash scripts/gpu/runpod-http.sh run $SHA >$D/script.log 2>&1
+fi
+touch $D/hold; wait $LAB; echo "fv-lab oracle rc=$?"
+L=artifacts/runpod/oracle-r2/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/oracle/$SHA-<MMDDHHMM>
+bash scripts/gpu/fv-lab-compare-runs.sh $L $S
+jq '{served, missing, runtime_ok, runtime_exit_code, problems, upstream: [.upstream[] | {id, tag, released, deleted}]}' $D/report.json
+U=artifacts/runpod/upstream/<the upstream tag in report.json>
+grep -E '^(r2_key|hf_token)=' $U/box.txt; grep '^r2:' $U/steps.tsv; jq '{exit, oom_kills}' $U/oracle-sfwan13/cell.json
+grep -E '\] (weights /fvscratch/weights: |r2 oracle-sfwan13: |oracle: sfwan13 reference )' $L/live.log
+grep -E 'runpod-pod-(created|deleted)' artifacts/fv-lab/ledger.tsv | tail -4    # both fv-lab pods created and deleted
+grep -rhoE 'FV_WEIGHTS_R2_[A-Z_]+[=":]+ *[^ "{]+' $L $U || echo "no key value in any fetched file"
+```
+
+**Pass:**
+
+- `fv-lab oracle rc=0`; the report `"served": ["sfwan13"]`, `"missing": []`, `"runtime_ok": true`,
+  `"runtime_exit_code": 0`, `"problems": []`, one upstream entry released (`… the hold is lifted`) with `"deleted":
+  {"Ok": null}`.
+- The upstream run: `box.txt` `r2_key=env`; `steps.tsv` `r2:sfwan21-1.3b	0`; `r2-sfwan21-1.3b.json` done;
+  `oracle-sfwan13/cell.json` exit 0, `oom_kills` 0; `pod.json` `"min_ram_gb": 192`; the plan (the first command,
+  without `--yes`) shows the upstream body's `"containerDiskInGb": 180` and its two R2 references.
+- fv-lab's runtime `live.log`: `weights /fvscratch/weights: … 1 R2 trees (28.93 GB) fetched before the arms that read
+  them, at most 28.93 GB on the container disk at once`, one `r2 oracle-sfwan13: weights ready: …` line, `oracle:
+  sfwan13 reference <size>`; both runtime pods `matrix_exit=0`.
+- `fv-lab-compare-runs.sh` exit 0 with "10 arm(s) the same (4 ran with byte-identical frames, 0 skipped in both, 0
+  failed in both; 6 with the same compare-dumps lines), 0 control arm(s) reported, 3 report(s) the same, 0 verdict
+  file(s) the same, 0 metrics report(s), 0 difference(s)" and `same compare/compare-clips-oracle-sfwan13-{codec-floor,
+  frames-vs-ref,legacy-frames-vs-ref}.json` (each report's `status`; the codec floor's numbers read our mp4's encode,
+  which may differ between pods, §20.6, but not its status); each generation arm the preset's 81 frames.
+- The ledger shows the upstream and the fv-lab runtime pod created and deleted; `fv-lab pod reap --account` lists
+  nothing; no fetched file holds a key.
+
+**Cost** ($2.49/hr; UNVERIFIED where marked). *R2 fetch time*: 28.93 GB at the 0.52-0.96 GB/s §16.7's gold run
+measured for trees over 10 GB on PRO 6000 pods in EU-RO-1: **30-56 s on each pod that fetches**, the upstream pod
+(the image's Python, UNVERIFIED there: no upstream pod has run `r2-fetch.py`) and each runtime pod (after `apt-get
+install python3`, about 1 min), so about 1-2 min of pod time each, $0.04-$0.08; R2 egress is free, the pod time is
+not. *Upstream pod*: ready 3.5 min on a host with the image (§19.7) up to 15 min on a cold pull; `info:box` and the
+fetch about 2 min; the SF-Wan reference (FastVideo's 1.3B causal DMD, 4 steps, 81 frames, the full VAE, the dump
+packed) about 3-6 min (UNVERIFIED: no recorded time); then held while both runtime sides run, about 20 min: in all
+**about 30-45 min, $1.25-$1.90**. *Each runtime pod*: boot and preflight 5 min, python3 and the fetch about 2 min,
+four SF-Wan generations of about 1-2 min each (UNVERIFIED; the gold files record loads of 36-139 s), six
+`compare-dumps`, two decodes and three `compare-clips` in about 2 min: **about 15-20 min, $0.60-$0.85**. **About
+$2.50-$3.60 in all.**
+
+**Balance.** fv-lab's guard (§19.1) at these caps: $8 + the upstream pod at $2.50/hr over 7,200 + 1,200 s ($5.83) +
+the runtime pod over 3,600 + 1,200 s ($3.33) = **$17.17**, plus what the account already spends over the 2 h cap
+(hence the build pod stopped first: at $0.96/hr it adds $1.92). The script side's pod has no such guard, so the start
+must cover it at its cap too (1 h at the $2.50 price cap and its create retries, about $3.33): **start at $20.50 or
+more**. The upstream cap stays at 7,200 s: the references' wait is what it leaves after the stock wait and the fetch
+reserve, 3,300 s, enough for a cold pull, the fetch and the reference. Stop before the balance would fall below $8
+(CLAUDE.md).
+
+#### 21.8 Open: the script side's tree (a decision first)
+
+The script runner cannot run `sfwan13` today: `runpod-http.sh run` mounts the EU volume as `$W`, which lacks
+`sfwan21-1.3b` since 2026-10-13, and passes no R2 key (its pod `env` carries only `FV_POD_FILES_TGZ`), so every
+generation arm skips (`weights incomplete`) and the compare has nothing to compare (§20.7's first attempt showed what
+that reads like). §21.1 did not settle it. Options:
+
+- **A (recommended).** An additive `FV_R2_TREES="<tree>…"` for `runpod-http.sh run`: the body carries the two R2
+  references (as `upstream_r2_key` does), and the start command, before `runpod-matrix.sh`, installs python3 (the
+  runtime image has none, §16.4), runs `r2-weights.py plan --pin` with the key and `r2-fetch.py --root
+  /fvscratch/weights` without it, links every volume tree into `/fvscratch/weights` (§16.3's merged root), and starts
+  the matrix with `FV_WORK=/fvscratch`, so `$W` is the merged root and the command lines equal fv-lab's word for
+  word. Unset, the start command and every golden are unchanged. About the size of §21.2's `pod.sh` step plus a
+  route test; its check is §21.7 itself.
+- **B.** A pod script through `FV_POD_FILES` / `FV_POD_SCRIPT` with a plan minted on the coordinator's host: no change
+  to `runpod-http.sh`, but the plan's bearer URLs would sit in the pod's create body (visible in the console until
+  they expire). Not recommended.
+- **C.** fv-lab's side alone against the reference (`compare-dumps` and the frame compares), no runner comparison:
+  the oracle's purpose is met, §8's equality is not.
+
+#### 21.9 Then: the retirement of `oracle`
+
+After §21.7 passes (and §20.7's re-run with the Hub token), in the next D1 PR, as §20.8 with `sfwan13` included:
+
+1. **Knobs.** `oracle` joins `FV_LAB_RETIRED`; `FV_ORACLE_TARGETS`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`,
+   `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT` and the five `FV_LTX_*_PROMPT` move from `SCRIPT_KNOBS` to `MODE_KNOBS`;
+   `runpod-http.sh run` / `plan` route `oracle` to `fv-lab pod up` (refusing `FV_ORACLE_TARGETS` with a pointer to
+   `FV_CELLS`) and `oracle-r2` likewise (it leaves `FV_LAB_SIBLINGS`: no live family is left to be a sibling of).
+2. **Fixtures freeze**: `oracle-{dry-run.txt,gates.tsv}`, `runpod-http-oracle.json`, `oracle-extra-*`,
+   `oracle-r2-{dry-run.txt,gates.tsv}`, `runpod-http-oracle-r2.json`; `fv-lab-goldens.sh` stops writing them.
+3. **The branch goes**: the `oracle)` case, `metric_dry` and `oracle_run`; the `wan` family keeps `oracle_fetch` /
+   `oracle_diff`; the other families' dry runs compared before and after. `tests/repeats_oracle.rs`'s oracle tests
+   (the `sfwan13` one included) run a frozen copy (`fixtures/oracle-script/`, as §15.10's `det-script/`).
+4. **`scripts/gpu/oracle.sh`** becomes `fv-lab oracle` (mapping `ORACLE_TARGETS` to `--cells` and to `--family
+   oracle-r2` for `sfwan13`), or is deleted with a pointer in docs/oracle.md.
+5. **The `sfwan` family's prelude** (`FV_ORACLE_TARGETS=sfwan13 runpod-matrix.sh oracle`, kept as it is here, §21.1
+   decision 4) becomes `fv-lab run oracle-r2 --cells <its arms> --runs-dir "$RUNS"` (that pod then needs the R2
+   key: §21.8's option A gives it), or is dropped and `sfwan13` runs only through `fv-lab oracle --family oracle-r2`.
+
+`runpod-http.sh upstream` stays for the upstream benchmarks (§19.8 item 3); its `r2:` step is here to stay with it.
+
+#### 21.10 What does not change
+
+The `oracle` tier (its default run, extra cells, three fixtures, pod body); the `fastvideo` and `sol-ltx25` upstream
+pod bodies and goldens when `sfwan13` is not selected; every other tier and its pod; the 15 other families' dry runs;
+`fv-lab pod up`, `fv-lab oracle` (`--family oracle-r2` was always accepted); the `sfwan` family's prelude; every
+existing cell file (the schema additions are optional fields and new kinds).

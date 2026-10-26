@@ -65,6 +65,7 @@ dry run show what will run.
 | `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | byte identity across fresh processes at short configs, three runs per group and the timed-pick control; `determinism.txt` | D1d (§15); retired after its GPU check (§15.10); `wan` skips on the EU volume |
 | `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | byte identity of 1080p runs within one process and across two; prompt sets as files, hashes per run, stage digests | D1d (§15); retired after its GPU check (§15.10) |
 | `oracle` | `oracle-<target>` (9), and 10 extra cells | 32 (+46) | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`); on request (`extra_cells`, run when `--cells` names their arms) the ten LTX clip-metric targets with their ffmpeg / ffprobe `[[metric]]` reports (D1i, §20) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; GPU check passed (`f93a961`; the clip-metric targets': §20.7), but **not retired**: the script branch stays whole for `sfwan13` and `oracle.sh` (§15.10, §20.5) |
+| `oracle-r2` | `oracle-sfwan13` | 10 | the oracle diff of SF-Wan 1.3B (`sfwan13`), its tree fetched from R2 (`weights = "volume+r2"`): tensors, the f32 floor, the frames against the reference's decoded clip and the codec floor (`decode` metrics, directory `[[compare]]`s), the pre-fix and composed paths | D1j ([§21](../adr/0019-fv-lab.md)); a sibling of the `oracle` family (`FV_LAB_SIBLINGS`); `fv-lab oracle --family oracle-r2`; GPU check §21.7, pending §21.8 |
 | `fuse` | `fuse-{kernels,trace,switch}` | 10 | DiT block fusions: the kernels bit for bit (ungated), a traced step per workload, fusions off against on (`--off-identity`, `exact` gate) | D1f ([§17](../adr/0019-fv-lab.md)); retired after its GPU check (§17.6); 3 arms skip on the EU volume (`h3-8step`) |
 | `attn3` | `attn3-h3-ltx25` | 6 | flash v2 against cuDNN SDPA on FastH3 4-step dense and LTX-2.5 1080p20s dense, VSA bf16 in place against f32 | D1f (§17); retired after its GPU check (§17.6); `FV_ATTN3_ARMS` / `FV_ATTN3_VSA` refused (select by arm) |
 | `ltx` | `ltx-versions` | 3 | LTX-2.5 two-stage, LTX-2.3 two-stage, LTX-2.0 19B distilled | D1f (§17); retired after its GPU check (§17.6; the script gated its arms from D1f); `ltx23` / `ltx2` skip on the EU volume |
@@ -315,7 +316,8 @@ reads them), for `oracle` a `FASTVIDEO_DUMP_OPS` other than `0,1,24,47`, and for
 script ran the oracle first with it; the tier does not). `pod fetch`
 takes `determinism.txt`, `hashes.txt` and each arm's `hashes.txt` / `digests.txt`; `fv-lab-compare-runs.sh` compares
 the hashes files byte for byte and each arm's `compare-dumps` lines, except a `[repeats] controls` arm's (read from
-`lab/cells`), which are reported, not judged (ADR-0019 §15.7). Still in the script (§15.6): `sfwan13` (§20.5; the
+`lab/cells`), which are reported, not judged (ADR-0019 §15.7). Still in the script (§15.6): `sfwan13` until §21's
+check (it is the `oracle-r2` tier's cell since §21; the
 ten LTX clip-metric targets are the tier's extra cells since §20, below), `FV_ORACLE_OWN_TEXT=1`, and
 `runpod-http.sh upstream` (the reference pods; `fv-lab oracle`, below, brings them up as fv-lab pods for the
 targets that are cells). So the `oracle` branch stays
@@ -364,8 +366,9 @@ RUNPOD_API_KEY=… ./fv-lab oracle --sha <7> \
 The upstream pod's body is `runpod-http.sh upstream`'s (`runpod-http.sh plan-upstream`, the goldens
 `fixtures/runpod-http-upstream-<stack>.json`) but for the wall-cap watchdog every fv-lab pod carries.
 `--fetch-tree [--fetch-skip ERE] [--fetch-max-mb N]` is passed to the runtime side's `pod up` (the whole run
-directory: the clip-metric targets' `metrics.txt` and clip copies, below). Not yet in fv-lab: `sfwan13` (§20.5); for
-it `scripts/gpu/oracle.sh` is still the way.
+directory: the clip-metric targets' `metrics.txt` and clip copies, below). `sfwan13`: `fv-lab oracle --family
+oracle-r2 --cells <its arms>` (ADR-0019 §21); its upstream target fetches `sfwan21-1.3b` from R2 (`lab/upstream.toml`
+`r2`, the pod's disk raised to the target's 180 GB, the R2 key as Runpod secret references).
 
 ## Derived-clip metrics and extra cells (D1i)
 

@@ -1188,13 +1188,15 @@ fn oracle_without_yes_is_the_plan_and_needs_no_key() {
     assert!(String::from_utf8_lossy(&nokey.stderr).contains("RUNPOD_API_KEY"));
     // `check` reads lab/upstream.toml too.
     let out = stdout(fv_lab().arg("check"));
-    assert!(out.contains("upstream fastvideo: 5 target(s)"), "{out}");
+    assert!(out.contains("upstream fastvideo: 6 target(s)"), "{out}");
     assert!(out.contains("upstream sol-ltx25: 14 target(s)"), "{out}");
     // The oracle tier's clip-metric targets are extra cells (ADR-0019 §20.3).
     assert!(
         out.contains("oracle: 9 cell(s), 32 arm(s) (+10 extra cell(s), 46 arm(s), on request)"),
         "{out}"
     );
+    // sfwan13 is the oracle-r2 tier's (ADR-0019 §21).
+    assert!(out.contains("oracle-r2: 1 cell(s), 10 arm(s)"), "{out}");
 }
 
 /// The runtime image's smoke step runs `fv-lab check` (and a dry run) in
@@ -1239,7 +1241,7 @@ fn the_runtime_images_lab_subset_passes_check() {
     assert!(lab >= 3, "lab/tiers.toml, lab/cells, lab/upstream.toml");
     let out = stdout(fv_lab().args(["check", "--root"]).arg(&root));
     assert!(out.contains("rtx6000: 2 cell(s), 7 arm(s)"), "{out}");
-    assert!(out.contains("upstream fastvideo: 5 target(s)"), "{out}");
+    assert!(out.contains("upstream fastvideo: 6 target(s)"), "{out}");
     let dry = stdout(
         fv_lab()
             .args([

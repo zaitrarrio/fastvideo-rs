@@ -92,12 +92,20 @@ start_up() {
   bg[$image]=$!
 }
 
-# The H3 targets need their weight views; SF-Wan reads the volume as it is.
-fvw=""
+# The H3 targets need their weight views. SF-Wan's tree is R2-only since
+# 2026-10-13: the step r2:sfwan21-1.3b fetches it onto the container disk
+# (upstream/pod.sh weights_r2; the pod gets the R2 key as Runpod secret
+# references, runpod-http.sh upstream_r2_key), which then needs 180 GB, as
+# lab/upstream.toml's sfwan13 target (docs/adr/0019-fv-lab.md §21).
+fvw="" fvdisk=150
 [[ " ${fv[*]} " == *" fasth3-"* ]] && fvw="weights:fasth3-8step weights:h3-diffusers"
+if [[ " ${fv[*]} " == *" sfwan13 "* ]]; then
+  fvw="${fvw:+$fvw }r2:sfwan21-1.3b"
+  fvdisk=180
+fi
 # UP_AFTER: upstream steps run once the oracle dumps are served (e.g.
 # cells:fv-sfwan13, the upstream benchmark on the same pod).
-(( ${#fv[@]} )) && start_up fastvideo "${fv[*]}" "$fvw" 150
+(( ${#fv[@]} )) && start_up fastvideo "${fv[*]}" "$fvw" "$fvdisk"
 # RECON_ACCEPT_MISMATCH=1: the LTX-2.5 single-file packs are rebuilt from the
 # Diffusers copy, and two of them (Gemma layers 12-47, the DiT's embedding
 # connectors) carry the Diffusers numbers -- the ones our port loads -- in the
