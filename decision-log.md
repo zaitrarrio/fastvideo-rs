@@ -2001,3 +2001,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §16.10 "Raised to 256"
 - Verification: `tests/payload_golden.rs` (gold's body `minRAMPerGPU: 256`, equal to `FV_MIN_RAM_GB=256 runpod-http.sh plan`), `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`; UNVERIFIED: how many EU-RO-1 PRO 6000 hosts give 256 GB (both gold pods got 283 GB)
+
+### FVID · 2026-10-26 · FVID-2026-10-26-negotiate-before-load
+- Trigger: the gold run at `7e580e5` (ADR-0019 §16.7 "Result"): `h3-ref2v-max`, `h3-ref2v-turbo`, `ltx25-ref2v` and `ltx25-a2v-guided` loaded their model for 199, 132, 34 and 5 s before `fv-gpucheck engine` negotiated the t2v request and `negotiate` refused it (plan D1 follow-up 4, D3 follow-up b)
+- Options: negotiate against `CudaModel::caps()` from the catalog before the backend is built; negotiate against the started engine's table before waiting for readiness (the executor is already loading); build the table `start` serves without starting it, negotiate, then start
+- Decision: (coordinator's request, executed by the agent) the third: `EngineService::caps_table` builds the table from the backends' declarations by the code `start` now uses (`declare` / `into_table`), and `EngineService::start_negotiated` negotiates against it and starts only an accepted request (`StartNegotiatedError::{UnknownModel, Negotiate, Start}`, the `negotiate: …` text unchanged); `fv-gpucheck engine` calls it after `CudaBackend::new` (device checks and the H3 1080P gate, no model load). fv-serve is unchanged: it loads its resident models at start whatever the requests, and its submit path negotiates before `engine.submit` (so before a swap load); while it loads, `admit` answers `loading` before negotiating, which costs no load
+- Reason: the catalog's `CudaModel::caps()` is not the served table (the table rebinds tiers across models and `CudaBackend::new` may drop the 1080P tier on the device), so only the table `start` builds keeps every acceptance and refusal as it was
+- Reversibility: high (code and tests)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0023-lab-report-and-ci-bridge.md (the gold tier's refusals)
+- Verification: `crates/fastvideo-engine-service/tests/start_negotiated.rs` (the four gold refusals from the real catalog with a backend that counts `load` calls: 0; an unknown model refused with 0 loads; an accepted request starts and loads, its caps and job equal to `negotiate` against the started engine's table; `caps_table` equal to the started engine's table and public aliases for the whole catalog); `cargo check -p fastvideo-gpucheck --features cuda`; UNVERIFIED on a GPU until the next gold run

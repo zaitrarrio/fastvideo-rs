@@ -36,7 +36,8 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use fastvideo_protocol::{
-    ApiError, JobId, LogLine, ModelCaps, ModelId, ResolvedJob, SessionSpec, StreamCaps,
+    negotiate, ApiError, GenerationRequest, JobId, LogLine, ModelCaps, ModelId, ResolvedJob,
+    SessionSpec, StagedInputs, StreamCaps,
 };
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch, Notify};
@@ -712,6 +713,56 @@ impl std::fmt::Debug for EngineService {
     }
 }
 
+/// What every backend declares: per executor its models' caps and
+/// recipes, and the models' public names. [`EngineService::start`] books the
+/// executors from it and [`EngineService::caps_table`] builds the same table.
+struct Declared {
+    per_exec: Vec<Vec<(ModelCaps, Recipe)>>,
+    public_names: BTreeMap<ModelId, Vec<String>>,
+}
+
+fn declare(backends: &[Box<dyn EngineBackend>]) -> Declared {
+    let mut per_exec = Vec::new();
+    let mut public_names: BTreeMap<ModelId, Vec<String>> = BTreeMap::new();
+    for b in backends {
+        let mut list: Vec<(ModelCaps, Recipe)> = Vec::new();
+        for c in b.caps() {
+            let r = b.recipe(&c.id);
+            let names = b.public_names(&c.id);
+            if !names.is_empty() {
+                public_names.entry(c.id.clone()).or_insert(names);
+            }
+            list.push((c, r));
+        }
+        per_exec.push(list);
+    }
+    Declared {
+        per_exec,
+        public_names,
+    }
+}
+
+impl Declared {
+    fn into_table(self, cfg: &EngineConfig) -> Result<CapabilityTable, ApiError> {
+        Ok(CapabilityTable::build(self.per_exec, &cfg.tier_overrides)?
+            .with_public_names(self.public_names))
+    }
+}
+
+/// Why [`EngineService::start_negotiated`] did not start the engine.
+#[derive(Debug, thiserror::Error)]
+pub enum StartNegotiatedError {
+    /// No backend declares the model.
+    #[error("model `{0}` is not in the capability table")]
+    UnknownModel(ModelId),
+    /// `negotiate` refused the request; nothing was started or loaded.
+    #[error("negotiate: {0:?}")]
+    Negotiate(ApiError),
+    /// The capability table or the start failed, as in [`EngineService::start`].
+    #[error("engine start: {0}")]
+    Start(ApiError),
+}
+
 impl EngineService {
     /// Starts one executor thread per backend (one per GPU). Each executor
     /// loads its backend's `resident` models; [`readiness`] reports progress.
@@ -728,32 +779,21 @@ impl EngineService {
         if backends.is_empty() {
             return Err(ApiError::internal("the engine needs at least one backend"));
         }
-        let mut per_exec = Vec::new();
+        let declared = declare(&backends);
         let mut execs = Vec::new();
         let mut pool = ModelPool::default();
-        let mut public_names: BTreeMap<ModelId, Vec<String>> = BTreeMap::new();
-        for (i, b) in backends.iter().enumerate() {
-            let caps = b.caps();
+        for (i, list) in declared.per_exec.iter().enumerate() {
             let mut ex = ExecState::default();
-            let mut list: Vec<(ModelCaps, Recipe)> = Vec::new();
-            for c in caps {
+            for (c, _) in list {
                 ex.serves.insert(c.id.clone());
                 if c.resident {
                     ex.resident.insert(c.id.clone());
                 }
                 pool.declare(i, c.id.clone(), c.resident);
-                let r = b.recipe(&c.id);
-                let names = b.public_names(&c.id);
-                if !names.is_empty() {
-                    public_names.entry(c.id.clone()).or_insert(names);
-                }
-                list.push((c, r));
             }
             execs.push(ex);
-            per_exec.push(list);
         }
-        let caps =
-            CapabilityTable::build(per_exec, &cfg.tier_overrides)?.with_public_names(public_names);
+        let caps = declared.into_table(&cfg)?;
         let n = backends.len();
         let readiness = watch::Sender::new(pool.readiness());
         let shared = Arc::new(Shared {
@@ -790,6 +830,41 @@ impl EngineService {
                 threads: Mutex::new(threads),
             }),
         })
+    }
+
+    /// The capability table [`EngineService::start`] serves for `backends`
+    /// under `cfg`, built the same way but without starting an executor, so
+    /// without loading anything: what a request can be negotiated against
+    /// before the models load ([`EngineService::start_negotiated`]).
+    pub fn caps_table(
+        cfg: &EngineConfig,
+        backends: &[Box<dyn EngineBackend>],
+    ) -> Result<CapabilityTable, ApiError> {
+        declare(backends).into_table(cfg)
+    }
+
+    /// Negotiate `req` for `model` against the table `start` would serve
+    /// ([`EngineService::caps_table`]), then start the engine only when the
+    /// request is accepted. A request the model cannot serve (a task it does
+    /// not support, a canvas it refuses) fails before any backend loads a
+    /// model: the same refusal [`fastvideo_protocol::negotiate`] gives
+    /// against the started engine's caps, minus the load. Returns the
+    /// started engine (still loading), the model's caps and the job.
+    pub fn start_negotiated(
+        cfg: EngineConfig,
+        backends: Vec<Box<dyn EngineBackend>>,
+        model: &ModelId,
+        req: &GenerationRequest,
+        staged: &StagedInputs,
+    ) -> Result<(Self, ModelCaps, ResolvedJob), StartNegotiatedError> {
+        let table = Self::caps_table(&cfg, &backends).map_err(StartNegotiatedError::Start)?;
+        let caps = table
+            .get(model)
+            .cloned()
+            .ok_or_else(|| StartNegotiatedError::UnknownModel(model.clone()))?;
+        let job = negotiate(req, &caps, staged).map_err(StartNegotiatedError::Negotiate)?;
+        let engine = Self::start(cfg, backends).map_err(StartNegotiatedError::Start)?;
+        Ok((engine, caps, job))
     }
 
     fn shared(&self) -> &Arc<Shared> {
