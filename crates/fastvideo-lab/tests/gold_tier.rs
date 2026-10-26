@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_lab::goldcell::{cell_name, gold_cells, GOLD_TIER};
+use fastvideo_lab::goldcell::{cell_name, gold_cells, technique_profile, GOLD_TIER};
 use fastvideo_lab::plan::{Lab, Step, TierWeights};
 use fastvideo_lab::run::{dry_run_lines, RunConfig};
 use fastvideo_lab::weights::{
@@ -114,6 +114,66 @@ fn every_gold_arm_is_its_variant() {
             "{v}: {argv}"
         );
     }
+}
+
+/// Every gold arm starts fv-gpucheck with the technique profile its variant
+/// is served with (the family file's `engine.profile`), before `engine`, and
+/// an arm of a variant without one passes none. fv-gpucheck installs its
+/// process's profile at start-up, and the engine refuses a process whose
+/// installed settings differ from its model's: the gold smoke run on
+/// `sha-f93a961` failed `h3-larry-turbo` and `sol-h3` at once ("technique
+/// settings already installed (None: {}) differ from what the served models
+/// need") and passed `vdn-h3`, which has none. The engine's side of the same
+/// check (its process plan of each cell's model) is
+/// `crates/fastvideo-engine-service/tests/gold_cells.rs`.
+#[test]
+fn every_gold_arm_starts_with_its_technique_profile() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let fams = families();
+    let mut with_profile = 0;
+    for g in golds() {
+        let v = &g.model.variant;
+        let argv = &lab.cells[&cell_name(v)].arms[0].argv;
+        let (_, var) = fams.find(v).expect("variant");
+        let want = technique_profile(var).unwrap_or_else(|e| panic!("{v}: {e}"));
+        let engine = argv
+            .iter()
+            .position(|a| a == "engine")
+            .unwrap_or_else(|| panic!("{v}: no engine subcommand: {argv:?}"));
+        let flags: Vec<usize> = argv
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.starts_with("--techniques"))
+            .map(|(i, _)| i)
+            .collect();
+        match want {
+            Some(p) => {
+                with_profile += 1;
+                assert_eq!(
+                    flags,
+                    [engine - 2],
+                    "{v}: one --techniques before engine: {argv:?}"
+                );
+                assert_eq!(argv[engine - 1], p, "{v}: {argv:?}");
+            }
+            None => assert!(flags.is_empty(), "{v}: no technique profile: {argv:?}"),
+        }
+    }
+    assert!(with_profile > 0);
+    // The smoke run's three arms.
+    let profile_of = |id: &str| {
+        let (_, var) = fams.find(id).expect(id);
+        technique_profile(var).expect(id).map(str::to_owned)
+    };
+    assert_eq!(
+        profile_of("h3-larry-turbo").as_deref(),
+        Some("h3/larry_turbo_dense")
+    );
+    assert_eq!(
+        profile_of("sol-h3").as_deref(),
+        Some("h3/sol_h3_4step_engine_ladder")
+    );
+    assert_eq!(profile_of("vdn-h3"), None);
 }
 
 #[test]

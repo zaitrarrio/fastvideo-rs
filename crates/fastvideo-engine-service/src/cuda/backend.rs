@@ -207,14 +207,8 @@ pub fn install_process_plan(plan: &ProcessPlan) -> Result<(), ApiError> {
         .iter()
         .map(|(k, v, _)| (k.to_owned(), v.to_owned()))
         .collect();
-    if have != plan.settings {
-        return Err(ApiError::internal(format!(
-            "technique settings already installed ({:?}: {have:?}) differ from what the served models need ({:?}: {:?}); \
-             start the process with that profile or none",
-            active.path, plan.profile, plan.settings
-        )));
-    }
-    Ok(())
+    plan.check_installed(active.path.as_deref(), &have)
+        .map_err(ApiError::internal)
 }
 
 impl CudaBackend {
