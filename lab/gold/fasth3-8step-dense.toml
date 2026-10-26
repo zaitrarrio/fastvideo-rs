@@ -20,18 +20,29 @@ width = 1344
 height = 768
 frames = 124
 fps = 24
-prompt_set = "scripts/gpu/prompts-eval.json (the five gate prompts; no run of this variant yet)"
+prompt_set = "scripts/gpu/prompts-eval.json (the five gate prompts)"
 steps = 8
+note = "The latency numbers are the gold run's (7e580e5, 2026-10-26): one request of the gold cell (lab/cells/gold-fasth3-8step-dense.toml: runpod-matrix.sh's default prompt, seed 1024, the served default), not the prompt set above."
 
 [latency]
+measures = "serve_job"
+p50_s = 71.33
+denoise_s = 65.68
+decode_s = 4.84
+load_s = 95.4
+peak_gib = 61.0
+note = "One serve-engine job of the gold cell (n = 1, the gold run at 7e580e5, 2026-10-26): p50_s is submit to MP4, the text encode of the uncached prompt (0.37 s) included; decode_s is video_decode + encode."
 
 [quality]
 
 [cost]
 usd_per_hr = 2.49
+usd_per_clip = 0.04934
 
 [last_validated]
-# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+commit = "7e580e5"
+run = "artifacts/runpod/gold/7e580e5-1026090916-e804/fasth3-8step-dense/summary.json"
+date = "2026-10-26"
 
 [[source]]
 fields = []
@@ -54,33 +65,20 @@ heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
 date = "2026-10-14"
 note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
 
-[[gap]]
-field = "latency.p50_s"
-why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.denoise_s", "latency.decode_s", "latency.load_s", "latency.peak_gib", "cost.usd_per_clip"]
+path = "artifacts/runpod/gold/7e580e5-1026090916-e804/fasth3-8step-dense/gpucheck-out/engine.json"
+heading = "checks"
+date = "2026-10-26"
+note = "The gold run at 7e580e5 (2026-10-26, ADR-0019 §16.7; run artifacts/runpod/gold/7e580e5-1026090916-e804, arm `fasth3-8step-dense`, exit 0, 168 s): one serve-engine job of the gold cell (lab/cells/gold-fasth3-8step-dense.toml: runpod-matrix.sh's default prompt, seed 1024, 1344x768, 124 frames, 8 steps, the served default) on an RTX PRO 6000 Blackwell Server Edition at $2.49/hr (the run's pod.json). Check `timings`: submit_to_mp4_s 71.33 (text 0.37, denoise 65.68, video_decode 4.72, encode 0.12), load_s 95.4, peak_memory_mb 62479 (61.0 GiB). Host RAM (summary.json): peak 78470 MiB of the pod's 269889 MiB, oom_kills 0. decode_s = video_decode + encode, as docs/perf/tiers.md. load_s is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's own R2 fetch had just written, can load from the page cache (live.log). usd_per_clip = cost.usd_per_hr x latency.p50_s / 3600, derived."
 
 [[gap]]
 field = "latency.min_s"
-why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+why = "one request: the gold run (7e580e5, 2026-10-26) makes one serve job per variant (n = 1), so there is no spread"
 
 [[gap]]
 field = "latency.max_s"
-why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
-
-[[gap]]
-field = "latency.denoise_s"
-why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
-
-[[gap]]
-field = "latency.decode_s"
-why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
-
-[[gap]]
-field = "latency.load_s"
-why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
-
-[[gap]]
-field = "latency.peak_gib"
-why = "no measurement of the dense 8-step recipe in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments); the measured 8-step cells run VSA 0.8"
+why = "one request: the gold run (7e580e5, 2026-10-26) makes one serve job per variant (n = 1), so there is no spread"
 
 [[gap]]
 field = "quality.psnr_vs_upstream_min_db"
@@ -105,7 +103,3 @@ why = "a clip, not a stream"
 [[gap]]
 field = "latency.ttff_s"
 why = "a clip, not a stream"
-
-[[gap]]
-field = "cost.usd_per_clip"
-why = "derived from latency.p50_s, which has no measurement here"

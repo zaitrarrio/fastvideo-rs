@@ -29,7 +29,8 @@ note = "h3-trim as served: --h3-recipe trim-8step, the MXFP8 DiT resident, the F
 measures = "end_to_end"
 decode_s = 1.65
 peak_gib = 55.6
-note = "decode_s is the 26-block video VAE with MXFP8 block linears (the default since 2026-10-14), median of 15 clips (run 2: 1.652 s; run 1: 1.627 s; bf16: 2.104-2.135 s, -22.6 %). peak_gib is the denoise run peak (allocated) at 480p with MXFP8; nvidia-smi 58 504 MiB. 768p: decode 3.944 s, peak 62.24 GiB."
+load_s = 83.6
+note = "decode_s is the 26-block video VAE with MXFP8 block linears (the default since 2026-10-14), median of 15 clips (run 2: 1.652 s; run 1: 1.627 s; bf16: 2.104-2.135 s, -22.6 %). peak_gib is the denoise run peak (allocated) at 480p with MXFP8; nvidia-smi 58 504 MiB. 768p: decode 3.944 s, peak 62.24 GiB. load_s is the gold run's serve job (7e580e5, 2026-10-26; its [[source]]), not this measurement's."
 
 [quality]
 gate = "pass: the MXFP8 26-block decoder against the bf16 decode of the same latents (LPIPS 0.0008 / 0.0011 mean at 480p / 768p, PSNR 49.8 / 50.4 dB, 105 / 105 quality checks each). A decoder gate: no gate of the Trim DiT itself in D2's sources."
@@ -38,7 +39,9 @@ gate = "pass: the MXFP8 26-block decoder against the bf16 decode of the same lat
 usd_per_hr = 2.49
 
 [last_validated]
-# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+commit = "7e580e5"
+run = "artifacts/runpod/gold/7e580e5-1026090916-e804/fasth3-trim-8step/summary.json"
+date = "2026-10-26"
 
 [[source]]
 fields = ["latency.measures", "latency.decode_s", "latency.peak_gib", "quality.gate", "workload"]
@@ -61,6 +64,13 @@ heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
 date = "2026-10-14"
 note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
 
+[[source]]
+fields = ["latency.load_s"]
+path = "artifacts/runpod/gold/7e580e5-1026090916-e804/fasth3-trim-8step/gpucheck-out/engine.json"
+heading = "checks"
+date = "2026-10-26"
+note = "The gold run at 7e580e5 (2026-10-26, ADR-0019 §16.7; run artifacts/runpod/gold/7e580e5-1026090916-e804, arm `fasth3-trim-8step`, exit 0, 98 s): one serve-engine job of the gold cell (lab/cells/gold-fasth3-trim-8step.toml: runpod-matrix.sh's default prompt, seed 1024, 832x480, 124 frames, 8 steps, the served default) on an RTX PRO 6000 Blackwell Server Edition at $2.49/hr (the run's pod.json). Check `timings`: submit_to_mp4_s 13.81 (text 0.45, denoise 11.41, video_decode 1.49, encode 0.12), load_s 83.6, peak_memory_mb 55877 (54.6 GiB). Host RAM (summary.json): peak 50386 MiB of the pod's 269889 MiB, oom_kills 0. decode_s = video_decode + encode, as docs/perf/tiers.md. load_s is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's own R2 fetch had just written, can load from the page cache (live.log). Its times are not this file's: the file's latency measures a different quantity (latency.measures), and a serve job includes the text encode of an uncached prompt and is one request. It closes only the gaps it measured that are not times: latency.load_s."
+
 [[gap]]
 field = "latency.p50_s"
 why = "the source states the end to end as an approximation only (about 19 s at 480p, about 49 s at 768p), not a measured median"
@@ -76,10 +86,6 @@ why = "no per-run band in the source"
 [[gap]]
 field = "latency.denoise_s"
 why = "not reported separately for the served MXFP8 DiT (the bf16 Trim denoise of option 7 is another configuration)"
-
-[[gap]]
-field = "latency.load_s"
-why = "not reported"
 
 [[gap]]
 field = "quality.psnr_vs_upstream_min_db"

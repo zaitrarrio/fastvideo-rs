@@ -31,7 +31,8 @@ p50_s = 9.27
 denoise_s = 7.53
 decode_s = 1.45
 peak_gib = 21.1
-note = "One timed generation (n = 1). The options run of the same day (c56aac4, bf16 decoder, before the glue fusions): 480p denoise 9.21 s, e2e 11.23 s, peak 19.7 GiB; 768p 24.64 / 29.31 / 27.1 (1.29x / 1.30x the V2-NVFP4 denoise, and under upstream's V2-NVFP4 10.25 / 29.3 s)."
+load_s = 11.4
+note = "One timed generation (n = 1). The options run of the same day (c56aac4, bf16 decoder, before the glue fusions): 480p denoise 9.21 s, e2e 11.23 s, peak 19.7 GiB; 768p 24.64 / 29.31 / 27.1 (1.29x / 1.30x the V2-NVFP4 denoise, and under upstream's V2-NVFP4 10.25 / 29.3 s). load_s is the gold run's serve job (7e580e5, 2026-10-26; its [[source]]), not this measurement's."
 
 [quality]
 gate = "fail against every comparable arm (Trim bf16, Trim NVFP4, V2-NVFP4): a different model's sample, not gate-equivalent to any H3 tier; shipped as the opt-in fastest tier judged by eye (owner decision 2026-10-14, decision 3)."
@@ -45,7 +46,9 @@ usd_per_hr = 2.49
 usd_per_clip = 0.00641
 
 [last_validated]
-# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+commit = "7e580e5"
+run = "artifacts/runpod/gold/7e580e5-1026090916-e804/fasth3-trim-nvfp4-fast/summary.json"
+date = "2026-10-26"
 
 [[source]]
 fields = ["latency.measures", "latency.p50_s", "latency.denoise_s", "latency.decode_s", "latency.peak_gib", "workload"]
@@ -68,6 +71,13 @@ heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
 date = "2026-10-14"
 note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
 
+[[source]]
+fields = ["latency.load_s"]
+path = "artifacts/runpod/gold/7e580e5-1026090916-e804/fasth3-trim-nvfp4-fast/gpucheck-out/engine.json"
+heading = "checks"
+date = "2026-10-26"
+note = "The gold run at 7e580e5 (2026-10-26, ADR-0019 §16.7; run artifacts/runpod/gold/7e580e5-1026090916-e804, arm `fasth3-trim-nvfp4-fast`, exit 0, 22 s): one serve-engine job of the gold cell (lab/cells/gold-fasth3-trim-nvfp4-fast.toml: runpod-matrix.sh's default prompt, seed 1024, 832x480, 124 frames, 8 steps, the served default) on an RTX PRO 6000 Blackwell Server Edition at $2.49/hr (the run's pod.json). Check `timings`: submit_to_mp4_s 9.92 (text 0.44, denoise 7.51, video_decode 1.51, encode 0.12), load_s 11.4, peak_memory_mb 44100 (43.1 GiB). Host RAM (summary.json): peak 30016 MiB of the pod's 269889 MiB, oom_kills 0. decode_s = video_decode + encode, as docs/perf/tiers.md. load_s is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's own R2 fetch had just written, can load from the page cache (live.log). Its times are not this file's: the file's latency measures a different quantity (latency.measures), and a serve job includes the text encode of an uncached prompt and is one request. It closes only the gaps it measured that are not times: latency.load_s."
+
 [[gap]]
 field = "latency.min_s"
 why = "one timed generation"
@@ -75,10 +85,6 @@ why = "one timed generation"
 [[gap]]
 field = "latency.max_s"
 why = "one timed generation"
-
-[[gap]]
-field = "latency.load_s"
-why = "not reported"
 
 [[gap]]
 field = "quality.psnr_vs_upstream_min_db"

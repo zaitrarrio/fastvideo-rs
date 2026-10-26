@@ -20,17 +20,27 @@ width = 832
 height = 480
 seconds = 5.0
 fps = 16
-prompt_set = "scripts/gpu/prompts-eval.json (no run of this variant in D2's sources)"
+prompt_set = "scripts/gpu/prompts-eval.json"
+note = "The latency numbers are the gold run's (7e580e5, 2026-10-26): one request of the gold cell (lab/cells/gold-longlive-1.3b.toml: runpod-matrix.sh's default prompt, seed 1024, the served default), not the prompt set above."
 
 [latency]
+measures = "serve_job"
+p50_s = 5.18
+denoise_s = 4.04
+decode_s = 0.7
+load_s = 35.9
+note = "One serve-engine job of the gold cell (n = 1, the gold run at 7e580e5, 2026-10-26): p50_s is submit to MP4, the text encode of the uncached prompt (0.34 s) included; decode_s is video_decode + encode."
 
 [quality]
 
 [cost]
 usd_per_hr = 2.49
+usd_per_clip = 0.00358
 
 [last_validated]
-# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+commit = "7e580e5"
+run = "artifacts/runpod/gold/7e580e5-1026090916-e804/longlive-1.3b/summary.json"
+date = "2026-10-26"
 
 [[source]]
 fields = []
@@ -46,33 +56,24 @@ heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
 date = "2026-10-14"
 note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class (see the other gold files for the older prices). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
 
-[[gap]]
-field = "latency.p50_s"
-why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.denoise_s", "latency.decode_s", "latency.load_s", "cost.usd_per_clip"]
+path = "artifacts/runpod/gold/7e580e5-1026090916-e804/longlive-1.3b/gpucheck-out/engine.json"
+heading = "checks"
+date = "2026-10-26"
+note = "The gold run at 7e580e5 (2026-10-26, ADR-0019 §16.7; run artifacts/runpod/gold/7e580e5-1026090916-e804, arm `longlive-1.3b`, exit 0, 42 s): one serve-engine job of the gold cell (lab/cells/gold-longlive-1.3b.toml: runpod-matrix.sh's default prompt, seed 1024, 832x480, 81 frames, 4 steps, the served default) on an RTX PRO 6000 Blackwell Server Edition at $2.49/hr (the run's pod.json). Check `timings`: submit_to_mp4_s 5.18 (text 0.34, denoise 4.04, video_decode 0.60, encode 0.10), load_s 35.9, no peak_memory_mb (the Wan pipeline reports none). Host RAM (summary.json): peak 51142 MiB of the pod's 269889 MiB, oom_kills 0. decode_s = video_decode + encode, as docs/perf/tiers.md. load_s is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's own R2 fetch had just written, can load from the page cache (live.log). usd_per_clip = cost.usd_per_hr x latency.p50_s / 3600, derived."
 
 [[gap]]
 field = "latency.min_s"
-why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+why = "one request: the gold run (7e580e5, 2026-10-26) makes one serve job per variant (n = 1), so there is no spread"
 
 [[gap]]
 field = "latency.max_s"
-why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
-
-[[gap]]
-field = "latency.denoise_s"
-why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
-
-[[gap]]
-field = "latency.decode_s"
-why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
-
-[[gap]]
-field = "latency.load_s"
-why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+why = "one request: the gold run (7e580e5, 2026-10-26) makes one serve job per variant (n = 1), so there is no spread"
 
 [[gap]]
 field = "latency.peak_gib"
-why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+why = "the gold run's engine report (7e580e5, 2026-10-26) carries no peak_memory_mb for the Wan pipeline; its host-RAM peak is in the run source's note"
 
 [[gap]]
 field = "latency.fps"
@@ -97,7 +98,3 @@ why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/technique
 [[gap]]
 field = "quality.jitter_ratio"
 why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
-
-[[gap]]
-field = "cost.usd_per_clip"
-why = "derived from latency.p50_s, which has no measurement here"

@@ -20,18 +20,29 @@ width = 1344
 height = 768
 frames = 124
 fps = 24
-prompt_set = "scripts/gpu/prompts-eval.json (the five gate prompts; no run of this variant yet)"
+prompt_set = "scripts/gpu/prompts-eval.json (the five gate prompts)"
 steps = 4
+note = "The latency numbers are the gold run's (7e580e5, 2026-10-26): one request of the gold cell (lab/cells/gold-fasth3-4step-vsa-nvfp4.toml: runpod-matrix.sh's default prompt, seed 1024, the served default), not the prompt set above."
 
 [latency]
+measures = "serve_job"
+p50_s = 17.7
+denoise_s = 12.44
+decode_s = 4.37
+load_s = 11.7
+peak_gib = 52.5
+note = "One serve-engine job of the gold cell (n = 1, the gold run at 7e580e5, 2026-10-26): p50_s is submit to MP4, the text encode of the uncached prompt (0.40 s) included; decode_s is video_decode + encode."
 
 [quality]
 
 [cost]
 usd_per_hr = 2.49
+usd_per_clip = 0.01224
 
 [last_validated]
-# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+commit = "7e580e5"
+run = "artifacts/runpod/gold/7e580e5-1026090916-e804/fasth3-4step-vsa-nvfp4/summary.json"
+date = "2026-10-26"
 
 [[source]]
 fields = []
@@ -47,33 +58,20 @@ heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
 date = "2026-10-14"
 note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
 
-[[gap]]
-field = "latency.p50_s"
-why = "the 2026-10-14 NVFP4 tier measurements (docs/perf/h3-nvfp4-tier-options.md) cover the FastH3 V2 NVFP4 release only; the 4-step VSA DataFree NVFP4 release has no number in D2's sources"
+[[source]]
+fields = ["latency.measures", "latency.p50_s", "latency.denoise_s", "latency.decode_s", "latency.load_s", "latency.peak_gib", "cost.usd_per_clip"]
+path = "artifacts/runpod/gold/7e580e5-1026090916-e804/fasth3-4step-vsa-nvfp4/gpucheck-out/engine.json"
+heading = "checks"
+date = "2026-10-26"
+note = "The gold run at 7e580e5 (2026-10-26, ADR-0019 §16.7; run artifacts/runpod/gold/7e580e5-1026090916-e804, arm `fasth3-4step-vsa-nvfp4`, exit 0, 30 s): one serve-engine job of the gold cell (lab/cells/gold-fasth3-4step-vsa-nvfp4.toml: runpod-matrix.sh's default prompt, seed 1024, 1344x768, 124 frames, 4 steps, the served default) on an RTX PRO 6000 Blackwell Server Edition at $2.49/hr (the run's pod.json). Check `timings`: submit_to_mp4_s 17.70 (text 0.40, denoise 12.44, video_decode 4.25, encode 0.12), load_s 11.7, peak_memory_mb 53794 (52.5 GiB). Host RAM (summary.json): peak 54665 MiB of the pod's 269889 MiB, oom_kills 0. decode_s = video_decode + encode, as docs/perf/tiers.md. load_s is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's own R2 fetch had just written, can load from the page cache (live.log). usd_per_clip = cost.usd_per_hr x latency.p50_s / 3600, derived."
 
 [[gap]]
 field = "latency.min_s"
-why = "the 2026-10-14 NVFP4 tier measurements (docs/perf/h3-nvfp4-tier-options.md) cover the FastH3 V2 NVFP4 release only; the 4-step VSA DataFree NVFP4 release has no number in D2's sources"
+why = "one request: the gold run (7e580e5, 2026-10-26) makes one serve job per variant (n = 1), so there is no spread"
 
 [[gap]]
 field = "latency.max_s"
-why = "the 2026-10-14 NVFP4 tier measurements (docs/perf/h3-nvfp4-tier-options.md) cover the FastH3 V2 NVFP4 release only; the 4-step VSA DataFree NVFP4 release has no number in D2's sources"
-
-[[gap]]
-field = "latency.denoise_s"
-why = "the 2026-10-14 NVFP4 tier measurements (docs/perf/h3-nvfp4-tier-options.md) cover the FastH3 V2 NVFP4 release only; the 4-step VSA DataFree NVFP4 release has no number in D2's sources"
-
-[[gap]]
-field = "latency.decode_s"
-why = "the 2026-10-14 NVFP4 tier measurements (docs/perf/h3-nvfp4-tier-options.md) cover the FastH3 V2 NVFP4 release only; the 4-step VSA DataFree NVFP4 release has no number in D2's sources"
-
-[[gap]]
-field = "latency.load_s"
-why = "the 2026-10-14 NVFP4 tier measurements (docs/perf/h3-nvfp4-tier-options.md) cover the FastH3 V2 NVFP4 release only; the 4-step VSA DataFree NVFP4 release has no number in D2's sources"
-
-[[gap]]
-field = "latency.peak_gib"
-why = "the 2026-10-14 NVFP4 tier measurements (docs/perf/h3-nvfp4-tier-options.md) cover the FastH3 V2 NVFP4 release only; the 4-step VSA DataFree NVFP4 release has no number in D2's sources"
+why = "one request: the gold run (7e580e5, 2026-10-26) makes one serve job per variant (n = 1), so there is no spread"
 
 [[gap]]
 field = "quality.psnr_vs_upstream_min_db"
@@ -98,7 +96,3 @@ why = "a clip, not a stream"
 [[gap]]
 field = "latency.ttff_s"
 why = "a clip, not a stream"
-
-[[gap]]
-field = "cost.usd_per_clip"
-why = "derived from latency.p50_s, which has no measurement here"
