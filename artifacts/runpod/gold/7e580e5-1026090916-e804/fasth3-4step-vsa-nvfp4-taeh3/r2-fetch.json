@@ -1,0 +1,1 @@
+{"state": "done", "bytes_done": 55193988103, "bytes_total": 55193988103, "elapsed_s": 62.3, "mb_per_s": 886.0, "trees": {"fasth3-4step-vsa-nvfp4": "ready"}, "error": null, "stream": false, "ready": false, "retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 14, "boosts": 0}

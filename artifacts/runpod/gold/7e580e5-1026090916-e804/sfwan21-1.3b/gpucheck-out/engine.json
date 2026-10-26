@@ -1,0 +1,327 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"sfwan21-1.3b\")): PoolEntry { executor: 0, model: ModelId(\"sfwan21-1.3b\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 28.937376115
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "first_step_s": 0.599779981,
+        "load_s": 28.937376115,
+        "metrics": {
+          "build_rtf": 0.801267246617284,
+          "inference_s": 4.056415436,
+          "peak_memory_mb": null,
+          "stage_durations": {
+            "denoise": 4.056415436,
+            "encode": 0.097391778,
+            "text": 0.445005364,
+            "video_decode": 0.59595796
+          }
+        },
+        "stages": [
+          {
+            "at_s": 0.012186374,
+            "stage": "text"
+          },
+          {
+            "at_s": 0.457222758,
+            "stage": "denoise"
+          },
+          {
+            "at_s": 4.515086641,
+            "stage": "video_decode"
+          }
+        ],
+        "submit_to_mp4_s": 5.286524605
+      }
+    },
+    {
+      "limits": {
+        "events": 28,
+        "steps": 4
+      },
+      "name": "progress",
+      "ok": true,
+      "values": {
+        "events": 28,
+        "last": [
+          28,
+          28
+        ]
+      }
+    },
+    {
+      "limits": {
+        "audio": false,
+        "frames": 81,
+        "height": 480,
+        "width": 832
+      },
+      "name": "mp4",
+      "ok": true,
+      "values": {
+        "audio_rate": null,
+        "bytes": 1285974,
+        "duration_s": 5.063,
+        "fps": 16.0,
+        "frames": 81,
+        "height": 480,
+        "path": "/fvscratch/runs/gold/7e580e5-1026090916-e804/sfwan21-1.3b/out/60cd6b68-417b-4d0a-8455-a84807c5d1c9/output.mp4",
+        "width": 832
+      }
+    },
+    {
+      "limits": {
+        "frames": 81
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "frames_sha256": "4ff2ee33e8c152587076ce41df0f5cd314044065a28a501bb3fd4bc5d7772308",
+        "pngs": 81
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": null,
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 399360,
+        "multiple": 16,
+        "pad_and_crop": false,
+        "short_edges": [
+          480
+        ]
+      },
+      "family": "wan",
+      "fps": {
+        "allowed": [
+          16
+        ],
+        "container_only": false,
+        "default": 16
+      },
+      "frames": {
+        "default": 81,
+        "max": 81,
+        "min": 9,
+        "offset": 9,
+        "step": 12
+      },
+      "id": "sfwan21-1.3b",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "sfwan21-1.3b-causal",
+      "refs": {
+        "audio": 0,
+        "images": 0,
+        "total": 0,
+        "videos": 0
+      },
+      "resident": true,
+      "served_names": [
+        "sfwan21-1.3b"
+      ],
+      "stream": {
+        "causal": {
+          "block_frames": 12,
+          "context": {
+            "prompt_recache": false,
+            "sink_latent_frames": 15,
+            "window_latent_frames": 21
+          },
+          "target_fps": 16
+        }
+      },
+      "tasks": [
+        "t2v"
+      ]
+    },
+    "cuda_feature": true,
+    "job": {
+      "audio": {
+        "plan": "none"
+      },
+      "audio_in": null,
+      "fps": 16,
+      "height": 480,
+      "keyframes": [],
+      "model": "sfwan21-1.3b",
+      "negative_prompt": "",
+      "num_frames": 81,
+      "post": {
+        "crop": null,
+        "drop_audio": false
+      },
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "recipe": "sfwan21-1.3b-causal",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 7,
+      "task": "t2v",
+      "width": 832
+    },
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": null,
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 399360,
+          "multiple": 16,
+          "pad_and_crop": false,
+          "short_edges": [
+            480
+          ]
+        },
+        "family": "wan",
+        "fps": {
+          "allowed": [
+            16
+          ],
+          "container_only": false,
+          "default": 16
+        },
+        "frames": {
+          "default": 81,
+          "max": 81,
+          "min": 9,
+          "offset": 9,
+          "step": 12
+        },
+        "id": "sfwan21-1.3b",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 0,
+          "images": 0,
+          "total": 0,
+          "videos": 0
+        },
+        "resident": true,
+        "served_names": [
+          "sfwan21-1.3b"
+        ],
+        "stream": null,
+        "tasks": [
+          "t2v"
+        ]
+      },
+      "gpu": {
+        "min_sm": 80,
+        "min_vram_gib": 24
+      },
+      "id": "sfwan21-1.3b",
+      "public_names": [],
+      "recipe": {
+        "block_frames": 12,
+        "family": "sf_wan",
+        "local_attn_frames": 21,
+        "sink_frames": 15,
+        "wan": {
+          "decoder": "taehv",
+          "default": [
+            832,
+            480,
+            81,
+            16
+          ],
+          "flow_shift": 5.0,
+          "frames_max": 81,
+          "i2v": false,
+          "max_area": 399360,
+          "multiple": 16,
+          "negative": "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards",
+          "preset": "sf_wan_t2v_1_3b",
+          "sampler": {
+            "kind": "dmd",
+            "steps": 4
+          },
+          "short_edges": [
+            480
+          ],
+          "tae_dir": "/fvscratch/weights/auxiliary/tae",
+          "vsa": false,
+          "weights": "/fvscratch/weights/sfwan21-1.3b"
+        }
+      },
+      "recipe_name": "sfwan21-1.3b-causal",
+      "resident": true,
+      "served_names": [
+        "sfwan21-1.3b"
+      ],
+      "tier": null,
+      "variant": "sfwan21-1.3b"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {
+        "FASTVIDEO_VSA": "0"
+      },
+      "profile": null,
+      "settings": {}
+    },
+    "recipe": {
+      "attention": "causal-kv",
+      "name": "sfwan21-1.3b-causal",
+      "steps": 4,
+      "summary": "SF-Wan causal rollout, 4 Self-Forcing steps per block, KV window 21 latent frames, sink 15",
+      "vae": "taehv"
+    }
+  },
+  "elapsed_s": 34.812507666,
+  "env": {
+    "FASTVIDEO_VSA": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "engine",
+  "status": "pass"
+}

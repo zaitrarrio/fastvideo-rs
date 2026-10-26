@@ -1,0 +1,219 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"h3-ref2v-turbo\")): PoolEntry { executor: 0, model: ModelId(\"h3-ref2v-turbo\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 132.035893019
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": {
+        "channels": 2,
+        "native_rate": 32000,
+        "via_sidecar": false
+      },
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 1032192,
+        "multiple": 32,
+        "pad_and_crop": false,
+        "short_edges": [
+          768,
+          480
+        ]
+      },
+      "family": "h3",
+      "fps": {
+        "allowed": [
+          24
+        ],
+        "container_only": false,
+        "default": 24
+      },
+      "frames": {
+        "default": 124,
+        "max": 362,
+        "min": 107,
+        "offset": 5,
+        "step": 17
+      },
+      "id": "h3-ref2v-turbo",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "sol-h3-ref2va",
+      "refs": {
+        "audio": 3,
+        "images": 9,
+        "total": 12,
+        "videos": 3
+      },
+      "resident": true,
+      "served_names": [
+        "h3-ref2v-turbo"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 15.083333015441895,
+          "min_s": 4.458333492279053
+        }
+      },
+      "tasks": [
+        "ref2v"
+      ],
+      "tier": "turbo"
+    },
+    "cuda_feature": true,
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": {
+          "channels": 2,
+          "native_rate": 32000,
+          "via_sidecar": false
+        },
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 1032192,
+          "multiple": 32,
+          "pad_and_crop": false,
+          "short_edges": [
+            768,
+            480
+          ]
+        },
+        "family": "h3",
+        "fps": {
+          "allowed": [
+            24
+          ],
+          "container_only": false,
+          "default": 24
+        },
+        "frames": {
+          "default": 124,
+          "max": 362,
+          "min": 107,
+          "offset": 5,
+          "step": 17
+        },
+        "id": "h3-ref2v-turbo",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 3,
+          "images": 9,
+          "total": 12,
+          "videos": 3
+        },
+        "resident": true,
+        "served_names": [
+          "h3-ref2v-turbo"
+        ],
+        "stream": null,
+        "tasks": [
+          "ref2v"
+        ]
+      },
+      "gpu": {
+        "min_sm": 89,
+        "min_vram_gib": 80,
+        "needs": [
+          "fp8"
+        ]
+      },
+      "id": "h3-ref2v-turbo",
+      "public_names": [
+        "MiniMax-H3-Turbo"
+      ],
+      "recipe": {
+        "adaln_cache": null,
+        "dense": true,
+        "dit_offload": null,
+        "family": "h3",
+        "hd_1080p": false,
+        "i2v_encoder": "auto",
+        "lora_strength": null,
+        "profile": "h3/sol_h3_ref2va",
+        "recipe": "sol-h3-ref2va",
+        "ref2va": true,
+        "ref_weights": "/fvscratch/weights/h3-ref2va",
+        "short_edge": 768,
+        "steps": 4,
+        "taeh3": null,
+        "text_encoder": "auto",
+        "text_weights": "/fvscratch/weights/h3-base",
+        "vdn_shared": null,
+        "vdn_weights": null,
+        "warmup": false,
+        "warmup_blocking": false,
+        "weights": "/fvscratch/weights/h3-base"
+      },
+      "recipe_name": "sol-h3-ref2va",
+      "resident": true,
+      "served_names": [
+        "h3-ref2v-turbo"
+      ],
+      "tier": "turbo",
+      "variant": "h3-ref2v-turbo"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {},
+      "profile": "h3/sol_h3_ref2va",
+      "settings": {
+        "FASTVIDEO_BF16_ACT": "1",
+        "FASTVIDEO_H3_QUANT": "mxfp8"
+      }
+    },
+    "recipe": {
+      "attention": "dense",
+      "name": "sol-h3-ref2va",
+      "profile": "h3/sol_h3_ref2va",
+      "steps": 4,
+      "summary": "H3 reference-to-video, fast: the Ref2VA DiT with the lightx2v turbo LoRA fused (Sol-H3 Ref2VA route), 4 forwards, dense attention, official VAE",
+      "vae": "full"
+    }
+  },
+  "elapsed_s": 132.484389665,
+  "env": {},
+  "error": "error: negotiate: ApiError { kind: InvalidRequest, message: \"model `h3-ref2v-turbo` does not support task t2v\", param: Some(\"task\"), retry_after_s: None }",
+  "git_sha": null,
+  "stage": "engine",
+  "status": "error"
+}

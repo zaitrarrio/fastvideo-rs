@@ -1,0 +1,1 @@
+{"state": "done", "bytes_done": 36004908092, "bytes_total": 36004908092, "elapsed_s": 47.5, "mb_per_s": 757.4, "trees": {"longlive-1.3b-safetensors": "ready", "sfwan21-1.3b": "ready"}, "error": null, "stream": false, "ready": false, "retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 10, "boosts": 0}

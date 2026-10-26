@@ -1,0 +1,223 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"ltx25-a2v-guided\")): PoolEntry { executor: 0, model: ModelId(\"ltx25-a2v-guided\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 24.888431205
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": {
+        "channels": 2,
+        "native_rate": 48000,
+        "via_sidecar": false
+      },
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 8355840,
+        "multiple": 64,
+        "pad_and_crop": true,
+        "short_edges": [
+          1080,
+          480,
+          720,
+          768,
+          1440,
+          2160
+        ]
+      },
+      "family": "ltx2",
+      "fps": {
+        "allowed": [
+          24,
+          25,
+          48,
+          50
+        ],
+        "container_only": false,
+        "default": 24
+      },
+      "frames": {
+        "default": 121,
+        "max": 481,
+        "min": 9,
+        "offset": 1,
+        "step": 8
+      },
+      "id": "ltx25-a2v-guided",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": true,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "ltx25-dev-a2v-guided",
+      "refs": {
+        "audio": 0,
+        "images": 0,
+        "total": 0,
+        "videos": 0
+      },
+      "resident": true,
+      "served_names": [
+        "ltx25-a2v-guided"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 20.04166603088379,
+          "min_s": 0.375
+        }
+      },
+      "tasks": [
+        "a2v"
+      ],
+      "tier": "max"
+    },
+    "cuda_feature": true,
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": {
+          "channels": 2,
+          "native_rate": 48000,
+          "via_sidecar": false
+        },
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 8355840,
+          "multiple": 64,
+          "pad_and_crop": true,
+          "short_edges": [
+            1080,
+            480,
+            720,
+            768,
+            1440,
+            2160
+          ]
+        },
+        "family": "ltx2",
+        "fps": {
+          "allowed": [
+            24,
+            25,
+            48,
+            50
+          ],
+          "container_only": false,
+          "default": 24
+        },
+        "frames": {
+          "default": 121,
+          "max": 481,
+          "min": 9,
+          "offset": 1,
+          "step": 8
+        },
+        "id": "ltx25-a2v-guided",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": true,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 0,
+          "images": 0,
+          "total": 0,
+          "videos": 0
+        },
+        "resident": true,
+        "served_names": [
+          "ltx25-a2v-guided"
+        ],
+        "stream": null,
+        "tasks": [
+          "a2v"
+        ]
+      },
+      "gpu": {
+        "min_sm": 80,
+        "min_vram_gib": 80
+      },
+      "id": "ltx25-a2v-guided",
+      "public_names": [],
+      "recipe": {
+        "a2v": "guided",
+        "canvas": [
+          1920,
+          1080
+        ],
+        "dit": "/fvscratch/weights/ltx25-dev/transformer_full",
+        "family": "ltx2",
+        "ic_lora": null,
+        "profile": "ltx2/ltx25_distill_dense",
+        "refine_steps": 3,
+        "sage_attention": false,
+        "stage1_steps": 30,
+        "stage2": "dense",
+        "tae": null,
+        "text": "streamed",
+        "text_weights": null,
+        "two_stage": true,
+        "version": "2.5",
+        "weights": "/fvscratch/weights/ltx25"
+      },
+      "recipe_name": "ltx25-dev-a2v-guided",
+      "resident": true,
+      "served_names": [
+        "ltx25-a2v-guided"
+      ],
+      "tier": "max",
+      "variant": "ltx25-a2v-guided"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {},
+      "profile": "ltx2/ltx25_distill_dense",
+      "settings": {}
+    },
+    "recipe": {
+      "attention": "dense",
+      "name": "ltx25-dev-a2v-guided",
+      "profile": "ltx2/ltx25_distill_dense",
+      "steps": 33,
+      "summary": "Audio-to-video, guided (A2VidPipelineTwoStage): the LTX-2.5 dev DiT, stage 1 30 steps with CFG 3 (guidance_scale), STG on block 28, modality guidance 3 and rescale 0.7, stage 2 the distilled LoRA, dense, conv VAE; the output carries the input audio",
+      "vae": "full"
+    }
+  },
+  "elapsed_s": 25.29760942,
+  "env": {},
+  "error": "error: negotiate: ApiError { kind: InvalidRequest, message: \"model `ltx25-a2v-guided` does not support task t2v\", param: Some(\"task\"), retry_after_s: None }",
+  "git_sha": null,
+  "stage": "engine",
+  "status": "error"
+}

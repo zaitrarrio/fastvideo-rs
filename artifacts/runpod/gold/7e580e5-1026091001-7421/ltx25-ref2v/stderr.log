@@ -1,0 +1,18 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] ltx2 ic-lora: /fvscratch/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors (480 pairs, reference downscale 1, stage 1 only)
+[fastvideo] ltx2 technique profile: ltx2/ltx25_distill_dense
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+[fastvideo] ltx2 dit: loaded block 8/48 (84.1 GiB free)
+[fastvideo] ltx2 dit: loaded block 16/48 (73.9 GiB free)
+[fastvideo] ltx2 dit: loaded block 24/48 (63.8 GiB free)
+[fastvideo] ltx2 dit: loaded block 32/48 (53.6 GiB free)
+[fastvideo] ltx2 dit: loaded block 40/48 (43.4 GiB free)
+[fastvideo] ltx2 dit: loaded block 48/48 (33.3 GiB free)
+[fastvideo] ltx2 dit: 48 blocks resident
+[fastvideo] ltx2 ic-lora: attached 480 linears (base kept for the stage-2 unfuse) from /fvscratch/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":34.04,"viewed_gb":40.42,"prefetch_read_gb":39.11,"prefetch_skipped_gb":0.00,"prefetch_busy_s":31.8,"viewed_gbps":1.19,"window_wait_s":0.0,"fill_s":1.1,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":0.0,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"ltx25-ref2v\")): PoolEntry { executor: 0, model: ModelId(\"ltx25-ref2v\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":34.678797617}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[ERROR] stage engine → gpucheck-out/engine.json (35.1s)
+error: negotiate: ApiError { kind: InvalidRequest, message: "model `ltx25-ref2v` does not support task t2v", param: Some("task"), retry_after_s: None }

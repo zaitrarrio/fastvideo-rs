@@ -1,0 +1,438 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"wan14b-plug-4step\")): PoolEntry { executor: 0, model: ModelId(\"wan14b-plug-4step\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 155.506205934
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "first_step_s": 5.214567934,
+        "load_s": 155.506205934,
+        "metrics": {
+          "build_rtf": 3.682158154666667,
+          "inference_s": 18.640925658,
+          "peak_memory_mb": null,
+          "stage_durations": {
+            "denoise": 18.640925658,
+            "encode": 0.109174818,
+            "text": 0.399782409,
+            "video_decode": 3.025742236
+          }
+        },
+        "stages": [
+          {
+            "at_s": 0.01391374,
+            "stage": "text"
+          },
+          {
+            "at_s": 0.413713139,
+            "stage": "denoise"
+          },
+          {
+            "at_s": 19.055855464,
+            "stage": "video_decode"
+          }
+        ],
+        "submit_to_mp4_s": 22.271531516
+      }
+    },
+    {
+      "limits": {
+        "events": 4,
+        "steps": 4
+      },
+      "name": "progress",
+      "ok": true,
+      "values": {
+        "events": 4,
+        "last": [
+          4,
+          4
+        ]
+      }
+    },
+    {
+      "limits": {
+        "audio": false,
+        "frames": 81,
+        "height": 480,
+        "width": 832
+      },
+      "name": "mp4",
+      "ok": true,
+      "values": {
+        "audio_rate": null,
+        "bytes": 1276673,
+        "duration_s": 5.063,
+        "fps": 16.0,
+        "frames": 81,
+        "height": 480,
+        "path": "/fvscratch/runs/gold/7e580e5-1026090916-e804/wan14b-plug-4step/out/1463ed17-9852-4e60-b7ec-c43791de265f/output.mp4",
+        "width": 832
+      }
+    },
+    {
+      "limits": {
+        "frames": 81
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "frames_sha256": "dca1ce0af200abc513ba5909963aa5a78af2bd6bbdb60d0749629920a747a594",
+        "pngs": 81
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": null,
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 399360,
+        "multiple": 16,
+        "pad_and_crop": false,
+        "short_edges": [
+          480
+        ]
+      },
+      "family": "wan",
+      "fps": {
+        "allowed": [
+          16,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60
+        ],
+        "container_only": true,
+        "default": 16
+      },
+      "frames": {
+        "default": 81,
+        "max": 81,
+        "min": 9,
+        "offset": 1,
+        "step": 4
+      },
+      "id": "wan14b-plug-4step",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "wan14b-plug-4step",
+      "refs": {
+        "audio": 0,
+        "images": 0,
+        "total": 0,
+        "videos": 0
+      },
+      "resident": true,
+      "served_names": [
+        "wan14b-plug-4step",
+        "wan14b-turbo"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 5.0625,
+          "min_s": 0.5625
+        }
+      },
+      "tasks": [
+        "t2v"
+      ]
+    },
+    "cuda_feature": true,
+    "job": {
+      "audio": {
+        "plan": "none"
+      },
+      "audio_in": null,
+      "fps": 16,
+      "height": 480,
+      "keyframes": [],
+      "model": "wan14b-plug-4step",
+      "negative_prompt": "",
+      "num_frames": 81,
+      "post": {
+        "crop": null,
+        "drop_audio": false
+      },
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "recipe": "wan14b-plug-4step",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 1024,
+      "task": "t2v",
+      "width": 832
+    },
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": null,
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 399360,
+          "multiple": 16,
+          "pad_and_crop": false,
+          "short_edges": [
+            480
+          ]
+        },
+        "family": "wan",
+        "fps": {
+          "allowed": [
+            16,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60
+          ],
+          "container_only": true,
+          "default": 16
+        },
+        "frames": {
+          "default": 81,
+          "max": 81,
+          "min": 9,
+          "offset": 1,
+          "step": 4
+        },
+        "id": "wan14b-plug-4step",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 0,
+          "images": 0,
+          "total": 0,
+          "videos": 0
+        },
+        "resident": true,
+        "served_names": [
+          "wan14b-plug-4step"
+        ],
+        "stream": null,
+        "tasks": [
+          "t2v"
+        ]
+      },
+      "gpu": {
+        "min_sm": 80,
+        "min_vram_gib": 80
+      },
+      "id": "wan14b-plug-4step",
+      "public_names": [],
+      "recipe": {
+        "decoder": "full",
+        "default": [
+          832,
+          480,
+          81,
+          16
+        ],
+        "family": "wan",
+        "flow_shift": 5.0,
+        "frames_max": 81,
+        "i2v": false,
+        "max_area": 399360,
+        "multiple": 16,
+        "negative": "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards",
+        "plug": "wan14b-plug-4step",
+        "preset": "wan_t2v_14b",
+        "sampler": {
+          "kind": "step_distill",
+          "shift": 5.0,
+          "timesteps": [
+            1000,
+            750,
+            500,
+            250
+          ]
+        },
+        "short_edges": [
+          480
+        ],
+        "tae_dir": null,
+        "vsa": false,
+        "weights": "/fvscratch/weights/wan21-t2v-14b"
+      },
+      "recipe_name": "wan14b-plug-4step",
+      "resident": true,
+      "served_names": [
+        "wan14b-plug-4step",
+        "wan14b-turbo"
+      ],
+      "tier": null,
+      "variant": "wan14b-plug-4step"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {
+        "FASTVIDEO_VSA": "0"
+      },
+      "profile": null,
+      "settings": {}
+    },
+    "recipe": {
+      "attention": "dense",
+      "name": "wan14b-plug-4step",
+      "steps": 4,
+      "summary": "wan_t2v_14b + LongLive-Plug wan14b-plug-4step step-distill Euler 4-step (1000/750/500/250), shift 5, no CFG, full decode",
+      "vae": "full"
+    }
+  },
+  "elapsed_s": 178.605348005,
+  "env": {
+    "FASTVIDEO_VSA": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "engine",
+  "status": "pass"
+}

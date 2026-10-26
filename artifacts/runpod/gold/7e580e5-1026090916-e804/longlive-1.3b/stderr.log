@@ -1,0 +1,47 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] longlive transformer: 825 tensors, 300 LoRA modules merged (scale 1), skipped []
+[fastvideo] taehv available for the distilled presets (/fvscratch/weights/auxiliary/tae)
+[fastvideo] wan load: host peak RSS 67.4 GiB (eager dit)
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"longlive-1.3b\")): PoolEntry { executor: 0, model: ModelId(\"longlive-1.3b\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":35.854214607}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[fastvideo] generate preset=sf_wan_t2v_1_3b tiny=false 832x480 frames=81 steps=4 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=causal-dmd blocks of 3 frames, timesteps [1000.0, 937.5, 833.3333, 625.0]
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=4680 Sk=4680 D=128
+[fastvideo] causal block 1/7 step 1/4 t=1000.0 done in 127ms
+[fastvideo] causal block 1/7 step 2/4 t=937.5 done in 66ms
+[fastvideo] causal block 1/7 step 3/4 t=833.3 done in 66ms
+[fastvideo] causal block 1/7 step 4/4 t=625.0 done in 66ms
+[fastvideo] causal block 2/7 step 1/4 t=1000.0 done in 144ms
+[fastvideo] causal block 2/7 step 2/4 t=937.5 done in 83ms
+[fastvideo] causal block 2/7 step 3/4 t=833.3 done in 83ms
+[fastvideo] causal block 2/7 step 4/4 t=625.0 done in 83ms
+[fastvideo] causal block 3/7 step 1/4 t=1000.0 done in 172ms
+[fastvideo] causal block 3/7 step 2/4 t=937.5 done in 102ms
+[fastvideo] causal block 3/7 step 3/4 t=833.3 done in 101ms
+[fastvideo] causal block 3/7 step 4/4 t=625.0 done in 101ms
+[fastvideo] causal block 4/7 step 1/4 t=1000.0 done in 206ms
+[fastvideo] causal block 4/7 step 2/4 t=937.5 done in 119ms
+[fastvideo] causal block 4/7 step 3/4 t=833.3 done in 120ms
+[fastvideo] causal block 4/7 step 4/4 t=625.0 done in 120ms
+[fastvideo] causal block 5/7 step 1/4 t=1000.0 done in 240ms
+[fastvideo] causal block 5/7 step 2/4 t=937.5 done in 137ms
+[fastvideo] causal block 5/7 step 3/4 t=833.3 done in 137ms
+[fastvideo] causal block 5/7 step 4/4 t=625.0 done in 137ms
+[fastvideo] causal block 6/7 step 1/4 t=1000.0 done in 273ms
+[fastvideo] causal block 6/7 step 2/4 t=937.5 done in 155ms
+[fastvideo] causal block 6/7 step 3/4 t=833.3 done in 155ms
+[fastvideo] causal block 6/7 step 4/4 t=625.0 done in 155ms
+[fastvideo] causal block 7/7 step 1/4 t=1000.0 done in 307ms
+[fastvideo] causal block 7/7 step 2/4 t=937.5 done in 173ms
+[fastvideo] causal block 7/7 step 3/4 t=833.3 done in 173ms
+[fastvideo] causal block 7/7 step 4/4 t=625.0 done in 173ms
+[fastvideo] causal dmd 4 steps done in 4044ms
+[fastvideo] taehv.decode done in 510ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.08s, 0.03 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.09 GiB of 128.80
+[fastvideo] wrote 81 png frames → /fvscratch/runs/gold/7e580e5-1026090916-e804/longlive-1.3b/out/c46f4a1d-7723-40b8-98a2-299c832251fb/frames (text 0.34s, denoise 4.04s, decode+mp4 0.60s, png 0.08s)
+[fastvideo] generate done in 5084ms
+[INFO] engine/timings {"first_step_s":0.482707365,"load_s":35.854214607,"metrics":{"build_rtf":0.798954305382716,"inference_s":4.044706171,"peak_memory_mb":null,"stage_durations":{"denoise":4.044706171,"encode":0.096608219,"text":0.343304375,"video_decode":0.602977045}},"stages":[{"at_s":0.011766545,"stage":"text"},{"at_s":0.35510288,"stage":"denoise"},{"at_s":4.401201818,"stage":"video_decode"}],"submit_to_mp4_s":5.181254964}
+[PASS] engine/progress {"events":28,"last":[28,28]} (limits {"events":28,"steps":4})
+[PASS] engine/mp4 {"audio_rate":null,"bytes":1184598,"duration_s":5.063,"fps":16.0,"frames":81,"height":480,"path":"/fvscratch/runs/gold/7e580e5-1026090916-e804/longlive-1.3b/out/c46f4a1d-7723-40b8-98a2-299c832251fb/output.mp4","width":832} (limits {"audio":false,"frames":81,"height":480,"width":832})
+[PASS] engine/frames {"frames_sha256":"8c75563fd721b22ce09e112ed67234ac7dc49e8b1c9b98dd256f32349445e680","pngs":81} (limits {"frames":81})
+[PASS] stage engine → gpucheck-out/engine.json (41.7s)

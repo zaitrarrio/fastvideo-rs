@@ -1,0 +1,30 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] plug lora wan14b-plug-4step wan21-t2v-14b-few-step/generator_lora_lightx2v.safetensors: 400 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1)
+[fastvideo] plug lora wan14b-plug-4step wan21-t2v-14b-cfg/adapter_model.safetensors: 400 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 0.5, scale 0.5)
+[fastvideo] plug lora wan14b-plug-4step wan21-t2v-14b-few-step/generator_lora_lightx2v.safetensors: 400 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 1, scale 1) (/fvscratch/weights/longlive-plug/wan21-t2v-14b-few-step/generator_lora_lightx2v.safetensors)
+[fastvideo] plug lora wan14b-plug-4step wan21-t2v-14b-cfg/adapter_model.safetensors: 400 modules matched, 0 skipped, 0 unknown keys (rank [128], alpha 128, weight 0.5, scale 0.5) (/fvscratch/weights/longlive-plug/wan21-t2v-14b-cfg/adapter_model.safetensors)
+[fastvideo] plug wan14b-plug-4step: 400 base parameters merged of 1095 tensors in 71.1 s
+[fastvideo] wan load: host peak RSS 171.1 GiB (eager dit)
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"wan14b-plug-4step\")): PoolEntry { executor: 0, model: ModelId(\"wan14b-plug-4step\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":155.506205934}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[fastvideo] generate preset=wan_t2v_14b tiny=false 832x480 frames=81 steps=4 dmd=false rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=step-distill euler timesteps [1000.0, 937.5, 833.3333, 625.0] (shift 5)
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], , workspace 0 B)
+[fastvideo] sdpa auto (sm_12x rule): bh=40 sq=32760 sk=32760 d=128 -> cuDNN
+[fastvideo] sdpa: fused mma B=1 H=40 Sq=32760 Sk=32760 D=128
+[fastvideo] sdpa auto (sm_12x rule): bh=40 sq=32760 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] euler step 1/4 t=1000.0 done in 4800ms
+[fastvideo] euler step 2/4 t=937.5 done in 4598ms
+[fastvideo] euler step 3/4 t=833.3 done in 4611ms
+[fastvideo] euler step 4/4 t=625.0 done in 4629ms
+[fastvideo] step-distill 4 steps done in 18640ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] vae.decode done in 2264ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.08s, 0.04 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.09 GiB of 129.32
+[fastvideo] wrote 81 png frames → /fvscratch/runs/gold/7e580e5-1026090916-e804/wan14b-plug-4step/out/1463ed17-9852-4e60-b7ec-c43791de265f/frames (text 0.40s, denoise 18.64s, decode+mp4 3.03s, png 0.08s)
+[fastvideo] generate done in 22161ms
+[INFO] engine/timings {"first_step_s":5.214567934,"load_s":155.506205934,"metrics":{"build_rtf":3.682158154666667,"inference_s":18.640925658,"peak_memory_mb":null,"stage_durations":{"denoise":18.640925658,"encode":0.109174818,"text":0.399782409,"video_decode":3.025742236}},"stages":[{"at_s":0.01391374,"stage":"text"},{"at_s":0.413713139,"stage":"denoise"},{"at_s":19.055855464,"stage":"video_decode"}],"submit_to_mp4_s":22.271531516}
+[PASS] engine/progress {"events":4,"last":[4,4]} (limits {"events":4,"steps":4})
+[PASS] engine/mp4 {"audio_rate":null,"bytes":1276673,"duration_s":5.063,"fps":16.0,"frames":81,"height":480,"path":"/fvscratch/runs/gold/7e580e5-1026090916-e804/wan14b-plug-4step/out/1463ed17-9852-4e60-b7ec-c43791de265f/output.mp4","width":832} (limits {"audio":false,"frames":81,"height":480,"width":832})
+[PASS] engine/frames {"frames_sha256":"dca1ce0af200abc513ba5909963aa5a78af2bd6bbdb60d0749629920a747a594","pngs":81} (limits {"frames":81})
+[PASS] stage engine → gpucheck-out/engine.json (178.6s)

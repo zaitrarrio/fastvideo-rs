@@ -1,0 +1,1 @@
+{"state": "done", "bytes_done": 34201418400, "bytes_total": 34201418400, "elapsed_s": 46.7, "mb_per_s": 731.7, "trees": {"wan22-ti2v-5b": "ready"}, "error": null, "stream": false, "ready": false, "retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 25, "boosts": 0}

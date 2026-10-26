@@ -1,0 +1,1 @@
+{"state": "done", "bytes_done": 1383679204, "bytes_total": 1383679204, "elapsed_s": 6.5, "mb_per_s": 214.5, "trees": {"h3-turbo-loras/lightx2v": "ready"}, "error": null, "stream": false, "ready": false, "retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 0, "boosts": 0}

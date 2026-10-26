@@ -1,0 +1,1 @@
+{"state": "done", "bytes_done": 5465182330, "bytes_total": 5465182330, "elapsed_s": 11.9, "mb_per_s": 457.6, "trees": {"vdn-h3-dmd-250-turbo": "ready", "vdn-h3-stage-b-2000": "ready"}, "error": null, "stream": false, "ready": false, "retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 0, "boosts": 0}

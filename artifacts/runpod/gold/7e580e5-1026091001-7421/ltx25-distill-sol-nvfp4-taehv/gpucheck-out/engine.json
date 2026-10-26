@@ -1,0 +1,364 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"ltx25-distill-sol-nvfp4-taehv\")): PoolEntry { executor: 0, model: ModelId(\"ltx25-distill-sol-nvfp4-taehv\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 66.03641124
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "first_step_s": 6.954703338,
+        "load_s": 66.03641124,
+        "metrics": {
+          "build_rtf": 1.260664774413223,
+          "inference_s": 6.3558515710000005,
+          "peak_memory_mb": 35883.79790496826,
+          "stage_durations": {
+            "audio_decode": 0.188135851,
+            "denoise": 6.3558515710000005,
+            "encode": 0.102215925,
+            "stage1": 2.498288264,
+            "stage2": 3.365550253,
+            "text": 6.573946497,
+            "upsample": 0.492013054,
+            "video_decode": 0.48974741
+          }
+        },
+        "stages": [
+          {
+            "at_s": 0.000277389,
+            "stage": "text"
+          },
+          {
+            "at_s": 6.609273619,
+            "stage": "denoise"
+          },
+          {
+            "at_s": 9.098484565,
+            "stage": "upsample"
+          },
+          {
+            "at_s": 9.605240202,
+            "stage": "refine"
+          },
+          {
+            "at_s": 12.978326226,
+            "stage": "video_decode"
+          }
+        ],
+        "submit_to_mp4_s": 13.854103564
+      }
+    },
+    {
+      "limits": {
+        "events": 11,
+        "steps": 11
+      },
+      "name": "progress",
+      "ok": true,
+      "values": {
+        "events": 11,
+        "last": [
+          11,
+          11
+        ]
+      }
+    },
+    {
+      "limits": {
+        "audio": true,
+        "frames": 121,
+        "height": 768,
+        "width": 1280
+      },
+      "name": "mp4",
+      "ok": true,
+      "values": {
+        "audio_rate": 48000,
+        "bytes": 3414826,
+        "duration_s": 5.042,
+        "fps": 24.0,
+        "frames": 121,
+        "height": 768,
+        "path": "/fvscratch/runs/gold/7e580e5-1026091001-7421/ltx25-distill-sol-nvfp4-taehv/out/ba9af0a0-9e70-4ba9-b153-8f1dfd368e40/output.mp4",
+        "width": 1280
+      }
+    },
+    {
+      "limits": {
+        "frames": 121
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "frames_sha256": "45cdf6e7781459e76d5f3e07b82c5f2e0011f0be7747d094c908584a70e67294",
+        "pngs": 121
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": {
+        "channels": 2,
+        "native_rate": 48000,
+        "via_sidecar": false
+      },
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 8355840,
+        "multiple": 64,
+        "pad_and_crop": true,
+        "short_edges": [
+          1080,
+          480,
+          720,
+          768,
+          1440,
+          2160
+        ]
+      },
+      "family": "ltx2",
+      "fps": {
+        "allowed": [
+          24,
+          25,
+          48,
+          50
+        ],
+        "container_only": false,
+        "default": 24
+      },
+      "frames": {
+        "default": 121,
+        "max": 481,
+        "min": 9,
+        "offset": 1,
+        "step": 8
+      },
+      "id": "ltx25-distill-sol-nvfp4-taehv",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "ltx25-distill-two-stage-sol-nvfp4-taehv",
+      "refs": {
+        "audio": 0,
+        "images": 0,
+        "total": 0,
+        "videos": 0
+      },
+      "resident": true,
+      "served_names": [
+        "ltx25-distill-sol-nvfp4-taehv"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 20.04166603088379,
+          "min_s": 0.375
+        }
+      },
+      "tasks": [
+        "t2v",
+        "i2v",
+        "keyframes",
+        "a2v",
+        "extend",
+        "retake"
+      ],
+      "tier": "draft"
+    },
+    "cuda_feature": true,
+    "job": {
+      "audio": {
+        "channels": 2,
+        "plan": "native",
+        "rate": 48000
+      },
+      "audio_in": null,
+      "fps": 24,
+      "height": 768,
+      "keyframes": [],
+      "model": "ltx25-distill-sol-nvfp4-taehv",
+      "negative_prompt": "",
+      "num_frames": 121,
+      "post": {
+        "crop": null,
+        "drop_audio": false
+      },
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "recipe": "ltx25-distill-two-stage-sol-nvfp4-taehv",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 7,
+      "task": "t2v",
+      "tier": "draft",
+      "width": 1280
+    },
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": {
+          "channels": 2,
+          "native_rate": 48000,
+          "via_sidecar": false
+        },
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 8355840,
+          "multiple": 64,
+          "pad_and_crop": true,
+          "short_edges": [
+            1080,
+            480,
+            720,
+            768,
+            1440,
+            2160
+          ]
+        },
+        "family": "ltx2",
+        "fps": {
+          "allowed": [
+            24,
+            25,
+            48,
+            50
+          ],
+          "container_only": false,
+          "default": 24
+        },
+        "frames": {
+          "default": 121,
+          "max": 481,
+          "min": 9,
+          "offset": 1,
+          "step": 8
+        },
+        "id": "ltx25-distill-sol-nvfp4-taehv",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 0,
+          "images": 0,
+          "total": 0,
+          "videos": 0
+        },
+        "resident": true,
+        "served_names": [
+          "ltx25-distill-sol-nvfp4-taehv"
+        ],
+        "stream": null,
+        "tasks": [
+          "t2v",
+          "i2v",
+          "keyframes",
+          "a2v",
+          "extend",
+          "retake"
+        ]
+      },
+      "gpu": {
+        "min_sm": 100,
+        "min_vram_gib": 80,
+        "needs": [
+          "fp8",
+          "nvfp4"
+        ]
+      },
+      "id": "ltx25-distill-sol-nvfp4-taehv",
+      "public_names": [],
+      "recipe": {
+        "a2v": "distilled",
+        "canvas": [
+          1920,
+          1080
+        ],
+        "dit": "/fvscratch/weights/ltx25",
+        "family": "ltx2",
+        "ic_lora": null,
+        "profile": "ltx2/ltx25_distill_sol_nvfp4",
+        "refine_steps": 3,
+        "sage_attention": false,
+        "stage1_steps": 8,
+        "stage2": "sol",
+        "tae": "/fvscratch/weights/auxiliary/tae/taeltx2_3_wide.safetensors",
+        "text": "streamed",
+        "text_weights": null,
+        "two_stage": true,
+        "version": "2.5",
+        "weights": "/fvscratch/weights/ltx25"
+      },
+      "recipe_name": "ltx25-distill-two-stage-sol-nvfp4-taehv",
+      "resident": true,
+      "served_names": [
+        "ltx25-distill-sol-nvfp4-taehv"
+      ],
+      "tier": "draft",
+      "variant": "ltx25-distill-sol-nvfp4-taehv"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {},
+      "profile": "ltx2/ltx25_distill_sol_nvfp4",
+      "settings": {
+        "FASTVIDEO_NVFP4": "static_6"
+      }
+    },
+    "recipe": {
+      "attention": "sol-stage2",
+      "name": "ltx25-distill-two-stage-sol-nvfp4-taehv",
+      "profile": "ltx2/ltx25_distill_sol_nvfp4",
+      "steps": 11,
+      "summary": "LTX-2.5 distilled two-stage, Sol stage 2, NVFP4 video FFN, TAEHV decode (fails the quality gate)",
+      "vae": "taehv"
+    }
+  },
+  "elapsed_s": 80.627111139,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "engine",
+  "status": "pass"
+}

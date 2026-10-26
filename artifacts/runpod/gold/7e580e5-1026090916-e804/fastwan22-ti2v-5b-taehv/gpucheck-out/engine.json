@@ -1,0 +1,439 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"fastwan22-ti2v-5b-taehv\")): PoolEntry { executor: 0, model: ModelId(\"fastwan22-ti2v-5b-taehv\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 40.197756373
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "first_step_s": 1.052718372,
+        "load_s": 40.197756373,
+        "metrics": {
+          "build_rtf": 0.32563797282644624,
+          "inference_s": 1.6417581129999999,
+          "peak_memory_mb": null,
+          "stage_durations": {
+            "denoise": 1.6417581129999999,
+            "encode": 0.096536164,
+            "text": 0.428812758,
+            "video_decode": 0.31824637
+          }
+        },
+        "stages": [
+          {
+            "at_s": 0.014576502,
+            "stage": "text"
+          },
+          {
+            "at_s": 0.44342408,
+            "stage": "denoise"
+          },
+          {
+            "at_s": 2.0863010810000002,
+            "stage": "video_decode"
+          }
+        ],
+        "submit_to_mp4_s": 2.597300531
+      }
+    },
+    {
+      "limits": {
+        "events": 3,
+        "steps": 3
+      },
+      "name": "progress",
+      "ok": true,
+      "values": {
+        "events": 3,
+        "last": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "limits": {
+        "audio": false,
+        "frames": 121,
+        "height": 480,
+        "width": 832
+      },
+      "name": "mp4",
+      "ok": true,
+      "values": {
+        "audio_rate": null,
+        "bytes": 1836229,
+        "duration_s": 5.042,
+        "fps": 24.0,
+        "frames": 121,
+        "height": 480,
+        "path": "/fvscratch/runs/gold/7e580e5-1026090916-e804/fastwan22-ti2v-5b-taehv/out/65a50584-6d65-427c-b7e7-e3841f9a46b2/output.mp4",
+        "width": 832
+      }
+    },
+    {
+      "limits": {
+        "frames": 121
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "frames_sha256": "773c3189483b4d75d677b5673b00e62f50e300b7ff007219380b85512a694714",
+        "pngs": 121
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": null,
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 901120,
+        "multiple": 32,
+        "pad_and_crop": false,
+        "short_edges": [
+          704,
+          576,
+          480
+        ]
+      },
+      "family": "wan",
+      "fps": {
+        "allowed": [
+          24,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60
+        ],
+        "container_only": true,
+        "default": 24
+      },
+      "frames": {
+        "default": 121,
+        "max": 161,
+        "min": 9,
+        "offset": 1,
+        "step": 4
+      },
+      "id": "fastwan22-ti2v-5b-taehv",
+      "knobs": {
+        "flow_shift": true,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": true
+      },
+      "recipe": "fastwan22-ti2v-5b-dmd3-taehv",
+      "refs": {
+        "audio": 0,
+        "images": 0,
+        "total": 0,
+        "videos": 0
+      },
+      "resident": true,
+      "served_names": [
+        "fastwan22-ti2v-5b-taehv"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 6.708333492279053,
+          "min_s": 0.375
+        }
+      },
+      "tasks": [
+        "t2v",
+        "i2v"
+      ],
+      "tier": "draft"
+    },
+    "cuda_feature": true,
+    "job": {
+      "audio": {
+        "plan": "none"
+      },
+      "audio_in": null,
+      "fps": 24,
+      "height": 480,
+      "keyframes": [],
+      "model": "fastwan22-ti2v-5b-taehv",
+      "negative_prompt": "",
+      "num_frames": 121,
+      "post": {
+        "crop": null,
+        "drop_audio": false
+      },
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "recipe": "fastwan22-ti2v-5b-dmd3-taehv",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 7,
+      "task": "t2v",
+      "tier": "draft",
+      "width": 832
+    },
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": null,
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 901120,
+          "multiple": 32,
+          "pad_and_crop": false,
+          "short_edges": [
+            704,
+            576,
+            480
+          ]
+        },
+        "family": "wan",
+        "fps": {
+          "allowed": [
+            24,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60
+          ],
+          "container_only": true,
+          "default": 24
+        },
+        "frames": {
+          "default": 121,
+          "max": 161,
+          "min": 9,
+          "offset": 1,
+          "step": 4
+        },
+        "id": "fastwan22-ti2v-5b-taehv",
+        "knobs": {
+          "flow_shift": true,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": true
+        },
+        "refs": {
+          "audio": 0,
+          "images": 0,
+          "total": 0,
+          "videos": 0
+        },
+        "resident": true,
+        "served_names": [
+          "fastwan22-ti2v-5b-taehv"
+        ],
+        "stream": null,
+        "tasks": [
+          "t2v",
+          "i2v"
+        ]
+      },
+      "gpu": {
+        "min_sm": 80,
+        "min_vram_gib": 32
+      },
+      "id": "fastwan22-ti2v-5b-taehv",
+      "public_names": [],
+      "recipe": {
+        "decoder": "taehv",
+        "default": [
+          1280,
+          704,
+          121,
+          24
+        ],
+        "family": "wan",
+        "flow_shift": 5.0,
+        "frames_max": 161,
+        "i2v": true,
+        "max_area": 901120,
+        "multiple": 32,
+        "negative": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+        "preset": "fast_wan_2_2_ti2v_5b",
+        "sampler": {
+          "kind": "dmd",
+          "steps": 3
+        },
+        "short_edges": [
+          704,
+          576,
+          480
+        ],
+        "tae_dir": "/fvscratch/weights/auxiliary/tae",
+        "vsa": false,
+        "weights": "/fvscratch/weights/fastwan22-ti2v-5b"
+      },
+      "recipe_name": "fastwan22-ti2v-5b-dmd3-taehv",
+      "resident": true,
+      "served_names": [
+        "fastwan22-ti2v-5b-taehv"
+      ],
+      "tier": "draft",
+      "variant": "fastwan22-ti2v-5b-taehv"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {
+        "FASTVIDEO_VSA": "0"
+      },
+      "profile": null,
+      "settings": {}
+    },
+    "recipe": {
+      "attention": "dense",
+      "name": "fastwan22-ti2v-5b-dmd3-taehv",
+      "steps": 3,
+      "summary": "fast_wan_2_2_ti2v_5b DMD 3-step, taehv decode",
+      "vae": "taehv"
+    }
+  },
+  "elapsed_s": 43.759337026,
+  "env": {
+    "FASTVIDEO_VSA": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "engine",
+  "status": "pass"
+}

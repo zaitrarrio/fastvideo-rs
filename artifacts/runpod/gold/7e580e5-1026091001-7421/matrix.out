@@ -1,0 +1,99 @@
+[09:10:34] [gold] matrix start image=a968fe04b59a01ab
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-36059877-3d9e-ab48-c93c-3edf269cd87b)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[09:10:34] [gold] pod memory: cgroup v2 /sys/fs/cgroup, limit 269889 MiB, oom_kills 0
+[09:10:34] [gold] weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 0 R2 trees (0.00 GB) fetched before the arms that read them, at most 0.00 GB on the container disk at once
+[09:10:35] [gold] ▶ fasth3-4step-vsa-480p-taeh3  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques h3/fasth3_4step_vsa engine --model fasth3-4step-vsa-480p-taeh3 --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 7 --width 832 --height 480 --num-frames 124 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/fasth3-4step-vsa-480p-taeh3/out  (wall cap 2365s; 0=none)
+[09:13:29] [gold] ok fasth3-4step-vsa-480p-taeh3  174s  
+[09:13:29] [gold] ram fasth3-4step-vsa-480p-taeh3: ram 27823 MiB of 269889 MiB, oom_kills 0
+[09:13:29] [gold] skip fasth3-4step-vsa-nvfp4-taeh3 (not in FV_CELLS)
+[09:13:29] [gold] skip fasth3-4step-vsa-nvfp4 (not in FV_CELLS)
+[09:13:31] [gold] ▶ fasth3-4step-vsa-taeh3  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques h3/fasth3_4step_vsa engine --model fasth3-4step-vsa-taeh3 --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 7 --width 832 --height 480 --num-frames 124 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/fasth3-4step-vsa-taeh3/out  (wall cap 2189s; 0=none)
+[09:13:46] [gold] ok fasth3-4step-vsa-taeh3  15s  
+[09:13:46] [gold] ram fasth3-4step-vsa-taeh3: ram 51971 MiB of 269889 MiB, oom_kills 0
+[09:13:47] [gold] ▶ fasth3-4step-vsa  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques h3/fasth3_4step_vsa engine --model fasth3-4step-vsa --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 7 --width 832 --height 480 --num-frames 124 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/fasth3-4step-vsa/out  (wall cap 2173s; 0=none)
+[09:14:31] [gold] ok fasth3-4step-vsa  44s  
+[09:14:31] [gold] ram fasth3-4step-vsa: ram 41097 MiB of 269889 MiB, oom_kills 0
+[09:14:31] [gold] skip fasth3-8step-dense (not in FV_CELLS)
+[09:14:31] [gold] skip fasth3-trim-8step (not in FV_CELLS)
+[09:14:31] [gold] skip fasth3-trim-nvfp4-fast (not in FV_CELLS)
+[09:14:31] [gold] skip fasth3-trim-nvfp4 (not in FV_CELLS)
+[09:14:31] [gold] skip fasth3-v2-nvfp4-taeh3 (not in FV_CELLS)
+[09:14:31] [gold] skip fasth3-v2-nvfp4 (not in FV_CELLS)
+[09:14:31] [gold] skip fastwan21-1.3b-taehv (not in FV_CELLS)
+[09:14:31] [gold] skip fastwan21-1.3b (not in FV_CELLS)
+[09:14:31] [gold] skip fastwan22-ti2v-5b-taehv (not in FV_CELLS)
+[09:14:31] [gold] skip fastwan22-ti2v-5b (not in FV_CELLS)
+[09:14:31] [gold] skip h3-larry-turbo (not in FV_CELLS)
+[09:14:31] [gold] skip h3-lightx2v-turbo-v01 (not in FV_CELLS)
+[09:14:31] [gold] skip h3-lightx2v-turbo (not in FV_CELLS)
+[09:14:32] [gold] ▶ h3-ref2v-max  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques h3/h3_ref2va_base engine --model h3-ref2v-max --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --width 1344 --height 768 --num-frames 124 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/h3-ref2v-max/out  (wall cap 2128s; 0=none)
+[09:17:52] [gold] FAIL h3-ref2v-max  199s  exit=2
+[09:17:52] [gold] ram h3-ref2v-max: ram 71543 MiB of 269889 MiB, oom_kills 0
+[fastvideo] h3 dit: 50 blocks resident
+[fastvideo] load/io h3 dit {"wall_s":195.75,"viewed_gb":93.42,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":3224.1,"viewed_gbps":0.48,"window_wait_s":0.0,"fill_s":1.9,"h2d_wait_s":0.2,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":182.5,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 vae: FASTVIDEO_H3_VAE_MXFP8 default: 36 blocks x 4 linears as MXFP8 (E4M3, E8M0 per 32); FASTVIDEO_H3_VAE_MXFP8=0 for bf16
+[fastvideo] load/io h3 total {"wall_s":198.62,"viewed_gb":103.38,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":3224.1,"viewed_gbps":0.52,"window_wait_s":0.0,"fill_s":1.9,"h2d_wait_s":0.2,"h2d_pageable_s":0.3,"convert_s":0.0,"lora_s":0.0,"read_wait_s":182.5,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"h3-ref2v-max\")): PoolEntry { executor: 0, model: ModelId(\"h3-ref2v-max\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":198.785982641}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[ERROR] stage engine → gpucheck-out/engine.json (199.2s)
+error: negotiate: ApiError { kind: InvalidRequest, message: "model `h3-ref2v-max` does not support task t2v", param: Some("task"), retry_after_s: None }
+[09:17:57] [gold] ▶ h3-ref2v-turbo  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques h3/sol_h3_ref2va engine --model h3-ref2v-turbo --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --width 1344 --height 768 --num-frames 124 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/h3-ref2v-turbo/out  (wall cap 1923s; 0=none)
+[09:20:10] [gold] FAIL h3-ref2v-turbo  132s  exit=2
+[09:20:10] [gold] ram h3-ref2v-turbo: ram 79933 MiB of 269889 MiB, oom_kills 0
+[fastvideo] h3 dit: 50 blocks resident
+[fastvideo] load/io h3 dit {"wall_s":129.00,"viewed_gb":94.81,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":1955.0,"viewed_gbps":0.73,"window_wait_s":0.0,"fill_s":24.2,"h2d_wait_s":1.3,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":3.1,"read_wait_s":61.7,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[fastvideo] h3 vae: FASTVIDEO_H3_VAE_MXFP8 default: 36 blocks x 4 linears as MXFP8 (E4M3, E8M0 per 32); FASTVIDEO_H3_VAE_MXFP8=0 for bf16
+[fastvideo] load/io h3 total {"wall_s":131.82,"viewed_gb":104.76,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":1955.0,"viewed_gbps":0.79,"window_wait_s":0.0,"fill_s":24.2,"h2d_wait_s":1.3,"h2d_pageable_s":0.3,"convert_s":0.0,"lora_s":3.1,"read_wait_s":61.7,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[fastvideo] h3 lora merge: device
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"h3-ref2v-turbo\")): PoolEntry { executor: 0, model: ModelId(\"h3-ref2v-turbo\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":132.035893019}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[ERROR] stage engine → gpucheck-out/engine.json (132.5s)
+error: negotiate: ApiError { kind: InvalidRequest, message: "model `h3-ref2v-turbo` does not support task t2v", param: Some("task"), retry_after_s: None }
+[09:20:10] [gold] skip longlive-1.3b (not in FV_CELLS)
+[09:20:12] [gold] ▶ ltx25-a2v-guided  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques ltx2/ltx25_distill_dense engine --model ltx25-a2v-guided --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --width 768 --height 512 --num-frames 121 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/ltx25-a2v-guided/out  (wall cap 1788s; 0=none)
+[09:20:38] [gold] FAIL ltx25-a2v-guided  25s  exit=2
+[09:20:38] [gold] ram ltx25-a2v-guided: ram 6181 MiB of 269889 MiB, oom_kills 0
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] ltx2 technique profile: ltx2/ltx25_distill_dense
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":5.00,"viewed_gb":1.14,"prefetch_read_gb":1.14,"prefetch_skipped_gb":0.00,"prefetch_busy_s":50.2,"viewed_gbps":0.23,"window_wait_s":0.0,"fill_s":0.0,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":3.5,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"ltx25-a2v-guided\")): PoolEntry { executor: 0, model: ModelId(\"ltx25-a2v-guided\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":24.888431205}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[ERROR] stage engine → gpucheck-out/engine.json (25.3s)
+error: negotiate: ApiError { kind: InvalidRequest, message: "model `ltx25-a2v-guided` does not support task t2v", param: Some("task"), retry_after_s: None }
+[09:20:39] [gold] ▶ ltx25-distill-dense  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques ltx2/ltx25_distill_dense engine --model ltx25-distill-dense --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 42 --width 1920 --height 1088 --num-frames 121 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/ltx25-distill-dense/out  (wall cap 1761s; 0=none)
+[09:24:29] [gold] ok ltx25-distill-dense  230s  
+[09:24:29] [gold] ram ltx25-distill-dense: ram 36169 MiB of 269889 MiB, oom_kills 0
+[09:24:31] [gold] ▶ ltx25-distill-sol-nvfp4-taehv  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques ltx2/ltx25_distill_sol_nvfp4 engine --model ltx25-distill-sol-nvfp4-taehv --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 7 --width 1280 --height 768 --num-frames 121 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/ltx25-distill-sol-nvfp4-taehv/out  (wall cap 1529s; 0=none)
+[09:25:52] [gold] ok ltx25-distill-sol-nvfp4-taehv  80s  
+[09:25:52] [gold] ram ltx25-distill-sol-nvfp4-taehv: ram 33914 MiB of 269889 MiB, oom_kills 0
+[09:25:54] [gold] ▶ ltx25-distill-sol  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques ltx2/ltx25_distill_sol engine --model ltx25-distill-sol --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 7 --width 1280 --height 768 --num-frames 121 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/ltx25-distill-sol/out  (wall cap 1446s; 0=none)
+[09:26:21] [gold] ok ltx25-distill-sol  27s  
+[09:26:21] [gold] ram ltx25-distill-sol: ram 35455 MiB of 269889 MiB, oom_kills 0
+[09:26:22] [gold] ▶ ltx25-ref2v  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques ltx2/ltx25_distill_dense engine --model ltx25-ref2v --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --width 1536 --height 896 --num-frames 121 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/ltx25-ref2v/out  (wall cap 1418s; 0=none)
+[09:26:58] [gold] FAIL ltx25-ref2v  35s  exit=2
+[09:26:58] [gold] ram ltx25-ref2v: ram 36519 MiB of 269889 MiB, oom_kills 0
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] ltx2 ic-lora: /fvscratch/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors (480 pairs, reference downscale 1, stage 1 only)
+[fastvideo] ltx2 technique profile: ltx2/ltx25_distill_dense
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+[fastvideo] ltx2 dit: 48 blocks resident
+[fastvideo] ltx2 ic-lora: attached 480 linears (base kept for the stage-2 unfuse) from /fvscratch/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":34.04,"viewed_gb":40.42,"prefetch_read_gb":39.11,"prefetch_skipped_gb":0.00,"prefetch_busy_s":31.8,"viewed_gbps":1.19,"window_wait_s":0.0,"fill_s":1.1,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":0.0,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"ltx25-ref2v\")): PoolEntry { executor: 0, model: ModelId(\"ltx25-ref2v\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":34.678797617}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[ERROR] stage engine → gpucheck-out/engine.json (35.1s)
+error: negotiate: ApiError { kind: InvalidRequest, message: "model `ltx25-ref2v` does not support task t2v", param: Some("task"), retry_after_s: None }
+[09:26:58] [gold] skip sfwan21-1.3b (not in FV_CELLS)
+[09:27:01] [gold] ▶ sol-h3  /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast --techniques h3/sol_h3_4step_engine_ladder engine --model sol-h3 --weights-root /fvscratch/weights --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 7 --width 832 --height 480 --num-frames 124 --clip-out /fvscratch/runs/gold/7e580e5-1026091001-7421/sol-h3/out  (wall cap 1379s; 0=none)
+[09:30:09] [gold] ok sol-h3  188s  
+[09:30:09] [gold] ram sol-h3: ram 25034 MiB of 269889 MiB, oom_kills 0
+[09:30:09] [gold] skip vdn-h3-8step (not in FV_CELLS)
+[09:30:09] [gold] skip vdn-h3 (not in FV_CELLS)
+[09:30:09] [gold] skip wan14b-plug-4step (not in FV_CELLS)
+[09:30:09] [gold] skip wan22-ti2v-5b (not in FV_CELLS)
+[09:30:09] [gold] matrix done
+matrix_exit=0

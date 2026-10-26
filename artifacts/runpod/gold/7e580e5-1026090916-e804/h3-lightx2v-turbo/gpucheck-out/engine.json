@@ -1,0 +1,340 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"h3-lightx2v-turbo\")): PoolEntry { executor: 0, model: ModelId(\"h3-lightx2v-turbo\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 295.27425258
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "first_step_s": 8.628582249,
+        "load_s": 295.27425258,
+        "metrics": {
+          "build_rtf": 6.07287799316129,
+          "inference_s": 31.376536298,
+          "peak_memory_mb": 58674.387241363525,
+          "stage_durations": {
+            "audio_decode": 0.123629653,
+            "denoise": 31.376536298,
+            "encode": 0.11990033,
+            "refine": 0.005332879,
+            "text": 0.52852712,
+            "video_decode": 4.717988389
+          }
+        },
+        "stages": [
+          {
+            "at_s": 0.000501469,
+            "stage": "text"
+          },
+          {
+            "at_s": 0.664370277,
+            "stage": "denoise"
+          },
+          {
+            "at_s": 32.064476066,
+            "stage": "audio_decode"
+          },
+          {
+            "at_s": 32.189403126,
+            "stage": "video_decode"
+          }
+        ],
+        "submit_to_mp4_s": 37.197634281
+      }
+    },
+    {
+      "limits": {
+        "events": 4,
+        "steps": 4
+      },
+      "name": "progress",
+      "ok": true,
+      "values": {
+        "events": 4,
+        "last": [
+          4,
+          4
+        ]
+      }
+    },
+    {
+      "limits": {
+        "audio": true,
+        "frames": 124,
+        "height": 768,
+        "width": 1344
+      },
+      "name": "mp4",
+      "ok": true,
+      "values": {
+        "audio_rate": 32000,
+        "bytes": 3863255,
+        "duration_s": 5.175,
+        "fps": 24.0,
+        "frames": 124,
+        "height": 768,
+        "path": "/fvscratch/runs/gold/7e580e5-1026090916-e804/h3-lightx2v-turbo/out/bba4a634-4ab9-4be7-a459-d55a17fcc311/output.mp4",
+        "width": 1344
+      }
+    },
+    {
+      "limits": {
+        "frames": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "frames_sha256": "2809124db9778e85f2a236d1dcf91a0fd575d17f842c3a8a6afcda4f02aba519",
+        "pngs": 124
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": {
+        "channels": 2,
+        "native_rate": 32000,
+        "via_sidecar": false
+      },
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 1032192,
+        "multiple": 32,
+        "pad_and_crop": false,
+        "short_edges": [
+          768,
+          480
+        ]
+      },
+      "family": "h3",
+      "fps": {
+        "allowed": [
+          24
+        ],
+        "container_only": false,
+        "default": 24
+      },
+      "frames": {
+        "default": 124,
+        "max": 362,
+        "min": 107,
+        "offset": 5,
+        "step": 17
+      },
+      "id": "h3-lightx2v-turbo",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "h3-lightx2v-turbo-v1.2-768p-dense",
+      "refs": {
+        "audio": 3,
+        "images": 9,
+        "total": 12,
+        "videos": 3
+      },
+      "resident": true,
+      "served_names": [
+        "h3-lightx2v-turbo"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 15.083333015441895,
+          "min_s": 4.458333492279053
+        }
+      },
+      "tasks": [
+        "t2v",
+        "i2v",
+        "keyframes"
+      ]
+    },
+    "cuda_feature": true,
+    "job": {
+      "audio": {
+        "channels": 2,
+        "plan": "native",
+        "rate": 32000
+      },
+      "audio_in": null,
+      "fps": 24,
+      "height": 768,
+      "keyframes": [],
+      "model": "h3-lightx2v-turbo",
+      "negative_prompt": "",
+      "num_frames": 124,
+      "post": {
+        "crop": null,
+        "drop_audio": false
+      },
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "recipe": "h3-lightx2v-turbo-v1.2-768p-dense",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 1024,
+      "task": "t2v",
+      "width": 1344
+    },
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": {
+          "channels": 2,
+          "native_rate": 32000,
+          "via_sidecar": false
+        },
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 1032192,
+          "multiple": 32,
+          "pad_and_crop": false,
+          "short_edges": [
+            768,
+            480
+          ]
+        },
+        "family": "h3",
+        "fps": {
+          "allowed": [
+            24
+          ],
+          "container_only": false,
+          "default": 24
+        },
+        "frames": {
+          "default": 124,
+          "max": 362,
+          "min": 107,
+          "offset": 5,
+          "step": 17
+        },
+        "id": "h3-lightx2v-turbo",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 3,
+          "images": 9,
+          "total": 12,
+          "videos": 3
+        },
+        "resident": true,
+        "served_names": [
+          "h3-lightx2v-turbo"
+        ],
+        "stream": null,
+        "tasks": [
+          "t2v",
+          "i2v",
+          "keyframes"
+        ]
+      },
+      "gpu": {
+        "min_sm": 89,
+        "min_vram_gib": 80,
+        "needs": [
+          "fp8"
+        ]
+      },
+      "id": "h3-lightx2v-turbo",
+      "public_names": [
+        "MiniMax-H3-Turbo-Lightx2v"
+      ],
+      "recipe": {
+        "adaln_cache": null,
+        "dense": true,
+        "dit_offload": null,
+        "family": "h3",
+        "hd_1080p": false,
+        "i2v_encoder": "auto",
+        "lora_strength": null,
+        "profile": "h3/lightx2v_turbo_dense",
+        "recipe": "lightx2v-turbo",
+        "ref2va": false,
+        "ref_weights": null,
+        "short_edge": 768,
+        "steps": 4,
+        "taeh3": null,
+        "text_encoder": "auto",
+        "text_weights": "/fvscratch/weights/h3-base",
+        "vdn_shared": null,
+        "vdn_weights": null,
+        "warmup": false,
+        "warmup_blocking": false,
+        "weights": "/fvscratch/weights/h3-base"
+      },
+      "recipe_name": "h3-lightx2v-turbo-v1.2-768p-dense",
+      "resident": true,
+      "served_names": [
+        "h3-lightx2v-turbo"
+      ],
+      "tier": null,
+      "variant": "h3-lightx2v-turbo"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {},
+      "profile": "h3/lightx2v_turbo_dense",
+      "settings": {
+        "FASTVIDEO_BF16_ACT": "1",
+        "FASTVIDEO_H3_QUANT": "mxfp8"
+      }
+    },
+    "recipe": {
+      "attention": "dense",
+      "name": "h3-lightx2v-turbo-v1.2-768p-dense",
+      "profile": "h3/lightx2v_turbo_dense",
+      "steps": 4,
+      "summary": "H3 + lightx2v/Minimax-h3-Turbo Turbo LoRA (minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors, folded at load, strength 1), 4 forwards, dense attention, MXFP8 linears, official VAE",
+      "vae": "full"
+    }
+  },
+  "elapsed_s": 333.527458954,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "engine",
+  "status": "pass"
+}

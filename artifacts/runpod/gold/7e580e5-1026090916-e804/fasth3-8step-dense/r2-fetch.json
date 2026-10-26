@@ -1,0 +1,1 @@
+{"state": "done", "bytes_done": 147857050891, "bytes_total": 147857050891, "elapsed_s": 162.3, "mb_per_s": 911.0, "trees": {"h3-8step": "ready"}, "error": null, "stream": false, "ready": false, "retries": 0, "corrupt_parts": 3, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 149, "boosts": 0}
