@@ -1881,3 +1881,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §16.3, §16.4, §16.6, §16.7, §16.9
 - Verification: `tests/fv_lab_bin.rs` `a_volume_r2_root_on_the_volume_is_refused`, `weights::tests` (`the_merged_root_stays_off_the_volume`, `a_tree_under_a_volume_tree_is_the_volumes_…`, `tree_names_are_checked`), `tests/r2_runner.rs` (`a_partly_failed_fetch_…`, `near_the_deadline_…`, the pin refusal against `fake_r2.py`), `pod::tests` (idle limits, `FV_RUN_DEADLINE`, `wait_limit_s`), `tests/lab_files.rs` `the_runtime_image_stays_python_free_…`, `tests/r2_runner.rs` `a_failed_python3_install_is_tried_again_…`, `test_r2_weights.py` `test_plan_pin_…`; `fv-lab-goldens.sh --check` (only `runpod-http-gold.json` changed: disk and idle limits)
+
+### FVID · 2026-10-26 · FVID-2026-10-26-compare-runs-controls
+- Trigger: the first `det-short` check of ADR-0019 §15.7 (commit `f93a961`): `fv-lab-compare-runs.sh --expect-verdicts 6` reported 4 differences, all from `h3-timed`, the timed-pick control, while `h3-r1`-`h3-r3` were byte-identical and both `fv-lab gate --check` passed
+- Options: hard-code the control names in the script; an explicit `--controls a,b` flag; read `[repeats] controls` from the checkout's `lab/cells/*.toml`
+- Decision: (coordinator, executed by the agent) read the cells (bash only, a line reader of the cells' shape; `--cells DIR` for tests); a control arm must exist in both runs and agree on `exit` / `skipped`, its frames, dump lines and own verdict files are reported (`control <arm>:`), neither differences nor verdict files; `determinism.txt` and `hashes.txt` are compared without its lines and still count; a name another cell judges stays judged; `--expect-verdicts` 5 for det-short's h3 group and 3 for determinism's h3 model
+- Reason: fv-lab's verdict judges only `judged` (`repeats.rs`); the timed pick is not reproducible across processes (docs/perf/determinism.md), so a byte comparison of it fails legitimate pairs of runs; the cells are the source of truth at the compared commit
+- Reversibility: high (script)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §15.7
+- Verification: `fv-lab-goldens.sh --check` (a control differing passes with its lines out of the counted files; a judged arm differing, a control in one run only, another control exit, or a name another cell judges differing fail; `h3-timed` of the checkout's cells is a control; an unclosed controls array exits 2); on the real runs `f93a961-1026045808-a9a4` / `f93a961-10260508`: exit 0, "1 control arm(s) reported, 5 verdict file(s) the same, 0 difference(s)"

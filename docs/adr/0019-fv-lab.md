@@ -1603,7 +1603,7 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family det-short --cells h3-r1,h
 RUNPOD_API_KEY=… FV_FAMILY=det-short FV_EXTRA_ENV="FV_DET_CELLS=h3" FV_FETCH_TREE=1 FV_FETCH_SKIP='/frames/|/cache/|adaln\.cache$' \
   bash scripts/gpu/runpod-http.sh run $SHA
 L=artifacts/runpod/det-short/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/det-short/$SHA-<MMDDHHMM>
-bash scripts/gpu/fv-lab-compare-runs.sh --expect-verdicts 6 $L $S     # determinism.txt, hashes.txt, 4 hashes.json
+bash scripts/gpu/fv-lab-compare-runs.sh --expect-verdicts 5 $L $S     # determinism.txt, hashes.txt, 3 judged hashes.json
 ./fv-lab gate $L --check --out /tmp/regate-ds-lab
 ./fv-lab gate $S --check --out /tmp/regate-ds-script --cells h3-r1,h3-r2,h3-r3,h3-timed
 
@@ -1614,7 +1614,7 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family determinism --cells h3-ab
 RUNPOD_API_KEY=… FV_FAMILY=determinism FV_EXTRA_ENV="FV_DET_CELLS='h3-ab h3-c h3-timed'" \
   FV_FETCH_TREE=1 FV_FETCH_SKIP='/frames/' bash scripts/gpu/runpod-http.sh run $SHA
 L=artifacts/runpod/determinism/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/determinism/$SHA-<MMDDHHMM>
-bash scripts/gpu/fv-lab-compare-runs.sh --expect-verdicts 4 $L $S     # determinism.txt, 3 hashes.txt
+bash scripts/gpu/fv-lab-compare-runs.sh --expect-verdicts 3 $L $S     # determinism.txt, 2 judged hashes.txt
 ./fv-lab gate $L --check --out /tmp/regate-det-lab
 ./fv-lab gate $S --check --out /tmp/regate-det-script --cells h3-ab,h3-c,h3-timed
 
@@ -1640,12 +1640,24 @@ L=artifacts/runpod/oracle/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/oracle/$SH
 bash scripts/gpu/fv-lab-compare-runs.sh $L $S
 ```
 
+**Control arms in the compare** (added after the first `det-short` check, run `f93a961`): the timed-pick arm
+(`FASTVIDEO_SDPA_AUTO=timed`) is not reproducible across processes (docs/perf/determinism.md), and it differed
+between the two sides of that run while r1-r3 were byte-identical and both `fv-lab gate --check` passed. So
+`fv-lab-compare-runs.sh` treats every arm a cell lists in `[repeats] controls` as fv-lab's verdict does: reported, not
+judged. It reads the controls from the checkout's `lab/cells/*.toml` (`--cells DIR` for another directory; a name
+another cell declares as an arm it does not list as a control stays judged). A control arm must still exist in both
+runs and agree on `summary.json` `exit` / `skipped`; its frames, `compare-dumps` lines and own `hashes.txt`,
+`hashes.json` and evidence logs are printed on a `control <arm>:` line and are neither differences nor verdict files;
+the run's `determinism.txt` and `hashes.txt` are compared without the control arms' lines and still count. Hence 5
+and 3 for `--expect-verdicts` above, not 6 and 4.
+
 Pass, for each family: `fv-lab-compare-runs.sh` exits 0 and both pods end `matrix_exit=0`:
 
-- `det-short`: 4 arms the same (4 ran, frames byte-identical, about 124 frames each), 6 verdict files the same, and
-  both `fv-lab gate --check` with 0 differences. The verdict (`repeats det-short-h3`) is pass on both when r1-r3 are
+- `det-short`: 3 arms the same (3 ran, frames byte-identical, about 124 frames each), 1 control arm reported
+  (`h3-timed`), 5 verdict files the same, and both `fv-lab gate --check` with 0 differences. The verdict (`repeats det-short-h3`) is pass on both when r1-r3 are
   identical (the 2026-10-06 run's were); a fail on both sides is no runner difference.
-- `determinism`: 3 arms the same, 4 verdict files the same, both `--check` clean.
+- `determinism`: 2 arms the same, 1 control arm reported (`h3-timed`), 3 verdict files the same, both `--check`
+  clean.
 - `oracle`: 5 arms the same (2 ran with byte-identical frames, the 3 `compare-dumps` arms with the same
   `compare-dumps` lines: "3 with the same compare-dumps lines"), both sides with `ORACLE_REFS_DONE` reached (fv-lab's
   `live.log`: `oracle: fasth3-4step-vsa reference <size>`).
