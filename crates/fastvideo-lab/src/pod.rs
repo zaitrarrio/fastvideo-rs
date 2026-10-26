@@ -586,6 +586,34 @@ pub fn read_records(dir: &Path) -> (Vec<PodRecord>, Vec<String>) {
     (out, skipped)
 }
 
+/// Write a pod record (`<state>/pods/<id>.json`, a run's `pod.json`).
+pub fn write_record(path: &Path, rec: &PodRecord) -> Result<(), String> {
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+    }
+    let text = serde_json::to_string_pretty(rec).map_err(|e| e.to_string())?;
+    std::fs::write(path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The steps after a create (its records): when they fail, the pod just
+/// created is deleted (`down`) before the error is returned, so no caller
+/// is left with a pod it does not know about (review of #216).
+pub fn or_delete<T>(
+    steps: Result<T, String>,
+    id: &str,
+    down: impl FnOnce() -> Result<(), String>,
+) -> Result<T, String> {
+    match steps {
+        Ok(t) => Ok(t),
+        Err(e) => Err(match down() {
+            Ok(()) => format!("{e} (pod {id} deleted)"),
+            Err(d) => format!(
+                "{e}; and pod {id} could not be deleted: {d} (its backstop deletes it at the cap)"
+            ),
+        }),
+    }
+}
+
 /// `artifacts/runpod/<family>/<tag>` under `root`: where `runpod-http.sh`
 /// puts a run, so existing summaries and compares read fv-lab runs.
 pub fn run_dir(root: &Path, family: &str, tag: &str) -> PathBuf {
@@ -2087,6 +2115,27 @@ cells = ["c"]
         // Skipped by the pattern, fetched as a judged file all the same.
         assert!(dest.join("live.log").is_file());
         let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn a_failed_step_after_a_create_deletes_the_pod() {
+        let downs = std::cell::Cell::new(0);
+        let down = || {
+            downs.set(downs.get() + 1);
+            Ok(())
+        };
+        assert_eq!(or_delete(Ok(1), "p", down), Ok(1));
+        assert_eq!(downs.get(), 0, "a success deletes nothing");
+        let e = or_delete::<()>(Err("no record".into()), "p", || {
+            downs.set(downs.get() + 1);
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(downs.get(), 1);
+        assert_eq!(e, "no record (pod p deleted)");
+        let e =
+            or_delete::<()>(Err("no record".into()), "p", || Err("HTTP 500".into())).unwrap_err();
+        assert!(e.contains("could not be deleted: HTTP 500"), "{e}");
     }
 
     #[test]

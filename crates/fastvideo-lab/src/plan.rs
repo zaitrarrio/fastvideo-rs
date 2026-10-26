@@ -234,6 +234,15 @@ impl Tiers {
             if !seen.insert(t.name.as_str()) {
                 return Err(field(file, at("name"), format!("`{}` twice", t.name)));
             }
+            // `fv-lab oracle`'s upstream pods are `fv-lab-upstream-<tag>`, run
+            // directory `upstream/<tag>` (ADR-0019 §19): no tier may be named so.
+            if t.name == crate::oracle::UPSTREAM_FAMILY {
+                return Err(field(
+                    file,
+                    at("name"),
+                    "`upstream` is the oracle's upstream pods' family (lab/upstream.toml)",
+                ));
+            }
             if t.gpu.trim().is_empty() {
                 return Err(field(file, at("gpu"), "empty"));
             }

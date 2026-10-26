@@ -9,8 +9,8 @@
 //!                 a finished run's promotion gates and verdicts, evaluated again from
 //!                 its files into <run dir>.regate (no GPU): exit 0 all passed, 1 a failure
 //!                 or nothing evaluated; --check: 1 when the run's files differ from those
-//! fv-lab check    parse and validate lab/tiers.toml and lab/cells/*.toml
-//! fv-lab schema tiers|cell
+//! fv-lab check    parse and validate lab/tiers.toml, lab/cells/*.toml and lab/upstream.toml
+//! fv-lab schema tiers|cell|upstream
 //! fv-lab pod up --sha <7> --family <tier> [--yes] [--wait] [--cells …] [--extra-env K=V …]
 //!                 [--baseline-sha <7>]   (required by a tier with `bin = "baseline"` arms)
 //!                 [--wall-cap-s S]       (lower the tier's wall cap)
@@ -22,6 +22,14 @@
 //!                 --fetch-tree: the whole run directory (runpod-http.sh FV_FETCH_TREE=1)
 //!                 reap: the pods recorded here past their cap; --account: every
 //!                 fv-lab-<tier>-<sha7>-<MMDDHHMMSS>-<hex4> pod past its tier's cap
+//! fv-lab oracle --sha <7> --cells <arms…> [--yes] [--family oracle] [--up-sha <commit>]
+//!                 [--upstream-image-tag latest|sha-<7>] [--extra-env K=V …] [--wall-cap-s S]
+//!                 [--upstream-wall-cap-s S] [--stock-wait-s S] [--refs-wait-s S] [--tag T]
+//!                 an oracle run (ADR-0019 §19): the upstream reference pods of
+//!                 lab/upstream.toml up (fv-deploy's guards, as `pod up`), their references
+//!                 waited for, the tier's runtime pod (`pod up --wait`) with FV_ORACLE_URL,
+//!                 the upstream pods fetched and deleted on ORACLE_REFS_DONE, on the stock
+//!                 wait or on any failure; without --yes it prints the plan (no key needed)
 //! fv-lab gold check [--max-age-days N] [--today YYYY-MM-DD]
 //!                 every gold file parses and resolves against families/, a validated
 //!                 commit exists (git), and the per-variant validation age (Markdown)
@@ -63,12 +71,17 @@ use fastvideo_deploy::provider::{
     Instance, InstanceId, InstanceState, Provider, ProviderKind, ReachOptions,
 };
 
+use fastvideo_lab::oracle::{
+    check_balance, check_full_sha, drive, plan_oracle, reference_base, runtime_args, OracleRequest,
+    Stacks, UPSTREAM_FAMILY,
+};
+use fastvideo_lab::oracle_live::LiveOps;
 use fastvideo_lab::plan::{Lab, Paths, Tier, TierWeights};
 use fastvideo_lab::pod::{
     baseline_for_pod, check_cells, check_sha7_named, fetch_run, fetch_tree, judge_run, launch,
-    name_taken, random_suffix, reap_account, reap_recorded, run_dir, run_tag, undeleted_in_ledger,
-    wait_done, wait_limit_s, Done, FetchSkip, LabPod, PodRecord, StartOptions, TreeFetch,
-    RUN_DEADLINE_RESERVE_S,
+    name_taken, or_delete, random_suffix, reap_account, reap_recorded, run_dir, run_tag,
+    undeleted_in_ledger, wait_done, wait_limit_s, write_record, Done, FetchSkip, LabPod, PodRecord,
+    StartOptions, TreeFetch, RUN_DEADLINE_RESERVE_S,
 };
 use fastvideo_lab::run::{dry_run_lines, gate_selection, Decision, RunConfig, RunError, Runner};
 use fastvideo_lab::schema;
@@ -110,6 +123,9 @@ enum Cmd {
     /// A Runpod pod for a tier.
     #[command(subcommand)]
     Pod(PodCmd),
+    /// An oracle run: the upstream reference pods, the runtime tier with
+    /// FV_ORACLE_URL, and their release (ADR-0019 §19).
+    Oracle(OracleArgs),
     /// The gold files: the CI check and the `gold` tier's cells.
     #[command(subcommand)]
     Gold(GoldCmd),
@@ -435,6 +451,65 @@ struct UpArgs {
     /// With --wait: how the run is fetched.
     #[command(flatten)]
     tree: TreeArgs,
+    #[arg(long)]
+    root: Option<PathBuf>,
+    /// Ledger, pod records, backstop logs (default <root>/artifacts/fv-lab).
+    #[arg(long)]
+    state_dir: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct OracleArgs {
+    /// The commit whose runtime image the runtime pod boots (7 hex digits).
+    #[arg(long)]
+    sha: String,
+    /// The runtime tier (lab/tiers.toml), one whose cells read upstream references.
+    #[arg(long, default_value = fastvideo_lab::oracle::ORACLE_TIER)]
+    family: String,
+    /// The arms to run (whole targets: e.g. every arm of oracle-fasth3-4step-vsa).
+    #[arg(long, num_args = 1..)]
+    cells: Vec<String>,
+    /// The commit the upstream pods clone for scripts/gpu/upstream (default:
+    /// --sha), resolved to its full hash with git.
+    #[arg(long)]
+    up_sha: Option<String>,
+    /// The upstream images' tag: `latest` (pinned to its digest at create) or `sha-<7>`.
+    #[arg(long, default_value = "latest")]
+    upstream_image_tag: String,
+    /// More K=V settings for the runtime run (FV_EXTRA_ENV; not FV_ORACLE_URL).
+    #[arg(long, num_args = 1..)]
+    extra_env: Vec<String>,
+    /// A wall cap below the runtime tier's (s).
+    #[arg(long)]
+    wall_cap_s: Option<u64>,
+    /// A wall cap below the upstream stacks' (s).
+    #[arg(long)]
+    upstream_wall_cap_s: Option<u64>,
+    /// How long the runtime pod may take to be ready before the upstream pods
+    /// are released and the run fails (s).
+    #[arg(long, default_value_t = fastvideo_lab::oracle::STOCK_WAIT_S)]
+    stock_wait_s: u64,
+    /// How long the references may take, counted from the first upstream
+    /// create (s; default: what the upstream cap leaves after the stock wait
+    /// and the fetch).
+    #[arg(long)]
+    refs_wait_s: Option<u64>,
+    /// The runtime run's tag (default <sha>-<MMDDHHMMSS>-<4 random hex>).
+    #[arg(long)]
+    tag: Option<String>,
+    /// Write the served references' base URLs (FV_ORACLE_URL's value) to this
+    /// file once they are served, before the runtime pod is created.
+    #[arg(long)]
+    url_file: Option<PathBuf>,
+    /// Keep the upstream pods until this file exists (another reader of the
+    /// same references, e.g. the GPU check's script side; ADR-0019 §19.7),
+    /// at most until their cap less 15 min; the stock wait, a failed runtime
+    /// side and an interrupt release them at once.
+    #[arg(long)]
+    hold_upstream: Option<PathBuf>,
+    /// Create (without it: print the plan).
+    #[arg(long)]
+    yes: bool,
     #[arg(long)]
     root: Option<PathBuf>,
     /// Ledger, pod records, backstop logs (default <root>/artifacts/fv-lab).
@@ -855,14 +930,6 @@ fn state_dir(arg: Option<&PathBuf>, root: &Path) -> PathBuf {
         .unwrap_or_else(|| root.join("artifacts/fv-lab"))
 }
 
-fn write_record(path: &Path, rec: &PodRecord) -> Result<(), String> {
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
-    }
-    let text = serde_json::to_string_pretty(rec).map_err(|e| e.to_string())?;
-    std::fs::write(path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
-}
-
 fn read_record(state: &Path, id: &str) -> Result<PodRecord, String> {
     let p = state.join("pods").join(format!("{id}.json"));
     let t = std::fs::read_to_string(&p).map_err(|e| {
@@ -1081,9 +1148,17 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         memory_gb: inst.memory_gb,
         vcpus: inst.vcpus,
     };
-    write_record(&state.join("pods").join(format!("{}.json", rec.id)), &rec)?;
+    // The pod exists: a record that cannot be written deletes it (or_delete).
     let out = run_dir(&root, &t.name, &tag);
-    write_record(&out.join("pod.json"), &rec)?;
+    or_delete(
+        write_record(&state.join("pods").join(format!("{}.json", rec.id)), &rec)
+            .and_then(|()| write_record(&out.join("pod.json"), &rec)),
+        &rec.id,
+        || {
+            d.destroy_retry(&inst.id, "record-failed")
+                .map_err(|e| e.to_string())
+        },
+    )?;
     log.line(&format!(
         "[fv-lab] pod {} runs `fv-lab run {}` (tag {tag}); results: fv-lab pod fetch {} --wait --down",
         rec.id, t.name, rec.id
@@ -1355,12 +1430,18 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
             let pods = pod.list().map_err(|e| e.to_string())?;
             let now = RealClock.now();
             let old = if *account {
-                let caps: Vec<(&str, u64)> = lab
+                let mut caps: Vec<(&str, u64)> = lab
                     .tiers
                     .tiers
                     .iter()
                     .map(|t| (t.name.as_str(), t.wall_cap_s))
                     .collect();
+                // The upstream pods of `fv-lab oracle` (fv-lab-upstream-<tag>),
+                // past the longest stack cap.
+                let stacks = Stacks::load(&root).map_err(|e| e.to_string())?;
+                if let Some(cap) = stacks.stacks.iter().map(|s| s.wall_cap_s).max() {
+                    caps.push((UPSTREAM_FAMILY, cap));
+                }
                 reap_account(&pods, now, &caps)
             } else {
                 let records = read_records(&state);
@@ -1409,6 +1490,208 @@ fn read_records(state: &Path) -> Vec<PodRecord> {
         eprintln!("[fv-lab] WARN: skipping pod record {w}");
     }
     records
+}
+
+// ------------------------------------------------------------------ oracle
+
+/// `--up-sha` (or `--sha`) as the full commit the upstream pods clone: a
+/// 40-hex value as it is, anything else through `git rev-parse` in `root`.
+fn full_commit(root: &Path, rev: &str) -> Result<String, String> {
+    if check_full_sha(rev).is_ok() {
+        return Ok(rev.to_owned());
+    }
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "--quiet"])
+        .arg(format!("{rev}^{{commit}}"))
+        .output()
+        .map_err(|e| format!("git rev-parse {rev}: {e}"))?;
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    if !out.status.success() || check_full_sha(&sha).is_err() {
+        return Err(format!(
+            "the upstream commit `{rev}` is not a commit of {} (git rev-parse); pass --up-sha <40 hex>",
+            root.display()
+        ));
+    }
+    Ok(sha)
+}
+
+/// `fv-lab oracle`: the plan, or (`--yes`) the run.
+fn cmd_oracle(a: &OracleArgs) -> Result<ExitCode, String> {
+    let root = find_root(a.root.as_ref())?;
+    let lab = Lab::load(&root).map_err(|e| e.to_string())?;
+    let stacks = Stacks::load(&root).map_err(|e| e.to_string())?;
+    check_sha7_named("--sha", &a.sha).map_err(|e| e.to_string())?;
+    let up_sha = full_commit(&root, a.up_sha.as_deref().unwrap_or(&a.sha))?;
+    let clock = RealClock;
+    let tag = || -> Result<String, String> {
+        Ok(run_tag(
+            &a.sha,
+            clock.now(),
+            random_suffix().map_err(|e| e.to_string())?,
+        ))
+    };
+    let runtime_tag = match &a.tag {
+        Some(t) => t.clone(),
+        None => tag()?,
+    };
+    let mut upstream_tags = Vec::new();
+    for _ in &stacks.stacks {
+        upstream_tags.push(tag()?);
+    }
+    let req = OracleRequest {
+        tier: a.family.clone(),
+        sha: a.sha.clone(),
+        up_sha,
+        image_tag: a.upstream_image_tag.clone(),
+        cells: a.cells.iter().flat_map(|c| split_list(c)).collect(),
+        extra_env: a.extra_env.clone(),
+        runtime_tag,
+        upstream_tags,
+        runtime_cap_s: a.wall_cap_s,
+        upstream_cap_s: a.upstream_wall_cap_s,
+        stock_wait_s: a.stock_wait_s,
+        refs_wait_s: a.refs_wait_s,
+        hold: a.hold_upstream.is_some(),
+    };
+    let plan = plan_oracle(&lab, &stacks, &req)?;
+    // A reused tag would read another run's pod.json as this run's pod.
+    let rdir = run_dir(&root, &plan.tier, &plan.runtime_tag);
+    if a.yes && rdir.exists() {
+        return Err(format!(
+            "{} exists: the tag {} was used before (pick another --tag)",
+            rdir.display(),
+            plan.runtime_tag
+        ));
+    }
+    // The runtime side's own refusals (`pod up`'s), before anything exists.
+    let t = tier(&lab, &plan.tier)?;
+    let mut so = StartOptions::for_tier(t, &plan.runtime_tag);
+    so.cells = plan.cells.clone();
+    so.cap_s = plan.runtime_cap_s;
+    let placeholders: Vec<String> = plan
+        .upstream
+        .iter()
+        .map(|u| reference_base("https://upstream-pod-8000.proxy.runpod.net", &u.start.tag))
+        .collect();
+    so.extra_env = vec![format!("FV_ORACLE_URL={}", placeholders.join(","))];
+    so.extra_env.extend(plan.extra_env.iter().cloned());
+    let runtime_launch = launch(t, &plan.sha, &so).map_err(|e| e.to_string())?;
+    guard::check_guards(&runtime_launch.guards).map_err(|e| e.to_string())?;
+    guard::check_region(&runtime_launch).map_err(|e| e.to_string())?;
+    if !a.yes {
+        eprintln!("[fv-lab] dry run (add --yes to create): the plan follows");
+        let api = RunpodApi::new(
+            &NoHttp,
+            &clock,
+            "",
+            RunpodUrls::from_env(&BootEnv::from_process()),
+        );
+        let p = LabPod {
+            inner: Pod::new(api),
+            family: UPSTREAM_FAMILY.into(),
+        };
+        let mut ups = Vec::new();
+        for u in &plan.upstream {
+            ups.push(json!({
+                "stack": u.stack,
+                "targets": u.targets,
+                "launch": u.launch,
+                "requests": p.payload(&u.launch).map_err(|e| e.to_string())?,
+            }));
+        }
+        let rt_requests = p.payload(&runtime_launch).map_err(|e| e.to_string())?;
+        print_json(&json!({
+            "upstream": ups,
+            "runtime": {
+                "tier": plan.tier,
+                "tag": plan.runtime_tag,
+                "cells": plan.cells,
+                "command": std::iter::once("fv-lab".to_owned())
+                    .chain(runtime_args(&plan, &placeholders, &plan.cells))
+                    .collect::<Vec<_>>(),
+                "launch": runtime_launch,
+                "requests": rt_requests,
+            },
+            "stock_wait_s": plan.stock_wait_s,
+            "refs_wait_s": plan.refs_wait_s,
+            "hold_upstream": a.hold_upstream,
+            "url_file": a.url_file,
+            "projection_usd": plan.projection_usd,
+            "note": "`--yes` pins every image to its digest; FV_ORACLE_URL's `upstream-pod` is each upstream pod's id once it is up; the upstream pods are fetched and deleted on the runtime pod's ORACLE_REFS_DONE, after --stock-wait-s without a runtime pod, or on any failure",
+        }));
+        return Ok(ExitCode::SUCCESS);
+    }
+    let env = BootEnv::from_process();
+    let http = ReqwestHttp::new().map_err(|e| e.to_string())?;
+    let api = RunpodApi::from_env(&http, &clock, &env).map_err(|e| e.to_string())?;
+    let provider = LabPod {
+        inner: Pod::new(api),
+        family: UPSTREAM_FAMILY.into(),
+    };
+    // Every pod of the run at its caps, against the balance, before the first create.
+    let account = provider.account().map_err(|e| e.to_string())?;
+    check_balance(&account, &plan)?;
+    let state = state_dir(a.state_dir.as_ref(), &root);
+    std::fs::create_dir_all(&state).map_err(|e| format!("{}: {e}", state.display()))?;
+    let api_key = env.get(API_KEY_VAR).unwrap_or("").to_owned();
+    let leaks = |s: &str| !api_key.is_empty() && s.contains(api_key.as_str());
+    let flag = interrupt_flag();
+    let interrupted = || flag.load(Ordering::SeqCst);
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let backstop = DetachedBackstop::new(
+        exe.clone(),
+        Some(state.join(format!("backstop-{}-oracle.log", utc_stamp(clock.now())))),
+        state.join("armed"),
+    );
+    let pod_url = |id: &str| provider.inner.api.urls.pod_url(id);
+    let list = || provider.inner.list().map_err(|e| e.to_string());
+    let resolve = |image: &str| ghcr_resolve(&http, image).map_err(|e| e.to_string());
+    let log = StderrLog;
+    let mut ops = LiveOps {
+        root: root.clone(),
+        state,
+        plan: &plan,
+        http: &http,
+        provider: &provider,
+        pod_url: &pod_url,
+        list: &list,
+        resolve: &resolve,
+        backstop: &backstop,
+        clock: &clock,
+        log: &log,
+        interrupted: &interrupted,
+        leaks: &leaks,
+        exe,
+        url_file: a.url_file.clone(),
+        hold: a.hold_upstream.clone(),
+        poll: Duration::from_secs(5),
+        child: None,
+        exit: None,
+        code: None,
+    };
+    let report = drive(&mut ops, &plan);
+    print_json(&report);
+    for p in &report.problems {
+        eprintln!("[fv-lab oracle] {p}");
+    }
+    eprintln!(
+        "[fv-lab oracle] results: {} and artifacts/runpod/{UPSTREAM_FAMILY}/<tag> ({})",
+        run_dir(&root, &plan.tier, &plan.runtime_tag).display(),
+        report
+            .upstream
+            .iter()
+            .map(|u| u.tag.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    // The runtime side's own exit code when it failed with one, else 1.
+    Ok(match (report.ok(), report.runtime_exit_code) {
+        (true, _) => ExitCode::SUCCESS,
+        (false, Some(c)) if c > 0 && c < 256 => ExitCode::from(c as u8),
+        _ => ExitCode::FAILURE,
+    })
 }
 
 fn cmd_backstop(
@@ -1464,6 +1747,8 @@ fn run() -> Result<ExitCode, String> {
         Cmd::Check { root } => {
             let root = find_root(root.as_ref())?;
             let lab = Lab::load(&root).map_err(|e| e.to_string())?;
+            let stacks = Stacks::load(&root).map_err(|e| e.to_string())?;
+            stacks.check_against(&lab).map_err(|e| e.to_string())?;
             for t in &lab.tiers.tiers {
                 let arms: usize = t
                     .cells
@@ -1480,15 +1765,26 @@ fn run() -> Result<ExitCode, String> {
                     t.wall_cap_s
                 );
             }
+            for s in &stacks.stacks {
+                println!(
+                    "upstream {}: {} target(s), {} at <= ${}/hr, cap {} s",
+                    s.name,
+                    s.targets.len(),
+                    s.gpu,
+                    s.max_usd_per_hr,
+                    s.wall_cap_s
+                );
+            }
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Schema { name } => {
-            let s =
-                schema::by_name(&name).ok_or_else(|| format!("no schema {name} (tiers, cell)"))?;
+            let s = schema::by_name(&name)
+                .ok_or_else(|| format!("no schema {name} (tiers, cell, upstream)"))?;
             print!("{}", schema::schema_text(&s));
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Pod(c) => cmd_pod(&c).map(b),
+        Cmd::Oracle(a) => cmd_oracle(&a),
         Cmd::Gold(c) => cmd_gold(&c),
         Cmd::Report(c) => cmd_report(&c),
         Cmd::Backstop {

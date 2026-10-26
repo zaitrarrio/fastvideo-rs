@@ -2070,3 +2070,12 @@ Project code: FVID
 - ADR: docs/adr/0019-fv-lab.md §18 (§9.1, §14.6, §14.7, §17.3, §17.4)
 - Verification: `fv-lab-route.test.sh`, `runpod-plan.test.sh`, `fv-lab-goldens.sh --check`, `tests/dry_run.rs::families_retired_with_no_tier_have_no_branch_and_no_tier`, `tests/repeats_oracle.rs`; `FV_DRY_RUN=1` output and `FV_DRY_RUN_GATES` of the 16 remaining families before (`b019ccb2`) and after: byte-identical
 - Open: `writer`'s measurement has no result in `docs/perf` and no committed run (only commit `a8ecfec6`'s description)
+
+### FVID · 2026-10-26 · FVID-2026-10-26-fv-lab-oracle-driver
+- Trigger: the coordinator's D1h: the `fv-lab oracle` driver of ADR-0019 §15.6 / §15.10 (what `oracle.sh` and §15.7's hand-run commands do) and the remaining oracle targets as cells
+- Decision: (agent, for the coordinator's review) `fv-lab oracle` brings up the upstream reference pods as fv-lab pods on fv-deploy's guards from a new `lab/upstream.toml` (its own schema v1, additive: one `[[stack]]` per upstream image with its targets' weight steps; not tiers, which run cells), waits for every selected reference before the runtime pod, runs the runtime side as `fv-lab pod up --wait`, and releases the upstream pods on `ORACLE_REFS_DONE` (or 1,800 s after the runtime pod is ready without it), a 2,100 s stock wait or any failure (review of #216: a pod is never left behind by a failed step after its create, the runtime side is stopped, the upstream pods released, then the runtime side waited for); the clip-metric targets and `sfwan13` are not moved (they need a derived-clip step the ADR has not designed: a decision, §19.9), so `oracle`'s branch stays whole
+- Reason: the ADR names the driver's shape (a second image and start command, the release on `ORACLE_REFS_DONE`); the stacks are data like the tiers; the runtime side is reused, not copied
+- Reversibility: high (a new subcommand, file and schema; `oracle.sh`, the branch and every existing pod body unchanged)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §19
+- Verification: `tests/oracle_driver.rs` (payload goldens from `runpod-http.sh plan-upstream`, the plan's refusals, the balance guard, the driver's order and releases on fakes), `tests/fv_lab_bin.rs::oracle_without_yes_is_the_plan_and_needs_no_key`, `tests/schema.rs`, `fv-lab-goldens.sh --check`; GPU check §19.7 pending (the coordinator's)

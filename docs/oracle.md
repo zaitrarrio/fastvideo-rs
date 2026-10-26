@@ -80,6 +80,33 @@ the floor the Rust-vs-Python profile is judged against.
 Results: `artifacts/runpod/oracle/<tag>/oracle-<target>-diff/` (the stderr
 table and `gpucheck-out/*.json`); the dumps themselves stay on the pods.
 
+**With fv-lab** (ADR-0019 §19, proposed until its GPU check passes): the
+same run on fv-deploy's guards, for the targets that are cells of the
+`oracle` tier (the nine tensor-diff targets; not yet the clip-metric targets
+or `sfwan13`, which stay on `oracle.sh`):
+
+```
+./fv-lab oracle --sha <7> --cells <arms>          # the plan: both pods' bodies, no key
+RUNPOD_API_KEY=… ./fv-lab oracle --sha <7> --cells <arms> --yes
+```
+
+`--cells` names arms (every arm of `oracle-<target>` for a whole target,
+e.g. `oracle-fasth3-4step-vsa,oracle-fasth3-4step-vsa-diff,…`). It brings up
+one upstream pod per stack of `lab/upstream.toml` that makes a selected
+target (the stack's image at `--upstream-image-tag`, default `latest`
+pinned to its digest; its host-RAM floor, 192 GB for the FastVideo stack,
+below), waits for every selected reference's `ORACLE_DONE` (keeping the
+pods alive with `keepalive.bin`), then runs the tier's runtime pod (`fv-lab
+pod up --wait` with `FV_ORACLE_URL` set to the serving pods) and fetches and
+deletes the upstream pods when the runtime pod has every reference, when no
+runtime pod is ready within `--stock-wait-s` (2,100 s), 1,800 s after the runtime
+pod is ready without `ORACLE_REFS_DONE`, or on any failure (an interrupt deletes
+them without the fetch).
+Results: `artifacts/runpod/oracle/<tag>/` as above and
+`artifacts/runpod/upstream/<tag>/` (the reference run, without dumps or
+clips). `--url-file` / `--hold-upstream` let another reader (the GPU check's
+script side) use the same reference.
+
 Pass: step-1 per-block rel-L2 at bf16-rounding level (~2e-3) growing smoothly
 with depth, no block where it jumps. A jump is bisected with the block's op
 dumps (`FASTVIDEO_DUMP_OPS=<i>`): the first op whose rel-L2 leaves the bf16
@@ -151,7 +178,8 @@ starvation (an OOM kill during the LoRA conversion), but does not prove it.
 **The setting:** run upstream H3 LoRA cells (`oracle:fasth3-4step-*`,
 `cells:fv-fasth3-4step-*`) with `FV_MIN_RAM_GB=192`. `scripts/gpu/oracle.sh`
 passes the caller's environment to `runpod-http.sh upstream`, so set it there
-too. The command in ADR-0019 §15.7 does.
+too. The command in ADR-0019 §15.7 does. `fv-lab oracle` takes it from
+`lab/upstream.toml`: the `fastvideo` stack's `min_ram_gb = 192`.
 
 ## Results: H3 turbo on H100 with the datacenter VSA kernel (2026-09-29)
 

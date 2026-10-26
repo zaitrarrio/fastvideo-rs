@@ -70,6 +70,8 @@ on:
       - "scripts/serve/e2e/segments-pod.sh"
       - "scripts/serve/tests/no-baked-config.test.sh"
       - "lab/tiers.toml"
+      # the upstream pods' goldens (fv-lab oracle, ADR-0019 §19)
+      - "lab/upstream.toml"
       - "crates/fastvideo-lab/fixtures/**"
       - "scripts/gpu/runpod-cuda.sh"
       - "scripts/gpu/lib.sh"
@@ -144,6 +146,8 @@ on:
       - "scripts/serve/e2e/segments-pod.sh"
       - "scripts/serve/tests/no-baked-config.test.sh"
       - "lab/tiers.toml"
+      # the upstream pods' goldens (fv-lab oracle, ADR-0019 §19)
+      - "lab/upstream.toml"
       - "crates/fastvideo-lab/fixtures/**"
       - "scripts/gpu/runpod-cuda.sh"
       - "scripts/gpu/lib.sh"

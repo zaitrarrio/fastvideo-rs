@@ -138,6 +138,37 @@ fn run_plan_schemas_are_strict_and_name_their_fields() {
             ],
         )],
     );
+    // lab/upstream.toml (ADR-0019 §19): the stacks of `fv-lab oracle`.
+    let u: serde_json::Value =
+        serde_json::from_str(&schema_text(&fastvideo_lab::schema::upstream_schema())).unwrap();
+    strict(
+        &u,
+        &[
+            (
+                "Stack",
+                vec![
+                    "name",
+                    "image",
+                    "gpu",
+                    "gpu_count",
+                    "cloud",
+                    "region",
+                    "max_usd_per_hr",
+                    "wall_cap_s",
+                    "container_disk_gb",
+                    "min_ram_gb",
+                    "cell_timeout_s",
+                    "env",
+                    "target",
+                ],
+            ),
+            ("StackTarget", vec!["name", "steps"]),
+        ],
+    );
+    assert_eq!(
+        u["$defs"]["Stack"]["properties"]["min_ram_gb"]["minimum"],
+        serde_json::json!(1)
+    );
     let c: serde_json::Value =
         serde_json::from_str(&schema_text(&fastvideo_lab::schema::cell_schema())).unwrap();
     strict(
