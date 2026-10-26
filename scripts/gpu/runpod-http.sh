@@ -922,7 +922,7 @@ cmd_run() {
   if sib="$(fv_lab_sibling "$FAMILY")" && [[ "$mode" == run || "$mode" == all ]]; then
     [[ "$sib" == oracle ]] \
       && die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib's targets its tier cannot run (docs/adr/0019-fv-lab.md §21): fv-lab oracle --family $FAMILY --sha $sha --cells <arms> --yes, or fv-lab pod up --sha $sha --family $FAMILY --cells <arms> --yes --wait; the script runs them as FV_FAMILY=$sib"
-    die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib in a mode its tier does not run (docs/adr/0019-fv-lab.md §22): fv-lab pod up --sha $sha --family $FAMILY --yes --wait (narrowed by arm with --cells <arms>); the script runs it as FV_FAMILY=$sib $(fv_lab_sibling_mode "$FAMILY")"
+    die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib in a mode its tier does not run (docs/adr/0019-fv-lab.md §22, S2): fv-lab pod up --sha $sha --family $FAMILY --yes --wait (narrowed by arm with --cells <arms>); the script runs it as FV_FAMILY=$sib $(fv_lab_sibling_mode "$FAMILY")"
   fi
   # Nor were the tiers made from a port one-off (fv-lab-retired.sh FV_LAB_EXPERIMENTS).
   if fv_lab_experiment "$FAMILY" && [[ "$mode" == run || "$mode" == all ]]; then

@@ -47,7 +47,7 @@ FV_LAB_EXPERIMENTS="h3-graphs"
 # that its own tier cannot run (another pod: `oracle-r2`, the oracle family's
 # sfwan13 target, reads its tree from R2, `weights = "volume+r2"`; another
 # prompt set: `hd5`, the hd family with FV_PROMPTS=scripts/gpu/prompts-hd5.json,
-# the 1080P serve gate's, which fv-lab takes from a cell, §22 S2). Its
+# the 1080P serve gate's, which fv-lab takes from a cell, §22, S2). Its
 # fixtures are <family>'s dry run under the tier's settings
 # (tests/fv-lab-goldens.sh fam_env) and runpod-http.sh plan's body for the
 # tier; fv-lab's dry run equals the first with the tier's name for the
