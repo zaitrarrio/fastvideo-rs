@@ -1852,6 +1852,11 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --cells h3-larry-tur
 RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --yes --wait
 #   -> artifacts/runpod/gold/$SHA-<MMDDHHMMSS>-<hex>/   (the pod is deleted at the end)
 ./fv-lab report tiers --runs artifacts/runpod/gold/$SHA-<MMDDHHMMSS>-<hex>
+# Or split in two (below: when one run would not fit the wall cap), two pods at the same $SHA:
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --cells <the 21 arms that read R2 trees> --yes --wait
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --cells <the 11 others> --yes --wait
+#   -> two run directories; one table from both (also `--runs <first> --runs <second>`):
+./fv-lab report tiers --runs artifacts/runpod/gold/$SHA-<first>,artifacts/runpod/gold/$SHA-<second>
 ```
 
 Pass: `DONE` and `matrix_exit=0`; `live.log` has the line `weights /fvscratch/weights: 10 volume trees linked from
@@ -1874,7 +1879,14 @@ time left as their cap. So the runner ends and the start command writes `DONE` b
 --wait`, `pod fetch --wait`) stops waiting at the cap less `FETCH_RESERVE_S` (15 min, `pod::wait_limit_s`) and fetches
 whatever the run holds (judged failed when there is no `DONE`), while the pod still lives. If the smoke run's per-arm
 times project past about 3.5 h, splitting the full run in two with `--cells` (the 21 arms that read R2 trees, then the
-11 others; about 10 min of boot more) still measures every arm.
+11 others; about 10 min of boot more) still measures every arm, and `report tiers` renders the two run directories
+as one run set: `--runs` takes several, comma separated or repeated. It refuses runs of different tiers or (where
+`pod.json` or the tag names it) different commits, the same directory twice, and an arm that ran in more than one
+run; an arm may be in several runs only when every copy but at most one was skipped (e.g. `wall cap near` in the
+first run), and the table shows the copy that ran (all skipped: the first in `--runs` order). Each row reads its
+arm's own run (its `pod.json` GPU and price); the header names every run, and a single run renders as before.
+`report tiers` writes no gold file: `[last_validated]` is written by hand (ADR-0023 "What a gold run then does"),
+and its `run` is the directory that variant's arm came from.
 
 #### 16.8 Differences, and what stays
 

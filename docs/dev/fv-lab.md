@@ -411,6 +411,7 @@ Design: [ADR-0023](../adr/0023-lab-report-and-ci-bridge.md) (plan D3, D4).
 ./fv-lab run gold --all --dry-run           # the gold tier: one serve-engine arm per gold variant
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family gold --yes --wait   # the gold runs -> artifacts/runpod/gold/<tag>/
 ./fv-lab report tiers --runs artifacts/runpod/gold/<tag>                # docs/perf/tiers.md from that run set
+./fv-lab report tiers --runs artifacts/runpod/gold/<tag1>,artifacts/runpod/gold/<tag2>   # a gold run split with --cells, as one
 ./fv-lab report tiers --check               # CI: docs/perf/tiers.md is what the run set its header names renders to
 ```
 
@@ -422,6 +423,14 @@ checked, and it says so). A variant never validated is a warning.
 tier names its arms by variant id), with every value read from that arm's `summary.json`, `benchmark.json` or
 `gpucheck-out/engine.json` and the run's `pod.json`; anything else is "not measured" with the reason. Options:
 `--gold DIR` (other gold files), `--out FILE`, `--stdout`.
+
+`--runs` takes several run directories (comma separated or repeated) of one tier and one commit, e.g. a gold run
+split in two with `--cells` ([ADR-0019 §16.7](../adr/0019-fv-lab.md#167-the-gpu-check-the-coordinators)), and
+renders them as one run set: the arms are merged, each row reads its own run's `pod.json`, and the header names every
+run (its tag, end, GPU and price). Refused: runs of different tiers or commits (where `pod.json` or the tag names
+one), the same directory twice, and an arm that ran in more than one run. An arm may be in several runs only when
+every copy but at most one was skipped; the copy that ran is shown (all skipped: the first in `--runs` order).
+`--check` reads the runs back from the header (`` Run set: `a`, `b` ``). One run renders exactly as before.
 
 Workflows: `gold-check.yml` runs the three checks on lab, family and lab-crate changes; `gold-run.yml`
 (`workflow_dispatch`, input `confirm: spend`) runs `pod up --family gold --yes --wait` and renders the table as an
