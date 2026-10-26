@@ -154,12 +154,16 @@ row `lingbot-video-moe-30b-a3b` @ `f2e538f64afe00cc4ae674db2aeb52e2945edfd5`
 
 ## GPU benchmark arm (not run)
 
-`FV_FAMILY=sol-lingbot scripts/gpu/runpod-http.sh run <sha>` (runpod-matrix
-family `sol-lingbot`): `fv-gpucheck sol lingbot-router`, then
-`sol lingbot-gen --arm baseline` and `--arm fullopt` over the three prompts.
-Knobs: `FV_LINGBOT_RESIDENCY` (`swap` default, `both` on B200),
-`FV_LINGBOT_PROMPTS` (3), `FV_LINGBOT_ARMS`, `FV_SOL_TIMEOUT_S`. B200:
-`RUNPOD_GPU_TYPE="NVIDIA B200" RUNPOD_GPU_MAX_DPH=8`. Estimates in
+The runpod-matrix family `sol-lingbot` (`fv-gpucheck sol lingbot-router`,
+then `sol lingbot-gen --arm baseline` and `--arm fullopt` over the three
+prompts; knobs `FV_LINGBOT_RESIDENCY`, `FV_LINGBOT_PROMPTS`, `FV_LINGBOT_ARMS`,
+`FV_SOL_TIMEOUT_S`) is **retired** with no tier (ADR-0019 §22, S1):
+`FV_FAMILY=sol-lingbot runpod-http.sh run` is refused (exit 2). The benchmark
+runs `scripts/gpu/sol-bench-pod.sh` (`docs/perf/sol-bench.md`), whose LingBot
+sets run `lingbot-router` and the two arms on one prompt; LingBot on three
+prompts and the B200 path with both resident (`FV_LINGBOT_RESIDENCY=both`;
+`sol-bench-pod.sh` hard-codes `--residency swap`) are lost (never recorded). The family's commands are in
+`git show 4f8822a0:scripts/gpu/runpod-matrix.sh`. Estimates in
 docs/perf/sol-lingbot-cosmos3-plan.md.
 
 ## Port status

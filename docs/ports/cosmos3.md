@@ -123,11 +123,15 @@ row `cosmos3-super` @ `f543c56225b2e04d0ad141e29655be3a45d9c455`
 
 ## GPU benchmark arm (not run)
 
-`FV_FAMILY=sol-cosmos3 scripts/gpu/runpod-http.sh run <sha>` (runpod-matrix
-family `sol-cosmos3`): cells `cosmos3-baseline`, `cosmos3-teacache`,
-`cosmos3-teacache-fp8` (`FV_COSMOS3_ARMS`), each `fv-gpucheck sol
-cosmos3-gen --warm`. B200: add `FV_EXTRA_ENV="FASTVIDEO_COSMOS3_UND=resident"`.
-Estimates in docs/perf/sol-lingbot-cosmos3-plan.md.
+The runpod-matrix family `sol-cosmos3` (cells `cosmos3-baseline`,
+`cosmos3-teacache`, `cosmos3-teacache-fp8`, each `fv-gpucheck sol cosmos3-gen
+--warm`) is **retired** with no tier (ADR-0019 §22, S1):
+`FV_FAMILY=sol-cosmos3 runpod-http.sh run` is refused (exit 2). The benchmark
+runs `scripts/gpu/sol-bench-pod.sh` (`docs/perf/sol-bench.md`), whose Cosmos3
+sets run the same arms; `FASTVIDEO_COSMOS3_UND=resident` keeps the text tower
+on a B200. The family's commands are in
+`git show 4f8822a0:scripts/gpu/runpod-matrix.sh`. Estimates in
+docs/perf/sol-lingbot-cosmos3-plan.md.
 
 ## Port status
 

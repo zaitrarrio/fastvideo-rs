@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs ON a Runpod GPU box. Family: wan | eval | oracle | ... | sol-cosmos3
+# Runs ON a Runpod GPU box. Family: mmaudio | sfwan | sfstream | wan | oracle |
+# hd | serve-engine
 # One process per family. Continues to the next cell on failure.
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) unless a
 # cell sets it.
@@ -8,17 +9,19 @@
 # fv-lab-retired.sh (rtx6000, techniques, b6, rtx5090, fastvideo, h3arms,
 # trace, ltxfps, ltxvae, precision; b4a, with its verdict step, §11.6;
 # det-short and determinism, with their [repeats] hashes, §15.10; fuse, attn3
-# and ltx, D1f's, §17.6) passed their GPU gate and their branches are gone; they are tiers of lab/ (`fv-lab run <tier>` on the box,
-# `runpod-http.sh run` / `fv-lab pod up` from a host). This script refuses
-# them (exit 2), and `headline` runs its cells of them through fv-lab. Two
+# and ltx, D1f's, §17.6) passed their GPU gate and their branches are gone;
+# they are tiers of lab/ (`fv-lab run <tier>` on the box, `runpod-http.sh run`
+# / `fv-lab pod up` from a host). This script refuses them (exit 2). Two
 # modes of them are fv-lab tiers too (§12, FV_LAB_RESTORED):
 # FV_PRECISION_ARM=ltx-nvfp4 is `precision-nvfp4`, FV_VAE_GEN=1 `ltxvae-gen`;
 # the refusal names the tier.
 # Retired with no tier (§18, FV_SCRIPT_RETIRED): h3, hunyuan, sana-video, b200,
-# writer, precision-debug, identity, b4b, b4c, b4c2, h3attn. Their branches are
-# gone too; this script refuses them (exit 2) and names what replaces each.
+# writer, precision-debug, identity, b4b, b4c, b4c2, h3attn; and (§22, S1)
+# sfquality, headline, speechtest, cold, eval, ltxoffload, solbench,
+# sol-lingbot, sol-cosmos3. Their branches are gone too; this script refuses
+# them (exit 2) and names what replaces each.
 #
-# Evaluation layer (eval family and the gen cells):
+# Evaluation layer (the gen cells):
 #   every H3 / LTX-2 gen cell writes <cell>/benchmark.json (timings per stage
 #   and step, peak memory, TeaCache / Sol-Attn / VSA / FFN-chunk / quantized
 #   linear counters; see crates/fastvideo-gpucheck/src/benchmark.rs).
@@ -34,14 +37,14 @@
 # FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
-# bash scripts/gpu/runpod-matrix.sh eval (or any family). A dry run fetches
+# bash scripts/gpu/runpod-matrix.sh hd (or any family). A dry run fetches
 # nothing, and with
 # FV_DRY_RUN_GATES=<file> it appends one line per gated cell ("arm", its
 # verify-weights.sh cell, -) and per promotion gate ("gate", kind, OFF arm
 # or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh) when a
 # family moves to lab/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|serve-engine|hd|headline|mmaudio|speechtest|sfwan|sfstream|sfquality|cold|wan|oracle|eval|ltxoffload (retired to fv-lab or with no tier: fv-lab-retired.sh)}"
+FAMILY="${1:?usage: runpod-matrix.sh mmaudio|sfwan|sfstream|wan|oracle|hd|serve-engine (retired to fv-lab or with no tier: fv-lab-retired.sh)}"
 DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
@@ -98,9 +101,6 @@ log() {
 }
 
 # ---- evaluation layer (see the header) ----
-if [[ "$FAMILY" == eval ]]; then
-  : "${FV_PROMPTS:=5}" "${FV_LPIPS:=1}"
-fi
 PROMPT_ARGS=()
 case "${FV_PROMPTS:-}" in
   "" | 0 | 1) PROMPTS_FILE="" ;;
@@ -537,88 +537,6 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
         --label "$label" --out "$RUNS/wave-$label/wave.json"
     done
     ;;
-  speechtest)
-    # Can the audio models say a given line? (docs/ports/mmaudio.md "Speech")
-    # Seeds 1000..1002 everywhere; every wav goes into $RUNS/manifest.tsv
-    # (id, wav, intended line, note) and one Whisper pass transcribes them all.
-    #   t2a-fox / t2a-station / t2a-fox-tagged  MMAudio text-to-audio, 8 s: a plain
-    #                               quoted line, and strobe's <S>..<E> + "Audio:" style
-    #   wan-talk                    FastWan 1.3B, a person speaking to camera (no audio)
-    #   v2a-{notext,text}-<seed>    MMAudio video-to-audio on that clip, without and
-    #                               with the spoken line as the text condition
-    #   h3-speech                   FastH3 4-step VSA 480p, 5 s, joint audio, the
-    #                               same lines in H3's <d>[English] ..</d> markup
-    #   whisper                     openai-whisper (FV_WHISPER_MODEL, default large-v3)
-    GPU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    MMW="$W/mmaudio-44k-v2"
-    export FASTVIDEO_MMAUDIO_WEIGHTS="$MMW"
-    SEEDS="1000 1001 1002"
-    FOX="The quick brown fox jumps over the lazy dog."
-    STATION="Welcome to the station, the next train leaves at nine."
-    MAN="A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions, soft window light."
-    WOMAN="A woman station announcer speaking into a microphone on a train platform, medium close-up, daytime."
-    MANIFEST="$RUNS/manifest.tsv"
-    : >"$MANIFEST"
-    add() { local n="${4//$'\n'/ | }"; printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${n//$'\t'/ }" >>"$MANIFEST"; }
-    t2a() {
-      local name="$1" line="$2" prompt="$3" seed
-      gated_cell "$name" mmaudio-44k-v2 "$BIN" --mode fast mmaudio t2a --weights "$MMW" --prompt "$prompt" \
-        --seeds "${SEEDS// /,}" --duration 8 --out "$RUNS/$name"
-      for seed in $SEEDS; do add "$name-$seed" "$RUNS/$name/seed-$seed.wav" "$line" "mmaudio t2a: $prompt"; done
-    }
-    t2a t2a-fox "$FOX" "A man says clearly: \"$FOX\""
-    t2a t2a-station "$STATION" "A woman announces: \"$STATION\""
-    t2a t2a-fox-tagged "$FOX" "A man talks to the camera. He says <S>$FOX<E>
-Audio: male speech, clear voice, quiet room"
-    TALK="A man in his thirties speaking to the camera in a bright living room, medium close-up, his lips moving as he talks, natural expressions and hand gestures, soft window light."
-    gated_cell wan-talk fastwan21-1.3b \
-      "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" --prompt "$TALK" --seed 1024 \
-        --clip-dir "$RUNS/wan-talk/frames"
-    CLIP="$(find "$RUNS/wan-talk" -name output.mp4 | grep -v cold | head -1)"
-    log "V2A clip: ${CLIP:-missing}"
-    for seed in $SEEDS; do
-      for arm in notext text; do
-        prompt=""
-        [[ "$arm" == text ]] && prompt="A man says clearly: \"$FOX\""
-        gated_cell "v2a-$arm-$seed" mmaudio-44k-v2 "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$CLIP" \
-          --prompt "$prompt" --seed "$seed" --runs 1 --out "$RUNS/v2a-$arm-$seed"
-        add "v2a-$arm-$seed" "$RUNS/v2a-$arm-$seed/mmaudio.wav" "$FOX" "mmaudio v2a on wan-talk, prompt: ${prompt:-none}"
-      done
-    done
-    H3P="$RUNS/h3-prompts.json"
-    # (No jq in the runtime image; the lines hold no JSON-special characters.)
-    {
-      printf '{"name": "speechtest", "prompts": [\n'
-      sep=""
-      for seed in $SEEDS; do
-        printf '%s{"name": "fox-%s", "seed": %s, "prompt": "%s He says clearly: <d>[English] %s</d>"},\n' "$sep" "$seed" "$seed" "$MAN" "$FOX"
-        printf '{"name": "station-%s", "seed": %s, "prompt": "%s She announces: <d>[English] %s</d>"}' "$seed" "$seed" "$WOMAN" "$STATION"
-        sep=$',\n'
-      done
-      printf '\n]}\n'
-    } >"$H3P"
-    gated_cell h3-speech fasth3-4step-vsa \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832 \
-        --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto --text-cache "$SCRATCH/h3-text-cache" \
-        --text-weights "$W/h3-base" --warm --prompts "$H3P" \
-        --adaln-cache "$RUNS/h3-speech-adaln.cache" --clip-dir "$RUNS/h3-speech/frames"
-    for seed in $SEEDS; do
-      add "h3-fox-$seed" "$RUNS/h3-speech/frames/fox-$seed/audio.wav" "$FOX" "h3 fasth3-4step-vsa 480p"
-      add "h3-station-$seed" "$RUNS/h3-speech/frames/station-$seed/audio.wav" "$STATION" "h3 fasth3-4step-vsa 480p"
-    done
-    WV="$SCRATCH/whisper-venv"
-    FV_GEN_TIMEOUT_S=2400 run_cell whisper bash -c "
-      set -e
-      (command -v python3 && python3 -m venv --help) >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq python3-venv python3-pip >/dev/null; }
-      command -v ffmpeg >/dev/null || { apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null; }
-      python3 -m venv $WV
-      $WV/bin/pip install -q --upgrade pip
-      $WV/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cu128
-      $WV/bin/pip install -q openai-whisper
-      $WV/bin/python $GPU_DIR/speech_transcribe.py --manifest $MANIFEST --model ${FV_WHISPER_MODEL:-large-v3} \
-        --out $RUNS/whisper/speech.json
-    "
-    ;;
   sfwan)
     # SF-Wan 1.3B on one pod: the oracle diff against FastVideo's dump (when
     # FV_ORACLE_URL serves one), then the wan family's SF-Wan cells and the
@@ -648,150 +566,6 @@ Audio: male speech, clear voice, quiet room"
     sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run reb-sink15-120s,seconds=120,rope=rebased,sink=15 \
       --run switch-keep-30s,seconds=30,switch_at=15,switch=keep --run switch-reset-20s,seconds=20,switch_at=10,switch=reset}
     sf_stream sfstream-10min --run reb-sink15-600s,seconds=600,rope=rebased,sink=15 --window-s 30
-    ;;
-  sfquality)
-    # Long-rollout quality of the open-ended SF-Wan stream (design risk
-    # R12): per 10 s window picture and latent statistics (top band against
-    # the rest), a fresh-state TAEHV decode against the carried state, one
-    # contact sheet per run (gpucheck-out/sheets/<run>.jpg), for the RoPE
-    # policies, sink and window sizes, periodic KV re-cache, graph against
-    # eager, and f32 activations. FV_SFQ_RUNS / FV_SFQ_F32_RUNS override.
-    TAE_W="$TAE/taew2_1.safetensors"
-    [[ -f "$TAE_W" ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
-      || log "WARN: taew2_1 fetch failed (tae-fetch.log)"
-    export FASTVIDEO_TAE_DIR="$TAE"
-    SF_PROMPT="${FV_SF_PROMPT:-A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed}"
-    SF_SWITCH="${FV_SF_SWITCH:-A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed}"
-    sfq() {
-      # $2: a command prefix (e.g. "env FASTVIDEO_BF16_ACT=0"), word-split.
-      local name="$1" pre="$2"; shift 2
-      # shellcheck disable=SC2086
-      gated_cell "$name" sfwan21-1.3b $pre "$BIN" --keep-going --mode fast wan stream --weights "$W/sfwan21-1.3b" \
-        --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
-    }
-    SFQ_RUNS="${FV_SFQ_RUNS:-reb-s3-180,seconds=180,keep_s=60 reb-s3-eager-90,seconds=90,graphs=0
-      rel-s3-120,seconds=120,rope=rel abs-s3-90,seconds=90,rope=abs reb-s1-90,seconds=90,sink=1
-      reb-s6-120,seconds=120,sink=6 reb-s9-120,seconds=120,sink=9 reb-s12-120,seconds=120,sink=12
-      reb-s3-w12-90,seconds=90,window=12 reb-s3-w27-90,seconds=90,window=27
-      reb-s3-rc7k9-120,seconds=120,recache=7:9 reb-s3-rc14k18-120,seconds=120,recache=14:18}"
-    # Runs are separated by spaces or "+" (so a list fits in FV_EXTRA_ENV).
-    args=()
-    for r in ${SFQ_RUNS//+/ }; do args+=(--run "$r"); done
-    # shellcheck disable=SC2086
-    sfq sfq-main "" ${FV_SFQ_PARITY---parity} "${args[@]}"
-    # A second seed (FV_SFQ_SEED2_RUNS; skipped when unset).
-    if [[ -n "${FV_SFQ_SEED2_RUNS:-}" ]]; then
-      args=()
-      for r in ${FV_SFQ_SEED2_RUNS//+/ }; do args+=(--run "$r"); done
-      SEED="${FV_SFQ_SEED2:-7}" sfq sfq-seed2 "" "${args[@]}"
-    fi
-    args=()
-    for r in ${FV_SFQ_F32_RUNS-reb-s3-f32-60,seconds=60,graphs=0}; do args+=(--run "$r"); done
-    if (( ${#args[@]} )); then sfq sfq-f32 "env FASTVIDEO_BF16_ACT=0" "${args[@]}"; fi
-    ;;
-  headline)
-    # The headline configurations on one pod (a new GPU type, one run):
-    # cells borrowed from other families, all written into this run dir.
-    # Its four source families are retired to fv-lab (fv-lab-retired.sh), so
-    # `fv-lab run <tier> --cells …` runs them, into this run dir
-    # (FV_RUNS_DIR), with this run's work, scratch and per-cell cap.
-    lab="${FV_LAB_BIN:-$(command -v fv-lab || echo /opt/fastvideo-rs/target/release/fv-lab)}"
-    if [[ "$DRY_RUN" != 1 ]]; then
-      # A tier's cells carry their own prompt and seed; fv-lab only warns, so
-      # refuse here rather than run something other than what was asked.
-      for v in FV_PROMPTS FV_PROMPT FV_SEED; do
-        if [[ -n "${!v:-}" ]]; then
-          log "FATAL: $v is set, and headline's cells run through fv-lab, which takes prompts and seeds only from the cells (docs/adr/0019-fv-lab.md §7, §10)"
-          exit 2
-        fi
-      done
-      [[ -x "$lab" ]] || { log "FATAL: fv-lab missing at $lab (FV_LAB_BIN); headline's cells run through it"; exit 2; }
-    fi
-    sub() { local fam="$1" rc=0; shift
-      # A dry run is fv-lab's (the tier's lines), or without fv-lab its command line.
-      if [[ "$DRY_RUN" == 1 ]]; then
-        if [[ -x "$lab" ]]; then
-          FV_RUNS_DIR="$RUNS" FV_WORK="$WORK" FV_SCRATCH="$SCRATCH" "$lab" run "$fam" --cells "$*" --dry-run || true
-        else
-          log "dry-run fv-lab: $(printf '%q ' "$lab" run "$fam" --cells "$*")"
-        fi
-        return 0
-      fi
-      FV_RUNS_DIR="$RUNS" FV_WORK="$WORK" FV_SCRATCH="$SCRATCH" FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-300}" \
-        "$lab" run "$fam" --cells "$*" || rc=$?
-      # As the recursive `runpod-matrix.sh <family> || true` before it: a
-      # failed tier is logged and the next one runs; its arms' summaries carry
-      # their exits, and it never set headline's own exit (matrix_exit).
-      (( rc == 0 )) || log "FAIL fv-lab run $fam exit=$rc"
-      return 0; }
-    sub fastvideo ${FV_HEADLINE_FASTVIDEO:-fasth3-4step-vsa-480p fasth3-8step-480p fasth3-4step-vsa-768p fasth3-8step-768p}
-    sub rtx6000 ${FV_HEADLINE_SOLH3:-sol-h3}
-    sub rtx5090 ${FV_HEADLINE_ROUTES:-h3-768p-fullopt ltx25-4k5s-sol}
-    sub precision ${FV_HEADLINE_PRECISION:-ltx25-4k5s-sol-bf16act-fp8}
-    ;;
-  cold)
-    # Timings measured the way the references measure them, where the warm
-    # cells do not. LTX-2.5: sol-engine times one request end to end in a fresh
-    # process (--offload cpu, weights loading lazily inside the stages), so
-    # these cells run once, without --warm, and always encode the prompt;
-    # compare load_s + total_s with its e2e. They run first, with the page
-    # cache dropped where the container allows it, so load reads the volume.
-    # H3: FastVideo times warm requests but encodes the prompt each time, so
-    # the fresh-prompt cells keep --warm and pass --no-text-cache.
-    drop_page_cache() {
-      sync
-      if echo 3 >/proc/sys/vm/drop_caches 2>/dev/null; then
-        log "cold: page cache dropped before $1"
-      else
-        log "cold: page cache NOT dropped before $1 (no permission); load may read cached pages"
-      fi
-    }
-    for wl in 4k5s 1080p20s; do
-      for mode in cpu resident; do
-        name="ltx25-$wl-sol-cold-$mode"
-        [[ -n "${FV_CELLS:-}" && " $FV_CELLS " != *" $name "* ]] && continue
-        envs=(env -u FASTVIDEO_LTX_OFFLOAD)
-        [[ "$mode" == cpu ]] && envs=(env FASTVIDEO_LTX_OFFLOAD=cpu)
-        drop_page_cache "$name"
-        gated_cell "$name" ltx25-two-stage \
-          "${envs[@]}" "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-            --weights "$W/ltx25" --dit "$W/ltx25" --workload "$wl" \
-            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --no-text-cache \
-            --clip "$RUNS/$name/frames"
-        # The 4K / 20 s PNGs are GBs; the reports keep the numbers.
-        rm -rf "$RUNS/$name/frames"/*.png
-      done
-    done
-    h3_fresh=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder auto
-      --no-text-cache
-      --text-weights "$W/h3-base"
-      --warm
-    )
-    for res in 768p 480p; do
-      geo=()
-      [[ "$res" == 480p ]] && geo=(--height 480 --width 832)
-      gated_cell "fasth3-8step-$res-fresh" fasth3-8step \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step "${geo[@]}" \
-          --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-8step-$res-fresh/frames" "${h3_fresh[@]}"
-      gated_cell "fasth3-4step-vsa-$res-fresh" fasth3-4step-vsa \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa "${geo[@]}" \
-          --adaln-cache "$RUNS/fasth3-4step-vsa-$res-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-4step-vsa-$res-fresh/frames" "${h3_fresh[@]}"
-    done
-    gated_cell sol-h3-fresh sol-h3 \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3 \
-        --adaln-cache "$RUNS/sol-h3-adaln.cache" \
-        --clip-dir "$RUNS/sol-h3-fresh/frames" "${h3_fresh[@]}"
-    gated_cell h3-768p-fullopt-fresh h3-base \
-      env FASTVIDEO_H3_SOL_CACHE=teacache \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
-        --adaln-cache "$RUNS/h3-768p-adaln.cache" \
-        --clip-dir "$RUNS/h3-768p-fullopt-fresh/frames" "${h3_fresh[@]}"
     ;;
   wan)
     # FastWan2.1 1.3B DMD, 3 steps (1000/757/522), 480x832, 81 frames: the
@@ -1103,61 +877,6 @@ Audio: male speech, clear voice, quiet room"
     # the full Wan VAE opt-out on the same recipe, for the decoder A/B.
     sf_arm sfwan13-81f-fullvae 81 FASTVIDEO_WAN_VAE=full
     compare_cells sfwan13-81f-fullvae sfwan13-81f-flash
-    ;;
-  eval)
-    # The evaluation layer end to end on one card: precision A/B pairs with
-    # benchmark.json, the prompt set (FV_PROMPTS, default 5 here), LPIPS
-    # (FV_LPIPS, default on) and the promotion gate.
-    #   H3 FastH3 8-step 480p: FASTVIDEO_BF16_ACT=0 (baseline) vs the bf16
-    #     default, plus a second f32 arm that must reproduce the baseline
-    #     byte for byte (the OFF arm of the switch).
-    #   LTX-2.5 two-stage 512p: FASTVIDEO_BF16_ACT=0 vs the bf16 default.
-    # FV_LPIPS_SELFTEST=1 (default) first checks the LPIPS port against the
-    # pinned official numbers (fv-gpucheck lpips, CPU and device).
-    if [[ "${FV_LPIPS_SELFTEST:-1}" == 1 && ${#LPIPS_ARGS[@]} -gt 0 ]]; then
-      run_cell lpips-selftest "$BIN" --out "$RUNS/lpips-selftest/gpucheck-out" lpips --weights "$LPIPS_DIR"
-      grep -hE '^\[(PASS|FAIL)\] lpips/' "$RUNS/lpips-selftest/stderr.log" 2>/dev/null | cut -c1-220 | tee -a "$LOG" || true
-    fi
-    h3_common=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder auto
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-      --warm
-      --height 480 --width 832
-      "${PROMPT_ARGS[@]}"
-    )
-    for v in f32act bf16act f32act-off; do
-      envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off)
-      [[ "$v" == f32act* ]] && envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off)
-      gated_cell "fasth3-8step-480p-$v" fasth3-8step \
-        env "${envs[@]}" \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
-          --adaln-cache "$RUNS/fasth3-8step-480p-$v-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-8step-480p-$v/frames" "${h3_common[@]}"
-    done
-    compare_cells fasth3-8step-480p-f32act fasth3-8step-480p-bf16act
-    compare_cells fasth3-8step-480p-f32act fasth3-8step-480p-f32act-off --off-identity
-    gate_cells fasth3-8step-480p-f32act fasth3-8step-480p-bf16act lossy fasth3-8step-480p-f32act-off
-    # The OFF arm judged as its own candidate: byte-identical, and no faster.
-    gate_cells fasth3-8step-480p-f32act fasth3-8step-480p-f32act-off exact fasth3-8step-480p-f32act-off
-    for v in f32act bf16act; do
-      envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off)
-      [[ "$v" == f32act ]] && envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off)
-      gated_cell "ltx25-512p-$v" ltx25-two-stage \
-        env "${envs[@]}" \
-        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-          --weights "$W/ltx25" --dit "$W/ltx25" --height 512 --width 768 --num-frames 121 \
-          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-          --clip "$RUNS/ltx25-512p-$v/frames" "${PROMPT_ARGS[@]}"
-    done
-    compare_cells ltx25-512p-f32act ltx25-512p-bf16act
-    gate_cells ltx25-512p-f32act ltx25-512p-bf16act lossy
-    for f in "$RUNS"/gate/gate-*.json; do
-      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
-    done
     ;;
   oracle)
     # GPU oracle diff (docs/oracle.md): the Python references' dumps
@@ -1514,183 +1233,6 @@ Audio: male speech, clear voice, quiet room"
       rm -rf "$ours" "$ours-f32" "$ours-owntext" "$ours-ownenc" "$ours-ownimg" "$ours-ownaud" "$ref"
     done
     ;;
-  ltxoffload)
-    # FASTVIDEO_LTX_OFFLOAD=cpu (sol-engine's BF16 RTX 5090 `--offload cpu`
-    # placement) against the default run, LTX-2.5 distilled two-stage, Sol
-    # stage 2, bf16 activations (the defaults). Every cell encodes its prompt
-    # (--no-text-cache): run a73173e-09270009 showed a cache hit does not
-    # reproduce a fresh encode bit for bit (every frame differs from step 0),
-    # which would hide what placement does. 512p first: the default
-    # (resident), the mode explicitly off, and cpu; frame/wav hashes, the
-    # byte-identity compares and the `exact` gate. Then, only when the 512p cpu
-    # frames match the resident ones byte for byte, cpu at 4k5s (warm) and
-    # 1080p20s (one cold request, as the reference times it): the reference's
-    # 30.36 / 29.07 GiB cells. FV_OFFLOAD_BIG=0 skips those;
-    # FV_OFFLOAD_4K_RESIDENT=1 adds a resident 4k5s cell.
-    ltx_off_gen() {
-      local name="$1" mode="$2"
-      shift 2
-      local envs=(env -u FASTVIDEO_LTX_OFFLOAD)
-      [[ "$mode" != default ]] && envs=(env FASTVIDEO_LTX_OFFLOAD="$mode")
-      gated_cell "$name" ltx25-two-stage \
-        "${envs[@]}" "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-          --weights "$W/ltx25" --dit "$W/ltx25" "$@" \
-          --prompt "$PROMPT" --seed "$SEED" --two-stage --no-text-cache \
-          --clip "$RUNS/$name/frames"
-      grep -h 'ltx2 offload\|ltx2 dit offload\|ltx2 memory\|offload stage\|ltx2 text:' "$RUNS/$name/stderr.log" 2>/dev/null \
-        | sed "s/^/[$name] /" | tee -a "$LOG" >/dev/null || true
-    }
-    frames_hash() {
-      local d="$RUNS/$1/frames"
-      compgen -G "$d/*.png" >/dev/null || { echo missing; return 0; }
-      local png wav
-      png="$(cd "$d" && sha256sum -- *.png | sha256sum | cut -c1-16)"
-      wav="$(cd "$d" && sha256sum -- *.wav 2>/dev/null | sha256sum | cut -c1-16)"
-      echo "png:$png wav:$wav"
-    }
-    small=(--height 512 --width 768 --num-frames 121 --warm)
-    ltx_off_gen ltx25-512p-resident default "${small[@]}"
-    ltx_off_gen ltx25-512p-off none "${small[@]}"
-    ltx_off_gen ltx25-512p-cpu cpu "${small[@]}"
-    for c in ltx25-512p-resident ltx25-512p-off ltx25-512p-cpu; do
-      log "frames+wav sha256 $c $(frames_hash "$c")"
-    done
-    compare_cells ltx25-512p-resident ltx25-512p-off --off-identity
-    compare_cells ltx25-512p-resident ltx25-512p-cpu --off-identity
-    gate_cells ltx25-512p-resident ltx25-512p-cpu exact ltx25-512p-off
-    same=""
-    h="$(frames_hash ltx25-512p-cpu)"
-    r="$(frames_hash ltx25-512p-resident)"
-    [[ "$h" != missing && "${h%% *}" == "${r%% *}" ]] && same=1
-    if [[ "${FV_OFFLOAD_BIG:-1}" == 1 && ( -n "$same" || "${FV_OFFLOAD_FORCE:-0}" == 1 ) ]]; then
-      ltx_off_gen ltx25-4k5s-cpu cpu --workload 4k5s --warm
-      if [[ "${FV_OFFLOAD_4K_RESIDENT:-0}" == 1 ]]; then
-        ltx_off_gen ltx25-4k5s-resident default --workload 4k5s --warm
-        compare_cells ltx25-4k5s-resident ltx25-4k5s-cpu --off-identity
-      fi
-      ltx_off_gen ltx25-1080p20s-cpu cpu --workload 1080p20s
-      # The 4K / 20 s PNGs are GBs; the reports and hashes keep the result.
-      for c in ltx25-4k5s-cpu ltx25-4k5s-resident ltx25-1080p20s-cpu; do
-        [[ -d "$RUNS/$c/frames" ]] && log "frames+wav sha256 $c $(frames_hash "$c")"
-      done
-      rm -rf "$RUNS"/ltx25-4k5s-*/frames "$RUNS"/ltx25-1080p20s-*/frames
-    else
-      log "skip the 4k5s / 1080p20s cpu cells (512p frames identical: ${same:-no}; FV_OFFLOAD_BIG=${FV_OFFLOAD_BIG:-1})"
-    fi
-    ;;
-  solbench)
-    # sol-engine's published cells for Wan2.1-T2V-1.3B, Wan2.2-T2V-A14B and
-    # LTX-2.3 HQ (NVlabs/Sana sol-engine models/{wan21_t2v_1_3b,wan22_t2v_a14b,
-    # ltx23}.toml and config/<model>/*.toml), baseline vs optimized, on the
-    # pod's one GPU. docs/ports/sol-wan-ltx23.md has the arms, what each
-    # reproduces, the weight trees and the GPU-minute estimates. Cells skip
-    # (summary.json "weights incomplete") unless verify-weights.sh passes:
-    # wan21-t2v-1.3b, wan22-t2v-a14b and ltx23-hq (ltx23 + ltx23-dev), all on
-    # the EU volume since 2026-10-06.
-    #   FV_CELLS            subset (default below: base + optimized of each)
-    #   FV_SOL_A14B_MOE     FASTVIDEO_WAN_MOE for the A14B cells (default auto:
-    #                       swap on a 96 GB card, both resident on a B200)
-    #   FV_SOL_PROMPTS=5    the 5 sol-engine prompts (default for 1.3B; A14B /
-    #                       LTX default to prompt p0 / the ltx23 prompt only)
-    : "${FV_CELLS:=wan13-sol-base wan13-sol-fullstack a14b-sol-base a14b-sol-fullopt ltx23-hq-base ltx23-hq-fullopt}"
-    sol_wan_prompts="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prompts-sol-wan-t2v5.json"
-    wan_neg_cn="色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
-    # p0 of that set (no python3 or jq in the runtime image).
-    sol_p0="Will Smith casually eats noodles, his relaxed demeanor contrasting with the energetic background of a bustling street food market. The scene captures a mix of humor and authenticity. Mid-shot framing, vibrant lighting."
-    # Diffusers' single-shift UniPC sigmas: the sol-engine baselines run
-    # Diffusers' WanPipeline (UniPCMultistepScheduler.from_config(flow_shift=...)).
-    export FASTVIDEO_WAN_UNIPC_SIGMAS=diffusers
-    # bf16 GEMMs and the full Wan VAE, as the reference arms run (on sm_100
-    # FASTVIDEO_WAN_QUANT would otherwise default to mxfp8).
-    export FASTVIDEO_WAN_QUANT=off FASTVIDEO_WAN_VAE=full
-
-    # ---- Wan2.1-T2V-1.3B (models/wan21_t2v_1_3b.toml): 832x480, 81 f @ 16
-    # fps, 50 UniPC steps, CFG 6, shift 3, seed 1024, 5 prompts after one warm
-    # generation. No published number (the profile has none); the arms are
-    # baseline.toml vs wan21_fullstack_sol.toml (EasyCache 0.036 + Sol-Attn
-    # tau 1, 10 dense forwards, layer 0 dense, Morton3D), plus each half.
-    w13=(--weights "$W/wan21-t2v-1.3b" --preset wan_t2v_1_3b --unipc --steps 50 --guidance 6.0
-      --flow-shift 3.0 --fps 16 --height 480 --width 832 --num-frames 81 --seed 1024
-      --negative "$wan_neg_cn" --warm)
-    if [[ "${FV_SOL_PROMPTS:-5}" == 5 ]]; then
-      w13+=(--prompts "$sol_wan_prompts")
-    else
-      w13+=(--prompt "$sol_p0")
-    fi
-    FV_GEN_TIMEOUT_S="${FV_SOL_W13_CAP_S:-1800}" gated_cell wan13-sol-base wan21-t2v-1.3b \
-      "$BIN" --mode fast wan gen "${w13[@]}" --clip-dir "$RUNS/wan13-sol-base/frames"
-    FV_GEN_TIMEOUT_S="${FV_SOL_W13_CAP_S:-1800}" gated_cell wan13-sol-easycache wan21-t2v-1.3b \
-      env FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
-      "$BIN" --mode fast wan gen "${w13[@]}" --clip-dir "$RUNS/wan13-sol-easycache/frames"
-    FV_GEN_TIMEOUT_S="${FV_SOL_W13_CAP_S:-1800}" gated_cell wan13-sol-attn wan21-t2v-1.3b \
-      env FASTVIDEO_WAN_SOL_ATTN=fullstack \
-      "$BIN" --mode fast wan gen "${w13[@]}" --clip-dir "$RUNS/wan13-sol-attn/frames"
-    FV_GEN_TIMEOUT_S="${FV_SOL_W13_CAP_S:-1800}" gated_cell wan13-sol-fullstack wan21-t2v-1.3b \
-      env FASTVIDEO_WAN_SOL_ATTN=fullstack FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
-      "$BIN" --mode fast wan gen "${w13[@]}" --clip-dir "$RUNS/wan13-sol-fullstack/frames"
-    for arm in easycache attn fullstack; do
-      compare_cells wan13-sol-base "wan13-sol-$arm"
-      gate_cells wan13-sol-base "wan13-sol-$arm" lossy
-    done
-
-    # ---- Wan2.2-T2V-A14B (models/wan22_t2v_a14b.toml): 1280x720, 81 f @ 16
-    # fps, 40 UniPC steps, shift 12, CFG 4.0 (high-noise expert) / 3.0
-    # (low-noise), boundary 0.875 (26 / 14 steps), seed 1024. Published 1x
-    # GB200: base 449.67 s (denoise 434.93), opt 207.01 s
-    # (config/wan22_t2v_a14b/singlegpu_opt.toml: kernels + EasyCache 0.30 +
-    # PISA 0.10). On a 96 GB card FASTVIDEO_WAN_MOE=auto parks both experts
-    # in pinned host memory and swaps them at the boundary; on a B200 both
-    # stay resident. One prompt, no warm-up generation (a 720p A14B
-    # generation is ~20 min on an RTX PRO 6000; the cold overhead is small
-    # next to it); FV_SOL_PROMPTS=5 runs sol-engine's five after a warm one.
-    a14b=(--weights "$W/wan22-t2v-a14b" --preset wan_2_2_t2v_a14b --unipc --steps 40
-      --guidance 4.0 --guidance-2 3.0 --flow-shift 12.0 --fps 16 --height 720 --width 1280
-      --num-frames 81 --seed 1024 --negative "$wan_neg_cn")
-    if [[ "${FV_SOL_PROMPTS:-1}" == 5 ]]; then
-      a14b+=(--prompts "$sol_wan_prompts" --warm)
-    else
-      a14b+=(--prompt "$sol_p0")
-    fi
-    a14b_moe="FASTVIDEO_WAN_MOE=${FV_SOL_A14B_MOE:-auto}"
-    FV_GEN_TIMEOUT_S="${FV_SOL_A14B_CAP_S:-5400}" gated_cell a14b-sol-base wan22-t2v-a14b \
-      env "$a14b_moe" \
-      "$BIN" --mode fast wan gen "${a14b[@]}" --clip-dir "$RUNS/a14b-sol-base/frames"
-    FV_GEN_TIMEOUT_S="${FV_SOL_A14B_CAP_S:-5400}" gated_cell a14b-sol-fullopt wan22-t2v-a14b \
-      env "$a14b_moe" FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_PISA=1 \
-      "$BIN" --mode fast wan gen "${a14b[@]}" --clip-dir "$RUNS/a14b-sol-fullopt/frames"
-    # Opt-in: both experts resident at MXFP8 (the reference recipe on every
-    # block linear; lossy) instead of the swap.
-    FV_GEN_TIMEOUT_S="${FV_SOL_A14B_CAP_S:-5400}" gated_cell a14b-sol-mxfp8 wan22-t2v-a14b \
-      env FASTVIDEO_WAN_MOE=both FASTVIDEO_WAN_QUANT=mxfp8 \
-      "$BIN" --mode fast wan gen "${a14b[@]}" --clip-dir "$RUNS/a14b-sol-mxfp8/frames"
-    for arm in fullopt mxfp8; do
-      compare_cells a14b-sol-base "a14b-sol-$arm"
-      gate_cells a14b-sol-base "a14b-sol-$arm" lossy
-    done
-
-    # ---- LTX-2.3 HQ (models/ltx23.toml [official_config]): the dev DiT with
-    # the distilled LoRA 384 v1.1 fused at 0.25 (stage 1) / 0.5 (stage 2),
-    # 1920x1088, 241 f @ 24 fps, 15-step res2s stage 1 at CFG 3, the 3-sigma
-    # stage 2, seed 42, the profile's prompt and negative prompt, one warm
-    # generation first (WARMUP=true). Published: 2.40x fullopt / baseline on
-    # 1x GB200, no absolute baseline. fullopt = config/ltx23/fullopt.toml's
-    # techniques we have: stage-1 SCSP (res2s calls 16-28), stage-2 PISA
-    # (sparsity 0.9, block 64, layers 0-1 dense), NVFP4 video FFN, stage-2
-    # midpoint prune (0.5, steps 1-2). Not ours: the KWL Triton fusions.
-    ltx23_prompt="A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail"
-    hq=(--model-version 2.3 --hq --weights "$W/ltx23" --dit "$W/ltx23-dev/ltx-2.3-22b-dev.safetensors"
-      --prompt "$ltx23_prompt" --seed 42 --text streamed --dit-offload resident --warm)
-    hq_up="FASTVIDEO_LTX2_UPSAMPLER=$W/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
-    FV_GEN_TIMEOUT_S="${FV_SOL_LTX_CAP_S:-2400}" gated_cell ltx23-hq-base ltx23-hq \
-      env "$hq_up" "$BIN" --mode fast ltx2 gen "${hq[@]}" --dense-stage2 \
-        --clip "$RUNS/ltx23-hq-base/frames"
-    FV_GEN_TIMEOUT_S="${FV_SOL_LTX_CAP_S:-2400}" gated_cell ltx23-hq-fullopt ltx23-hq \
-      env "$hq_up" FASTVIDEO_LTX2_STAGE1_CACHE=1 FASTVIDEO_LTX2_MIDPOINT_PRUNE=1 FASTVIDEO_NVFP4=1 \
-      "$BIN" --mode fast ltx2 gen "${hq[@]}" --pisa-stage2 \
-        --clip "$RUNS/ltx23-hq-fullopt/frames"
-    compare_cells ltx23-hq-base ltx23-hq-fullopt
-    gate_cells ltx23-hq-base ltx23-hq-fullopt lossy
-    ;;
   hd)
     # H3 at 1080p-class canvases (docs/serve/h3-1080p-and-upscaler.md):
     # h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3 tau ladder) at the
@@ -1804,43 +1346,6 @@ Audio: male speech, clear voice, quiet room"
     fi
     # Keep the reports and MP4s; the PNG frames were compared on the box.
     rm -rf "$RUNS"/cli-*/frames "$RUNS"/engine-*/out/*/frames
-    ;;
-  sol-lingbot)
-    # LingBot-Video MoE 30B-A3B vs sol-engine models/lingbot_video.toml
-    # (docs/ports/lingbot.md "Comparison"): base 832x480x121 / 40 steps,
-    # 1920x1088 refiner / 8 steps, guidance 3, seed 42, the three
-    # t2v_val3 prompts. Published (4x GB200): baseline 375.53 s, fullopt
-    # 144.36 s. FV_LINGBOT_RESIDENCY: swap (96 GB cards, default) or both
-    # (B200). FV_LINGBOT_PROMPTS: prompts per arm (default 3).
-    SOL_IN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sol"
-    export FV_GEN_TIMEOUT_S="${FV_SOL_TIMEOUT_S:-14400}"
-    run_cell lingbot-router "$BIN" --mode fast sol lingbot-router
-    for arm in ${FV_LINGBOT_ARMS:-baseline fullopt}; do
-      gated_cell "lingbot-$arm" lingbot-moe \
-        "$BIN" --mode fast sol lingbot-gen --weights "$W/lingbot-video-moe-30b-a3b" \
-          --prompts "$SOL_IN/lingbot-t2v-val3.txt" --num-prompts "${FV_LINGBOT_PROMPTS:-3}" \
-          --arm "$arm" --residency "${FV_LINGBOT_RESIDENCY:-swap}" --seed 42 \
-          --clip "$RUNS/lingbot-$arm/clips"
-    done
-    ;;
-  sol-cosmos3)
-    # Cosmos3-Super 64B T2V vs sol-engine models/cosmos3.toml (docs/ports/cosmos3.md
-    # "Comparison"): 1280x720x189, 35 steps, guidance 6, seed 42, one warmup
-    # request (WARMUP=true). Published (4x GB200): baseline 130.41 s, fullopt
-    # 2.26x. FASTVIDEO_COSMOS3_UND=resident keeps the text tower on the GPU
-    # (B200); unset streams it per prompt (96 GB cards).
-    SOL_IN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sol"
-    export FV_GEN_TIMEOUT_S="${FV_SOL_TIMEOUT_S:-10800}"
-    c3=(--weights "$W/cosmos3-super" --prompt "$(cat "$SOL_IN/cosmos3-default.txt")"
-      --negative-prompt "$(cat "$SOL_IN/cosmos3-negative.txt")" --seed 42 --warm)
-    for arm in ${FV_COSMOS3_ARMS:-baseline teacache teacache-fp8}; do
-      case "$arm" in
-        teacache-fp8) gated_cell "cosmos3-$arm" cosmos3-super env FASTVIDEO_FP8=1 \
-          "$BIN" --mode fast sol cosmos3-gen "${c3[@]}" --arm teacache --clip "$RUNS/cosmos3-$arm/clip" ;;
-        *) gated_cell "cosmos3-$arm" cosmos3-super \
-          "$BIN" --mode fast sol cosmos3-gen "${c3[@]}" --arm "$arm" --clip "$RUNS/cosmos3-$arm/clip" ;;
-      esac
-    done
     ;;
   *)
     # A restored mode (fv-lab-retired.sh FV_LAB_RESTORED, docs/adr/0019-fv-lab.md

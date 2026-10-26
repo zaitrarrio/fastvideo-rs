@@ -15,7 +15,9 @@ its 1080P-gate sibling `hd5` (D1 S2) are tiers whose script branch stays until t
 ([below](#hd-and-hd5-d1-s2)). `gold` is fv-lab's own: every gold variant's canonical cell (ADR-0023).
 `precision-nvfp4` and `ltxvae-gen` are two modes of retired families, restored as tiers ([ADR-0019 §12](../adr/0019-fv-lab.md)).
 Eleven more families left the script with no tier (`h3`, `hunyuan`, `sana-video`, `b200`, `writer`, `precision-debug`,
-`identity`, `b4b`, `b4c`, `b4c2`, `h3attn`; D1g, ADR-0019 §18): every driver refuses them ([below](#retired-with-no-tier-d1g)).
+`identity`, `b4b`, `b4c`, `b4c2`, `h3attn`; D1g, ADR-0019 §18), and nine after them (`sfquality`, `headline`,
+`speechtest`, `cold`, `eval`, `ltxoffload`, `solbench`, `sol-lingbot`, `sol-cosmos3`; ADR-0019 §22, S1): every driver
+refuses them ([below](#retired-with-no-tier-d1g)).
 
 ## Build
 
@@ -70,15 +72,16 @@ dry run show what will run.
 | `fuse` | `fuse-{kernels,trace,switch}` | 10 | DiT block fusions: the kernels bit for bit (ungated), a traced step per workload, fusions off against on (`--off-identity`, `exact` gate) | D1f ([§17](../adr/0019-fv-lab.md)); retired after its GPU check (§17.6); 3 arms skip on the EU volume (`h3-8step`) |
 | `attn3` | `attn3-h3-ltx25` | 6 | flash v2 against cuDNN SDPA on FastH3 4-step dense and LTX-2.5 1080p20s dense, VSA bf16 in place against f32 | D1f (§17); retired after its GPU check (§17.6); `FV_ATTN3_ARMS` / `FV_ATTN3_VSA` refused (select by arm) |
 | `ltx` | `ltx-versions` | 3 | LTX-2.5 two-stage, LTX-2.3 two-stage, LTX-2.0 19B distilled | D1f (§17); retired after its GPU check (§17.6; the script gated its arms from D1f); `ltx23` / `ltx2` skip on the EU volume |
-| `hd` | `hd-canvases`, `hd-10s` | 8 | H3 at the served 1080P canvas: h3-turbo and h3-max at 768p and 1920x1088 / 1088x1920 (`--oversize-canvas`) over `prompts-hd.json`, both at 1920x1088 for 10 s; time and peak memory | D1 S2 ([§22](../adr/0019-fv-lab.md)); the script's derived step (Lanczos compares, post script, keyframe prune) dropped in lockstep; branch kept until its GPU check (§22.9) |
-| `hd5` | `hd5-canvases`, `hd-10s` | 8 | `hd` over the 1080P serve gate's five prompts (`prompts-hd5.json`); the gate is `--cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s` | D1 S2 (§22.8); a sibling of the `hd` family (`FV_LAB_SIBLINGS`: the script with `FV_PROMPTS=…/prompts-hd5.json`); shares `hd-10s` |
+| `hd` | `hd-canvases`, `hd-10s` | 8 | H3 at the served 1080P canvas: h3-turbo and h3-max at 768p and 1920x1088 / 1088x1920 (`--oversize-canvas`) over `prompts-hd.json`, both at 1920x1088 for 10 s; time and peak memory | D1 S2 ([§22](../adr/0019-fv-lab.md)); the script's derived step (Lanczos compares, post script, keyframe prune) dropped in lockstep; branch kept until its GPU check (§22.10) |
+| `hd5` | `hd5-canvases`, `hd-10s` | 8 | `hd` over the 1080P serve gate's five prompts (`prompts-hd5.json`); the gate is `--cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s` | D1 S2 (§22.9); a sibling of the `hd` family (`FV_LAB_SIBLINGS`: the script with `FV_PROMPTS=…/prompts-hd5.json`); shares `hd-10s` |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)); weights `volume+r2` ([below](#weights-from-the-volume-and-r2-volumer2)) |
 | `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`, deleted after the GPU check, §14.4), [below](#port-one-offs-the-experiment-tiers) |
 
 All eleven above `precision-nvfp4`, `det-short` and `determinism`, and `fuse`, `attn3` and `ltx` are **retired from
 the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10; `b4a` §11.6; `det-short`, `determinism` §15.10; `fuse`,
-`attn3`, `ltx` §17.6): their `runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps sixteen other families
-(the eleven retired with no tier went in D1g, [below](#retired-with-no-tier-d1g)).
+`attn3`, `ltx` §17.6): their `runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps seven other families, `mmaudio`, `sfwan`,
+`sfstream`, `wan`, `oracle`, `hd` and `serve-engine` (the twenty retired with no tier went in D1g and §22's S1,
+[below](#retired-with-no-tier-d1g)).
 ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is not on the EU volume (`h3-8step`)
 is recorded as skipped (`weights incomplete`), as the script recorded it.
 
@@ -183,16 +186,16 @@ on `PATH`, else `./fv-lab` at the repository root ([Build](#build)); without one
 FV_DRY_RUN=1 FV_FAMILY=b6 FV_BASELINE_SHA=e93e357 bash scripts/gpu/runpod-http.sh run <7>   # prints the fv-lab command
 FV_DRY_RUN=1 FV_FAMILY=b4a FV_CELLS="b4a-h3-4step-tea-base b4a-h3-4step-tea-pr" FV_BASELINE_SHA=e93e357 \
   bash scripts/gpu/runpod-http.sh run <7>                           # b4a's GPU gate cell, through fv-lab
-FV_DRY_RUN=1 FV_FAMILY=eval bash scripts/gpu/runpod-http.sh run <7>   # a script family: says what it would run
+FV_DRY_RUN=1 FV_FAMILY=wan bash scripts/gpu/runpod-http.sh run <7>    # a script family: says what it would run
 FV_DRY_RUN=1 FV_FAMILY=h3 bash scripts/gpu/runpod-http.sh run <7>     # retired with no tier: refused (exit 2), names rtx6000
 ```
 
 `FV_DRY_RUN=1` never creates a pod and needs no key. `runpod.sh rtx6000` is retired with the branch (the Taskfile's
-`rtx6000` task runs `runpod-http.sh run`). The script's `headline` family runs its cells of `fastvideo`, `rtx6000`,
-`rtx5090` and `precision` through `fv-lab run <tier> --cells …` into its own run directory (`--runs-dir` /
-`FV_RUNS_DIR`). Outside a dry run it stops (exit 2) when fv-lab is missing or `FV_PROMPTS` / `FV_PROMPT` / `FV_SEED`
-is set (the cells carry their own), and logs `FAIL fv-lab run <tier> exit=<n>` for a failed tier and goes on, as it
-did with the recursive script.
+`rtx6000` task runs `runpod-http.sh run`). The script's `headline` family, which ran its cells of `fastvideo`,
+`rtx6000`, `rtx5090` and `precision` through `fv-lab run <tier> --cells …` into its own run directory, is retired with
+no tier ([ADR-0019 §22](../adr/0019-fv-lab.md), S1): the same nine arms are four `fv-lab run <tier> --cells …` calls,
+or `fv-lab pod up --family <tier> --cells …` from a host, and the refusal lists them. `--runs-dir` / `FV_RUNS_DIR`
+stays.
 
 Cell fields beyond D1a ([ADR-0019 §9.2](../adr/0019-fv-lab.md)):
 
@@ -432,7 +435,7 @@ Not moved (§17.3): `b4b`, `b4c`, `b4c2`. Each cell's verdict reads what no `[ve
 
 ## `hd` and `hd5` (D1, S2)
 
-[ADR-0019 §22](../adr/0019-fv-lab.md) (S2, §22.8). `runpod-matrix.sh hd` as a tier: its eight arms
+[ADR-0019 §22](../adr/0019-fv-lab.md) (S2, §22.9). `runpod-matrix.sh hd` as a tier: its eight arms
 (`lab/cells/hd-canvases.toml`, `hd-10s.toml`), held to the branch's dry run by `fv-lab-goldens.sh`. The branch's
 derived step left the script in the same change, so the two runners run the same arms and nothing else: the 768p clips'
 ffmpeg Lanczos upscale and its compares with the native 1080p clips, the `FV_HD_POST_URL` post script and the keyframe
@@ -481,6 +484,20 @@ pointer. `runpod.sh gpu` starts `ltx` only now and `matrix` runs `ltx` then `wan
 `git show b019ccb2:scripts/gpu/runpod-matrix.sh`; `b4-verdict.sh` went with the B4 branches (`b4a`'s verdict is held
 to its frozen copy, `fixtures/b4a-script/`). `fv-lab-route.test.sh`, `runpod-plan.test.sh` and `tests/dry_run.rs` hold
 this.
+
+Nine more joined the list in [ADR-0019 §22](../adr/0019-fv-lab.md)'s first slice (S1, FVID-2026-10-26-d1-remaining),
+the same way: refused by every driver, branches deleted, nothing routed to fv-lab. Their pointers also say what is
+lost; their commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
+
+| family | what replaces it | lost |
+|---|---|---|
+| `sfquality` | nothing: the R12 long-rollout study is finished and its outcome shipped (the 15-frame sink, the causal session caps; `docs/ports/wan.md` R12); `sfstream` keeps a pod check of the rollout | the sweep in one command, the f32 and second-seed rollouts (by hand: `fv-gpucheck wan stream --run <spec>`) |
+| `headline` | its nine arms as four `fv-lab run <tier> --cells …` calls: `fastvideo`, `rtx6000`, `rtx5090`, `precision` (the refusal lists the arms) | the nine arms on one pod, and its use on a new GPU type (each tier fixes its `gpu`) |
+| `speechtest` | nothing: `docs/ports/mmaudio.md` "Speech" answers it; `mmaudio` keeps the sidecar checked on a pod | the Whisper check in one command (`scripts/gpu/speech_transcribe.py` by hand) |
+| `cold` | nothing: no result was recorded | the page-cache-cold end-to-end time with load included (sol-engine's e2e) |
+| `eval` | `precision`'s f32act / bf16act pairs with lossy gates, `fuse`'s `exact` gates with an OFF arm, prompt sets in cells, `--lpips` on any run | the combination in one run, the `BF16_ACT=0` OFF-identity gate, the five-prompt LPIPS pairs, the LPIPS self-test on a pod (by hand: `fv-gpucheck lpips --weights <dir>`) |
+| `ltxoffload` | nothing: its numbers are in `docs/ports/ltx25.md`; `b6-ltx25-offload-cpu` still checks `--offload cpu` across builds | LTX `cpu`-against-resident identity, the 4K `cpu` peaks |
+| `solbench`, `sol-lingbot`, `sol-cosmos3` | `scripts/gpu/sol-bench-pod.sh`, which the sol-engine benchmark runs (`docs/perf/sol-bench.md`) | per-arm compares and lossy gates, `wan13-sol-easycache`, `wan13-sol-attn`, `a14b-sol-mxfp8`, LingBot on three prompts, LingBot's B200 `FV_LINGBOT_RESIDENCY=both` path (`sol-bench-pod.sh` hard-codes `--residency swap`) (none ever recorded) |
 
 ## On a GPU box: `fv-lab run`
 

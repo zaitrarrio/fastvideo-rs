@@ -431,7 +431,9 @@ fn branch_labels_are_read_as_bash_reads_them() {
 #[test]
 fn families_retired_with_no_tier_have_no_branch_and_no_tier() {
     // D1g (ADR-0019 §18): h3 (§17.4), the B4 families (§17.3 option (b)) and
-    // §14.7's rows left runpod-matrix.sh with no tier: no branch, no tier of
+    // §14.7's rows left runpod-matrix.sh with no tier; then §22's S1 nine
+    // (FVID-2026-10-26-d1-remaining): no branch, no family-specific code left
+    // in the script (eval's prompt and LPIPS defaults), no tier of
     // lab/tiers.toml, no fixtures, and in neither FV_LAB_RETIRED nor
     // FV_LAB_EXPERIMENTS (runpod-http.sh refuses them instead of routing).
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
@@ -452,6 +454,15 @@ fn families_retired_with_no_tier_have_no_branch_and_no_tier() {
             "b4c",
             "b4c2",
             "h3attn",
+            "sfquality",
+            "headline",
+            "speechtest",
+            "cold",
+            "eval",
+            "ltxoffload",
+            "solbench",
+            "sol-lingbot",
+            "sol-cosmos3",
         ]
     );
     let tiers: Vec<&str> = lab.tiers.tiers.iter().map(|t| t.name.as_str()).collect();
@@ -461,6 +472,11 @@ fn families_retired_with_no_tier_have_no_branch_and_no_tier() {
         assert!(
             !has_branch(&matrix, f),
             "{f}: its runpod-matrix.sh branch is gone"
+        );
+        assert!(
+            !matrix.contains(&format!("\"$FAMILY\" == {f} "))
+                && !matrix.contains(&format!("\"$FAMILY\" == {f}\n")),
+            "{f}: no family-specific code left in runpod-matrix.sh"
         );
         assert!(
             !tiers.contains(&f.as_str()),

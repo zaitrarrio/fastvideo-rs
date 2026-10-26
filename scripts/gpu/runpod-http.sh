@@ -132,10 +132,10 @@ FAMILY="${FV_FAMILY:-rtx6000}"
 [[ "${1:-}" == upstream || "${1:-}" == plan-upstream ]] && FAMILY="${FV_FAMILY:-upstream}"
 OUT_ROOT="$ROOT/artifacts/runpod/$FAMILY"
 # A family retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
-# docs/adr/0019-fv-lab.md §18) has no branch and no tier: nothing to run, plan
+# docs/adr/0019-fv-lab.md §18, §22) has no branch and no tier: nothing to run, plan
 # or route. Refused (exit 2) before the key, any lookup or a pod.
 if [[ "${1:-}" == run || "${1:-}" == all || "${1:-}" == plan ]] && fv_script_retired "$FAMILY"; then
-  echo "runpod-http: $FAMILY is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): $(fv_script_retired_why "$FAMILY")" >&2
+  echo "runpod-http: $FAMILY is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18, §22): $(fv_script_retired_why "$FAMILY")" >&2
   exit 2
 fi
 # FV_R2_TREES (ADR-0019 §21.8): checked before the key, any lookup or a pod.

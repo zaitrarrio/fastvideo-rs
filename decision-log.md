@@ -2143,6 +2143,7 @@ Project code: FVID
   - whether the `mmaudio` knob stays offered (catalog `FASTVIDEO_WAN_AUDIO`, the CLI's `--audio mmaudio`, GCP staging);
   - whether `sol-bench-pod.sh` moves to fv-lab;
   - the total spend, within the standing "provision as needed" permission.
+- Result (2026-10-26, S1, draft PR #222): the nine (c) families retired with no tier: in `FV_SCRIPT_RETIRED` with pointers naming what is lost, refused (exit 2) by `runpod-matrix.sh`, `runpod-http.sh run` / `all` / `plan` and `runpod.sh gpu` / `matrix` / `plan`, their branches deleted (495 lines, not §22.6's 567; plus `eval`'s defaults), 12 dry runs of the remaining families byte-identical before and after, no knob moved, stale docs updated; tests and mutations in ADR-0019 §22.8; CPU only
 
 ### FVID · 2026-10-26 · FVID-2026-10-26-d1-s2-hd
 - Trigger: the coordinator's slice S2 of FVID-2026-10-26-d1-remaining (ADR-0019 §22.6 item 2): `hd` as an fv-lab tier, its derived step dropped from the script in lockstep, its three orphans handled
@@ -2156,6 +2157,6 @@ Project code: FVID
 - Reason: `hd_report.py` and `report summary --kind hd` read the arms by the script's names, which extra cells could not keep (arm names are unique per tier); the dry runs of every other family are unchanged, and `hd`'s lost only its eight empty dry-run timing lines (log only)
 - Reversibility: high (cells, fixtures; the dropped commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`)
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
-- ADR: docs/adr/0019-fv-lab.md §22.8, §22.9
-- Verification: `tests/dry_run.rs` (the two tiers' dry runs and gates equal the script's), `tests/payload_golden.rs`, `tests/lab_files.rs`, `knobs::tests`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, every family's dry run before and after; GPU: §22.9 (the coordinator's; `turbo-768p turbo-1080p max-1080p`, ~$2.00)
-- Open: S7 (after §22.9 passes): `hd` into `FV_LAB_RETIRED`, its branch deleted, `hd5` frozen with it
+- ADR: docs/adr/0019-fv-lab.md §22.9, §22.10
+- Verification: `tests/dry_run.rs` (the two tiers' dry runs and gates equal the script's), `tests/payload_golden.rs`, `tests/lab_files.rs`, `knobs::tests`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, every family's dry run before and after; GPU: §22.10 (the coordinator's; `turbo-768p turbo-1080p max-1080p`, ~$2.00)
+- Open: S7 (after §22.10 passes): `hd` into `FV_LAB_RETIRED`, its branch deleted, `hd5` frozen with it

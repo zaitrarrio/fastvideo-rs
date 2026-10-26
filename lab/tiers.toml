@@ -582,7 +582,7 @@ cells = ["ltx-versions"]
 # derived step (the Lanczos upscale and its compares, the FV_HD_POST_URL post
 # script, the keyframe prune) dropped from the script in the same PR, so the
 # script's dry run is the tier's (fv-lab-goldens.sh). The branch stays until the
-# GPU check through both runners (§22 "S2: the GPU check"); S7 then retires it.
+# GPU check through both runners (§22.10); S7 then retires it.
 # The rtx6000 tier's pod, as runpod-http.sh gives every FV_FAMILY.
 
 # runpod-matrix.sh `hd`: H3 at the served 1080P canvas, h3-turbo and h3-max at
