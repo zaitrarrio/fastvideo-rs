@@ -1,4 +1,5 @@
-# The fuse family's switch arms (runpod-matrix.sh `fuse`, step 3): untraced warm
+# The fuse family's switch arms (was runpod-matrix.sh `fuse`, retired after its GPU check,
+# docs/adr/0019-fv-lab.md §17.6; step 3): untraced warm
 # generations with the block fusions off (FASTVIDEO_H3_FUSE=0 FASTVIDEO_LTX_FUSE=0
 # FASTVIDEO_SPLIT_ROWS=0: the ops the previous build runs) and on. The fusions keep
 # every rounding point, so each off / on pair must compare byte-identical

@@ -10,7 +10,7 @@ stay in the script and move in later slices. `b4a` (D1d) is the first whose cell
 and `fv-lab gate`](#verdicts-and-fv-lab-gate); its GPU gate passed on `e82b6b7`, ADR-0019 §11.6); `det-short` and
 `determinism` (D1d) the last, with their `[repeats]` frame hashes (GPU checks passed on `f93a961`, §15.10). `oracle`
 is a tier whose script branch stays whole ([below](#determinism-and-the-oracle-d1d-second-slice)), and `fuse`,
-`attn3` and `ltx` (D1f) are tiers whose branches stay until their GPU checks ([below](#fuse-attn3-ltx-d1f)). `gold` is fv-lab's
+`attn3` and `ltx` (D1f) are retired too (GPU checks passed on `762ce4d`, §17.6; [below](#fuse-attn3-ltx-d1f)). `gold` is fv-lab's
 own: every gold variant's canonical cell (ADR-0023).
 `precision-nvfp4` and `ltxvae-gen` are two modes of retired families, restored as tiers ([ADR-0019 §12](../adr/0019-fv-lab.md)).
 
@@ -63,19 +63,20 @@ dry run show what will run.
 | `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | byte identity across fresh processes at short configs, three runs per group and the timed-pick control; `determinism.txt` | D1d (§15); retired after its GPU check (§15.10); `wan` skips on the EU volume |
 | `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | byte identity of 1080p runs within one process and across two; prompt sets as files, hashes per run, stage digests | D1d (§15); retired after its GPU check (§15.10) |
 | `oracle` | `oracle-<target>` (9) | 32 | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; GPU check passed (`f93a961`), but **not retired**: the script branch stays whole for the clip-metric targets, `sfwan13` and `oracle.sh` (§15.10) |
-| `fuse` | `fuse-{kernels,trace,switch}` | 10 | DiT block fusions: the kernels bit for bit (ungated), a traced step per workload, fusions off against on (`--off-identity`, `exact` gate) | D1f ([§17](../adr/0019-fv-lab.md)); script branch kept until its GPU check; 3 arms skip on the EU volume (`h3-8step`) |
-| `attn3` | `attn3-h3-ltx25` | 6 | flash v2 against cuDNN SDPA on FastH3 4-step dense and LTX-2.5 1080p20s dense, VSA bf16 in place against f32 | D1f (§17); script branch kept until its GPU check; `FV_ATTN3_ARMS` / `FV_ATTN3_VSA` refused (select by arm) |
-| `ltx` | `ltx-versions` | 3 | LTX-2.5 two-stage, LTX-2.3 two-stage, LTX-2.0 19B distilled | D1f (§17); script branch kept until its GPU check (it gates its arms since D1f); `ltx23` / `ltx2` skip on the EU volume |
+| `fuse` | `fuse-{kernels,trace,switch}` | 10 | DiT block fusions: the kernels bit for bit (ungated), a traced step per workload, fusions off against on (`--off-identity`, `exact` gate) | D1f ([§17](../adr/0019-fv-lab.md)); retired after its GPU check (§17.6); 3 arms skip on the EU volume (`h3-8step`) |
+| `attn3` | `attn3-h3-ltx25` | 6 | flash v2 against cuDNN SDPA on FastH3 4-step dense and LTX-2.5 1080p20s dense, VSA bf16 in place against f32 | D1f (§17); retired after its GPU check (§17.6); `FV_ATTN3_ARMS` / `FV_ATTN3_VSA` refused (select by arm) |
+| `ltx` | `ltx-versions` | 3 | LTX-2.5 two-stage, LTX-2.3 two-stage, LTX-2.0 19B distilled | D1f (§17); retired after its GPU check (§17.6; the script gated its arms from D1f); `ltx23` / `ltx2` skip on the EU volume |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)); weights `volume+r2` ([below](#weights-from-the-volume-and-r2-volumer2)) |
 | `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`, deleted after the GPU check, §14.4), [below](#port-one-offs-the-experiment-tiers) |
 
-All eleven above `precision-nvfp4`, and `det-short` and `determinism`, are **retired from the script**
-(`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10; `b4a` §11.6; `det-short`, `determinism` §15.10): their `runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps the other families.
+All eleven above `precision-nvfp4`, `det-short` and `determinism`, and `fuse`, `attn3` and `ltx` are **retired from
+the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10; `b4a` §11.6; `det-short`, `determinism` §15.10; `fuse`,
+`attn3`, `ltx` §17.6): their `runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps the other families.
 ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is not on the EU volume (`h3-8step`)
 is recorded as skipped (`weights incomplete`), as the script recorded it.
 
 What the retired branches had and the tiers do not, dropped with the branches: the `FV_VAE_*`, `FV_LTXFPS*`,
-`FV_TECH_CELLS`, `FV_B6_CELLS`, `FV_B4A_CELLS` knobs (ADR-0019 §9.4, §11.5) and the summaries the branches copied into `live.log`. The two
+`FV_TECH_CELLS`, `FV_B6_CELLS`, `FV_B4A_CELLS`, `FV_DET_*` and `FV_ATTN3_*` knobs (ADR-0019 §9.4, §11.5, §15.10, §17.6) and the summaries the branches copied into `live.log`. The two
 modes dropped with them are tiers again (owner decision 2026-10-25, [ADR-0019 §12](../adr/0019-fv-lab.md)):
 
 ```sh
@@ -141,7 +142,8 @@ that fv-lab would not honour is refused, not dropped, unless fv-lab does the sam
 - no equivalent, refused when set: `FV_POD_FILES`, `FV_POD_SCRIPT`, `FV_POD_FILE`, `FV_PROMPTS`, `FV_PROMPT`,
   `FV_SEED`, `FV_AVOID_MACHINES`, `FV_CREATE_WAIT_S`, `RUNPOD_ALLOWED_CUDA`,
   `FV_KEEP_POD=1`, `RUNPOD_NO_VOLUME=1`, `FV_FETCH_SKIP` / `FV_FETCH_MAX_MB` without `FV_FETCH_TREE=1`, and the retired pair selectors `FV_TECH_CELLS`,
-  `FV_B6_CELLS`, `FV_B4A_CELLS`, `FV_DET_CELLS` (select by arm with `FV_CELLS`), and an `FV_EXTRA_ENV` holding a
+  `FV_B6_CELLS`, `FV_B4A_CELLS`, `FV_DET_CELLS` and arm pickers `FV_ATTN3_ARMS`, `FV_ATTN3_VSA` (select by arm with
+  `FV_CELLS`), and an `FV_EXTRA_ENV` holding a
   newline (it is read as one line; later entries would be dropped);
 - refused unless equal to the tier's value in `lab/tiers.toml`: `FV_GEN_TIMEOUT_S` (`cell_timeout_s`),
   `FV_CONTAINER_DISK_GB`, `RUNPOD_CLOUD_TYPE`, `RUNPOD_GPU_TYPE`, `FV_MIN_RAM_GB` (`min_ram_gb`; refused on a
@@ -319,12 +321,14 @@ frozen for `tests/repeats_oracle.rs` at `0f63c56b` (`crates/fastvideo-lab/fixtur
 
 ## `fuse`, `attn3`, `ltx` (D1f)
 
-[ADR-0019 §17](../adr/0019-fv-lab.md). Three more families as tiers, their `runpod-matrix.sh` branches kept until each
-one's GPU check through both runners (§17.5); their goldens come from the live branches (`fv-lab-goldens.sh`). No new
+[ADR-0019 §17](../adr/0019-fv-lab.md). Three more families as tiers. All three passed their GPU check through both
+runners on `762ce4d` (§17.5 "Results": every arm that ran byte-identical, `kernels-fuse` 90 `[PASS]`) and are retired
+(§17.6): their `runpod-matrix.sh` branches are deleted, `runpod-http.sh run` / `plan` call `fv-lab pod up`, and their
+goldens are frozen as the script last wrote them. No new
 cell field: `fuse`'s kernel check is an ungated arm (§15), and a cell whose compares follow arms of two pipelines
-names both in its descriptive `model` (`model = "h3 ltx2"`). The script's `ltx` branch gates its three arms since
-this slice (it ran them ungated, so the LTX-2.3 and LTX-2.0 arms failed on the volume, where their trees are not;
-now both runners record them as skipped).
+names both in its descriptive `model` (`model = "h3 ltx2"`). The script's `ltx` branch gated its three arms from
+this slice until it went (it had run them ungated, so the LTX-2.3 and LTX-2.0 arms failed on the volume, where their
+trees are not; both runners then recorded them as skipped).
 
 ```sh
 ./fv-lab run fuse --dry-run                     # the script's dry run, kernels-fuse first
@@ -333,8 +337,8 @@ now both runners record them as skipped).
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family ltx --yes --wait
 ```
 
-`FV_ATTN3_ARMS` / `FV_ATTN3_VSA` are refused by `fv-lab run` and `pod up --extra-env` (the script branch still reads
-them); `--cells` names the arms. The script's `[PASS]` / `[FAIL]` and `/gpu_trace` lines in `live.log` are not
+`FV_ATTN3_ARMS` / `FV_ATTN3_VSA` are refused by `fv-lab run` and `pod up --extra-env`, and since the branch went by
+`runpod-http.sh` too (in `FV_EXTRA_ENV` and the host environment); `--cells` / `FV_CELLS` names the arms. The script's `[PASS]` / `[FAIL]` and `/gpu_trace` lines in `live.log` are not
 copied (log only: both are in the arms' `stderr.log`).
 
 Not moved (§17.3): `b4b`, `b4c`, `b4c2`. Each cell's verdict reads what no `[verdict]` list types today

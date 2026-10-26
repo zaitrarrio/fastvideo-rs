@@ -105,7 +105,8 @@ fn the_trees_tiers_lack_on_the_eu_volume_are_h3_8step_fastwan22_and_the_older_lt
     // 2026-10-13; rtx6000, the D1b families, the oracle's fasth3-8step
     // cells, fuse's 8-step arms), fastwan22-ti2v-5b (det-short's wan group,
     // ADR-0019 §15), and ltx23 and ltx2 (the ltx tier's LTX-2.3 and LTX-2.0
-    // arms, D1f §17, gated in the script since then).
+    // arms, D1f §17, gated in the script from then until its branch went,
+    // §17.6).
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let eu: BTreeSet<String> = parse_eu_trees(&read("scripts/gpu/volumes.sh"))
         .into_iter()

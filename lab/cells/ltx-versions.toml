@@ -1,7 +1,8 @@
-# runpod-matrix.sh `ltx`: the LTX-2 generations side by side: LTX-2.5 distilled
+# Was runpod-matrix.sh `ltx` (retired after its GPU check, docs/adr/0019-fv-lab.md §17.6):
+# the LTX-2 generations side by side: LTX-2.5 distilled
 # two-stage (warm), LTX-2.3 distilled two-stage and LTX-2.0 19B distilled
 # (8 steps, single stage), streamed Gemma where two-stage, one prompt and seed.
-# Each arm gates on its tree (the script's branch gates them since D1f,
+# Each arm gates on its tree (the script's branch gated them from D1f,
 # docs/adr/0019-fv-lab.md §17: it ran them ungated before, and the two arms
 # whose trees are not on the EU volume failed on the missing files). ltx23 and
 # ltx2 are not on bz0ofkfx45 (volumes.sh FV_EU_VOLUME_TREES), so those two arms

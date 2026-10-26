@@ -103,7 +103,7 @@ dry "refused: FV_POD_CAP_S not a number" 1 "never raised" FV_FAMILY=trace FV_POD
 # 2. The dropped modes' knobs (ADR-0019 §9.4) in FV_EXTRA_ENV.
 for k in FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS \
   FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_DET_REPEATS FV_DET_PROMPT FV_DET_T2V_PROMPT \
-  FV_DET_I2V_PROMPT FV_PROMPTS FV_GEN_TIMEOUT_S FV_CELLS; do
+  FV_DET_I2V_PROMPT FV_ATTN3_ARMS FV_ATTN3_VSA FV_PROMPTS FV_GEN_TIMEOUT_S FV_CELLS; do
   dry "refused in FV_EXTRA_ENV: $k" 1 "reads no $k from FV_EXTRA_ENV" FV_FAMILY=precision FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1"
 done
 # The two modes restored as tiers (ADR-0019 §12): refused, naming the tier, on
@@ -240,6 +240,40 @@ mx "matrix: determinism is retired" "FATAL: determinism is retired to fv-lab (fv
   determinism
 # oracle keeps its branch (ADR-0019 §15.10): the script path, as before.
 dry "oracle: still a script family" 0 "on the script path, nothing created" FV_FAMILY=oracle
+
+# fuse, attn3 and ltx (ADR-0019 §17.6): fv-lab only, their GPU checks' arms
+# selected by arm; attn3's arm pickers (FV_ATTN3_ARMS, FV_ATTN3_VSA) are
+# refused with that answer, in FV_EXTRA_ENV and in the host environment.
+dry "fuse: fv-lab only, selected by arm" 0 \
+  "fv-lab pod up --sha abc1234 --family fuse --root $ROOT --wall-cap-s 3600 --cells kernels-fuse fasth3-4step-vsa-768p-off fasth3-4step-vsa-768p-on fasth3-8step-768p-off fasth3-8step-768p-on --yes --wait" \
+  FV_FAMILY=fuse FV_POD_CAP_S=3600 \
+  FV_CELLS="kernels-fuse fasth3-4step-vsa-768p-off fasth3-4step-vsa-768p-on fasth3-8step-768p-off fasth3-8step-768p-on"
+dry "attn3: fv-lab only, selected by arm" 0 \
+  "fv-lab pod up --sha abc1234 --family attn3 --root $ROOT --cells fasth3-4step-vsa-768p-b160 fasth3-4step-vsa-768p-b161 --yes --wait" \
+  FV_FAMILY=attn3 FV_CELLS="fasth3-4step-vsa-768p-b160 fasth3-4step-vsa-768p-b161"
+dry "ltx: fv-lab only, every arm" 0 "fv-lab pod up --sha abc1234 --family ltx --root $ROOT --yes --wait" FV_FAMILY=ltx
+dry "attn3: FV_ATTN3_ARMS refused, FV_CELLS named" 1 \
+  "reads no FV_ATTN3_ARMS from FV_EXTRA_ENV (FV_ATTN3_ARMS: attn3 runs the script's default arms (FV_ATTN3_ARMS \"v2 cudnn\", FV_ATTN3_VSA \"0 1\") and selects by arm, as every tier: FV_CELLS" \
+  FV_FAMILY=attn3 FV_EXTRA_ENV="FV_ATTN3_ARMS=v2"
+dry "attn3: FV_ATTN3_ARMS and FV_ATTN3_VSA refused in one message" 1 \
+  "reads no FV_ATTN3_ARMS, FV_ATTN3_VSA from FV_EXTRA_ENV" \
+  FV_FAMILY=attn3 FV_EXTRA_ENV="FV_ATTN3_ARMS=cudnn FASTVIDEO_X=1 FV_ATTN3_VSA=1"
+dry "FV_ATTN3_VSA in another tier's FV_EXTRA_ENV: refused" 1 "reads no FV_ATTN3_VSA from FV_EXTRA_ENV" \
+  FV_FAMILY=fuse FV_EXTRA_ENV="FV_ATTN3_VSA=0"
+for kv in FV_ATTN3_ARMS=v2 FV_ATTN3_VSA=1; do
+  dry "host env refused: ${kv%%=*} (attn3)" 1 "which has no ${kv%%=*}: it selects by arm, FV_CELLS" FV_FAMILY=attn3 "$kv"
+done
+for fam in fuse attn3 ltx; do
+  mx "matrix: $fam is retired" "FATAL: $fam is retired to fv-lab (fv-lab-retired.sh): fv-lab run $fam " "$fam"
+  expect "all: refused for $fam" 1 "run \`kernels\`, then \`run\`" -- RUNPOD_API_KEY=x FV_FAMILY="$fam" bash "$HTTP" all abc1234
+  expect "plan: fv-lab's plan for $fam" 0 "--family $fam --root $ROOT --tag abc1234-1025120000-abcd" -- \
+    FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
+done
+# The other D1f candidates stay on the script path (ADR-0019 §17.3, §17.4):
+# the B4 families wait for §17.3's decision, h3 for §17.4's.
+for fam in h3 b4c b4c2; do
+  dry "$fam: still a script family" 0 "on the script path, nothing created" FV_FAMILY="$fam"
+done
 
 # A script family's dry run creates nothing.
 dry "script family: dry run" 0 "on the script path, nothing created" FV_FAMILY=b4b

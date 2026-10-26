@@ -526,13 +526,14 @@ tier_value() {
 # dropped modes' knobs (ADR-0019 §9.4, §10.4; the two modes restored as tiers,
 # §12, are named by fv_lab_route; b4a's FV_B4A_CELLS since its branch went,
 # §11.6, answered with FV_CELLS; det-short's and determinism's FV_DET_* since
-# theirs went, §15.10, FV_DET_CELLS answered with FV_CELLS), the prompts
-# fv-lab ignores (§7), and what the start command sets after FV_EXTRA_ENV
-# anyway.
+# theirs went, §15.10, FV_DET_CELLS answered with FV_CELLS; attn3's arm
+# pickers FV_ATTN3_ARMS / FV_ATTN3_VSA since its branch went, §17.6, answered
+# with FV_CELLS), the prompts fv-lab ignores (§7), and what the start command
+# sets after FV_EXTRA_ENV anyway.
 FV_LAB_NOT_READ="FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_GEN FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS
   FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS
-  FV_DET_CELLS FV_DET_REPEATS FV_DET_PROMPT FV_DET_T2V_PROMPT FV_DET_I2V_PROMPT FV_PROMPTS FV_PROMPT FV_SEED
-  FV_WORK FV_SCRATCH FV_RUN_TAG FV_CELLS FV_GEN_TIMEOUT_S"
+  FV_DET_CELLS FV_DET_REPEATS FV_DET_PROMPT FV_DET_T2V_PROMPT FV_DET_I2V_PROMPT FV_ATTN3_ARMS FV_ATTN3_VSA
+  FV_PROMPTS FV_PROMPT FV_SEED FV_WORK FV_SCRATCH FV_RUN_TAG FV_CELLS FV_GEN_TIMEOUT_S"
 
 # fv_lab_route run|plan <sha> [tag]: `fv-lab pod up` for $FAMILY with this
 # driver's settings mapped across (FV_CELLS -> --cells, FV_BASELINE_SHA ->
@@ -604,9 +605,9 @@ fv_lab_route() {
   for v in FV_KEEP_POD RUNPOD_NO_VOLUME; do
     [[ "${!v:-0}" != 1 ]] || refuse "has no $v=1"
   done
-  # The retired families' pair and group selectors (ADR-0019 §9.4, §11.5,
-  # §15.10): ignored, the run would cover every cell of the tier.
-  for v in FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_DET_CELLS; do
+  # The retired families' pair, group and arm selectors (ADR-0019 §9.4,
+  # §11.5, §15.10, §17.6): ignored, the run would cover every cell of the tier.
+  for v in FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_DET_CELLS FV_ATTN3_ARMS FV_ATTN3_VSA; do
     [[ -z "${!v:-}" ]] || refuse "has no $v: it selects by arm, FV_CELLS (fv-lab pod up --cells)"
   done
   # The tier's values (lab/tiers.toml).
@@ -666,6 +667,9 @@ fv_lab_route() {
       FV_DET_CELLS)
         keys+=("$k")
         why+=("$k: det-short and determinism select by arm, as every tier: FV_CELLS with the arms of those groups, e.g. FV_CELLS=\"h3-r1 h3-r2 h3-r3 h3-timed\" (fv-lab pod up --cells; ADR-0019 §15.5, §15.10)") ;;
+      FV_ATTN3_ARMS|FV_ATTN3_VSA)
+        keys+=("$k")
+        why+=("$k: attn3 runs the script's default arms (FV_ATTN3_ARMS \"v2 cudnn\", FV_ATTN3_VSA \"0 1\") and selects by arm, as every tier: FV_CELLS, e.g. FV_CELLS=\"fasth3-4step-vsa-768p-b160 fasth3-4step-vsa-768p-b161\" (fv-lab pod up --cells; ADR-0019 §17.2, §17.6)") ;;
       FV_ORACLE_URL)
         # The script's determinism ran the oracle family first when given a
         # URL; the tier does not (ADR-0019 §15.5), so it is refused there,

@@ -476,11 +476,13 @@ tae = true
 cells = ["oracle-fasth3-8step", "oracle-fasth3-8step-vsa0", "oracle-fasth3-4step-vsa", "oracle-fasth3-4step-dense", "oracle-h3-ref2va-4step", "oracle-ltx25-512p", "oracle-ltx25-512p-dense", "oracle-ltx25-4k", "oracle-ltx25-4k-dense"]
 
 # ---- D1f (docs/adr/0019-fv-lab.md §17): three more runpod-matrix.sh families as
-# tiers, each held equal to the script's dry run by a golden (fv-lab-goldens.sh);
-# their branches stay until each one's GPU check through both runners (§17.5).
-# Every tier is the rtx6000 tier's pod, as runpod-http.sh gives every FV_FAMILY.
+# tiers, each held equal to the script's dry run by a golden (fv-lab-goldens.sh).
+# All three passed their GPU check through both runners (§17.5, 762ce4d) and
+# are retired (§17.6: branches deleted, goldens frozen, FV_ATTN3_* dropped:
+# select by arm). Every tier is the rtx6000 tier's pod, as runpod-http.sh gives
+# every FV_FAMILY.
 
-# runpod-matrix.sh `fuse` (Phase 3c DiT block fusions): the ungated kernel check,
+# Was runpod-matrix.sh `fuse` (Phase 3c DiT block fusions): the ungated kernel check,
 # the traced steps, then the off / on switch arms with a compare and an exact
 # gate per pair (one cell: the three pairs follow all six arms, H3 and LTX-2.5).
 [[tier]]
@@ -501,8 +503,8 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["fuse-kernels", "fuse-trace", "fuse-switch"]
 
-# runpod-matrix.sh `attn3` at its defaults (FV_ATTN3_ARMS "v2 cudnn", FV_ATTN3_VSA
-# "0 1"; both refused by fv-lab: select by arm): one cell, H3 and LTX-2.5 arms,
+# Was runpod-matrix.sh `attn3` at its defaults (FV_ATTN3_ARMS "v2 cudnn", FV_ATTN3_VSA
+# "0 1"; both refused: select by arm): one cell, H3 and LTX-2.5 arms,
 # the three compares after them as in the script.
 [[tier]]
 name = "attn3"
@@ -522,8 +524,8 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["attn3-h3-ltx25"]
 
-# runpod-matrix.sh `ltx`: LTX-2.5, LTX-2.3 and LTX-2.0 side by side, each arm
-# gated on its tree (the script's branch gates them since D1f, §17); the ltx23
+# Was runpod-matrix.sh `ltx`: LTX-2.5, LTX-2.3 and LTX-2.0 side by side, each arm
+# gated on its tree (the script's branch gated them from D1f, §17); the ltx23
 # and ltx2 trees are not on the EU volume, so those two arms are skipped there.
 [[tier]]
 name = "ltx"

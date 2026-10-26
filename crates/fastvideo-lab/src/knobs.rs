@@ -46,8 +46,10 @@ pub const RESTORED_MODES: [RestoredMode; 2] = [
 /// when `b4a` retired (§11.6); with it ignored, every `b4a` cell would run, at
 /// three times the cost of the one asked for. The five `FV_DET_*` joined when
 /// `det-short` and `determinism` retired (§15.10): their tiers are the
-/// script's defaults.
-pub const MODE_KNOBS: [&str; 16] = [
+/// script's defaults. `FV_ATTN3_ARMS` and `FV_ATTN3_VSA` (attn3's arm
+/// pickers) joined when `attn3` retired (§17.6): the tier is their defaults
+/// (`v2 cudnn`, `0 1`), selected by arm.
+pub const MODE_KNOBS: [&str; 18] = [
     "FV_PRECISION_ARM",
     "FV_NVFP4_WORKLOADS",
     "FV_VAE_GEN",
@@ -64,26 +66,25 @@ pub const MODE_KNOBS: [&str; 16] = [
     "FV_DET_PROMPT",
     "FV_DET_T2V_PROMPT",
     "FV_DET_I2V_PROMPT",
+    "FV_ATTN3_ARMS",
+    "FV_ATTN3_VSA",
 ];
 
 /// The knobs of the tiers whose `runpod-matrix.sh` branch is still there:
 /// the script reads them, no tier does. fv-lab refuses them; `runpod-http.sh`'s
 /// `FV_LAB_NOT_READ` gains them in the PR that retires the branch (as the
-/// `FV_DET_*` knobs did with `det-short` and `determinism`).
+/// `FV_DET_*` knobs did with `det-short` and `determinism`, §15.10, and
+/// `FV_ATTN3_*` with `attn3`, §17.6).
 ///
-/// - `oracle` (ADR-0019 §15), whose branch stays whole (§15.10: its
-///   clip-metric targets, `sfwan13` and `scripts/gpu/oracle.sh`'s runtime side
-///   still run there): `FV_ORACLE_*`, `FV_REF2VA_PROMPT`.
-/// - `attn3` (D1f, §17): `FV_ATTN3_ARMS` and `FV_ATTN3_VSA` picked its arms;
-///   the tier is their defaults (`v2 cudnn`, `0 1`), selected by arm.
-pub const SCRIPT_KNOBS: [&str; 7] = [
+/// `oracle` (ADR-0019 §15), whose branch stays whole (§15.10: its
+/// clip-metric targets, `sfwan13` and `scripts/gpu/oracle.sh`'s runtime side
+/// still run there): `FV_ORACLE_*`, `FV_REF2VA_PROMPT`.
+pub const SCRIPT_KNOBS: [&str; 5] = [
     "FV_ORACLE_TARGETS",
     "FV_ORACLE_F32",
     "FV_ORACLE_OWN_TEXT",
     "FV_ORACLE_PREFETCH",
     "FV_REF2VA_PROMPT",
-    "FV_ATTN3_ARMS",
-    "FV_ATTN3_VSA",
 ];
 
 /// The blocks the oracle cells dump (`FASTVIDEO_DUMP_OPS` in every arm's
@@ -158,7 +159,7 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
     }
     if key == "FV_ATTN3_ARMS" || key == "FV_ATTN3_VSA" {
         return Some(format!(
-            "{key}: the attn3 tier runs the script's default arms (FV_ATTN3_ARMS \"v2 cudnn\", FV_ATTN3_VSA \"0 1\"); narrow it by arm with --cells (FV_CELLS) (ADR-0019 §17)"
+            "{key}: the attn3 tier runs the script's default arms (FV_ATTN3_ARMS \"v2 cudnn\", FV_ATTN3_VSA \"0 1\"); narrow it by arm with --cells (FV_CELLS) (ADR-0019 §17.2, §17.6)"
         ));
     }
     if key == "FV_ORACLE_PREFETCH" {
@@ -382,16 +383,31 @@ mod tests {
         let env = |k: &str| (k == "FV_ORACLE_PREFETCH").then(|| "0".to_owned());
         let e = check_run_env("oracle", env).unwrap_err();
         assert!(e.contains("always fetches"), "{e}");
-        // attn3's arm pickers (ADR-0019 §17): refused by fv-lab, by arm.
+        // The script's oracle branch still reads them (ADR-0019 §15.10):
+        // runpod-http.sh's list gains them when it goes (tests/knobs.rs
+        // holds that list to not_read()).
+        assert!(SCRIPT_KNOBS.iter().all(|k| !not_read().any(|n| n == *k)));
+    }
+
+    #[test]
+    fn the_retired_attn3_knobs_are_not_read() {
+        // attn3's arm pickers: refused by fv-lab, by arm (ADR-0019 §17.2),
+        // for every tier, in --extra-env and in fv-lab run's environment.
         let e = check_extra_env("attn3", &["FV_ATTN3_ARMS=v2".into()]).unwrap_err();
         assert!(e.contains("narrow it by arm"), "{e}");
         let env = |k: &str| (k == "FV_ATTN3_VSA").then(|| "1".to_owned());
         let e = check_run_env("attn3", env).unwrap_err();
         assert!(e.contains("FV_ATTN3_VSA: the attn3 tier runs"), "{e}");
-        // The script's oracle and attn3 branches still read them (ADR-0019 §15.10, §17):
-        // runpod-http.sh's list gains them when it goes (tests/knobs.rs
-        // holds that list to not_read()).
-        assert!(SCRIPT_KNOBS.iter().all(|k| !not_read().any(|n| n == *k)));
+        let e = check_extra_env("fuse", &["FV_ATTN3_VSA=0".into()]).unwrap_err();
+        assert!(e.contains("FV_ATTN3_VSA: the attn3 tier runs"), "{e}");
+        // Retired with the branch (§17.6): out of SCRIPT_KNOBS, into
+        // MODE_KNOBS, so runpod-http.sh's FV_LAB_NOT_READ refuses them too
+        // (tests/knobs.rs holds them equal).
+        for k in ["FV_ATTN3_ARMS", "FV_ATTN3_VSA"] {
+            assert!(!SCRIPT_KNOBS.contains(&k), "{k}");
+            assert!(MODE_KNOBS.contains(&k), "{k}");
+            assert!(not_read().any(|n| n == k), "{k}");
+        }
     }
 
     #[test]

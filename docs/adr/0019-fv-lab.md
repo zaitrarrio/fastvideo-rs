@@ -17,9 +17,10 @@
   side, `runpod-http.sh upstream`, and the retirement of the rest of `runpod-matrix.sh` and `runpod-http.sh` follow
   (§8, §14.6, §15.6, §15.10). §16 (`weights = "volume+r2"`: the trees the EU volume lacks fetched from the R2
   weights store per arm; the `gold` tier on it) is proposed, CPU-tested; its GPU check is the full gold run (§16.7).
-  §17 (D1f: `fuse`, `attn3` and `ltx` as tiers, no new cell field, the script's `ltx` arms gated; `b4b` / `b4c` /
-  `b4c2` stay, each needing a new kind of verdict; `h3` proposed for retirement) is proposed, CPU-tested; its GPU
-  checks are §17.5
+  §17 (D1f: `fuse`, `attn3` and `ltx` as tiers, no new cell field, the script's `ltx` arms gated) is accepted for
+  those three: their GPU checks passed on `762ce4d` and they are retired from the script (§17.5 "Results", §17.6).
+  `b4b` / `b4c` / `b4c2` stay, each needing a new kind of verdict (§17.3's decision), and `h3`'s retirement is
+  still a proposal (§17.4)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -329,9 +330,9 @@ wrote. ADR-0019 open decision 3 covers compares and gates placed between arms.
 | `ltxfps` | 5 in 2 cells | yes, but `h3-8step` (1 arm) | PASS/FAIL lines copied into live.log (log only) | as is | moved | **retired (script branch deleted, fv-lab only)**, §10: `b0d0bb8`, 2 arms the same (1 ran, 121 frames byte-identical; 1 skipped in both); `d1b-compare/ltxfps.txt`; `FV_LTXFPS*` dropped |
 | `ltxvae` | 12 in 4 cells (2 / 0) | yes (ltx25) | a compare after the first two arms of each workload: two cells per workload; `FV_VAE_GEN=1` arms (off by default) | as is | moved (default arms) | **retired (script branch deleted, fv-lab only)**, §10: `b0d0bb8`, `ltxvae-4k5s` fast/streaming, 2 arms × 121 frames byte-identical, the compare the same; `d1b-compare/ltxvae.txt`; `FV_VAE_GEN` dropped |
 | `precision` | 8 in 2 cells (8 / 6) | ltx25 yes; `h3-8step` (4 arms) | compare + gate pairs | paired gate | moved (default mode) | **retired (script branch deleted, fv-lab only)**, §10: `c21d801`, `ltx25-4k5s-sol` f32act/bf16act, 2 arms × 242 frames byte-identical, 9 reports and the gate report the same; `d1b-compare/precision.txt`; the `ltx-nvfp4` mode dropped |
-| `fuse` | 10 in 3 cells (3 / 3) | yes, but `h3-8step` (3 arms) | an ungated `kernels` run_cell; one compare block across H3 and LTX arms; `[PASS]`/`[FAIL]` and `/gpu_trace` lines in live.log (log only) | ungated arms (§15); `model` names both pipelines (§17.2) | moved (D1f, §17) | after the GPU check (§17.5) |
-| `attn3` | 6 in 1 cell (3 / 0) | yes | one compare block across H3 and LTX arms (one cell, two pipelines) | as is: `model` is descriptive and names both (§17.2); `FV_ATTN3_*` refused | moved (D1f, §17) | after the GPU check (§17.5) |
-| `ltx` | 3 in 1 cell | ltx25 yes; ltx23, ltx2 no (2 arms skipped) | ungated `run_cell`s that read weights (the two arms without their trees failed) | as is: the script's branch gates its arms since D1f, a real-run change in lockstep (§17.2) | moved (D1f, §17) | after the GPU check (§17.5) |
+| `fuse` | 10 in 3 cells (3 / 3) | yes, but `h3-8step` (3 arms) | an ungated `kernels` run_cell; one compare block across H3 and LTX arms; `[PASS]`/`[FAIL]` and `/gpu_trace` lines in live.log (log only) | ungated arms (§15); `model` names both pipelines (§17.2) | moved (D1f, §17) | **retired (script branch deleted, fv-lab only)**, §17.6: `762ce4d`, `kernels-fuse` exit 0 (90 `[PASS]`), the 4-step VSA off / on pair 248 frames each byte-identical (the off / on compare `pass`, off-identity `ok`), the 8-step pair skipped on both; `artifacts/runpod/fuse/762ce4d-*`, `compare-762ce4d.txt` |
+| `attn3` | 6 in 1 cell (3 / 0) | yes | one compare block across H3 and LTX arms (one cell, two pipelines) | as is: `model` is descriptive and names both (§17.2); `FV_ATTN3_*` refused | moved (D1f, §17) | **retired (script branch deleted, fv-lab only)**, §17.6: `762ce4d`, the VSA bf16 pair (b160 / b161) 248 frames each byte-identical (their compare `pass`, off-identity `ok`); `artifacts/runpod/attn3/762ce4d-*`, `compare-762ce4d.txt`; `FV_ATTN3_*` dropped (select by arm) |
+| `ltx` | 3 in 1 cell | ltx25 yes; ltx23, ltx2 no (2 arms skipped) | ungated `run_cell`s that read weights (the two arms without their trees failed) | as is: the script's branch gates its arms since D1f, a real-run change in lockstep (§17.2) | moved (D1f, §17) | **retired (script branch deleted, fv-lab only)**, §17.6: `762ce4d`, `ltx25-two-stage` 242 frames byte-identical, the LTX-2.3 and LTX-2.0 arms skipped on both; `artifacts/runpod/ltx/762ce4d-*`, `compare-762ce4d.txt` |
 | `eval` | 5 (3 / 3) | yes, but `h3-8step` | a prompt set and LPIPS by default; an LPIPS self-test only when LPIPS loaded | no | stays | prompt sets join the schema |
 | `h3attn` | 4 processes, ~30 `--arm`s | partly | one process runs many arms (`{arm}` in its clip dir); FP8 arms dropped on a kernel FAIL | no | stays | D1e or retired |
 | `hd` | 8 | yes | ffmpeg Lanczos upscale between the arms and their compares; keyframe prune; post script | no | stays | D1c (`report`) or a cell type for derived clips |
@@ -1091,8 +1092,10 @@ fixtures, `fv-lab-goldens.sh --check` (with compare-runs' verdict-file cases); G
 
 §17 (D1f), CPU: `tests/dry_run.rs` and `tests/payload_golden.rs` with the `fuse`, `attn3` and `ltx` fixtures (written
 from the live branches by `fv-lab-goldens.sh`), `tests/lab_files.rs` (the trees the volume lacks: `h3-8step`,
-`fastwan22-ti2v-5b`, `ltx23`, `ltx2`), `knobs::tests::the_oracle_knobs_are_refused_by_fv_lab_only` (`FV_ATTN3_*`),
-`tests/schema.rs` (`model`'s description), `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`; GPU: §17.5.
+`fastwan22-ti2v-5b`, `ltx23`, `ltx2`), `knobs::tests::the_retired_attn3_knobs_are_not_read` (`FV_ATTN3_*`, in
+`MODE_KNOBS` since §17.6), `tests/knobs.rs`, `tests/schema.rs` (`model`'s description), `fv-lab-goldens.sh --check`
+(the three fixtures frozen since §17.6), `tests/dry_run.rs::retired_families_are_frozen_tiers_without_a_branch`,
+`fv-lab-route.test.sh` (§17.6's routing and refusals); GPU: §17.5 (passed on `762ce4d`).
 
 §13 (D1c), CPU: `tests/report.rs` (every fixture of `fixtures/report/`, byte for byte), `tests/fetch_tree.rs` (the
 script's `fetch_tree` on a fake pod), `tests/fv_lab_bin.rs::report_summary_and_table_print_the_scripts_output`,
@@ -1447,8 +1450,8 @@ Not deleted: it still has callers. At this commit:
 
 | mode | callers | after |
 |---|---|---|
-| `run` (script path) | every family with a `runpod-matrix.sh` branch: `mmaudio`, `speechtest`, `sfwan`, `sfstream`, `sfquality`, `headline`, `identity`, `cold`, `h3`, `ltx`, `hunyuan`, `sana-video`, `wan`, `b200`, `precision-debug`, `attn3`, `fuse`, `eval`, `b4b`, `b4c`, `b4c2`, `h3attn`, `oracle`, `writer`, `ltxoffload`, `solbench`, `hd`, `serve-engine`, `sol-lingbot`, `sol-cosmos3` (30; `determinism` and `det-short` left with §15.10); `oracle.sh` (`FV_FAMILY=oracle`, `FV_ORACLE_RUN_MODE`, `FV_KEEP_POD`, `FV_POD_FILE`); `FV_POD_FILES` / `FV_POD_SCRIPT=sol-bench-pod.sh` (`docs/perf/sol-bench.md`; `hd-upscaler.sh` ships by it) | goes with `runpod-matrix.sh` (each family a tier or retired) and the sol-bench pod script |
-| `run` (fv-lab route, §10) | the 15 retired tiers (13, then `det-short` and `determinism`, §15.10); the Taskfile's `rtx6000` task | the Taskfile calls `fv-lab pod up` directly |
+| `run` (script path) | every family with a `runpod-matrix.sh` branch: `mmaudio`, `speechtest`, `sfwan`, `sfstream`, `sfquality`, `headline`, `identity`, `cold`, `h3`, `hunyuan`, `sana-video`, `wan`, `b200`, `precision-debug`, `eval`, `b4b`, `b4c`, `b4c2`, `h3attn`, `oracle`, `writer`, `ltxoffload`, `solbench`, `hd`, `serve-engine`, `sol-lingbot`, `sol-cosmos3` (27; `determinism` and `det-short` left with §15.10, `fuse`, `attn3` and `ltx` with §17.6); `oracle.sh` (`FV_FAMILY=oracle`, `FV_ORACLE_RUN_MODE`, `FV_KEEP_POD`, `FV_POD_FILE`); `FV_POD_FILES` / `FV_POD_SCRIPT=sol-bench-pod.sh` (`docs/perf/sol-bench.md`; `hd-upscaler.sh` ships by it) | goes with `runpod-matrix.sh` (each family a tier or retired) and the sol-bench pod script |
+| `run` (fv-lab route, §10) | the 18 retired tiers (13, then `det-short` and `determinism`, §15.10, then `fuse`, `attn3` and `ltx`, §17.6); the Taskfile's `rtx6000` task | the Taskfile calls `fv-lab pod up` directly |
 | `run` / `all` refused | `gold`, the experiment tiers (§14.3) | — |
 | `plan` | `fv-lab-goldens.sh` (every script family's, `gold`'s and `h3-graphs`'s pod body: `fixtures/runpod-http-*.json`), `fv-lab-restored-goldens.sh` (at `5987e6a4`), the route test | the bodies freeze as the families' fixtures did (§10 item 3) |
 | `kernels`, `all` | by hand (`README.md`; `kernels.rs`'s `FV_EXTRA_ENV` groups) | an fv-lab kernels tier once an arm may have no weight gate (§9.1) |
@@ -2227,9 +2230,11 @@ arm's 84.09 GB fetch not yet written back are charged to the same cgroup (item 5
 
 ### 17. D1f: `fuse`, `attn3` and `ltx` as tiers; the B4 families stay; `h3` proposed for retirement
 
-Status: proposed 2026-10-26 (draft PR from `claude/d1f-tiers`), CPU-tested; each moved family's GPU check is §17.5.
-No script branch is deleted in this PR: a family leaves `runpod-matrix.sh` only after its own check through both
-runners (§8), in a later D1 PR, as §10, §11.6 and §15.10 did. Decision-id FVID-2026-10-26-d1f-tiers.
+Status: accepted 2026-10-26 for the three moved families: their GPU checks (§17.5) passed on `762ce4d`, and `fuse`,
+`attn3` and `ltx` are retired from the script (in `FV_LAB_RETIRED`, branches deleted, fixtures frozen, §17.6). The B4
+families wait for §17.3's decision and `h3`'s retirement (§17.4) is still a proposal. No script branch was deleted in
+the PR that made the tiers (#212): each family left `runpod-matrix.sh` only after its own check through both runners
+(§8), as §10, §11.6 and §15.10 did. Decision-id FVID-2026-10-26-d1f-tiers.
 
 This slice took seven families of §9.1: `b4b`, `b4c` and `b4c2` (the plan-B4 byte-identity families with verdicts),
 `fuse`, `attn3` and `ltx` (the ones §9.1 said "need ungated arms", which §15 added), and `h3` (§9.1: "retired, rtx6000
@@ -2442,6 +2447,45 @@ would fall below $8 (CLAUDE.md).
 
 Byte identity is expected for the frames on one GPU class from one `SHA` (docs/perf/determinism.md, §12's caveats).
 
+**Results (2026-10-26): all three pass.** `SHA=762ce4d` (main after #213) on both sides of each check: image
+`ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-762ce4d` (digest `sha256:ae688277d596110669173d39ccb6458768246f31ba2a237b27cebb0712508d0e`,
+build id `c7d4230782e731e1`, tools `tools-v0.1.70`), fv-lab 0.1.70 on the host, one RTX PRO 6000 Blackwell Server
+Edition per side in EU-RO-1 on `bz0ofkfx45` at $2.49/hr, the commands above with `--wall-cap-s 3600` on the fv-lab
+side and `FV_POD_CAP_S=3600` on the script side. The six pods ran in parallel, 12:40 to 12:51Z; every side's
+`matrix.out` ends `matrix_exit=0` (the fv-lab sides' `DONE` fetched too), and all six pods were deleted (fv-lab's at its fetch, the script's at its `destroy
+pod`). Both `ltx` creates found no capacity at 12:40 and were retried once, a minute later. Each preflight's
+`weights.log` ends `exit=1` (`h3-8step` incomplete), as on every run on this volume. Each compare was run again from
+the committed run directories and its output saved next to them with its command and exit status
+(`artifacts/runpod/<family>/compare-762ce4d.txt`); each is §17.5's expected line.
+
+- **`fuse`**: fv-lab `artifacts/runpod/fuse/762ce4d-1026124004-44af` (pod `ktao6reo6e4p1e`), script
+  `artifacts/runpod/fuse/762ce4d-10261240` (pod `l83gwsp4q0vrt3`). `fv-lab-compare-runs.sh` exit 0: "5 arm(s) the same
+  (2 ran with byte-identical frames, 2 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0
+  control arm(s) reported, 4 report(s) the same, 0 verdict file(s) the same, 0 difference(s)". `kernels-fuse` exit 0
+  on both with 90 `[PASS]` and no `[FAIL]` lines (4 s each: the ~5 min estimate was far over). The VSA off and on
+  arms 248 frames each, byte-identical across the runners; their compare `pass` with off-identity `ok` (124 pairs,
+  max difference 0) on both, so the fusions keep every bit, as the family requires. The 8-step pair `skipped:
+  weights incomplete` on both, its compare and the LTX compare `skipped` (frames missing). The VSA gate report is
+  present on both, and its own status is `fail` on both, for the same two checks: `performance/speedup` (the warm
+  denoise, fusions on against off, 18.54 to 17.13 s on the fv-lab side and 18.74 to 17.36 s on the script side,
+  1.08×: over the gate policy's 1.03 experimental floor, under its 1.10 promotion bar) and `lpips_available` (no
+  `--lpips` in §17.5's commands). That is the switch's promotion verdict, not its identity (the gate's
+  `off_identity` check passed), and both runners agree on it.
+- **`attn3`**: fv-lab `artifacts/runpod/attn3/762ce4d-1026124004-04fa` (pod `2euds1fn4gfyt8`), script
+  `artifacts/runpod/attn3/762ce4d-10261240` (pod `vir27fw4n6g0vp`). Exit 0: "2 arm(s) the same (2 ran with
+  byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s)
+  reported, 3 report(s) the same, 0 verdict file(s) the same, 0 difference(s)". b160 and b161 248 frames each; their
+  compare `pass` with off-identity `ok` (max difference 0: VSA on bf16 activations read in place equals the f32
+  widening path bit for bit, the family's own bar) on both; the two dense compares `skipped` on both.
+- **`ltx`**: fv-lab `artifacts/runpod/ltx/762ce4d-1026124138-4dd8` (pod `zsz3k16tggu58v`), script
+  `artifacts/runpod/ltx/762ce4d-10261241` (pod `yis61qgkwwo71c`). Exit 0: "3 arm(s) the same (1 ran with
+  byte-identical frames, 2 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s)
+  reported, 0 report(s) the same, 0 verdict file(s) the same, 0 difference(s)". `ltx25-two-stage` 242 frames,
+  byte-identical (549 s and 540 s); `ltx23-two-stage` and `ltx20-distilled-8step` `skipped: weights incomplete` on
+  both (`SKIP … weights incomplete` in both `live.log`): the script's gates of §17.2 skip what fv-lab skips.
+
+Cost: about $2.2 for the six pods (the Runpod balance $23.11 before, $20.90 after), against the ~$4.20 estimate.
+
 #### 17.6 Then
 
 After a family's check passes, in the next D1 PR (as §15.10): it joins `FV_LAB_RETIRED`, its `runpod-matrix.sh` branch
@@ -2449,3 +2493,29 @@ is deleted (the remaining families' dry runs compared before and after), its thr
 run` / `plan` route it to `fv-lab pod up`, and for `attn3` `FV_ATTN3_ARMS` / `FV_ATTN3_VSA` move from `SCRIPT_KNOBS`
 to `MODE_KNOBS` (so into `runpod-http.sh`'s `FV_LAB_NOT_READ`). `h3` goes in the same PR if the coordinator accepts
 §17.4; the B4 families wait for §17.3's decision.
+
+**Done** for `fuse`, `attn3` and `ltx` in the PR after the checks (2026-10-26, branch `claude/d1f-retire-fuse-attn3-ltx`),
+as §15.10 did for `det-short` and `determinism`:
+
+- The evidence is committed: the six run directories and the three `compare-762ce4d.txt` (§17.5 "Results").
+- All three are in `FV_LAB_RETIRED`; their `case` branches are deleted from `runpod-matrix.sh` (with them the
+  `fuse_h3` / `fuse_ltx` helpers, the `[PASS]` / `/gpu_trace` log copies and the last reads of `FV_ATTN3_*`). The 27
+  remaining families' dry runs are unchanged (`FV_DRY_RUN=1` output and `FV_DRY_RUN_GATES` records before and after,
+  every top-level `case` label): 26 byte-identical, `writer` differing only in its `dd` timings.
+- Their nine fixtures are frozen (`fv-lab-goldens.sh` no longer writes them; `tests/dry_run.rs` lists the three among
+  the retired). No crate test ran these branches live (§15.10's frozen copy was for `tests/repeats_oracle.rs`), so no
+  frozen copy of the script is needed: the fixtures are the reference.
+- `knobs.rs`: `FV_ATTN3_ARMS` and `FV_ATTN3_VSA` move from `SCRIPT_KNOBS` (now the oracle's five only) into
+  `MODE_KNOBS`, so into `not_read()` and `runpod-http.sh`'s `FV_LAB_NOT_READ` (`tests/knobs.rs` holds them equal);
+  fv-lab's refusal text is unchanged (the tier is their defaults, narrow it by arm).
+- `runpod-http.sh run` / `plan` route the three to `fv-lab pod up`; `FV_ATTN3_ARMS` / `FV_ATTN3_VSA` are refused in
+  `FV_EXTRA_ENV` (with a pointer to `FV_CELLS` and the default arms) and in the host environment, as
+  `FV_DET_CELLS` is.
+- `fv-lab-route.test.sh`: the three routed (by arm, and `ltx` whole), `FV_ATTN3_*` refused both ways, `all`
+  refused, `plan` fv-lab's, `runpod-matrix.sh` refusing each (exit 2), and `h3`, `b4c`, `b4c2` still on the script
+  path.
+- `lab/tiers.toml` and the five cells say "was runpod-matrix.sh …".
+- Not changed: `scripts/gpu/runpod.sh gpu` (`cmd_gpu`, the SSH driver of the first volume fill) still starts
+  `runpod-matrix.sh ltx` on one of its three pods, which now refuses it (exit 2) while its `h3` and `hunyuan` pods
+  run as before. Its `ltx` stage is left for the coordinator: point it at `fv-lab pod up --family ltx`, or drop the
+  stage, or retire `cmd_gpu` with `h3` (§17.4).

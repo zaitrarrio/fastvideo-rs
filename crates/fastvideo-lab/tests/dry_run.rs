@@ -320,6 +320,10 @@ fn retired_families_are_frozen_tiers_without_a_branch() {
         // D1d's determinism families, after their GPU checks (§15.10).
         "det-short",
         "determinism",
+        // D1f's families, after their GPU checks (§17.6).
+        "fuse",
+        "attn3",
+        "ltx",
     ] {
         assert!(retired.iter().any(|r| r == f), "{f} retired");
     }
