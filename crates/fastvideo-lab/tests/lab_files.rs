@@ -60,12 +60,12 @@ fn trees_and_gates_exist() {
     }
     for c in script_cells(&lab) {
         for a in &c.arms {
-            assert!(
-                gates.contains(a.gate.as_str()),
-                "{}: gate {}",
-                a.name,
-                a.gate
-            );
+            // An ungated arm (D1d §15: compare-dumps) reads no tree.
+            let Some(gate) = &a.gate else {
+                assert!(a.trees.is_empty(), "{}: ungated with trees", a.name);
+                continue;
+            };
+            assert!(gates.contains(gate.as_str()), "{}: gate {gate}", a.name);
             for tree in &a.trees {
                 assert!(
                     manifest.contains(tree),
@@ -98,10 +98,12 @@ fn only_fasth3_8step_needs_a_tree_the_eu_volume_lacks() {
 }
 
 #[test]
-fn the_only_tree_any_tier_lacks_on_the_eu_volume_is_h3_8step() {
+fn the_trees_tiers_lack_on_the_eu_volume_are_h3_8step_and_fastwan22() {
     // Every other tree an arm reads is on bz0ofkfx45 (volumes.sh
-    // FV_EU_VOLUME_TREES): the D1b families' GPU runs exercise every arm but
-    // the h3-8step ones, which both runners record as skipped there.
+    // FV_EU_VOLUME_TREES): the GPU runs exercise every arm but these, which
+    // both runners record as skipped there: h3-8step (R2-only since
+    // 2026-10-13; rtx6000, the D1b families, the oracle's fasth3-8step
+    // cells) and fastwan22-ti2v-5b (det-short's wan group, ADR-0019 §15).
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let eu: BTreeSet<String> = parse_eu_trees(&read("scripts/gpu/volumes.sh"))
         .into_iter()
@@ -113,7 +115,14 @@ fn the_only_tree_any_tier_lacks_on_the_eu_volume_is_h3_8step() {
         .filter(|t| !eu.contains(t.as_str()))
         .map(String::as_str)
         .collect();
-    assert_eq!(lacking, BTreeSet::from(["h3-8step"]));
+    assert_eq!(lacking, BTreeSet::from(["h3-8step", "fastwan22-ti2v-5b"]));
+    let wan: Vec<&str> = script_cells(&lab)
+        .into_iter()
+        .flat_map(|c| &c.arms)
+        .filter(|a| a.trees.iter().any(|t| t == "fastwan22-ti2v-5b"))
+        .map(|a| a.name.as_str())
+        .collect();
+    assert_eq!(wan, ["wan-r1", "wan-r2", "wan-r3", "wan-timed"]);
 }
 
 #[test]

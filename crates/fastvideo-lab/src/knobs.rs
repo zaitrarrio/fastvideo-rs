@@ -59,6 +59,29 @@ pub const MODE_KNOBS: [&str; 11] = [
     "FV_B4A_CELLS",
 ];
 
+/// The knobs of the families D1d's second slice made tiers (ADR-0019 §15:
+/// `det-short`, `determinism`, `oracle`) while their `runpod-matrix.sh`
+/// branches stay (until their GPU checks): the script reads them, no tier
+/// does. fv-lab refuses them; `runpod-http.sh`'s `FV_LAB_NOT_READ` gains them
+/// in the PR that deletes the branches (as `FV_B4A_CELLS` did, §11.6).
+pub const SCRIPT_KNOBS: [&str; 10] = [
+    "FV_DET_CELLS",
+    "FV_DET_REPEATS",
+    "FV_DET_PROMPT",
+    "FV_DET_T2V_PROMPT",
+    "FV_DET_I2V_PROMPT",
+    "FV_ORACLE_TARGETS",
+    "FV_ORACLE_F32",
+    "FV_ORACLE_OWN_TEXT",
+    "FV_ORACLE_PREFETCH",
+    "FV_REF2VA_PROMPT",
+];
+
+/// The blocks the oracle cells dump (`FASTVIDEO_DUMP_OPS` in every arm's
+/// `env`): the script's default. Another value for the `oracle` tier would be
+/// overridden by the cells, so it is refused.
+pub const ORACLE_DUMP_OPS: &str = "0,1,24,47";
+
 /// The knobs that picked workloads or arm groups of a restored mode: one cell
 /// per workload in the tier, so `--cells` / `FV_CELLS` by arm replaces them.
 const BY_ARM: [&str; 3] = ["FV_NVFP4_WORKLOADS", "FV_VAE_WORKLOADS", "FV_VAE_UNTRACED"];
@@ -113,6 +136,27 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
                 .to_owned(),
         );
     }
+    if key == "FV_DET_CELLS" || key == "FV_ORACLE_TARGETS" {
+        return Some(format!(
+            "{key}: fv-lab selects by arm: pass --cells (FV_CELLS) with the arms of those groups or targets, one cell each (ADR-0019 §15)"
+        ));
+    }
+    if key == "FV_ORACLE_PREFETCH" {
+        return Some(
+            "FV_ORACLE_PREFETCH: fv-lab always fetches the references in the background (ADR-0019 §15)"
+                .to_owned(),
+        );
+    }
+    if SCRIPT_KNOBS.contains(&key) {
+        return Some(format!(
+            "{key}: no tier reads it; the det-short, determinism and oracle tiers are the script's defaults (ADR-0019 §15)"
+        ));
+    }
+    if key == "FASTVIDEO_DUMP_OPS" && tier == Some("oracle") && value != ORACLE_DUMP_OPS {
+        return Some(format!(
+            "FASTVIDEO_DUMP_OPS={value}: the oracle cells dump blocks {ORACLE_DUMP_OPS} (each arm sets it; ADR-0019 §15)"
+        ));
+    }
     if BY_ARM.contains(&key) {
         return Some(format!(
             "{key}: the restored tiers (precision-nvfp4, ltxvae-gen) have one cell per workload; narrow them by arm with --cells / FV_CELLS (ADR-0019 §12)"
@@ -164,11 +208,14 @@ pub fn check_extra_env(tier: &str, entries: &[String]) -> Result<(), String> {
     message(found)
 }
 
-/// `fv-lab run`: the [`MODE_KNOBS`] set (non-empty) in its environment.
-/// `get` reads one variable (the process environment in the binary).
+/// `fv-lab run`: the [`MODE_KNOBS`] and [`SCRIPT_KNOBS`] set (non-empty) in
+/// its environment, and the oracle's `FASTVIDEO_DUMP_OPS`. `get` reads one
+/// variable (the process environment in the binary).
 pub fn check_run_env(tier: &str, get: impl Fn(&str) -> Option<String>) -> Result<(), String> {
     let found = MODE_KNOBS
         .iter()
+        .chain(&SCRIPT_KNOBS)
+        .chain(&["FASTVIDEO_DUMP_OPS"])
         .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (*k, v)))
         .filter_map(|(k, v)| {
             why(Some(tier), k, &v, false).map(|w| (restored_mode(k, &v).is_some(), w))
@@ -263,6 +310,25 @@ mod tests {
         // Retired with the b4a branch (ADR-0019 §11.6): runpod-http.sh's
         // FV_LAB_NOT_READ refuses it too (tests/knobs.rs holds them equal).
         assert!(not_read().any(|k| k == "FV_B4A_CELLS"));
+    }
+
+    #[test]
+    fn the_d1d_families_knobs_are_refused_by_fv_lab_only() {
+        let e = check_extra_env("det-short", &["FV_DET_CELLS=h3".into()]).unwrap_err();
+        assert!(e.contains("selects by arm"), "{e}");
+        let e = check_extra_env("oracle", &["FV_ORACLE_F32=1".into()]).unwrap_err();
+        assert!(e.contains("no tier reads it"), "{e}");
+        assert!(check_extra_env("oracle", &["FV_ORACLE_URL=https://x/upstream/t".into()]).is_ok());
+        assert!(check_extra_env("oracle", &["FASTVIDEO_DUMP_OPS=0,1,24,47".into()]).is_ok());
+        let e = check_extra_env("oracle", &["FASTVIDEO_DUMP_OPS=0,1".into()]).unwrap_err();
+        assert!(e.contains("dump blocks 0,1,24,47"), "{e}");
+        assert!(check_extra_env("rtx6000", &["FASTVIDEO_DUMP_OPS=0,1".into()]).is_ok());
+        let env = |k: &str| (k == "FV_ORACLE_PREFETCH").then(|| "0".to_owned());
+        let e = check_run_env("oracle", env).unwrap_err();
+        assert!(e.contains("always fetches"), "{e}");
+        // The script still reads them: runpod-http.sh's list gains them when
+        // the branches go (tests/knobs.rs holds that list to not_read()).
+        assert!(SCRIPT_KNOBS.iter().all(|k| !not_read().any(|n| n == *k)));
     }
 
     #[test]

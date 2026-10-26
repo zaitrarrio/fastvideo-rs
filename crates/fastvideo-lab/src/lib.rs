@@ -17,6 +17,8 @@
 //!   `scripts/gpu/runpod-matrix.sh`'s frame, and a cell's verdict step) and
 //!   its `--dry-run`; `fv-lab gate`, a finished run's gates and verdicts
 //!   evaluated again offline.
+//! - [`repeats`]: the frame hashes, `determinism.txt` and the typed verdict
+//!   of the determinism families' `[repeats]` cells (ADR-0019 §15).
 //! - [`weights`]: a `volume+r2` tier's trees: which come from the EU volume
 //!   and which from the R2 weights store, fetched per arm (ADR-0019 §16).
 //! - [`pod`]: `fv-lab pod`, a tier's Runpod pod on fv-deploy's `Provider`
@@ -54,6 +56,7 @@ pub mod pod;
 pub mod profiles;
 pub mod pyfmt;
 pub mod quote;
+pub mod repeats;
 pub mod report;
 pub mod run;
 pub mod schema;

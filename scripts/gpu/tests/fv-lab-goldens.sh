@@ -37,7 +37,10 @@
 #                              (the per-arm byte-identity record, ADR-0019 §8)
 #
 # Every script runs under `env -i` (PATH, HOME, LC_ALL=C only): the caller's
-# FV_* / RUNPOD_* settings cannot reach the fixtures.
+# FV_* / RUNPOD_* settings cannot reach the fixtures. One tier is the script
+# under fixed settings (fam_env below, ADR-0019 §15): `oracle` is the family
+# with FV_ORACLE_TARGETS naming its nine tensor-diff targets and the
+# FV_GEN_TIMEOUT_S scripts/gpu/oracle.sh passes (5400), for all three fixtures.
 #
 # No network, no GPU, no weights: the dry run logs instead of running, and the
 # plan takes the volume's datacentre from FV_PLAN_VOLUME. Needs bash and jq.
@@ -134,6 +137,13 @@ for FAMILY in $FAMILIES; do
     echo "fv-lab-goldens: tier $FAMILY has no runpod-matrix.sh branch and is not in fv-lab-retired.sh (freeze its fixtures there, or restore the branch)" >&2
     exit 2
   }
+  # The settings a tier is the script under (ADR-0019 §15), else none.
+  fam_env=()
+  case "$FAMILY" in
+    oracle)
+      fam_env=("FV_ORACLE_TARGETS=fasth3-8step fasth3-8step-vsa0 fasth3-4step-vsa fasth3-4step-dense h3-ref2va-4step ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense"
+        FV_GEN_TIMEOUT_S=5400) ;;
+  esac
   rm -rf "$TMP/work" "$TMP/scratch" "$TMP/pairs.txt"
   # The volume's TAE copy is complete, as on bz0ofkfx45 (auxiliary/tae): the
   # script's $TAE is then /workspace/weights/auxiliary/tae, not the container
@@ -141,7 +151,7 @@ for FAMILY in $FAMILIES; do
   mkdir -p "$TMP/work/weights/auxiliary/tae" "$TMP/scratch"
   : >"$TMP/work/weights/auxiliary/tae/.complete"
   # 1. The dry run: the commands, in order (the family's own log lines).
-  clean FV_DRY_RUN=1 FV_DRY_RUN_GATES="$TMP/pairs.txt" FV_WORK="$TMP/work" FV_SCRATCH="$TMP/scratch" \
+  clean ${fam_env[@]+"${fam_env[@]}"} FV_DRY_RUN=1 FV_DRY_RUN_GATES="$TMP/pairs.txt" FV_WORK="$TMP/work" FV_SCRATCH="$TMP/scratch" \
     FV_RUN_TAG="$TAG" FV_BASELINE_SHA="$BASELINE_SHA" \
     bash "$ROOT/scripts/gpu/runpod-matrix.sh" "$FAMILY" 2>/dev/null \
     | sed -E 's/^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] //' \
@@ -165,7 +175,7 @@ for FAMILY in $FAMILIES; do
   done <"$TMP/pairs.txt" | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" >"$TMP/new/$FAMILY-gates.tsv"
 
   # 3. The pod body.
-  clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
+  clean ${fam_env[@]+"${fam_env[@]}"} RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
     bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
   FIXTURES+=("$FAMILY-dry-run.txt" "$FAMILY-gates.tsv" "runpod-http-$FAMILY.json")
 done
@@ -255,6 +265,21 @@ echo '{"family":"fam","verdict":"fail","cells":"d c","why":"d:fail c:fail"}' >"$
 echo '{"family":"fam","verdict":"fail","cells":"d c","why":"d:fail"}' >"$TMP/vh/fam.verdict.json"
 clean bash "$CMP" "$TMP/vf" "$TMP/vg" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on a family verdict in another order" >&2; rc=1; }
 if clean bash "$CMP" "$TMP/vf" "$TMP/vh" >/dev/null; then echo "fv-lab-goldens: compare-runs missed another family verdict" >&2; rc=1; fi
+# The determinism families' hashes and the oracle's compare-dumps lines (D1d,
+# ADR-0019 §15): equal in both pass; another hash or another dump line fails.
+cp -a "$TMP/rb" "$TMP/da"; cp -a "$TMP/rb" "$TMP/db"
+for r in da db; do
+  echo 'a frames=1 frames_sha256=x audio_sha256=none' | tee "$TMP/$r/hashes.txt" >"$TMP/$r/determinism.txt"
+  echo '{"cell":"a","frames":1,"frames_sha256":"x","audio_sha256":"none"}' >"$TMP/$r/a/hashes.json"
+  printf 'compare-dumps latent rel_l2 1.0e-3\n[INFO] took %s s\n' "$RANDOM" >"$TMP/$r/a/stderr.log"
+done
+clean bash "$CMP" --expect-verdicts 3 "$TMP/da" "$TMP/db" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on equal hashes and dump lines" >&2; rc=1; }
+cp -a "$TMP/db" "$TMP/dc"; echo 'a IDENTICAL' >"$TMP/dc/determinism.txt"
+cp -a "$TMP/db" "$TMP/dd"; echo 'compare-dumps latent rel_l2 2.0e-3' >"$TMP/dd/a/stderr.log"
+cp -a "$TMP/db" "$TMP/de"; rm "$TMP/de/a/hashes.json"
+for bad in dc dd de; do
+  if clean bash "$CMP" "$TMP/da" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a hash or dump difference ($bad)" >&2; rc=1; fi
+done
 for bad in rc rd re rf rh ri; do
   if clean bash "$CMP" "$TMP/ra" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a difference ($bad)" >&2; rc=1; fi
 done

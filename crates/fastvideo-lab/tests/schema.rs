@@ -160,7 +160,8 @@ fn run_plan_schemas_are_strict_and_name_their_fields() {
             (
                 "Arm",
                 vec![
-                    "name", "gate", "trees", "steps", "bin", "tae", "env", "argv",
+                    "name", "gate", "trees", "steps", "bin", "tae", "env", "argv", "fresh",
+                    "requires", "echo",
                 ],
             ),
             ("Compare", vec!["baseline", "candidate", "args", "gate"]),
@@ -181,9 +182,26 @@ fn run_plan_schemas_are_strict_and_name_their_fields() {
             ("Evidence", vec!["file", "lines", "strip", "diff"]),
             ("LineCount", vec!["what", "lines", "min", "why"]),
             ("Identical", vec!["baseline", "candidate", "why"]),
+            // D1d's second slice (ADR-0019 §15).
+            ("Reference", vec!["target"]),
+            ("PromptFile", vec!["file", "names"]),
+            (
+                "Repeats",
+                vec!["hash", "reference", "judged", "controls", "keep"],
+            ),
         ],
     );
-    for k in ["workload", "lists", "arm", "compare", "gate", "verdict"] {
+    for k in [
+        "workload",
+        "lists",
+        "arm",
+        "compare",
+        "gate",
+        "verdict",
+        "reference",
+        "prompt_file",
+        "repeats",
+    ] {
         assert!(c["properties"].get(k).is_some(), "cell schema lacks `{k}`");
     }
 }

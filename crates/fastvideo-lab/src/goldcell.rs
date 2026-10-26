@@ -113,7 +113,7 @@ pub fn gold_cell(g: &Gold, v: &VariantManifest) -> CellFile {
         lists: Default::default(),
         arms: vec![Arm {
             name: variant.to_owned(),
-            gate: format!("variant:{variant}"),
+            gate: Some(format!("variant:{variant}")),
             trees: v.trees.clone(),
             steps: w.steps,
             note: None,
@@ -121,10 +121,16 @@ pub fn gold_cell(g: &Gold, v: &VariantManifest) -> CellFile {
             tae: None,
             env: None,
             argv,
+            fresh: Vec::new(),
+            requires: Vec::new(),
+            echo: Vec::new(),
         }],
         compares: Vec::new(),
         gates: Vec::new(),
         verdict: None,
+        reference: None,
+        prompt_files: Vec::new(),
+        repeats: None,
     }
 }
 

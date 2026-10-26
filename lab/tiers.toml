@@ -378,3 +378,75 @@ weights = "volume"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["h3-graphs-turbo-trace", "h3-graphs-turbo"]
+
+# ---- D1d, second slice (docs/adr/0019-fv-lab.md §15): the determinism families
+# and the oracle as tiers, each held equal to the script's dry run by a golden
+# (fv-lab-goldens.sh). Their runpod-matrix.sh branches stay until each one's GPU
+# check through both runners (§15.7). Every tier is the rtx6000 tier's pod, as
+# runpod-http.sh gives every FV_FAMILY the same pod.
+
+# runpod-matrix.sh `det-short`: one cell per arm group of its default
+# FV_DET_CELLS ("h3 wan ltx ltx-sage"), FV_DET_REPEATS=3; the frame hashes and
+# determinism.txt are each cell's [repeats] (FV_DET_CELLS -> --cells by arm).
+[[tier]]
+name = "det-short"
+description = "Byte identity across fresh processes at short configs (docs/perf/determinism.md): H3, FastWan2.2, LTX-2.5 dense and Sage, three runs each and the timed-pick control"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["det-short-h3", "det-short-wan", "det-short-ltx", "det-short-ltx-sage"]
+
+# runpod-matrix.sh `determinism` (without FV_ORACLE_URL: its oracle prelude is
+# the `oracle` tier): one cell per model, its three arms (two runs in one
+# process, one in another, the timed control), the prompt sets as files.
+[[tier]]
+name = "determinism"
+description = "Byte identity of 1080p generations within one process and across two (docs/perf/determinism.md): LTX-2.5 T2V and I2V, FastH3, and the timed-pick control"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["determinism-ltx-t2v", "determinism-ltx-i2v", "determinism-h3"]
+
+# runpod-matrix.sh `oracle` with FV_ORACLE_TARGETS naming its nine tensor-diff
+# targets (the clip-metric targets, ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,a2v-guided,
+# retake*,extend} and sfwan13, stay in the script, §15.6): one cell per target,
+# its reference fetched from FV_ORACLE_URL. cell_timeout_s 5400 as
+# scripts/gpu/oracle.sh passes FV_GEN_TIMEOUT_S. `pod up` needs FV_ORACLE_URL
+# (--extra-env) and --cells (the targets the upstream pods make).
+[[tier]]
+name = "oracle"
+description = "GPU oracle diff (docs/oracle.md): our H3 and LTX-2.5 runs on the upstream references' injected noise and text, compared tensor by tensor (needs FV_ORACLE_URL)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 5400
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["oracle-fasth3-8step", "oracle-fasth3-8step-vsa0", "oracle-fasth3-4step-vsa", "oracle-fasth3-4step-dense", "oracle-h3-ref2va-4step", "oracle-ltx25-512p", "oracle-ltx25-512p-dense", "oracle-ltx25-4k", "oracle-ltx25-4k-dense"]

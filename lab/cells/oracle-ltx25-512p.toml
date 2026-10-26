@@ -1,0 +1,43 @@
+# runpod-matrix.sh `oracle`, target ltx25-512p (docs/oracle.md; docs/adr/0019-fv-lab.md §15): the upstream
+# reference's dump (scripts/gpu/upstream/oracle.sh on an upstream pod, served under FV_ORACLE_URL) fetched
+# into {ref}, its noise and text conditioning injected into our run (FASTVIDEO_INJECT_DIR), our run dumped
+# the same way (FASTVIDEO_DUMP_DIR, blocks 0,1,24,47) and the two compared tensor by tensor (compare-dumps,
+# ungated, only when both dumps exist; its lines echoed into the log). After the cell the dumps and
+# the reference are removed. The references run bf16 without FP8: FASTVIDEO_H3_QUANT=off pins our H3
+# default (MXFP8) off.
+schema = 1
+name = "oracle-ltx25-512p"
+description = "Oracle diff of LTX-2.5 two-stage at 512p (768x512x121), Sol stage 2, against the sol-ltx25 reference"
+
+[workload]
+model = "ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+frames = 121
+width = 768
+height = 512
+note = "runpod-matrix.sh's default PROMPT and SEED; the distilled default (Sol stage 2)"
+
+[reference]
+target = "ltx25-512p"
+
+[[arm]]
+name = "oracle-ltx25-512p"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-ltx25-512p-dump"
+]
+argv = [
+  "--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--height", "{height}", "--width", "{width}", "--num-frames", "{frames}", "--prompt",
+  "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--clip", "{runs}/{arm}/frames"
+]
+fresh = ["{runs}/oracle-ltx25-512p-dump"]
+
+[[arm]]
+name = "oracle-ltx25-512p-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-ltx25-512p-dump"]
+requires = ["{ref}", "{runs}/oracle-ltx25-512p-dump"]
+echo = ["compare-dumps"]

@@ -1,0 +1,14 @@
+arm	oracle-fasth3-8step	fasth3-8step	-	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	oracle-fasth3-8step-f32	fasth3-8step	-	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	oracle-fasth3-8step-vsa0	fasth3-8step	-	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	oracle-fasth3-8step-vsa0-f32	fasth3-8step	-	h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	oracle-fasth3-4step-vsa	fasth3-4step-vsa	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+arm	oracle-fasth3-4step-vsa-f32	fasth3-4step-vsa	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+arm	oracle-fasth3-4step-dense	fasth3-4step-dense	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+arm	oracle-fasth3-4step-dense-f32	fasth3-4step-dense	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+arm	oracle-h3-ref2va-4step	h3-ref2va	-	h3-ref2va:transformer_ref h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	oracle-h3-ref2va-4step-cond	h3-ref2va	-	h3-ref2va:transformer_ref h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder
+arm	oracle-ltx25-512p	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	oracle-ltx25-512p-dense	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	oracle-ltx25-4k	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	oracle-ltx25-4k-dense	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer

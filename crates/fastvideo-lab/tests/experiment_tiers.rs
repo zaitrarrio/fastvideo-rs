@@ -49,7 +49,8 @@ fn steps(lab: &Lab, tier: &str) -> Vec<Step> {
     Lab::steps(&cells, &cfg.bin, &cfg.paths()).expect("render")
 }
 
-/// The arms of a tier, in run order: (name, gate, command).
+/// The arms of a tier, in run order: (name, gate, command); an ungated arm
+/// (ADR-0019 §15) has the gate `""`.
 fn arms(steps: &[Step]) -> Vec<(String, String, Vec<String>)> {
     Step::flatten(steps)
         .into_iter()
@@ -59,7 +60,11 @@ fn arms(steps: &[Step]) -> Vec<(String, String, Vec<String>)> {
                 gate,
                 command,
                 ..
-            } => Some((name.clone(), gate.clone(), command.clone())),
+            } => Some((
+                name.clone(),
+                gate.clone().unwrap_or_default(),
+                command.clone(),
+            )),
             _ => None,
         })
         .collect()

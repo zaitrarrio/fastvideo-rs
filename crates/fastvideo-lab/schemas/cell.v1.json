@@ -42,6 +42,35 @@
       "description": "The file stem.",
       "type": "string"
     },
+    "prompt_file": {
+      "description": "Prompt-set files written into the run directory before the cell's\nfirst arm (D1d §15, the `determinism` family's `det_set`).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PromptFile"
+      }
+    },
+    "reference": {
+      "description": "The upstream reference dump the cell's arms read as `{ref}` (D1d §15,\nthe `oracle` family): fetched before the cell's first arm\n([`Reference`]).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Reference"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "repeats": {
+      "description": "Frame-hash equality across the cell's repeated arms (D1d §15, the\n`det-short` / `determinism` families' hashes and `determinism.txt`).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Repeats"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "schema": {
       "description": "Always 1.",
       "type": "integer",
@@ -87,6 +116,13 @@
           "description": "The binary: `gpucheck` (default) or `baseline` ([`ArmBin`]).",
           "$ref": "#/$defs/ArmBin"
         },
+        "echo": {
+          "description": "Line patterns (as [`Evidence::lines`]) of the arm's `stderr.log`\ncopied into the log after it, each line as `[<arm>] <line>`\n(`oracle_diff`'s `compare-dumps` lines).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "env": {
           "description": "`K=V` settings, in order, for `env K=V … fv-gpucheck …`. Absent: no\n`env`; `env = []`: a bare `env` before the binary, as the script's\n`env ${e[@]} \"$bin\"` renders an empty list (the command line equal\nword for word).",
           "type": [
@@ -97,9 +133,19 @@
             "type": "string"
           }
         },
+        "fresh": {
+          "description": "Paths under `{runs}/` removed before the arm (selected or not), as the\nscript's `oracle_run` removes its dump directory; in a cell with a\n[`Reference`] also removed after the cell.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "gate": {
-          "description": "The `verify-weights.sh` cell that must pass before the arm runs (an\nincomplete tree is recorded as skipped, not run).",
-          "type": "string"
+          "description": "The `verify-weights.sh` cell that must pass before the arm runs (an\nincomplete tree is recorded as skipped, not run). Absent: an ungated\narm (the script's bare `run_cell`, D1d §15: `compare-dumps`), which\nreads no weight tree.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "name": {
           "description": "The run directory (unique within a tier).",
@@ -110,6 +156,13 @@
             "string",
             "null"
           ]
+        },
+        "requires": {
+          "description": "Directories that must all exist for the arm to run; otherwise it is\npassed over without a trace (the script's `oracle_diff`: no dumps,\nnothing to compare). A dry run lists the arm all the same.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "steps": {
           "description": "Denoising steps when the recipe fixes them (descriptive: the recipe\nflag sets them, no `--steps` is passed).",
@@ -128,8 +181,9 @@
           ]
         },
         "trees": {
-          "description": "The weight trees the arm reads (weights-manifest.tsv `dest` names):\nthe roots of `gate` and every `{weights}/<tree>` of the command.",
+          "description": "The weight trees the arm reads (weights-manifest.tsv `dest` names):\nthe roots of `gate` and every `{weights}/<tree>` of the command\n(none for an ungated arm).",
           "type": "array",
+          "default": [],
           "items": {
             "type": "string"
           }
@@ -138,8 +192,6 @@
       "additionalProperties": false,
       "required": [
         "name",
-        "gate",
-        "trees",
         "argv"
       ]
     },
@@ -352,6 +404,97 @@
         }
       },
       "additionalProperties": false
+    },
+    "PromptFile": {
+      "description": "A prompt set of one prompt repeated under several names, written to\n`{runs}/<file>` before the cell's first arm, byte for byte as the\nscript's `det_set` writes it:\n`{\"prompts\": [{\"name\": \"<n>\", \"seed\": <seed>, \"prompt\": \"<prompt>\"},…]}`,\nthe prompt and the seed the cell's workload's.",
+      "type": "object",
+      "properties": {
+        "file": {
+          "description": "The file name (`t2v-ab.json`), in the run directory.",
+          "type": "string"
+        },
+        "names": {
+          "description": "The prompt names, in order (`run1`, `run2`): each a run directory\n`frames/<name>/` of the arm that reads the set.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "names"
+      ]
+    },
+    "Reference": {
+      "description": "The reference of an oracle cell (docs/adr/0019-fv-lab.md §15): what an\nupstream pod made for `oracle-<target>` (`scripts/gpu/upstream/oracle.sh`),\nserved under `FV_ORACLE_URL` as `oracle-<target>/oracle-dump.tar` once\n`oracle-<target>/ORACLE_DONE` exists. The runner fetches it (in the\nbackground from the start of the run, as the script's prefetch) into\n`<scratch>/oracle-ref/<target>/`, the arms read `{ref}`\n(`<scratch>/oracle-ref/<target>/dump`). Unavailable (no URL, not finished\nwithin `FV_ORACLE_WAIT_S`, a failed download): the cell's first arm is\nrecorded as skipped (`reference dump unavailable`) and nothing else of the\ncell runs. After the cell, the reference and every arm's `fresh` path are\nremoved (the dumps are hundreds of MB).",
+      "type": "object",
+      "properties": {
+        "target": {
+          "description": "The upstream target (`fasth3-4step-vsa`): `oracle-<target>` there.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target"
+      ]
+    },
+    "RepeatHash": {
+      "description": "How [`Repeats`] hashes an arm's frames.",
+      "oneOf": [
+        {
+          "description": "One hash per arm (`det-short`'s `sh_hash`): every `frame-*.png` under\nthe arm's directory but `*/warmup/*`, in path order, concatenated,\nand every `audio.wav` the same way, into `<arm>/hashes.json` and a\nline of `<runs>/hashes.txt`.",
+          "type": "string",
+          "const": "arm"
+        },
+        {
+          "description": "One hash per run directory `frames/<run>/` but `warmup`\n(`determinism`'s `det_hash`, a prompt set's runs): its `frame-*.png`\nin name order and its `audio.wav`, into `<arm>/hashes.txt`; the\nstage digests of `stderr.log` into `<arm>/digests.txt`.",
+          "type": "string",
+          "const": "run"
+        }
+      ]
+    },
+    "Repeats": {
+      "description": "Frame-hash equality across repeats (docs/adr/0019-fv-lab.md §15): after\neach arm of the cell its frames are hashed ([`RepeatHash`]) and all but\n`keep` deleted; after every cell, `<runs>/determinism.txt` reports each\nhash against the reference's (`IDENTICAL` / `DIFFERENT`), as the script\nwrites it. The verdict (fv-lab's; the script only reports): the cell\npasses when the reference has frames and every hash of the `judged` arms\nequals it; `controls` are reported, not judged (the timed-pick control,\nwhich may differ by design); a reference arm that did not run (skipped)\nleaves the cell undecided.",
+      "type": "object",
+      "properties": {
+        "controls": {
+          "description": "The arms reported but not judged.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hash": {
+          "$ref": "#/$defs/RepeatHash"
+        },
+        "judged": {
+          "description": "The arms whose every hash must equal the reference's; the reference\narm is one of them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "keep": {
+          "description": "The frame files kept after hashing (`frame-000.png`); every other\n`frame-*.png` is deleted, as the script does (the hashes and\n`frames.sha256.json` are written before).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reference": {
+          "description": "The hash every other is compared with: an arm (`hash = \"arm\"`), or\n`<arm>/<run>` (`hash = \"run\"`: `ltx-t2v-ab/run1`).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "hash",
+        "reference",
+        "judged"
+      ]
     },
     "Verdict": {
       "description": "A cell's verdict (docs/adr/0019-fv-lab.md §11, D1d): what the script's\nbyte-identity families (`b4a`) do besides arms and compares, as data.\n\nThe verdict's arms start from an empty directory (`<runs>/<arm>` is\nremoved before each, so no earlier run's output stands in for this one's).\nAfter each of them, in order: its `summary.json` must record exit 0 (else\n`<label>:exit`); its `stderr.log` must exist (else `<label>:no-run`, and\nnothing more is read for it); each [`Evidence`] file is written; each\n[`LineCount`] is logged and checked. After the cell's compares: each\n[`Identical`] pair, then each evidence `diff`. The verdict is\n`<runs>/<family>-<cell>.verdict.json`,\n`{\"cell\":\"<cell>\",\"verdict\":\"pass|fail\",\"why\":\"<reasons>\"}`; and every run\nwith verdicts ends with `<runs>/<family>.verdict.json` over the cells it\nran (`runpod-matrix.sh`'s `b4_family_verdict`). A verdict passes only on\npositive evidence: a missing file fails it.",

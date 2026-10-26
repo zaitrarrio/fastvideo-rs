@@ -99,7 +99,7 @@ fn every_gold_arm_is_its_variant() {
         let arm = &cell.arms[0];
         let (_, var) = fams.find(v).expect("variant");
         assert_eq!(&arm.name, v);
-        assert_eq!(arm.gate, format!("variant:{v}"));
+        assert_eq!(arm.gate, Some(format!("variant:{v}")));
         assert!(
             ids.contains(&v.as_str()),
             "{v}: no verify-weights.sh variant cell"

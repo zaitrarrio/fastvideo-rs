@@ -9,17 +9,19 @@
   from the script at `5987e6a4` (§12, accepted; GPU check passed on `8b18d89`).
   D1c (§13: `fv-lab report summary` and `report table`, the `FV_FETCH_TREE` mirror; CPU only, no GPU gate) is
   accepted. D1e (§14: the port one-offs, one kept as the tier `h3-graphs`, nine deleted; `runpod-http.sh`'s callers
-  listed) is proposed, its GPU check (§14.4) the coordinator's. The rest of D1d (`oracle`) and the retirement of the
-  rest of `runpod-matrix.sh` and `runpod-http.sh` follow (§8, §14.6). §16 (`weights = "volume+r2"`: the trees the EU
-  volume lacks fetched from the R2 weights store per arm; the `gold` tier on it; §15 is D1d's) is proposed, CPU-tested;
-  its GPU check is the full gold run (§16.7)
+  listed) is proposed, its GPU check (§14.4) the coordinator's. D1d's second slice (§15: `det-short`, `determinism`
+  and `oracle`'s tensor-diff targets as tiers, the typed `[repeats]` frame-hash check, references, ungated arms,
+  prompt files) is proposed, its GPU checks (§15.7) pending. The oracle's clip-metric targets, `runpod-http.sh
+  upstream`, and the retirement of the rest of `runpod-matrix.sh` and `runpod-http.sh` follow (§8, §14.6, §15.6). §16 (`weights = "volume+r2"`: the trees the EU volume lacks fetched from the R2
+  weights store per arm; the `gold` tier on it) is proposed, CPU-tested; its GPU check is the full gold run (§16.7)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
   `scripts/gpu/fv-lab-compare-runs.sh` (the GPU gate's comparison); fv-lab in the tools release's `gpucheck` set;
   schemas `crates/fastvideo-lab/schemas/{tiers,cell}.v1.json`; data `lab/tiers.toml`, `lab/cells/*.toml` (D1a
   `rtx6000-*`, D1b `techniques-*`, `b6-*`, `rtx5090-*`, `fastvideo-*`, `h3arms-*`, `trace-*`, `ltxfps-*`, `ltxvae-*`,
-  `precision-*`; D1d `b4a-*`, §11; D1e `h3-graphs-*`, §14);
+  `precision-*`; D1d `b4a-*`, §11; D1e `h3-graphs-*`, §14; D1d `det-short-*`, `determinism-*`, `oracle-*`, §15, with
+  `src/repeats.rs`);
   goldens `crates/fastvideo-lab/fixtures/*` (written by `scripts/gpu/tests/fv-lab-goldens.sh`, frozen for the tiers of
   `scripts/gpu/fv-lab-retired.sh`, §10); one seam in
   `fastvideo-deploy` (`runpod::Pod::list`, §6)
@@ -327,8 +329,9 @@ wrote. ADR-0019 open decision 3 covers compares and gates placed between arms.
 | `cold` | 10 | yes, but `h3-8step` | page-cache drop before each LTX arm, PNG deletion, `env -u` | no | stays | a later slice |
 | `serve-engine` | 6 | H3, LTX yes; Wan no | frames deleted after the run; `FV_ENGINE_CELLS`; `--tae-dir` without a gate | almost | stays | a later slice |
 | `writer` | 7 | ltx25 yes | sysinfo, a sampler process, `dd` throughput | no | stays | D1e or retired |
-| `determinism`, `det-short` | 9 to 19 | partly | prompt-set files written at run time, hashing, verdict files, frame deletion | no | stay | determinism checks move with D1c / D1d |
-| `oracle`, `sfwan` | many | partly | reference-dump fetches from upstream pods, compare-dumps; `sfwan` recurses into `oracle` and `wan` | no | stay | D1d |
+| `determinism`, `det-short` | 9 to 19 | partly | prompt-set files written at run time, hashing, verdict files, frame deletion | `[[prompt_file]]`, `[repeats]` (§15) | moved in D1d (§15) | after each one's GPU check (§15.7); `det-short`'s opt-in `ltx-sol` group and other `FV_DET_REPEATS` stay script-only |
+| `oracle` | 9 tensor-diff targets moved (32 arms); 10 clip-metric targets and `sfwan13` stay | partly | reference-dump fetches from upstream pods, compare-dumps, ffmpeg metrics | `[reference]`, ungated arms, `fresh` / `requires` / `echo` (§15) | tensor-diff targets moved in D1d (§15) | after its GPU check (§15.7); the clip-metric targets with a derived-clip step (§15.6) |
+| `sfwan` | many | no | recurses into `oracle` and `wan` | no | stays | D1d / a Wan volume |
 | `wan` | ~35 | no (Wan trees R2-only) | oracle fetches, ungated kernels, `rm` | no | stays | D1d / a Wan volume |
 | `b200` | 8 | partly | TAE and Spark file probes at run time; ungated | no | stays | retired with the US volume, or D1e |
 | `h3` | 3 | `h3-8step` no | Spark file probes; ungated | no | stays | retired (rtx6000 covers it) |
@@ -820,7 +823,8 @@ refusal answers); its fv-lab equivalent is
 3. **Settled (review of #188, F2):** `fv-lab gate` never writes into the run directory; `--out` defaults to
    `<run>.regate`, and `--check` compares.
 4. **`oracle`** (the `oracle` family, `oracle.sh`, `fv-gpucheck compare-dumps`) is the second D1d slice; the
-   `determinism` verdicts become new typed checks under `[verdict]` (§11.1) with D1c / D1d.
+   `determinism` verdicts become new typed checks under `[verdict]` (§11.1) with D1c / D1d. Done in §15: a `[repeats]`
+   table beside `[verdict]` rather than under it (§15.3 says why), the oracle's tensor-diff targets as a tier.
 
 ### 12. Two dropped modes restored as tiers: `precision-nvfp4`, `ltxvae-gen`
 
@@ -1065,6 +1069,12 @@ Passed for all nine (§9.5).
 evidence and diffs byte-identical; `fv-lab gate` reproduces them), `tests/fv_lab_bin.rs` (`b4a` dry run,
 `gate_evaluates_a_finished_runs_verdicts_offline`), `tests/dry_run.rs` and `tests/payload_golden.rs` with the `b4a`
 fixtures, `fv-lab-goldens.sh --check` (with compare-runs' verdict-file cases); GPU: §11.6.
+
+§15 (D1d, second slice), CPU: `tests/repeats_oracle.rs` (the live `det-short`, `determinism` and `oracle` branches and
+`fv-lab run` on one fake box: every output file byte-identical, `fv-lab gate --check` clean, the typed verdicts),
+`tests/{dry_run,payload_golden}.rs` with the three tiers' fixtures, `plan::tests::references_ungated_arms_prompt_files_and_repeats`,
+`tests/fv_lab_bin.rs::the_oracle_pod_needs_its_references_and_the_d1d_knobs_are_refused`, `fv-lab-goldens.sh --check`
+(with compare-runs' hash and dump-line cases); GPU: §15.7.
 
 §13 (D1c), CPU: `tests/report.rs` (every fixture of `fixtures/report/`, byte for byte), `tests/fetch_tree.rs` (the
 script's `fetch_tree` on a fake pod), `tests/fv_lab_bin.rs::report_summary_and_table_print_the_scripts_output`,
@@ -1423,6 +1433,259 @@ Proposed, for the slice that retires the script (not decided here):
 | `writer` | sysinfo, a sampler, `dd` throughput | retire (a one-time measurement, `docs/perf`) |
 | `precision-debug`, `identity` | dump-dependent compares, cases from the environment | retire; `precision` and the identity tiers cover them |
 | `solbench`, `sol-lingbot`, `sol-cosmos3` | per-arm timeouts, routers, prompts from files; trees not on the volume | tiers with `hydrate` and a prompt-file arm, or retired |
+
+### 15. D1d, second slice: `det-short`, `determinism` and `oracle` as tiers
+
+Status: proposed 2026-10-26 (CPU part done in the draft PR; the GPU checks, §15.7, are the coordinator's). No script
+branch is deleted here: each family leaves `runpod-matrix.sh` only after its own check through both runners (§8).
+Decision-id FVID-2026-10-26-d1d-oracle-determinism.
+
+#### 15.1 What moved
+
+| tier | cells | arms | the script it is |
+|---|---|---|---|
+| `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | `runpod-matrix.sh det-short` at its defaults (`FV_DET_CELLS="h3 wan ltx ltx-sage"`, `FV_DET_REPEATS=3`): three fresh processes per group and the timed-pick control (not for `ltx-sage`), every arm's frames hashed after it, `determinism.txt` |
+| `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | `runpod-matrix.sh determinism` without `FV_ORACLE_URL` (its oracle prelude is the `oracle` tier): per model `-ab` (two runs in one process), `-c` (one in another), `-timed`; the prompt sets written into the run directory; hashes per run, stage digests, `determinism.txt` |
+| `oracle` | `oracle-<target>` for `fasth3-8step`, `fasth3-8step-vsa0`, `fasth3-4step-vsa`, `fasth3-4step-dense`, `h3-ref2va-4step`, `ltx25-512p`, `ltx25-512p-dense`, `ltx25-4k`, `ltx25-4k-dense` | 32 (14 gated, 18 `compare-dumps`) | `runpod-matrix.sh oracle` with `FV_ORACLE_TARGETS` naming those nine (the tensor-diff targets: the reference fetched, our run on its injected inputs, `compare-dumps`; the f32 noise floor for the H3 targets, the condition-row control for Ref2VA) and `FV_GEN_TIMEOUT_S=5400` (what `oracle.sh` passes) |
+
+Every tier is the `rtx6000` tier's pod (the PRO 6000, the six preflight cells, the TAE fetch, a 4 h cap), as
+`runpod-http.sh` gives every `FV_FAMILY`; `oracle`'s per-arm cap is 5400 s. Weights: every tree is on the EU volume
+`bz0ofkfx45` except `h3-8step` (the two `fasth3-8step*` oracle cells) and `fastwan22-ti2v-5b` (det-short's `wan`
+group), whose arms both runners record as skipped (`weights incomplete`), as before; `tests/lab_files.rs` pins those
+two as the only trees any tier lacks there. No new tree, no download.
+
+#### 15.2 Cell schema additions (v1, additive, `deny_unknown_fields` kept)
+
+Every cell file before them parses unchanged, the gold cells' generated text is unchanged, `schemas/cell.v1.json` is
+regenerated (`tests/schema.rs`).
+
+6. **Ungated arms.** `[[arm]] gate` is optional. Without it the arm is the script's bare `run_cell` (no
+   `verify-weights.sh`, no `FV_DRY_RUN_GATES` row); it may read no weight tree (`trees` empty, no `{weights}`, no
+   `tae`). Used by the oracle's `compare-dumps` arms. (§9.1 named this step for `kernels`-style arms; those families
+   still need more, §9.1.)
+7. **`[[arm]] fresh`, `requires`, `echo`.** `fresh`: paths below `{runs}/` removed before the arm, selected or not
+   (`oracle_run`'s `rm -rf "$dump"`). `requires`: directories that must all exist, else the arm is passed over without a
+   trace (`oracle_diff`: no dumps, nothing to compare; a dry run lists it all the same). `echo`: `stderr.log` line
+   patterns (the verdict step's matcher) written into the log after the arm as `[<arm>] <line>` (`oracle_diff`'s
+   `compare-dumps` lines).
+8. **`[reference] target`** and the `{ref}` placeholder. The upstream reference of an oracle target: the runner fetches
+   it as the script's `oracle_fetch` does (poll every base URL of `FV_ORACLE_URL` for `oracle-<target>/ORACLE_DONE` every
+   30 s up to `FV_ORACLE_WAIT_S`, default 10800; then `oracle-dump.tar` with curl, three attempts, `tar -xf`, a `dump/`
+   directory) into `<scratch>/oracle-ref/<target>/`, and `{ref}` is its `dump/`. All selected references are fetched in
+   the background from the start of the run (the script's prefetch), and `<runs>/ORACLE_REFS_DONE` is written once all
+   are here (what `scripts/gpu/oracle.sh` waits for to delete the upstream pods). An unavailable reference skips the
+   cell, recorded on its first arm (`reference dump unavailable`); after the cell the reference and every arm's `fresh`
+   path are removed. `FV_ORACLE_URL` takes the script's spaces or commas (what `pod up --extra-env` can carry).
+9. **`[[prompt_file]] file, names`.** A prompt set of the workload's prompt and seed under each name, written to
+   `{runs}/<file>` before the cell's first arm, byte for byte as `det_set` prints it (`\` and `"` escaped). A file name
+   is used once per tier; some arm must read `{runs}/<file>`.
+10. **`[repeats] hash, reference, judged, controls, keep`.** Frame-hash equality across repeats (§13.6's first
+    report): after each arm of the cell its frames are hashed and pruned to `keep`, and after every cell
+    `<runs>/determinism.txt` reports each hash against the reference's, `IDENTICAL` or `DIFFERENT`, in the script's
+    words. `hash = "arm"` is `det-short`'s `sh_hash` (every `frame-*.png` under the arm but `*/warmup/*`, in path-byte
+    order, concatenated, and every `audio.wav`; `<arm>/hashes.json` and a line of `<runs>/hashes.txt`); `hash = "run"`
+    is `determinism`'s `det_hash` (per run directory `frames/<run>/` but `warmup`, its frames in name order and its
+    `audio.wav`, `<arm>/hashes.txt`; the stage digests of `stderr.log` into `<arm>/digests.txt`). `reference` is an arm,
+    or `<arm>/<run>`; `judged` ∪ `controls` are the cell's arms, the reference arm judged; one hash kind per tier (one
+    `determinism.txt`). Ported in `src/repeats.rs` (no regex engine: the two `sed`s and `read -r` are matched by hand).
+
+#### 15.3 The typed verdict, and why it writes no file
+
+A `[repeats]` cell **passes** when its reference has frames and every hash of its `judged` arms equals the reference's
+(frames and audio); `controls` (the timed-pick runs, which differ by design: docs/perf/determinism.md) are reported,
+not judged; a reference arm that did not run (skipped on its weights) leaves the cell undecided. The runner logs
+`repeats <cell>: pass|fail (<reasons>)` (reasons `<arm>:different`, `<arm>/<run>:frames-different`, `<ref>:no-frames`,
+`<arm>:missing`, `<arm>:no-runs`) and `fv-lab gate` decides it again offline: it rebuilds `hashes.txt` from each arm's
+`hashes.json` and `determinism.txt` from the per-arm hashes, which both fetches take, so frames are never needed
+(`--check` compares the two files byte for byte with the run's own).
+
+It is not a list under `[verdict]`, and it writes no `*.verdict.json`: `[verdict]`'s frame is `b4a`'s script behaviour
+(fresh arm directories, the `rm -rf` dry-run lines, a verdict file per cell and per family), and the determinism
+families' script does none of it. Written files would exist in fv-lab's run only, and the GPU comparison is file for
+file (`fv-lab-compare-runs.sh` counts a verdict file in one run as a difference). The decision lives where it can be
+checked against the script: `determinism.txt` (byte-identical) and `fv-lab gate`'s outcome and exit status.
+
+The other two reports of §13.6 are not moved here: h3-graphs' byte identity (`hashes.tsv`, `MISMATCH`) and
+fasth3-nvfp4's lossy-gate windows belong to `scripts/gpu/experiments/`, which D1e moves (a `[repeats]`-like group check
+and a compare-report window rule when those experiments become cells); h3arms' reuse count already is a
+`[[verdict.count]]`.
+
+#### 15.4 Equality
+
+- **Goldens.** `fv-lab-goldens.sh` writes the three tiers' fixtures from the live branches like every script tier
+  (`<tier>-dry-run.txt`, `<tier>-gates.tsv`, `runpod-http-<tier>.json`; 17 / 11 / 43 dry-run lines). One tier is the
+  script under fixed settings: `oracle` is generated with `FV_ORACLE_TARGETS` set to its nine targets and
+  `FV_GEN_TIMEOUT_S=5400` (`fam_env` in the script). `tests/{dry_run,payload_golden}.rs` hold fv-lab to them; the gates
+  test skips ungated arms as `FV_DRY_RUN_GATES` does.
+- **Script changes.** They change no generation, hash or report a finished run writes; one changes how a run with a
+  failed reference arm ends (the second item):
+  - dry run only: a dry `oracle_fetch` logs `dry-run reference <target>: <dump>` and fetches nothing (before, the dry
+    run needed a URL and, without one, skipped every target); the prefetch does not start in a dry run; a dry
+    `oracle_diff` logs its command; a dry `det_hash` returns (before, it failed under `set -e` on the arm directory a
+    dry run does not make, after the first arm, so the dry run had one arm);
+  - `determinism`'s verdict reads `|| true` like `det-short`'s. **A real-run change** (review of #202): on main a model
+    that did not run (`FV_DET_CELLS`), or whose `-ab` arm was skipped or crashed (an empty `hashes.txt`), killed the
+    verdict subshell under `pipefail` and the family with it, so `matrix_exit` was non-zero and `determinism.txt` cut
+    short. Now the family goes on to `matrix done` (`matrix_exit=0`), and a reference arm that ran without run1 hashes
+    says so: `<model>-ab: no run1 hashes` in `determinism.txt` and `live.log` (its other runs follow as `DIFFERENT`).
+    fv-lab writes the same line (`<ref arm>: no <run> hashes`), and its typed verdict leaves the cell undecided when
+    the reference arm did not run, a fail when it ran without frames; `tests/repeats_oracle.rs` (`noh3`) holds both
+    byte-equal;
+  - `det-short`'s arms pass one flat `env` (`env FASTVIDEO_CACHE=… XDG_CACHE_HOME=… [FASTVIDEO_SDPA_AUTO=timed]
+    FASTVIDEO_WAN_VAE=full …`) where they nested two (`env … env FASTVIDEO_WAN_VAE=full …`): the same environment in the
+    same order, a cell's one `env` list.
+- **The other families' dry runs** (`FV_DRY_RUN=1` output and `FV_DRY_RUN_GATES` records, before and after, for every
+  `case` branch): the same, but `identity` (a bash error message's line number), `writer` (its `dd` timings, which
+  differ run to run) and `wan`, whose branch calls the same `oracle_fetch` / `oracle_diff`: its dry run now lists its
+  oracle cells instead of `oracle: FV_ORACLE_URL unset`. (The old `oracle` dry run never ended: its prefetch watcher
+  waited `FV_ORACLE_WAIT_S` for dumps a dry run never fetches.)
+- **Fakes, both runners** (`tests/repeats_oracle.rs`): the live branches copied with what they source into a fake root
+  and `fv-lab run` of the committed tiers on one fake box (a fake fv-gpucheck writing frames per prompt-set run with a
+  warm-up directory, audio, stage digests and dumps, and answering `compare-dumps`; the upstream reference served as
+  a `file://` URL to the real curl). Every output file is the same, byte for byte (hashes, `determinism.txt`, digests,
+  prompt sets, kept frames, frames records), exits and skips agree, the `tee`'d report and `compare-dumps` lines of
+  `live.log` are equal, the dumps and the reference are gone after a target, and a missing reference skips its cell
+  on both sides; a `flaky` mode makes repeats differ and both reports and the verdict say so; `fv-lab gate --check`
+  finds no difference on either run directory and decides the verdicts. `fv-lab-compare-runs.sh` compares the hashes
+  files and each arm's `compare-dumps` lines (self-test in `fv-lab-goldens.sh`).
+
+#### 15.5 Differences from the script, and why
+
+| | script | fv-lab | why |
+|---|---|---|---|
+| `FV_DET_CELLS`, `FV_ORACLE_TARGETS` | pick groups / targets | refused by `fv-lab run` and `pod up --extra-env`; `--cells` by arm (a group's or target's arms) | arms are the unit (§9.4); one cell per group / target |
+| `FV_DET_REPEATS`, `FV_DET_PROMPT`, `FV_DET_T2V_PROMPT`, `FV_DET_I2V_PROMPT`, `FV_REF2VA_PROMPT`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT` | change the arms | refused (`knobs::SCRIPT_KNOBS`) | the tiers are the defaults; a variant is another tier (§12's way) |
+| `FV_ORACLE_PREFETCH=0` | sequential fetches | refused: always in the background | the result is the same; only the upstream pods' lifetime differs |
+| `FASTVIDEO_DUMP_OPS` other than `0,1,24,47` for `oracle` | the dumped blocks | refused | every arm sets it; another value would be overridden |
+| `ORACLE_REFS_DONE` | written by a watcher once every target's `dump/` exists at the same moment (polled every 20 s up to `FV_ORACLE_WAIT_S`); the loop's cleanup removes each target's dump after its cell, so in a run of several targets an early target's dump can be gone before the last arrives and the file is never written (a script bug for multi-target runs, which then keep the upstream pods to the end) | written when every selected reference has been fetched (a count of successful fetches) | the meaning `oracle.sh` waits for: every reference is here, the upstream pods can go |
+| a reference whose prefetch failed | fetched again inline (another `FV_ORACLE_WAIT_S`) | the cell skipped | the prefetch already waited and tried three downloads; a second 3 h wait on a GPU pod buys nothing |
+| `FV_CELLS` naming some arms of an oracle target | the target's reference fetched all the same | fetched only when one of its arms is selected; other targets `skip <cell> (no arm in FV_CELLS)` | selection by arm |
+| `oracle-h3-ref2va-*`'s `-dump-cond` after the cell | left on the container disk | removed with the other dumps | disk only |
+| `determinism` with an unselected arm (`FV_CELLS`) | `det_hash` fails, the family ends | the arm is not hashed | a run that cannot finish is no reference |
+| `determinism` with `FV_ORACLE_URL` | runs the `oracle` family first | not read by `determinism` | the oracle is its own tier |
+| a `stderr.log` holding a NUL | `grep` in the C locale writes `Binary file … matches` into `digests.txt` / drops the echo | the lines | as §13.4: bytes, not a locale |
+| `pod up` of `oracle` | (the script ran whatever it was given) | needs `--extra-env FV_ORACLE_URL=…` and `--cells` | otherwise every cell skips, or a reference never made upstream holds a GPU pod for `FV_ORACLE_WAIT_S` |
+
+#### 15.6 What stays in the script, and when it moves
+
+- **The oracle's clip-metric targets** (`ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,a2v-guided,retake,retake-v,retake-a,extend}`)
+  and **`sfwan13`**: after their runs and diffs they compute ffmpeg SSIM / PSNR and ffprobe lines into
+  `oracle-<target>-frames/metrics.txt` (select filters, pinned frames, the source's kept frames) and, for `sfwan13`,
+  decode the reference mp4 into frames for `compare-clips`. That is a derived-clip step, the one `hd` waits for (§9.1);
+  they move with it. `FV_ORACLE_OWN_TEXT=1`'s `-owntext` arms are another tier when wanted.
+- **`runpod-http.sh upstream`** is not moved or aliased. It boots another image (`fastvideo-rs-upstream-<target>`, the
+  Python references, no fv-gpucheck and no fv-lab), runs `scripts/gpu/upstream/pod.sh` (`UP_STEPS`), serves results
+  with its own start command and idle watchdog (`net`: busy while fetched from), and is kept alive and deleted by
+  `oracle.sh` (`FV_KEEP_POD`, `ORACLE_REFS_DONE`, the keepalive fetches). An fv-lab tier is a list of fv-gpucheck arms
+  on the runtime image, so the upstream pod is a second `ImageFlavour` and start command, and the orchestration an
+  `fv-lab oracle` driver (upstream pods up, the runtime tier with `FV_ORACLE_URL`, release on `ORACLE_REFS_DONE`).
+  It moves with that driver, after the `oracle` tier's GPU check and branch retirement, and before `runpod-http.sh` is
+  deleted (D1e's end). Until then `oracle.sh` drives `runpod-http.sh upstream` and, for the runtime side, either
+  runner: `runpod-http.sh run` with `FV_FAMILY=oracle`, and once the branch is retired `FV_EXTRA_ENV`'s
+  `FV_ORACLE_TARGETS` becomes `FV_CELLS` (oracle.sh's change in the retirement PR).
+- **`det-short`'s `ltx-sol` group** (off by default) and other `FV_DET_REPEATS`: tiers when wanted.
+- **`identity`** and **`precision-debug`** (§9.1): cases from the environment, compare-dumps only when dump directories
+  exist, frame deletion. Their verdicts are hash equalities (`identity`) and dump diffs (`precision-debug`), which
+  `[repeats]` and the ungated `requires` / `echo` arms now cover; what is left is that their arm lists come from the
+  environment (`FV_ID_CASES`). D1e (§14.7) proposes retiring them; this slice does not change that.
+
+#### 15.7 The GPU checks (the coordinator's)
+
+The procedure is §8's: one commit `SHA` for both sides (this PR's head or its merge, once
+`fastvideo-rs-runtime:sha-<7>` is published with its `lab/` and fv-lab), the cheapest cells that exercise the new
+parts, both sides in parallel, then `fv-lab-compare-runs.sh`. RTX PRO 6000, EU, on `bz0ofkfx45`, about $2.49/hr; pod
+boot and preflight ~5 min per side.
+
+```sh
+SHA=<7>
+# det-short, the h3 group: three fresh processes and the timed control, hashes and determinism.txt
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family det-short --cells h3-r1,h3-r2,h3-r3,h3-timed --yes --wait
+RUNPOD_API_KEY=… FV_FAMILY=det-short FV_EXTRA_ENV="FV_DET_CELLS=h3" FV_FETCH_TREE=1 FV_FETCH_SKIP='/frames/|/cache/|adaln\.cache$' \
+  bash scripts/gpu/runpod-http.sh run $SHA
+L=artifacts/runpod/det-short/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/det-short/$SHA-<MMDDHHMM>
+bash scripts/gpu/fv-lab-compare-runs.sh --expect-verdicts 6 $L $S     # determinism.txt, hashes.txt, 4 hashes.json
+./fv-lab gate $L --check --out /tmp/regate-ds-lab
+./fv-lab gate $S --check --out /tmp/regate-ds-script --cells h3-r1,h3-r2,h3-r3,h3-timed
+
+# determinism, the h3 model: two runs in one process, one in another, the timed control (1088x1920 5 s)
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family determinism --cells h3-ab,h3-c,h3-timed --yes --wait
+# (FV_DET_CELLS is space separated; runpod-http.sh writes FV_EXTRA_ENV into the start command as shell text,
+#  so the inner quotes hold the list together, as oracle.sh's FV_ORACLE_URL='…' does)
+RUNPOD_API_KEY=… FV_FAMILY=determinism FV_EXTRA_ENV="FV_DET_CELLS='h3-ab h3-c h3-timed'" \
+  FV_FETCH_TREE=1 FV_FETCH_SKIP='/frames/' bash scripts/gpu/runpod-http.sh run $SHA
+L=artifacts/runpod/determinism/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/determinism/$SHA-<MMDDHHMM>
+bash scripts/gpu/fv-lab-compare-runs.sh --expect-verdicts 4 $L $S     # determinism.txt, 3 hashes.txt
+./fv-lab gate $L --check --out /tmp/regate-det-lab
+./fv-lab gate $S --check --out /tmp/regate-det-script --cells h3-ab,h3-c,h3-timed
+
+# oracle, fasth3-4step-vsa: one upstream pod makes the reference, both runtime sides fetch it
+RUNPOD_API_KEY=… FV_KEEP_POD=1 FV_POD_FILE=/tmp/up.pod UP_IMAGE_TARGET=fastvideo UP_IMAGE_TAG=latest \
+  UP_STEPS="info:box weights:h3-diffusers oracle:fasth3-4step-vsa" UP_CELL_TIMEOUT_S=7200 \
+  FV_EXTRA_ENV="FASTVIDEO_DUMP_OPS=0,1,24,47" FV_FETCH_SKIP='oracle-dump\.tar|/dump/|\.mp4$' FV_CONTAINER_DISK_GB=150 \
+  bash scripts/gpu/runpod-http.sh upstream $SHA & UPD=$!   # keeps the pod; writes "<id> <tag>" to /tmp/up.pod
+until [ -s /tmp/up.pod ]; do sleep 20; done; read -r UP UPTAG </tmp/up.pod
+URL=https://$UP-8000.proxy.runpod.net/upstream/$UPTAG
+until curl -sf -o /dev/null $URL/oracle-fasth3-4step-vsa/ORACLE_DONE; do sleep 30; done   # the reference is served
+# oracle.sh's keepalive (its traffic keeps the upstream pod's net watchdog from deleting it), bounded to 90 min
+# whatever happens below, so a stuck runtime side cannot hold the upstream pod forever:
+timeout 5400 bash -c "while sleep 60; do curl -s -o /dev/null https://$UP-8000.proxy.runpod.net/keepalive.bin; done" & KA=$!
+CELLS=oracle-fasth3-4step-vsa,oracle-fasth3-4step-vsa-diff,oracle-fasth3-4step-vsa-f32,oracle-fasth3-4step-vsa-f32-diff,oracle-fasth3-4step-vsa-bf16-vs-f32
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family oracle --cells $CELLS --extra-env FV_ORACLE_URL=$URL --yes --wait & LAB=$!
+RUNPOD_API_KEY=… FV_FAMILY=oracle FV_GEN_TIMEOUT_S=5400 \
+  FV_EXTRA_ENV="FV_ORACLE_URL=$URL FV_ORACLE_TARGETS=fasth3-4step-vsa FASTVIDEO_DUMP_OPS=0,1,24,47" \
+  bash scripts/gpu/runpod-http.sh run $SHA & SCR=$!
+wait $LAB $SCR                                             # both runtime pods done (each fetched the dump first)
+kill $KA; RUNPOD_API_KEY=… bash scripts/gpu/runpod-http.sh down $UP; wait $UPD   # the upstream pod: only after both
+L=artifacts/runpod/oracle/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/oracle/$SHA-<MMDDHHMM>
+bash scripts/gpu/fv-lab-compare-runs.sh $L $S
+```
+
+Pass, for each family: `fv-lab-compare-runs.sh` exits 0 and both pods end `matrix_exit=0`:
+
+- `det-short`: 4 arms the same (4 ran, frames byte-identical, about 124 frames each), 6 verdict files the same, and
+  both `fv-lab gate --check` with 0 differences. The verdict (`repeats det-short-h3`) is pass on both when r1-r3 are
+  identical (the 2026-10-06 run's were); a fail on both sides is no runner difference.
+- `determinism`: 3 arms the same, 4 verdict files the same, both `--check` clean.
+- `oracle`: 5 arms the same (2 ran with byte-identical frames, the 3 `compare-dumps` arms with the same
+  `compare-dumps` lines: "3 with the same compare-dumps lines"), both sides with `ORACLE_REFS_DONE` reached (fv-lab's
+  `live.log`: `oracle: fasth3-4step-vsa reference <size>`).
+
+**Estimates** ($2.49/hr): `det-short` h3 group: 4 arms of 160-190 s (run `6ec6c64-10061138`), ~12 min + 5 min per
+side, ~$0.70 per side, **~$1.40**. `determinism` h3: 1088x1920 5 s 4-step VSA, ~2 min load and ~1-1.5 min per run, 5
+runs in 3 processes, ~13 min + 5 min per side, **~$1.50**. `oracle` fasth3-4step-vsa: the upstream pod ~45 min (15 min
+image pull, the `h3-diffusers` view, the reference; docs/oracle.md: 35 min for an LTX reference), ~$1.90; each
+runtime side two H3 runs with dumps and three `compare-dumps`, ~10 min + 5 min, ~$0.60 per side; **~$3.10**. All
+three about **$6** (and the `ltx` group of det-short, ~10 min more per side, ~$0.85, if wanted). Stop before the
+balance would fall below $8 (CLAUDE.md).
+
+Byte identity is expected for the frames and hashes on one GPU class (docs/perf/determinism.md), with the caveats of
+§12 (the same generation source and tools build on both sides: one `SHA` here). The `compare-dumps` lines depend on
+both runtime dumps and the one reference, so they too are the same when the frames are.
+
+#### 15.8 Then
+
+After a family's check passes, in the next D1 PR: it joins `FV_LAB_RETIRED`, its `runpod-matrix.sh` branch is
+deleted (and, for `oracle`, only its moved targets: the clip-metric targets keep a reduced branch until §15.6's step,
+or the branch stays whole and the tier is the moved part's equal; to be decided with the result), its fixtures
+freeze, `knobs::SCRIPT_KNOBS` joins `FV_LAB_NOT_READ`, and `oracle.sh`'s runtime side passes `FV_CELLS` instead of
+`FV_ORACLE_TARGETS`.
+
+#### 15.9 Review of #202
+
+- The oracle check's commands (§15.7) wait on the two runtime sides by PID, and the keepalive loop has its own
+  90-minute bound, so the upstream pod is always deleted after them.
+- `determinism`'s `|| true` is a real-run change, stated in §15.4, and a reference arm without run1 hashes is reported
+  (`<model>-ab: no run1 hashes`) by both runners.
+- `FV_ORACLE_URL` is `http(s)://` only: `fv-lab run` and `pod up --extra-env` refuse anything else (a `file://` URL, a
+  value that would read as a curl option), and every curl call passes `--proto =http,https --proto-redir =http,https
+  --url <u>`. The tests' fake upstream is a `file://` URL through `RunConfig::allow_file_urls`, which no flag or
+  variable of the binary sets.
+- Validation: a cell with both `[reference]` and `[verdict]` is refused (its verdict would never run), and so are two
+  cells of one tier with the same `reference.target` (one `oracle-ref` directory, fetched twice at once). A `fresh`
+  path must name something below `{runs}/`: at least one component, none empty, `.` or `..` (`{runs}/` or `{runs}/.`
+  would have removed the run directory).
+- §15.5 gains the `ORACLE_REFS_DONE` row; the det-short check's script side skips the AdaLN caches
+  (`adaln\.cache$`).
 
 ### 16. Weights by tree from two places: `weights = "volume+r2"`
 
