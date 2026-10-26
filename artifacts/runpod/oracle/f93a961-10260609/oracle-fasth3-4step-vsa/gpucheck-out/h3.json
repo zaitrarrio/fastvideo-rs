@@ -1,0 +1,242 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "streamed",
+        "device_gib": 0.0,
+        "free_gib_before_load": 94.28277587890625,
+        "load_seconds": 0.0,
+        "requested": "Streamed"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 0.118525614,
+        "dit_residency": "resident",
+        "dit_s": 154.901218631,
+        "refiner_s": 0.135670419,
+        "seconds": 242.545813921,
+        "text_encoder_s": 0.0,
+        "video_vae_s": 24.223692536
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.141298918,
+        "decode_s": 4.922978115,
+        "denoise_s": 39.441082523,
+        "load_s": 242.545813921,
+        "peak_mib": 60420,
+        "refine_s": 0.005357447,
+        "step_s": [
+          21.728927734375,
+          5.89961181640625,
+          5.8970517578125,
+          5.915419921875
+        ],
+        "text_cache": "miss",
+        "text_encoder": "streamed",
+        "text_s": 190.31735529,
+        "total_s": 235.035508564,
+        "video_decode_s": 4.781679197,
+        "video_encode_s": 0.094026295,
+        "video_push_s": 0.000021,
+        "video_rgb_s": 0.1056688890137037,
+        "video_vae_s": 4.668981882870198,
+        "video_wait_s": 0.134028115,
+        "warm": false,
+        "write_s": 0.207217021
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/oracle/f93a961-10260609/oracle-fasth3-4step-vsa/frames/frame-062.png",
+        "mean": 0.42931104449064544,
+        "std": 0.25009633965571504
+      }
+    },
+    {
+      "limits": {
+        "expected": "output.mp4 with an audio track"
+      },
+      "name": "mp4_written",
+      "ok": true,
+      "values": {
+        "mp4": "/fvscratch/runs/oracle/f93a961-10260609/oracle-fasth3-4step-vsa/frames/output.mp4"
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/oracle/f93a961-10260609/oracle-fasth3-4step-vsa/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 62.32392379641533,
+        "stages": [
+          {
+            "gib": 51.905614107847214,
+            "stage": "text"
+          },
+          {
+            "gib": 48.275975435972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 62.32392379641533,
+            "stage": "denoise"
+          },
+          {
+            "gib": 46.55480119585991,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 50.177193850278854,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 19.357105255126953,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 19.357105255126953,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.393716812133789,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 12.611612051725388,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": "/fvscratch/runs/oracle/f93a961-10260609/oracle-fasth3-4step-vsa/frames/output.mp4",
+      "sequence_length": 37756,
+      "text_tokens": 46,
+      "wav": "/fvscratch/runs/oracle/f93a961-10260609/oracle-fasth3-4step-vsa/frames/audio.wav"
+    },
+    "request": {
+      "attention": "vsa-h3 + to_gate_compress",
+      "height": 768,
+      "num_frames": 124,
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "prompt_set": null,
+      "seconds": 5,
+      "seed": 1024,
+      "techniques": {
+        "plan": [
+          "vsa (sparsity recipe, group default)"
+        ],
+        "profile": null,
+        "settings": [],
+        "sources": [
+          {
+            "from": "recipe",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": "/fvscratch/h3-text-cache",
+      "text_weights": "/workspace/weights/h3-base",
+      "video_vae": "official",
+      "warm": false,
+      "width": 1344
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 48.08111158385873,
+          "peak_reserved_gib": 49.03125,
+          "peak_used_gib": 49.00397007539868,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 48.08157220855355,
+          "peak_reserved_gib": 49.03125,
+          "peak_used_gib": 48.08663908019662,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 48.09449902549386,
+          "peak_reserved_gib": 58.3125,
+          "peak_used_gib": 57.21575640514493,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 48.17736359219998,
+          "peak_reserved_gib": 48.40625,
+          "peak_used_gib": 48.30901594739407,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 48.19070168118924,
+          "peak_reserved_gib": 50.375,
+          "peak_used_gib": 49.565245824866,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 477.977094672,
+  "env": {
+    "FASTVIDEO_DUMP_DIR": "/fvscratch/runs/oracle/f93a961-10260609/oracle-fasth3-4step-vsa-dump",
+    "FASTVIDEO_DUMP_OPS": "0,1,24,47",
+    "FASTVIDEO_H3_QUANT": "off",
+    "FASTVIDEO_INJECT_DIR": "/fvscratch/oracle-ref/fasth3-4step-vsa/dump"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

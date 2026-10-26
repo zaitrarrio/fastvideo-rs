@@ -41,11 +41,13 @@ pub const RESTORED_MODES: [RestoredMode; 2] = [
 ];
 
 /// The retired families' knobs that changed their arms (ADR-0019 §9.4) or
-/// picked their pairs (`FV_TECH_CELLS`, `FV_B6_CELLS`, `FV_B4A_CELLS`): no
-/// tier reads them. `FV_B4A_CELLS` joined when `b4a` retired (§11.6); with it
-/// ignored, every `b4a` cell would run, at three times the cost of the one
-/// asked for.
-pub const MODE_KNOBS: [&str; 11] = [
+/// picked their pairs or groups (`FV_TECH_CELLS`, `FV_B6_CELLS`,
+/// `FV_B4A_CELLS`, `FV_DET_CELLS`): no tier reads them. `FV_B4A_CELLS` joined
+/// when `b4a` retired (§11.6); with it ignored, every `b4a` cell would run, at
+/// three times the cost of the one asked for. The five `FV_DET_*` joined when
+/// `det-short` and `determinism` retired (§15.10): their tiers are the
+/// script's defaults.
+pub const MODE_KNOBS: [&str; 16] = [
     "FV_PRECISION_ARM",
     "FV_NVFP4_WORKLOADS",
     "FV_VAE_GEN",
@@ -57,19 +59,20 @@ pub const MODE_KNOBS: [&str; 11] = [
     "FV_TECH_CELLS",
     "FV_B6_CELLS",
     "FV_B4A_CELLS",
-];
-
-/// The knobs of the families D1d's second slice made tiers (ADR-0019 §15:
-/// `det-short`, `determinism`, `oracle`) while their `runpod-matrix.sh`
-/// branches stay (until their GPU checks): the script reads them, no tier
-/// does. fv-lab refuses them; `runpod-http.sh`'s `FV_LAB_NOT_READ` gains them
-/// in the PR that deletes the branches (as `FV_B4A_CELLS` did, §11.6).
-pub const SCRIPT_KNOBS: [&str; 10] = [
     "FV_DET_CELLS",
     "FV_DET_REPEATS",
     "FV_DET_PROMPT",
     "FV_DET_T2V_PROMPT",
     "FV_DET_I2V_PROMPT",
+];
+
+/// The knobs of the `oracle` family, a tier (ADR-0019 §15) whose
+/// `runpod-matrix.sh` branch stays whole (§15.10: its clip-metric targets,
+/// `sfwan13` and `scripts/gpu/oracle.sh`'s runtime side still run there): the
+/// script reads them, no tier does. fv-lab refuses them; `runpod-http.sh`'s
+/// `FV_LAB_NOT_READ` gains them in the PR that retires the branch (as the
+/// `FV_DET_*` knobs did with `det-short` and `determinism`).
+pub const SCRIPT_KNOBS: [&str; 5] = [
     "FV_ORACLE_TARGETS",
     "FV_ORACLE_F32",
     "FV_ORACLE_OWN_TEXT",
@@ -141,13 +144,19 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
             "{key}: fv-lab selects by arm: pass --cells (FV_CELLS) with the arms of those groups or targets, one cell each (ADR-0019 §15)"
         ));
     }
+    if key == "FV_ORACLE_URL" && tier == Some("determinism") {
+        return Some(
+            "FV_ORACLE_URL: determinism no longer runs the oracle first; run the oracle on its own (scripts/gpu/oracle.sh; ADR-0019 §15.5, §15.10)"
+                .to_owned(),
+        );
+    }
     if key == "FV_ORACLE_PREFETCH" {
         return Some(
             "FV_ORACLE_PREFETCH: fv-lab always fetches the references in the background (ADR-0019 §15)"
                 .to_owned(),
         );
     }
-    if SCRIPT_KNOBS.contains(&key) {
+    if SCRIPT_KNOBS.contains(&key) || (key.starts_with("FV_DET_") && MODE_KNOBS.contains(&key)) {
         return Some(format!(
             "{key}: no tier reads it; the det-short, determinism and oracle tiers are the script's defaults (ADR-0019 §15)"
         ));
@@ -209,13 +218,15 @@ pub fn check_extra_env(tier: &str, entries: &[String]) -> Result<(), String> {
 }
 
 /// `fv-lab run`: the [`MODE_KNOBS`] and [`SCRIPT_KNOBS`] set (non-empty) in
-/// its environment, and the oracle's `FASTVIDEO_DUMP_OPS`. `get` reads one
-/// variable (the process environment in the binary).
+/// its environment, the oracle's `FASTVIDEO_DUMP_OPS`, and `FV_ORACLE_URL`
+/// for `determinism` (which the script's branch read to run the oracle
+/// first; the tier does not, ADR-0019 §15.10). `get` reads one variable (the
+/// process environment in the binary).
 pub fn check_run_env(tier: &str, get: impl Fn(&str) -> Option<String>) -> Result<(), String> {
     let found = MODE_KNOBS
         .iter()
         .chain(&SCRIPT_KNOBS)
-        .chain(&["FASTVIDEO_DUMP_OPS"])
+        .chain(&["FASTVIDEO_DUMP_OPS", "FV_ORACLE_URL"])
         .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (*k, v)))
         .filter_map(|(k, v)| {
             why(Some(tier), k, &v, false).map(|w| (restored_mode(k, &v).is_some(), w))
@@ -313,9 +324,43 @@ mod tests {
     }
 
     #[test]
-    fn the_d1d_families_knobs_are_refused_by_fv_lab_only() {
+    fn the_retired_determinism_families_knobs_are_not_read() {
         let e = check_extra_env("det-short", &["FV_DET_CELLS=h3".into()]).unwrap_err();
         assert!(e.contains("selects by arm"), "{e}");
+        let e = check_extra_env("determinism", &["FV_DET_T2V_PROMPT=x".into()]).unwrap_err();
+        assert!(e.contains("FV_DET_T2V_PROMPT: no tier reads it"), "{e}");
+        let env = |k: &str| (k == "FV_DET_REPEATS").then(|| "5".to_owned());
+        let e = check_run_env("det-short", env).unwrap_err();
+        assert!(e.contains("FV_DET_REPEATS: no tier reads it"), "{e}");
+        let e = check_extra_env(
+            "determinism",
+            &["FV_ORACLE_URL=https://x/upstream/t".into()],
+        )
+        .unwrap_err();
+        assert!(e.contains("no longer runs the oracle first"), "{e}");
+        assert!(check_extra_env("oracle", &["FV_ORACLE_URL=https://x/upstream/t".into()]).is_ok());
+        // `fv-lab run` with FV_ORACLE_URL in its environment: refused for
+        // determinism (it would be dropped), read by oracle.
+        let url = |k: &str| (k == "FV_ORACLE_URL").then(|| "https://x/upstream/t".to_owned());
+        let e = check_run_env("determinism", url).unwrap_err();
+        assert!(e.contains("no longer runs the oracle first"), "{e}");
+        assert!(check_run_env("oracle", url).is_ok());
+        assert!(check_run_env("det-short", url).is_ok());
+        // Retired with their branches (ADR-0019 §15.10): runpod-http.sh's
+        // FV_LAB_NOT_READ refuses them too (tests/knobs.rs holds them equal).
+        for k in [
+            "FV_DET_CELLS",
+            "FV_DET_REPEATS",
+            "FV_DET_PROMPT",
+            "FV_DET_T2V_PROMPT",
+            "FV_DET_I2V_PROMPT",
+        ] {
+            assert!(not_read().any(|n| n == k), "{k}");
+        }
+    }
+
+    #[test]
+    fn the_oracle_knobs_are_refused_by_fv_lab_only() {
         let e = check_extra_env("oracle", &["FV_ORACLE_F32=1".into()]).unwrap_err();
         assert!(e.contains("no tier reads it"), "{e}");
         assert!(check_extra_env("oracle", &["FV_ORACLE_URL=https://x/upstream/t".into()]).is_ok());
@@ -326,8 +371,9 @@ mod tests {
         let env = |k: &str| (k == "FV_ORACLE_PREFETCH").then(|| "0".to_owned());
         let e = check_run_env("oracle", env).unwrap_err();
         assert!(e.contains("always fetches"), "{e}");
-        // The script still reads them: runpod-http.sh's list gains them when
-        // the branches go (tests/knobs.rs holds that list to not_read()).
+        // The script's oracle branch still reads them (ADR-0019 §15.10):
+        // runpod-http.sh's list gains them when it goes (tests/knobs.rs
+        // holds that list to not_read()).
         assert!(SCRIPT_KNOBS.iter().all(|k| !not_read().any(|n| n == *k)));
     }
 

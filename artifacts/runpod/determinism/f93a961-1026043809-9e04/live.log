@@ -1,0 +1,37 @@
+[04:38:35] [determinism] matrix start image=7431ed604fd282ff
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-d3ce0c9d-2d73-2b82-31ba-99eef2f9537a)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[04:38:35] [determinism] skip ltx-t2v-ab (not in FV_CELLS)
+[04:38:35] [determinism] skip ltx-t2v-c (not in FV_CELLS)
+[04:38:35] [determinism] skip ltx-t2v-timed (not in FV_CELLS)
+[04:38:35] [determinism] skip ltx-i2v-ab (not in FV_CELLS)
+[04:38:35] [determinism] skip ltx-i2v-c (not in FV_CELLS)
+[04:38:35] [determinism] skip ltx-i2v-timed (not in FV_CELLS)
+[04:38:35] [determinism] ▶ h3-ab  env FASTVIDEO_DIGEST=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast --techniques h3/fasth3_4step_vsa h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --height 1088 --width 1920 --oversize-canvas --seconds 5 --prompt A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field --seed 7 --prompts /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-ab.json --text-encoder auto --no-text-cache --text-weights /workspace/weights/h3-base --adaln-cache /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-det-adaln.cache --clip-dir /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-ab/frames  (wall cap 3600s; 0=none)
+[04:45:11] [determinism] ok h3-ab  395s  /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-ab/stderr.log:[INFO] h3/timings/run2 {"audio_decode_s":0.054010398,"decode_s":10.124600515000001,"denoise_s":43.536487039,"load_s":185.929475717,"peak_mib":56580,"refine_s":0.00043185,"step_s":[10.834072265625,10.864724609375001,10.9062685546875,10.9311494140625],"text_cache":"disabled","text_encoder":"streamed-fp8","text_s":100.471117761,"total_s":154.597513041,"video_decode_s":10.070590117,"video_encode_s":0.160802383,"video_push_s":0.00005711,"video_rgb_s":0.1998527509807367,"video_vae_s":9.87319828593731,"video_wait_s":0.052749628,"warm":false,"write_s":0.272046731}
+[h3-ab] run1 frames 124 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+[h3-ab] run1 audio 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+[h3-ab] run2 frames 124 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+[h3-ab] run2 audio 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+[04:45:13] [determinism] ▶ h3-c  env FASTVIDEO_DIGEST=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast --techniques h3/fasth3_4step_vsa h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --height 1088 --width 1920 --oversize-canvas --seconds 5 --prompt A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field --seed 7 --prompts /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-c.json --text-encoder auto --no-text-cache --text-weights /workspace/weights/h3-base --adaln-cache /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-det-adaln.cache --clip-dir /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-c/frames  (wall cap 3600s; 0=none)
+[04:49:09] [determinism] ok h3-c  235s  /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-c/stderr.log:[INFO] h3/timings/run3 {"audio_decode_s":0.136456666,"decode_s":10.181750055,"denoise_s":43.551104784,"load_s":180.314780335,"peak_mib":58820,"refine_s":0.005506941,"step_s":[10.8391640625,10.885363281250001,10.895783203125001,10.9304267578125],"text_cache":"disabled","text_encoder":"resident-fp8","text_s":0.474223519,"total_s":54.783961291,"video_decode_s":10.045293389,"video_encode_s":0.152203151,"video_push_s":0.00003068,"video_rgb_s":0.18241927401672361,"video_vae_s":9.860251720786092,"video_wait_s":0.048944757,"warm":false,"write_s":0.272728761}
+[h3-c] run3 frames 124 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+[h3-c] run3 audio 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+[04:49:11] [determinism] ▶ h3-timed  env FASTVIDEO_DIGEST=1 FASTVIDEO_SDPA_AUTO=timed /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast --techniques h3/fasth3_4step_vsa h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --height 1088 --width 1920 --oversize-canvas --seconds 5 --prompt A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field --seed 7 --prompts /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-ab.json --text-encoder auto --no-text-cache --text-weights /workspace/weights/h3-base --adaln-cache /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-det-adaln.cache --clip-dir /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-timed/frames  (wall cap 3600s; 0=none)
+[04:55:38] [determinism] ok h3-timed  387s  /fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-timed/stderr.log:[INFO] h3/timings/run2 {"audio_decode_s":0.053816706,"decode_s":10.149009119999999,"denoise_s":43.514962584,"load_s":176.319348915,"peak_mib":56588,"refine_s":0.00047759,"step_s":[10.8285732421875,10.854001953125,10.9043955078125,10.927689453125],"text_cache":"disabled","text_encoder":"streamed-fp8","text_s":101.063607139,"total_s":155.178241299,"video_decode_s":10.095192414,"video_encode_s":0.191752034,"video_push_s":0.00004042,"video_rgb_s":0.19967402401777362,"video_vae_s":9.863716474413872,"video_wait_s":0.055872536,"warm":false,"write_s":0.258915083}
+[h3-timed] run1 frames 124 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+[h3-timed] run1 audio 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+[h3-timed] run2 frames 124 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+[h3-timed] run2 audio 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-ab/run1 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-ab/run1 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-ab/run2 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-ab/run2 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-c/run3 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-c/run3 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-timed/run1 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-timed/run1 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-timed/run2 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-timed/run2 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+[04:55:39] [determinism] repeats determinism-h3: pass
+[04:55:39] [determinism] matrix done

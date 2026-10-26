@@ -6,7 +6,8 @@
 #   fv-lab-experiment-goldens.sh           regenerate the fixtures below
 #   fv-lab-experiment-goldens.sh --check   fail when the script's output differs
 #
-# h3-graphs (scripts/gpu/experiments/h3-graphs-pod.sh; docs/perf/h3-denoise-graphs.md):
+# h3-graphs (scripts/gpu/experiments/h3-graphs-pod.sh, deleted after the tier's GPU
+# check, ADR-0019 §14.4, so read from the history; docs/perf/h3-denoise-graphs.md):
 #   crates/fastvideo-lab/fixtures/experiments/h3-graphs-script.txt
 #       every fv-gpucheck command line the pod script's `trace` and `cells`
 #       steps start, in its order, for every checkpoint it knows (v2, 4s,
@@ -49,6 +50,11 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fail=0
 
+# deleted_in <path>: the commit that deleted the file (empty while it exists).
+deleted_in() {
+  git -C "$ROOT" log -1 --no-renames --diff-filter=D --format=%H HEAD -- "$1" 2>/dev/null
+}
+
 # source_of <path>: the file, or its last version from the history, or nothing.
 source_of() {
   local rel="$1" del
@@ -56,7 +62,7 @@ source_of() {
     echo "$ROOT/$rel"
     return 0
   fi
-  del="$(git -C "$ROOT" log -1 --no-renames --diff-filter=D --format=%H HEAD -- "$rel" 2>/dev/null)" || return 1
+  del="$(deleted_in "$rel")" || return 1
   [[ -n "$del" ]] && git -C "$ROOT" cat-file -e "$del^:$rel" 2>/dev/null || return 1
   mkdir -p "$TMP/history/$(dirname "$rel")"
   git -C "$ROOT" show "$del^:$rel" >"$TMP/history/$rel"
@@ -98,8 +104,20 @@ if ! src="$(source_of "$POD")"; then
   exit "$fail"
 fi
 
-# 1. The prep step's prompt sets: its own Python, on its own input.
+# 1. The prep step's prompt sets: its own Python, on its own input. Once the
+#    pod script is read from the history, its input is too (from the same
+#    commit, the deleting commit's parent), so a later edit of
+#    prompts-hd5.json cannot pair with the old script; CI's shallow clone keeps
+#    the fixtures instead, so both agree.
 mkdir -p "$TMP/fvw" "$TMP/srv" "$TMP/stub" "$TMP/new"
+HD5="$ROOT/scripts/gpu/prompts-hd5.json"
+if [[ ! -f "$ROOT/$POD" ]]; then
+  del="$(deleted_in "$POD")"
+  HD5="$TMP/history/scripts/gpu/prompts-hd5.json"
+  mkdir -p "$(dirname "$HD5")"
+  git -C "$ROOT" show "$del^:scripts/gpu/prompts-hd5.json" >"$HD5" \
+    || { echo "fv-lab-experiment-goldens: no scripts/gpu/prompts-hd5.json at $del^" >&2; exit 2; }
+fi
 # The heredoc's body: the lines between its opening line (matched as a plain
 # string, through the environment as in cut_block) and `PYEOF`.
 PREP_OPEN="  \"\$PY\" - \"\$G/prompts-hd5.json\" \"\$L\" <<'PYEOF'" \
@@ -107,7 +125,7 @@ PREP_OPEN="  \"\$PY\" - \"\$G/prompts-hd5.json\" \"\$L\" <<'PYEOF'" \
   "$src" >"$TMP/prep.py"
 [[ -s "$TMP/prep.py" ]] || { echo "fv-lab-experiment-goldens: no prep Python in $POD" >&2; exit 2; }
 env -i PATH="/usr/local/bin:/usr/bin:/bin" HOME="$TMP" LC_ALL=C \
-  python3 -I "$TMP/prep.py" "$ROOT/scripts/gpu/prompts-hd5.json" "$TMP/fvw"
+  python3 -I "$TMP/prep.py" "$HD5" "$TMP/fvw"
 cp "$TMP/fvw/prompts-768.json" "$TMP/new/prompts-h3-graphs-768.json"
 cp "$TMP/fvw/prompts-trace-768p.json" "$TMP/new/prompts-h3-graphs-trace-768p.json"
 

@@ -1,0 +1,31 @@
+$ fv-lab gate artifacts/runpod/determinism/f93a961-1026043809-9e04 --check --out regate-det-lab
+h3-ab/run1 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-ab/run1 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-ab/run2 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-ab/run2 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-c/run3 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-c/run3 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-timed/run1 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-timed/run1 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-timed/run2 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-timed/run2 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+[06:39:09] [determinism] repeats determinism-h3: pass
+fv-lab gate determinism: 1 evaluated, 0 failed, 0 skipped (a gate whose arms did not both run); written to regate-det-lab
+fv-lab gate --check: 0 difference(s) between regate-det-lab and the run
+exit=0
+
+$ fv-lab gate artifacts/runpod/determinism/f93a961-10260439 --check --out regate-det-script --cells h3-ab,h3-c,h3-timed
+h3-ab/run1 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-ab/run1 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-ab/run2 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-ab/run2 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-c/run3 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-c/run3 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-timed/run1 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-timed/run1 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+h3-timed/run2 frames IDENTICAL 108ee6cac6f8164151d3e641ce284fe88f2116a34c6ae5ee4bc87ee4671e12ee
+h3-timed/run2 audio IDENTICAL 3bdd2ed55e984ceb56bd72b280edd0fb4fea2bd9a69c30ad4d5be0df06580217
+[06:39:09] [determinism] repeats determinism-h3: pass
+fv-lab gate determinism: 1 evaluated, 0 failed, 0 skipped (a gate whose arms did not both run); written to regate-det-script
+fv-lab gate --check: 0 difference(s) between regate-det-script and the run
+exit=0

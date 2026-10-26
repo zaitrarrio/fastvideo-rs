@@ -1,0 +1,11 @@
+same h3-r1: {"exit":0,"skipped":null}, 124 frames byte-identical
+same h3-r2: {"exit":0,"skipped":null}, 124 frames byte-identical
+same h3-r3: {"exit":0,"skipped":null}, 124 frames byte-identical
+control h3-timed: reported, not judged ({"exit":0,"skipped":null}, frames differ (124 vs 124 frames))
+same determinism.txt (without the control arms' lines)
+same h3-r1/hashes.json
+same h3-r2/hashes.json
+same h3-r3/hashes.json
+control h3-timed: h3-timed/hashes.json reported, not judged (differs)
+same hashes.txt (without the control arms' lines)
+3 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 1 control arm(s) reported, 0 report(s) the same, 5 verdict file(s) the same, 0 difference(s)

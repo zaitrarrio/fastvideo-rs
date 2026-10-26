@@ -1,4 +1,4 @@
-# The h3-graphs experiment's h3-turbo trace (scripts/gpu/experiments/h3-graphs-pod.sh, step `trace`, checkpoint
+# The h3-graphs experiment's h3-turbo trace (was scripts/gpu/experiments/h3-graphs-pod.sh, deleted after the GPU check of docs/adr/0019-fv-lab.md §14.4; step `trace`, checkpoint
 # `turbo`; docs/perf/h3-denoise-graphs.md §1, §5; docs/adr/0019-fv-lab.md §14): one process with the CUDA graphs of the
 # denoise steps on (FASTVIDEO_H3_GRAPHS=1) and a CUPTI trace of step 1 (FASTVIDEO_GPU_TRACE=1) over the script's
 # trace prompt set: a spark-mountain-lake warm-up request, then h3-demo eager, captured and replayed, at 1344x768,

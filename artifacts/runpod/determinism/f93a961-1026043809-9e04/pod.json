@@ -1,0 +1,13 @@
+{
+  "id": "r7z1ddrfki2dvv",
+  "name": "fv-lab-determinism-f93a961-1026043809-9e04",
+  "family": "determinism",
+  "tag": "f93a961-1026043809-9e04",
+  "sha": "f93a961",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:4349dd58c313b0bff42039501b1e326fb532b8ad46ea1189a35cdde9be6fbe91",
+  "url": "https://r7z1ddrfki2dvv-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792989492.2268157,
+  "cap_s": 14400
+}

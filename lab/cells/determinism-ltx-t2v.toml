@@ -1,4 +1,4 @@
-# runpod-matrix.sh `determinism` (docs/perf/determinism.md; docs/adr/0019-fv-lab.md §15): LTX-2.5 1080p 6 s text-to-video (the first run a conditioning-cache
+# Was runpod-matrix.sh `determinism` (retired after its GPU check, docs/adr/0019-fv-lab.md §15.10; docs/perf/determinism.md; docs/adr/0019-fv-lab.md §15): LTX-2.5 1080p 6 s text-to-video (the first run a conditioning-cache
 # miss, the second a hit),
 # run twice in one process (prompt set t2v-ab.json: run1, run2), once in a second process (t2v-c.json:
 # run3) and once more with FASTVIDEO_SDPA_AUTO=timed (the old per-process timed pick, on t2v-ab.json: the

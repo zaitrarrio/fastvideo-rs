@@ -1,0 +1,44 @@
+[oracle_dump] patched fastvideo.pipelines.basic.minimax_h3.stages.minimax_h3_denoising
+[oracle_dump] patched fastvideo.pipelines.basic.minimax_h3.stages.minimax_h3_denoising
+[W1026 06:01:49.009522701 ProcessGroupNCCL.cpp:1001] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+[oracle_dump] patched fastvideo.pipelines.basic.wan.stages.causal_denoising
+Loading safetensors checkpoint shards:   0% Completed | 0/14 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:   7% Completed | 1/14 [00:12<02:40, 12.32s/it]
+Loading safetensors checkpoint shards:  14% Completed | 2/14 [00:25<02:35, 12.96s/it]
+Loading safetensors checkpoint shards:  21% Completed | 3/14 [00:39<02:27, 13.40s/it]
+Loading safetensors checkpoint shards:  29% Completed | 4/14 [00:53<02:15, 13.57s/it]
+Loading safetensors checkpoint shards:  36% Completed | 5/14 [01:07<02:04, 13.78s/it]
+Loading safetensors checkpoint shards:  43% Completed | 6/14 [01:21<01:49, 13.66s/it]
+Loading safetensors checkpoint shards:  50% Completed | 7/14 [01:35<01:36, 13.85s/it]
+Loading safetensors checkpoint shards:  57% Completed | 8/14 [01:48<01:22, 13.70s/it]
+Loading safetensors checkpoint shards:  64% Completed | 9/14 [02:02<01:08, 13.67s/it]
+Loading safetensors checkpoint shards:  71% Completed | 10/14 [02:15<00:54, 13.58s/it]
+Loading safetensors checkpoint shards:  79% Completed | 11/14 [02:19<00:32, 10.69s/it]
+Loading safetensors checkpoint shards:  86% Completed | 12/14 [02:20<00:14,  7.50s/it]
+Loading safetensors checkpoint shards:  93% Completed | 13/14 [02:20<00:05,  5.27s/it]
+Loading safetensors checkpoint shards: 100% Completed | 14/14 [02:32<00:00,  7.51s/it]
+Loading safetensors checkpoint shards: 100% Completed | 14/14 [02:32<00:00, 10.92s/it]
+
+/opt/upstream/fastvideo/lib/python3.12/site-packages/torch/nn/utils/weight_norm.py:144: FutureWarning: `torch.nn.utils.weight_norm` is deprecated in favor of `torch.nn.utils.parametrizations.weight_norm`.
+  WeightNorm.apply(module, name, dim)
+[oracle_dump] patched fastvideo.models.dits.minimax_h3
+Loading safetensors checkpoint shards:   0% Completed | 0/14 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:   7% Completed | 1/14 [00:06<01:19,  6.13s/it]
+Loading safetensors checkpoint shards:  14% Completed | 2/14 [00:11<01:10,  5.83s/it]
+Loading safetensors checkpoint shards:  21% Completed | 3/14 [00:17<01:04,  5.89s/it]
+Loading safetensors checkpoint shards:  29% Completed | 4/14 [00:23<00:57,  5.73s/it]
+Loading safetensors checkpoint shards:  36% Completed | 5/14 [00:28<00:51,  5.72s/it]
+Loading safetensors checkpoint shards:  43% Completed | 6/14 [00:35<00:47,  5.93s/it]
+Loading safetensors checkpoint shards:  50% Completed | 7/14 [00:40<00:41,  5.87s/it]
+Loading safetensors checkpoint shards:  57% Completed | 8/14 [00:46<00:34,  5.67s/it]
+Loading safetensors checkpoint shards:  64% Completed | 9/14 [00:52<00:29,  5.91s/it]
+Loading safetensors checkpoint shards:  71% Completed | 10/14 [00:58<00:23,  5.81s/it]
+Loading safetensors checkpoint shards:  79% Completed | 11/14 [01:04<00:17,  5.97s/it]
+Loading safetensors checkpoint shards:  86% Completed | 12/14 [01:10<00:11,  5.98s/it]
+Loading safetensors checkpoint shards:  93% Completed | 13/14 [01:16<00:05,  5.92s/it]
+Loading safetensors checkpoint shards: 100% Completed | 14/14 [01:21<00:00,  5.76s/it]
+Loading safetensors checkpoint shards: 100% Completed | 14/14 [01:21<00:00,  5.84s/it]
+
+[1;36m(Worker pid=925)[0;0m /opt/upstream/fastvideo/lib/python3.12/site-packages/triton/language/core.py:2284: UserWarning: tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.
+[1;36m(Worker pid=925)[0;0m   warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
+[1;36m(Worker pid=925)[0;0m [oracle_dump] denoise done after 4 steps

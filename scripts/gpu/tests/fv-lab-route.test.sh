@@ -98,7 +98,8 @@ dry "refused: FV_POD_CAP_S above the tier's" 1 "never raised" FV_FAMILY=trace FV
 dry "refused: FV_POD_CAP_S not a number" 1 "never raised" FV_FAMILY=trace FV_POD_CAP_S=1h
 # 2. The dropped modes' knobs (ADR-0019 §9.4) in FV_EXTRA_ENV.
 for k in FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS \
-  FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_PROMPTS FV_GEN_TIMEOUT_S FV_CELLS; do
+  FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_DET_REPEATS FV_DET_PROMPT FV_DET_T2V_PROMPT \
+  FV_DET_I2V_PROMPT FV_PROMPTS FV_GEN_TIMEOUT_S FV_CELLS; do
   dry "refused in FV_EXTRA_ENV: $k" 1 "reads no $k from FV_EXTRA_ENV" FV_FAMILY=precision FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1"
 done
 # The two modes restored as tiers (ADR-0019 §12): refused, naming the tier, on
@@ -202,6 +203,39 @@ for kv in "b4a FV_B4A_CELLS=b4a-h3-4step-tea" "techniques FV_TECH_CELLS=h3-480p-
 done
 mx "matrix: b4a is retired" "FATAL: b4a is retired to fv-lab (fv-lab-retired.sh): fv-lab run b4a " \
   FV_BASELINE_SHA=e93e357 b4a
+
+# det-short and determinism (ADR-0019 §15.10): fv-lab only, their GPU checks'
+# groups selected by arm; the script side's FV_DET_CELLS is refused with that
+# answer, in FV_EXTRA_ENV and in the host environment, and determinism's
+# oracle prelude (FV_ORACLE_URL) is refused, not dropped.
+dry "det-short: fv-lab only, selected by arm" 0 \
+  "fv-lab pod up --sha abc1234 --family det-short --root $ROOT --cells h3-r1 h3-r2 h3-r3 h3-timed --fetch-tree --fetch-skip /frames/ --yes --wait" \
+  FV_FAMILY=det-short FV_CELLS="h3-r1,h3-r2,h3-r3,h3-timed" FV_FETCH_TREE=1 FV_FETCH_SKIP=/frames/
+dry "determinism: fv-lab only, selected by arm" 0 \
+  "fv-lab pod up --sha abc1234 --family determinism --root $ROOT --cells h3-ab h3-c h3-timed --yes --wait" \
+  FV_FAMILY=determinism FV_CELLS="h3-ab h3-c h3-timed"
+dry "det-short: FV_DET_CELLS refused, FV_CELLS named" 1 \
+  "reads no FV_DET_CELLS from FV_EXTRA_ENV (FV_DET_CELLS: det-short and determinism select by arm, as every tier: FV_CELLS" \
+  FV_FAMILY=det-short FV_EXTRA_ENV="FV_DET_CELLS=h3"
+dry "determinism: FV_DET_CELLS and FV_DET_REPEATS refused in one message" 1 \
+  "reads no FV_DET_CELLS, FV_DET_REPEATS from FV_EXTRA_ENV" \
+  FV_FAMILY=determinism FV_EXTRA_ENV="FV_DET_CELLS=h3-ab FV_DET_REPEATS=2"
+dry "host env refused: FV_DET_CELLS (det-short)" 1 "which has no FV_DET_CELLS: it selects by arm, FV_CELLS" \
+  FV_FAMILY=det-short FV_DET_CELLS=h3
+dry "determinism: FV_ORACLE_URL refused" 1 \
+  "(FV_ORACLE_URL: determinism no longer runs the oracle first; run the oracle on its own" \
+  FV_FAMILY=determinism FV_EXTRA_ENV="FV_ORACLE_URL=https://x-8000.proxy.runpod.net/upstream/t"
+dry "another tier: FV_ORACLE_URL passes to --extra-env" 0 \
+  "--family det-short --root $ROOT --extra-env FV_ORACLE_URL=https://x-8000.proxy.runpod.net/upstream/t --yes --wait" \
+  FV_FAMILY=det-short FV_EXTRA_ENV="FV_ORACLE_URL=https://x-8000.proxy.runpod.net/upstream/t"
+dry "FV_EXTRA_ENV with a newline refused (later lines would be dropped)" 1 \
+  "reads FV_EXTRA_ENV as one line of space-separated K=V entries, and it holds a newline" \
+  FV_FAMILY=det-short FV_EXTRA_ENV="FASTVIDEO_X=1"$'\n'"FV_DET_CELLS=h3"
+mx "matrix: det-short is retired" "FATAL: det-short is retired to fv-lab (fv-lab-retired.sh): fv-lab run det-short " det-short
+mx "matrix: determinism is retired" "FATAL: determinism is retired to fv-lab (fv-lab-retired.sh): fv-lab run determinism " \
+  determinism
+# oracle keeps its branch (ADR-0019 §15.10): the script path, as before.
+dry "oracle: still a script family" 0 "on the script path, nothing created" FV_FAMILY=oracle
 
 # A script family's dry run creates nothing.
 dry "script family: dry run" 0 "on the script path, nothing created" FV_FAMILY=b4b

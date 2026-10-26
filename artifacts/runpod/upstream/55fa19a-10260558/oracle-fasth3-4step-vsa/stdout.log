@@ -1,0 +1,133 @@
+INFO 10-26 06:01:41.267 [__init__.py:47] CUDA is available
+INFO 10-26 06:01:43.746 [lora_patch.py:165] LoRA adapter /workspace/weights/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors carries a dense payload: 82 additive (.diff/.diff_b), 50 replacement (.set_weight)
+INFO 10-26 06:01:43.746 [multiproc_executor.py:107] Use master port: 55985
+INFO 10-26 06:01:48.267 [__init__.py:47] CUDA is available
+INFO 10-26 06:01:49.376 [parallel_state.py:909] Initializing distributed environment with world_size=1, device=cuda:0
+INFO 10-26 06:01:49.376 [parallel_state.py:737] Using nccl backend for CUDA platform
+INFO 10-26 06:01:49.399 [__init__.py:39] Building pipeline of type: basic
+INFO 10-26 06:01:49.419 [utils.py:691] Diffusers version: 0.36.0.dev0
+INFO 10-26 06:01:49.419 [registry.py:1097] Pinning pipeline class name from MiniMaxH3ModularPipeline to MiniMaxH3ModularPipeline
+INFO 10-26 06:01:49.420 [pipeline_registry.py:134] Loading pipelines for types: ['basic']
+INFO 10-26 06:01:49.567 [pipeline_registry.py:176] Loaded 54 pipeline classes across 1 types
+INFO 10-26 06:01:49.567 [utils.py:544] Model already exists locally at /root/upstream-weights/MiniMax-H3
+INFO 10-26 06:01:49.567 [__init__.py:56] Model path: /root/upstream-weights/MiniMax-H3
+INFO 10-26 06:01:49.567 [profiler.py:198] Torch profiler disabled; returning no-op controller
+INFO 10-26 06:01:49.567 [composed_pipeline_base.py:171] Loading pipeline modules...
+INFO 10-26 06:01:49.567 [minimax_h3_pipeline.py:224] MiniMax-H3 sequential module load auto=False (unified_memory=False)
+INFO 10-26 06:01:49.567 [utils.py:544] Model already exists locally at /root/upstream-weights/MiniMax-H3
+INFO 10-26 06:01:49.567 [composed_pipeline_base.py:471] Model path: /root/upstream-weights/MiniMax-H3
+INFO 10-26 06:01:49.570 [utils.py:691] Diffusers version: 0.36.0.dev0
+INFO 10-26 06:01:49.570 [composed_pipeline_base.py:532] Loading pipeline modules from config: {'_class_name': 'MiniMaxH3ModularPipeline', '_diffusers_version': '0.36.0.dev0', '_blocks_class_name': 'MiniMaxH3Blocks', 'text_encoder': ['transformers', 'Qwen3VLForConditionalGeneration', {'type_hint': ['transformers', 'Qwen3VLForConditionalGeneration'], 'pretrained_model_name_or_path': 'MiniMaxAI/MiniMax-H3', 'subfolder': 'text_encoder', 'variant': None, 'revision': None}], 'tokenizer': ['transformers', 'Qwen2TokenizerFast', {'type_hint': ['transformers', 'Qwen2TokenizerFast'], 'pretrained_model_name_or_path': 'MiniMaxAI/MiniMax-H3', 'subfolder': 'tokenizer', 'variant': None, 'revision': None}], 'processor': ['transformers', 'Qwen3VLProcessor', {'type_hint': ['transformers', 'Qwen3VLProcessor'], 'pretrained_model_name_or_path': 'MiniMaxAI/MiniMax-H3', 'subfolder': 'processor', 'variant': None, 'revision': None}], 'vae': ['diffusers', 'AutoencoderKLMiniMaxH3', {'type_hint': ['diffusers', 'AutoencoderKLMiniMaxH3'], 'pretrained_model_name_or_path': 'MiniMaxAI/MiniMax-H3', 'subfolder': 'vae', 'variant': None, 'revision': None}], 'audio_vae': ['diffusers', 'AutoencoderKLMiniMaxH3Audio', {'type_hint': ['diffusers', 'AutoencoderKLMiniMaxH3Audio'], 'pretrained_model_name_or_path': 'MiniMaxAI/MiniMax-H3', 'subfolder': 'audio_vae', 'variant': None, 'revision': None}], 'transformer': ['diffusers', 'MiniMaxH3Transformer3DModel', {'type_hint': ['diffusers', 'MiniMaxH3Transformer3DModel'], 'pretrained_model_name_or_path': 'MiniMaxAI/MiniMax-H3', 'subfolder': 'transformer', 'variant': None, 'revision': None}], 'transformer_ref': ['diffusers', 'MiniMaxH3Transformer3DModel', {'type_hint': ['diffusers', 'MiniMaxH3Transformer3DModel'], 'pretrained_model_name_or_path': 'MiniMaxAI/MiniMax-H3', 'subfolder': 'transformer_ref', 'variant': None, 'revision': None}], 'scheduler': ['diffusers', 'MiniMaxH3Scheduler', {'type_hint': ['diffusers', 'MiniMaxH3Scheduler'], 'pretrained_model_name_or_path': 'MiniMaxAI/MiniMax-H3', 'subfolder': 'scheduler', 'variant': None, 'revision': None}], 'audio_scheduler': ['diffusers', 'MiniMaxH3Scheduler', {'type_hint': ['diffusers', 'MiniMaxH3Scheduler'], 'pretrained_model_name_or_path': 'MiniMaxAI/MiniMax-H3', 'subfolder': 'audio_scheduler', 'variant': None, 'revision': None}]}
+INFO 10-26 06:01:49.570 [composed_pipeline_base.py:571] Loading required modules: ['text_encoder', 'tokenizer', 'processor', 'vae', 'audio_vae', 'transformer', 'scheduler', 'audio_scheduler']
+INFO 10-26 06:01:49.570 [composed_pipeline_base.py:576] Skipping non-module config entry _blocks_class_name=MiniMaxH3Blocks
+INFO 10-26 06:01:49.570 [component_loader.py:1380] Loading text_encoder using transformers from /root/upstream-weights/MiniMax-H3/text_encoder
+INFO 10-26 06:01:49.585 [component_loader.py:299] HF Model config: {'architectures': ['Qwen3VLForConditionalGeneration'], 'image_token_id': 151655, 'text_config': {'attention_bias': False, 'attention_dropout': 0.0, 'bos_token_id': 151643, 'dtype': 'bfloat16', 'eos_token_id': 151645, 'head_dim': 128, 'hidden_act': 'silu', 'hidden_size': 5120, 'initializer_range': 0.02, 'intermediate_size': 25600, 'max_position_embeddings': 262144, 'model_type': 'qwen3_vl_text', 'num_attention_heads': 64, 'num_hidden_layers': 64, 'num_key_value_heads': 8, 'rms_norm_eps': 1e-06, 'rope_scaling': {'mrope_interleaved': True, 'mrope_section': [24, 20, 20], 'rope_type': 'default'}, 'rope_theta': 5000000, 'use_cache': True, 'vocab_size': 151936}, 'tie_word_embeddings': False, 'video_token_id': 151656, 'vision_config': {'deepstack_visual_indexes': [8, 16, 24], 'depth': 27, 'hidden_act': 'gelu_pytorch_tanh', 'hidden_size': 1152, 'in_channels': 3, 'initializer_range': 0.02, 'intermediate_size': 4304, 'model_type': 'qwen3_vl', 'num_heads': 16, 'num_position_embeddings': 2304, 'out_hidden_size': 5120, 'patch_size': 16, 'spatial_merge_size': 2, 'temporal_patch_size': 2}, 'vision_end_token_id': 151653, 'vision_start_token_id': 151652}
+INFO 10-26 06:04:24.389 [component_loader.py:448] Loading weights took 152.86 seconds
+INFO 10-26 06:05:03.777 [composed_pipeline_base.py:626] Loaded module text_encoder from /root/upstream-weights/MiniMax-H3/text_encoder
+INFO 10-26 06:05:03.778 [component_loader.py:1380] Loading tokenizer using transformers from /root/upstream-weights/MiniMax-H3/tokenizer
+INFO 10-26 06:05:03.778 [component_loader.py:626] Loading tokenizer from /root/upstream-weights/MiniMax-H3/tokenizer
+INFO 10-26 06:05:04.005 [component_loader.py:724] Loaded tokenizer: Qwen2Tokenizer
+INFO 10-26 06:05:04.005 [composed_pipeline_base.py:626] Loaded module tokenizer from /root/upstream-weights/MiniMax-H3/tokenizer
+INFO 10-26 06:05:04.006 [component_loader.py:1380] Loading processor using transformers from /root/upstream-weights/MiniMax-H3/processor
+INFO 10-26 06:05:04.006 [component_loader.py:600] Loading processor from /root/upstream-weights/MiniMax-H3/processor
+[ERROR] `min_frames` is part of Qwen3VLVideoProcessorInitKwargs, but not documented. Make sure to add it to the docstring of the function in /opt/upstream/fastvideo/lib/python3.12/site-packages/transformers/models/qwen3_vl/video_processing_qwen3_vl.py.
+[ERROR] `max_frames` is part of Qwen3VLVideoProcessorInitKwargs, but not documented. Make sure to add it to the docstring of the function in /opt/upstream/fastvideo/lib/python3.12/site-packages/transformers/models/qwen3_vl/video_processing_qwen3_vl.py.
+INFO 10-26 06:05:04.174 [component_loader.py:605] Loaded processor: Qwen3VLProcessor
+INFO 10-26 06:05:04.174 [composed_pipeline_base.py:626] Loaded module processor from /root/upstream-weights/MiniMax-H3/processor
+INFO 10-26 06:05:04.174 [component_loader.py:1380] Loading vae using diffusers from /root/upstream-weights/MiniMax-H3/vae
+WARNING 10-26 06:05:04.678 [selector.py:281] Requested attention backend VIDEO_SPARSE_ATTN_H3 is not supported by this layer; supported backends are ['TORCH_SDPA', 'FLASH_ATTN']. Falling back to automatic selection.
+INFO 10-26 06:05:04.678 [cuda.py:174] Trying FASTVIDEO_ATTENTION_BACKEND=VIDEO_SPARSE_ATTN_H3
+INFO 10-26 06:05:04.678 [cuda.py:175] Selected backend: None
+INFO 10-26 06:05:04.682 [cuda.py:332] Cannot use FlashAttention-2 backend because the flash_attn package is not found. Make sure that flash_attn was built and installed (on by default).
+INFO 10-26 06:05:04.682 [cuda.py:339] Using Torch SDPA backend.
+INFO 10-26 06:06:02.972 [composed_pipeline_base.py:626] Loaded module vae from /root/upstream-weights/MiniMax-H3/vae
+INFO 10-26 06:06:02.973 [component_loader.py:1380] Loading audio_vae using diffusers from /root/upstream-weights/MiniMax-H3/audio_vae
+INFO 10-26 06:06:11.096 [composed_pipeline_base.py:626] Loaded module audio_vae from /root/upstream-weights/MiniMax-H3/audio_vae
+INFO 10-26 06:06:11.096 [component_loader.py:1380] Loading transformer using diffusers from /root/upstream-weights/MiniMax-H3/transformer
+INFO 10-26 06:06:11.115 [component_loader.py:1042] transformer cls_name: MiniMaxH3Transformer3DModel
+INFO 10-26 06:06:11.178 [component_loader.py:1094] Loading model from 14 safetensors files: ['/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00001-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00002-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00003-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00004-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00005-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00006-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00007-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00008-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00009-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00010-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00011-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00012-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00013-of-00014.safetensors', '/root/upstream-weights/MiniMax-H3/transformer/diffusion_pytorch_model-00014-of-00014.safetensors']
+INFO 10-26 06:06:11.178 [component_loader.py:1103] Loading model from MiniMaxH3Transformer3DModel, default_dtype: torch.bfloat16
+INFO 10-26 06:06:11.178 [component_loader.py:1119] Worker 0 transformer attention backend: VIDEO_SPARSE_ATTN_H3
+INFO 10-26 06:06:11.178 [fsdp_load.py:228] Loading model with default_dtype: torch.bfloat16
+WARNING 10-26 06:06:11.180 [selector.py:281] Requested attention backend VIDEO_SPARSE_ATTN_H3 is not supported by this layer; supported backends are ['TORCH_SDPA', 'FLASH_ATTN', 'ATTN_QAT_INFER']. Falling back to automatic selection.
+INFO 10-26 06:06:11.180 [cuda.py:174] Trying FASTVIDEO_ATTENTION_BACKEND=VIDEO_SPARSE_ATTN_H3
+INFO 10-26 06:06:11.180 [cuda.py:175] Selected backend: None
+INFO 10-26 06:06:11.181 [cuda.py:332] Cannot use FlashAttention-2 backend because the flash_attn package is not found. Make sure that flash_attn was built and installed (on by default).
+INFO 10-26 06:06:11.181 [cuda.py:339] Using Torch SDPA backend.
+INFO 10-26 06:06:11.181 [cuda.py:174] Trying FASTVIDEO_ATTENTION_BACKEND=VIDEO_SPARSE_ATTN_H3
+INFO 10-26 06:06:11.181 [cuda.py:175] Selected backend: AttentionBackendEnum.VIDEO_SPARSE_ATTN_H3
+INFO 10-26 06:06:11.181 [cuda.py:249] Using MiniMax-H3 Video Sparse Attention backend.
+INFO 10-26 06:06:11.205 [fsdp_load.py:282] Loading transformer weights with to_cpu=False
+INFO 10-26 06:06:11.227 [lora_patch.py:165] LoRA adapter /workspace/weights/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors carries a dense payload: 82 additive (.diff/.diff_b), 50 replacement (.set_weight)
+INFO 10-26 06:07:35.081 [fsdp_load.py:713] Parameters absent from the checkpoint and supplied by the LoRA adapter: 50 (transformer_blocks.*.attn.to_gate_compress.weight x50)
+INFO 10-26 06:07:56.678 [lora_patch.py:224] LoRA dense payload fully applied: 132 parameters
+INFO 10-26 06:07:56.731 [component_loader.py:1155] Loaded model with 35.05B parameters
+INFO 10-26 06:07:56.732 [composed_pipeline_base.py:626] Loaded module transformer from /root/upstream-weights/MiniMax-H3/transformer
+INFO 10-26 06:07:56.732 [composed_pipeline_base.py:596] Skipping module transformer_ref
+INFO 10-26 06:07:56.732 [component_loader.py:1380] Loading scheduler using diffusers from /root/upstream-weights/MiniMax-H3/scheduler
+INFO 10-26 06:07:56.734 [composed_pipeline_base.py:626] Loaded module scheduler from /root/upstream-weights/MiniMax-H3/scheduler
+INFO 10-26 06:07:56.734 [component_loader.py:1380] Loading audio_scheduler using diffusers from /root/upstream-weights/MiniMax-H3/audio_scheduler
+INFO 10-26 06:07:56.734 [composed_pipeline_base.py:626] Loaded module audio_scheduler from /root/upstream-weights/MiniMax-H3/audio_scheduler
+INFO 10-26 06:07:56.735 [lora_pipeline.py:202] trainable_transformer_modules: dict_keys(['transformer'])
+INFO 10-26 06:07:56.740 [lora_patch.py:165] LoRA adapter /workspace/weights/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors carries a dense payload: 82 additive (.diff/.diff_b), 50 replacement (.set_weight)
+INFO 10-26 06:07:56.740 [lora_pipeline.py:345] Converting transformer to LoRA Transformer
+INFO 10-26 06:08:14.609 [lora_pipeline.py:386] Converted 363 layers to LoRA layers
+INFO 10-26 06:08:25.150 [lora_pipeline.py:515] Rank 0: loaded LoRA adapter /workspace/weights/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors
+WARNING 10-26 06:08:25.223 [lora_pipeline.py:567] LoRA adapter /workspace/weights/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors does not contain the weights for layer norm_out.linear. LoRA will not be applied to it.
+INFO 10-26 06:08:25.223 [lora_pipeline.py:573] Rank 0: LoRA adapter /workspace/weights/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors applied to 362 layers
+INFO 10-26 06:08:25.256 [__init__.py:61] Pipelines instantiated
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:25.257 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 10-26 06:08:25.257 [multiproc_executor.py:707] 1 workers ready
+INFO 10-26 06:08:25.259 [video_generator.py:766] 
+INFO 10-26 06:08:25.259 [video_generator.py:766]                       height: 768
+INFO 10-26 06:08:25.259 [video_generator.py:766]                        width: 1344
+INFO 10-26 06:08:25.259 [video_generator.py:766]                 video_length: 124
+INFO 10-26 06:08:25.259 [video_generator.py:766]                       prompt: A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>
+INFO 10-26 06:08:25.259 [video_generator.py:766]                       image_path: None
+INFO 10-26 06:08:25.259 [video_generator.py:766]                   neg_prompt: 
+INFO 10-26 06:08:25.259 [video_generator.py:766]                         seed: 1024
+INFO 10-26 06:08:25.259 [video_generator.py:766]                  infer_steps: 5
+INFO 10-26 06:08:25.259 [video_generator.py:766]        num_videos_per_prompt: 1
+INFO 10-26 06:08:25.259 [video_generator.py:766]               guidance_scale: 1.0
+INFO 10-26 06:08:25.259 [video_generator.py:766]                     n_tokens: 499968
+INFO 10-26 06:08:25.259 [video_generator.py:766]                   flow_shift: None
+INFO 10-26 06:08:25.259 [video_generator.py:766]      embedded_guidance_scale: None
+INFO 10-26 06:08:25.259 [video_generator.py:766]                   save_video: True
+INFO 10-26 06:08:25.259 [video_generator.py:766]                   output_path: /root/runs/upstream/55fa19a-10260558/oracle-fasth3-4step-vsa/run_01.mp4
+INFO 10-26 06:08:25.259 [video_generator.py:766]         
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:25.278 [minimax_h3_pipeline.py:82] MiniMax-H3 geometry from config: patch_size=(1, 2, 2) spatial_compression_ratio=16 latent_channels=24
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:25.279 [composed_pipeline_base.py:388] Creating pipeline stages...
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:25.279 [minimax_h3_pipeline.py:224] MiniMax-H3 sequential module load auto=False (unified_memory=False)
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:25.279 [composed_pipeline_base.py:758] Running pipeline stages: dict_keys(['input_preparation_stage', 'conditioning_stage', 'latent_preparation_stage', 'denoising_stage', 'video_decoding_stage', 'audio_decoding_stage'])
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:25.279 [base.py:182] [input_preparation_stage|MiniMaxH3InputPreparationStage] Starting execution
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:25.447 [base.py:190] [input_preparation_stage|MiniMaxH3InputPreparationStage] Execution completed in 0.07528997957706451 ms
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:25.447 [base.py:182] [conditioning_stage|MiniMaxH3ConditioningStage] Starting execution
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:26.539 [base.py:190] [conditioning_stage|MiniMaxH3ConditioningStage] Execution completed in 1091.3713610498235 ms
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:26.556 [base.py:182] [latent_preparation_stage|MiniMaxH3LatentPreparationStage] Starting execution
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:26.675 [base.py:190] [latent_preparation_stage|MiniMaxH3LatentPreparationStage] Execution completed in 118.68712201248854 ms
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:26.675 [base.py:182] [denoising_stage|MiniMaxH3DenoisingStage] Starting execution
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:26.685 [cuda.py:174] Trying FASTVIDEO_ATTENTION_BACKEND=VIDEO_SPARSE_ATTN_H3
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:26.685 [cuda.py:175] Selected backend: AttentionBackendEnum.VIDEO_SPARSE_ATTN_H3
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:08:26.685 [cuda.py:249] Using MiniMax-H3 Video Sparse Attention backend.
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:05.617 [base.py:190] [denoising_stage|MiniMaxH3DenoisingStage] Execution completed in 38941.630034008995 ms
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:05.617 [base.py:182] [video_decoding_stage|MiniMaxH3VideoDecodingStage] Starting execution
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:13.376 [pinned_offload.py:55] frozen offload: holding 10.42 GB of AutoencoderKLMiniMaxH3 on the host (pinned)
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:23.470 [base.py:190] [video_decoding_stage|MiniMaxH3VideoDecodingStage] Execution completed in 17852.302351035178 ms
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:23.594 [base.py:182] [audio_decoding_stage|MiniMaxH3AudioDecodingStage] Starting execution
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:24.287 [pinned_offload.py:55] frozen offload: holding 0.61 GB of MiniMaxH3AudioVAE on the host (pinned)
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:24.500 [base.py:190] [audio_decoding_stage|MiniMaxH3AudioDecodingStage] Execution completed in 906.0290550114587 ms
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:24.607 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 10-26 06:09:24.608 [video_generator.py:863] Generated successfully in 59.35 seconds
+INFO 10-26 06:09:26.073 [video_generator.py:919] PostDecodeFrameProcessStage completed in 1.465 s
+INFO 10-26 06:09:26.360 [video_generator.py:1284] Wrote frames to ffmpeg stdin in 0.284 s
+INFO 10-26 06:09:26.389 [video_generator.py:990] Saved video to /root/runs/upstream/55fa19a-10260558/oracle-fasth3-4step-vsa/run_01.mp4
+INFO 10-26 06:09:26.389 [video_generator.py:992] VideoSaveStage completed in 0.316 s
+INFO 10-26 06:09:26.389 [video_generator.py:995] AudioMuxStage completed in 0.000 s
+INFO 10-26 06:09:26.389 [video_generator.py:1000] End-to-end latency: 61.13 seconds
+INFO 10-26 06:09:26.417 [multiproc_executor.py:347] Shutting down MultiprocExecutor...
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:26.417 [gpu_worker.py:108] Worker 0 shutting down...
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:27.004 [gpu_worker.py:117] Worker 0 shutdown complete
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:27.040 [gpu_worker.py:108] Worker 0 shutting down...
+[1;36m(Worker pid=925)[0;0m INFO 10-26 06:09:27.469 [gpu_worker.py:117] Worker 0 shutdown complete
+INFO 10-26 06:09:37.176 [multiproc_executor.py:402] MultiprocExecutor shutdown complete
+{"ok": true, "load_s": 401.511374596972, "warm_total_s": 61.15930103894789, "denoise_s": 38.941630034008995, "error": null}

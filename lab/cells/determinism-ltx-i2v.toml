@@ -1,4 +1,4 @@
-# runpod-matrix.sh `determinism` (docs/perf/determinism.md; docs/adr/0019-fv-lab.md §15): LTX-2.5 1080p 6 s image-to-video (the beach fixture),
+# Was runpod-matrix.sh `determinism` (retired after its GPU check, docs/adr/0019-fv-lab.md §15.10; docs/perf/determinism.md; docs/adr/0019-fv-lab.md §15): LTX-2.5 1080p 6 s image-to-video (the beach fixture),
 # run twice in one process (prompt set i2v-ab.json: run1, run2), once in a second process (i2v-c.json:
 # run3) and once more with FASTVIDEO_SDPA_AUTO=timed (the old per-process timed pick, on i2v-ab.json: the
 # speed baseline, reported, not judged), all with FASTVIDEO_DIGEST=1 (stage digests in stderr, into

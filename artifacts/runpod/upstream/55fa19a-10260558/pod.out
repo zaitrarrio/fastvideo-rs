@@ -1,0 +1,8 @@
+[06:01:27] pod.sh start steps: info:box weights:h3-diffusers oracle:fasth3-4step-vsa
+[06:01:28] ▶ step info:box
+[06:01:28] ok step info:box  0s
+[06:01:28] ▶ step weights:h3-diffusers
+[06:01:31] ok step weights:h3-diffusers  3s
+[06:01:31] ▶ step oracle:fasth3-4step-vsa
+[06:09:38] ok step oracle:fasth3-4step-vsa  487s
+[06:09:39] pod.sh done

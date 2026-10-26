@@ -524,10 +524,13 @@ tier_value() {
 # What `run` reads from FV_EXTRA_ENV on the script path but no tier reads: the
 # dropped modes' knobs (ADR-0019 §9.4, §10.4; the two modes restored as tiers,
 # §12, are named by fv_lab_route; b4a's FV_B4A_CELLS since its branch went,
-# §11.6, answered with FV_CELLS), the prompts fv-lab ignores (§7), and what
-# the start command sets after FV_EXTRA_ENV anyway.
+# §11.6, answered with FV_CELLS; det-short's and determinism's FV_DET_* since
+# theirs went, §15.10, FV_DET_CELLS answered with FV_CELLS), the prompts
+# fv-lab ignores (§7), and what the start command sets after FV_EXTRA_ENV
+# anyway.
 FV_LAB_NOT_READ="FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_GEN FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS
-  FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_PROMPTS FV_PROMPT FV_SEED
+  FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS
+  FV_DET_CELLS FV_DET_REPEATS FV_DET_PROMPT FV_DET_T2V_PROMPT FV_DET_I2V_PROMPT FV_PROMPTS FV_PROMPT FV_SEED
   FV_WORK FV_SCRATCH FV_RUN_TAG FV_CELLS FV_GEN_TIMEOUT_S"
 
 # fv_lab_route run|plan <sha> [tag]: `fv-lab pod up` for $FAMILY with this
@@ -548,6 +551,11 @@ fv_lab_route() {
   # would land in another run directory than FV_FAMILY's, under another pod
   # name). Checked before any other refusal, so the hint is the first answer.
   local r r_tier r_fam r_mode extra_in=()
+  # FV_EXTRA_ENV is one line of K=V entries: `read` below takes its first line
+  # only, so a newline would drop every later entry unchecked and unpassed
+  # (the refusals below included). Refused, not dropped.
+  [[ "${FV_EXTRA_ENV:-}" != *$'\n'* ]] \
+    || refuse "reads FV_EXTRA_ENV as one line of space-separated K=V entries, and it holds a newline"
   read -r -a extra_in <<<"${FV_EXTRA_ENV:-}"
   for e in ${extra_in[@]+"${extra_in[@]}"}; do
     for r in $FV_LAB_RESTORED; do
@@ -586,9 +594,9 @@ fv_lab_route() {
   for v in FV_KEEP_POD RUNPOD_NO_VOLUME; do
     [[ "${!v:-0}" != 1 ]] || refuse "has no $v=1"
   done
-  # The retired families' pair selectors (ADR-0019 §9.4, §11.5): ignored, the
-  # run would cover every cell of the tier.
-  for v in FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS; do
+  # The retired families' pair and group selectors (ADR-0019 §9.4, §11.5,
+  # §15.10): ignored, the run would cover every cell of the tier.
+  for v in FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_DET_CELLS; do
     [[ -z "${!v:-}" ]] || refuse "has no $v: it selects by arm, FV_CELLS (fv-lab pod up --cells)"
   done
   # The tier's values (lab/tiers.toml).
@@ -644,6 +652,17 @@ fv_lab_route() {
           why+=("$k: b4a selects by arm, as every tier: FV_CELLS=\"<cell>-base <cell>-pr\" (fv-lab pod up --cells; ADR-0019 §11.5, §11.6)")
         else
           why+=("$k: fv-lab selects by arm: FV_CELLS (fv-lab pod up --cells), not FV_B4A_CELLS (ADR-0019 §11.5, §11.6)")
+        fi ;;
+      FV_DET_CELLS)
+        keys+=("$k")
+        why+=("$k: det-short and determinism select by arm, as every tier: FV_CELLS with the arms of those groups, e.g. FV_CELLS=\"h3-r1 h3-r2 h3-r3 h3-timed\" (fv-lab pod up --cells; ADR-0019 §15.5, §15.10)") ;;
+      FV_ORACLE_URL)
+        # The script's determinism ran the oracle family first when given a
+        # URL; the tier does not (ADR-0019 §15.5), so it is refused there,
+        # not dropped. Every other tier passes it on (oracle reads it).
+        if [[ "$FAMILY" == determinism ]]; then
+          keys+=("$k")
+          why+=("$k: determinism no longer runs the oracle first; run the oracle on its own (scripts/gpu/oracle.sh; ADR-0019 §15.5, §15.10)")
         fi ;;
       *)
         if [[ " $(echo $FV_LAB_NOT_READ) " == *" $k "* ]]; then

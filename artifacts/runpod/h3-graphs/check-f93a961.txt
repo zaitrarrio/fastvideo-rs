@@ -1,0 +1,24 @@
+# ADR-0019 §14.4 check of artifacts/runpod/h3-graphs/f93a961-1026043809-da7b
+# (the §14.4 script, R=artifacts/runpod/h3-graphs/f93a961-1026043809-da7b)
+PASS
+
+# denoise_s per arm (benchmark.json, the median of the six timed requests)
+sync    17.9807997685
+lazy    17.8792129835
+graphs  17.9269934055
+
+# per request (stderr.log h3/timings denoise_s)
+h3-demo-768p-a               sync 18.280 lazy 18.179 (-0.55%) graphs 18.380 (+0.55% vs sync, +1.10% vs lazy)
+h3-demo-768p-b               sync 18.387 lazy 18.295 (-0.50%) graphs 18.260 (-0.69% vs sync, -0.19% vs lazy)
+h3-demo-768p-c               sync 18.438 lazy 18.334 (-0.56%) graphs 18.298 (-0.76% vs sync, -0.20% vs lazy)
+spark-mountain-lake-768p-a   sync 17.679 lazy 17.571 (-0.61%) graphs 17.594 (-0.48% vs sync, +0.13% vs lazy)
+spark-mountain-lake-768p-b   sync 17.680 lazy 17.574 (-0.60%) graphs 17.584 (-0.54% vs sync, +0.06% vs lazy)
+spark-mountain-lake-768p-c   sync 17.682 lazy 17.579 (-0.58%) graphs 17.542 (-0.79% vs sync, -0.21% vs lazy)
+
+# graphs arm: per-request graph lines and the pool high water (stderr.log)
+h3 graphs: 4 steps: 0 replayed, 4 captured, 0 eager
+h3 graphs: 4 steps: 4 replayed, 0 captured, 0 eager
+h3 graphs: 4 steps: 4 replayed, 0 captured, 0 eager
+h3 graphs: 4 steps: 0 replayed, 4 captured, 0 eager
+h3 graphs: 4 steps: 4 replayed, 0 captured, 0 eager
+      8 graph pool high 10.34 GiB

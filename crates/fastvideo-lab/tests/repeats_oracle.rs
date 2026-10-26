@@ -1,7 +1,7 @@
 //! D1d's second slice (docs/adr/0019-fv-lab.md §15) against the script it
-//! moves: `runpod-matrix.sh det-short`, `determinism` and `oracle` (their live
-//! branches, copied with what they source into a fake root) and `fv-lab run`
-//! of the committed tiers, on one fake box: a fake fv-gpucheck that writes
+//! moves: `runpod-matrix.sh det-short`, `determinism` and `oracle` (copied
+//! with what they source into a fake root) and `fv-lab run` of the committed
+//! tiers, on one fake box: a fake fv-gpucheck that writes
 //! frames (per prompt-set run, with a warm-up directory), audio, stage digests
 //! and tensor dumps and answers `compare-dumps`, a fake nvidia-smi and
 //! verify-weights.sh (the trees the EU volume lacks fail), and an upstream
@@ -15,6 +15,23 @@
 //! `compare-dumps` lines and remove the dumps and the reference after an
 //! oracle target. `fv-lab gate` must derive the reports again from either run
 //! directory (`--check`: no difference) and decide the typed verdicts.
+//!
+//! `det-short` and `determinism` are retired (ADR-0019 §15.10: their GPU
+//! checks passed on `f93a961`, their branches are deleted from
+//! `scripts/gpu/runpod-matrix.sh`). Their script side is frozen as
+//! `tests/verdict.rs` froze `b4a`'s: `fixtures/det-script/` holds the script
+//! as it last ran them, at main `0f63c56b` (the commit before the deletion):
+//! `runpod-matrix.sh` cut to its shared frame, the `determinism` and
+//! `det-short` branches and the fallback branch, every kept line unchanged
+//! (`git show 0f63c56b:scripts/gpu/runpod-matrix.sh | sed -n
+//! '1,454p;2114,2327p;3093,3119p'`), and that commit's `b4-verdict.sh`,
+//! `cuda-13.pins` and `fv-lab-retired.sh` whole. So a change to fv-lab's
+//! `[repeats]` step is still held to the script's bytes, and a change to
+//! `scripts/gpu/` no longer moves the reference. `oracle`'s branch is live
+//! (it stays whole, §15.10) and is copied from this checkout. The frozen
+//! `determinism` branch's oracle prelude (`FV_ORACLE_URL` set: `bash
+//! runpod-matrix.sh oracle`) would hit "unknown family" in the cut copy,
+//! which has no `oracle` branch; no test sets `FV_ORACLE_URL` for it.
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -109,7 +126,9 @@ impl Fake {
     }
 }
 
-/// What runpod-matrix.sh sources, from this checkout (the branches are live).
+/// runpod-matrix.sh and what it sources: from this checkout for `oracle`
+/// (its branch is live), from `fixtures/det-script/` (frozen at `0f63c56b`)
+/// for the retired `det-short` and `determinism`.
 const SOURCED: [&str; 4] = [
     "runpod-matrix.sh",
     "b4-verdict.sh",
@@ -117,14 +136,30 @@ const SOURCED: [&str; 4] = [
     "fv-lab-retired.sh",
 ];
 
+/// Where a family's script comes from: the frozen copy for the retired ones.
+fn script_source(family: &str) -> PathBuf {
+    match family {
+        "det-short" | "determinism" => {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/det-script")
+        }
+        _ => repo_root().join("scripts/gpu"),
+    }
+}
+
 fn fake(name: &str, mode: &str) -> Fake {
     let dir = std::env::temp_dir().join(format!("fv-lab-d1d-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let f = Fake { dir };
     let gpu = f.root().join("scripts/gpu");
     std::fs::create_dir_all(&gpu).unwrap();
+    // `name` starts with the family (det-short…, determinism…, oracle…).
+    let family = ["det-short", "determinism", "oracle"]
+        .into_iter()
+        .find(|fam| name.starts_with(fam))
+        .expect("a fake is named after its family");
+    let src = script_source(family);
     for s in SOURCED {
-        std::fs::copy(repo_root().join("scripts/gpu").join(s), gpu.join(s)).unwrap();
+        std::fs::copy(src.join(s), gpu.join(s)).unwrap();
     }
     std::fs::write(f.dir.join("mode"), mode).unwrap();
     // The EU volume lacks h3-8step and fastwan22-ti2v-5b.
@@ -376,6 +411,103 @@ fn regate(
         o.into_iter().map(|o| (o.what, o.decision)).collect(),
         r.differences(&steps),
     )
+}
+
+/// The frame logs `matrix start image=<build id>` from a fixed path, the
+/// runtime image's, which the frozen cut cannot redirect: on a host that has
+/// the file, its id reads as the goldens' `unknown` (as in tests/verdict.rs).
+fn host_build_id() -> Option<String> {
+    std::fs::read_to_string("/opt/fastvideo-rs/target/release/fv-gpucheck.build-id")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+/// The frozen script is the one the frozen goldens came from: its dry run of
+/// `det-short` and `determinism`, under `fv-lab-goldens.sh`'s inputs, is
+/// `fixtures/<family>-dry-run.txt` line for line (which `tests/dry_run.rs`
+/// holds fv-lab's dry run to), and its `FV_DRY_RUN_GATES` records are the
+/// first four columns of `fixtures/<family>-gates.tsv` (the fifth, a cell's
+/// needs, is `verify-weights.sh --list`'s, added by the goldens script).
+#[test]
+fn the_frozen_script_dry_runs_as_the_frozen_goldens() {
+    for family in ["det-short", "determinism"] {
+        let f = fake(&format!("{family}-frozen-dry"), "");
+        let (work, scratch) = (f.dir.join("dry-work"), f.dir.join("dry-scratch"));
+        std::fs::create_dir_all(work.join("weights/auxiliary/tae")).unwrap();
+        std::fs::write(work.join("weights/auxiliary/tae/.complete"), "").unwrap();
+        let libs = scratch.join("fv-libs");
+        std::fs::create_dir_all(&libs).unwrap();
+        for l in ["libcudnn.so", "libcupti.so"] {
+            std::fs::write(libs.join(l), "").unwrap();
+        }
+        let gates = f.dir.join("dry-gates.tsv");
+        let o = Command::new("bash")
+            .arg(f.root().join("scripts/gpu/runpod-matrix.sh"))
+            .arg(family)
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .env("HOME", &f.dir)
+            .env("LC_ALL", "C")
+            .env("FV_DRY_RUN", "1")
+            .env("FV_DRY_RUN_GATES", &gates)
+            .env("FV_WORK", &work)
+            .env("FV_SCRATCH", &scratch)
+            .env("FV_RUN_TAG", "1234567-10241200")
+            .env("FV_BASELINE_SHA", "7654321")
+            .output()
+            .expect("bash runs");
+        assert!(
+            o.status.success(),
+            "{family}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        let (s, w, r) = (
+            scratch.display().to_string(),
+            work.display().to_string(),
+            f.root().display().to_string(),
+        );
+        let tag = format!("[{family}] ");
+        let ours: Vec<String> = String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .map(|l| l.get(11..).unwrap_or(""))
+            .filter(|l| l.contains(&tag))
+            .map(|l| {
+                let l = l
+                    .replace(&s, "/fvscratch")
+                    .replace(&w, "/workspace")
+                    .replace(&r, "/opt/fastvideo-rs");
+                match host_build_id() {
+                    Some(id) => l.replace(
+                        &format!("matrix start image={id}"),
+                        "matrix start image=unknown",
+                    ),
+                    None => l,
+                }
+            })
+            .collect();
+        let golden = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("fixtures/{family}-dry-run.txt")),
+        )
+        .expect("frozen golden");
+        assert_eq!(ours, golden.lines().collect::<Vec<_>>(), "{family}");
+        let first4 = |t: &str| -> Vec<String> {
+            t.lines()
+                .map(|l| l.split('\t').take(4).collect::<Vec<_>>().join("\t"))
+                .collect()
+        };
+        let ours = std::fs::read_to_string(&gates)
+            .expect("FV_DRY_RUN_GATES written")
+            .replace(&s, "/fvscratch")
+            .replace(&w, "/workspace");
+        let golden = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/{family}-gates.tsv")),
+        )
+        .expect("frozen gates");
+        assert!(!golden.is_empty(), "{family}: gates");
+        assert_eq!(first4(&ours), first4(&golden), "{family}: gates");
+    }
 }
 
 #[test]
