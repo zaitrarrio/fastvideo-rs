@@ -7,9 +7,10 @@
 //! the URL and hold files; a reference served only with its dump.
 #![cfg(unix)]
 
+mod common;
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -227,16 +228,16 @@ fn fake_fv_lab(dir: &Path, run_dir: &Path, exit: Option<i32>) -> PathBuf {
         Some(c) => format!("exit {c}\n"),
         None => "while :; do sleep 0.1; done\n".to_owned(),
     };
-    std::fs::write(
+    // Never held open for writing by this process: an exec racing another
+    // test thread's fork would fail with ETXTBSY (common::write_exe).
+    common::write_exe(
         &exe,
-        format!(
+        &format!(
             "#!/bin/bash\ntrap 'echo term >>{d}/mark; exit 7' TERM\necho \"$@\" >{d}/args\nmkdir -p {r}\nprintf '%s' '{pod}' >{r}/pod.json\n{tail}",
             d = dir.display(),
             r = run_dir.display(),
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     exe
 }
 

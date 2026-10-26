@@ -6,7 +6,8 @@
 //! where fv-lab has none. These maps are the only differences allowed.
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// One `<tier>:<family>:<K=V>` entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,4 +188,29 @@ impl Sibling {
 /// §16.3) where the script reads the volume (`/workspace/weights`).
 pub fn merged_root(line: &str) -> String {
     line.replace("/workspace/weights/", "/fvscratch/weights/")
+}
+
+/// Writes the executable `path` (a fake tool a test then runs) so that this
+/// process never holds it open for writing. A fork by another test thread
+/// between `open` and `close` of an in-process write would carry that fd into
+/// a child until the child execs, and an `exec` of the file meanwhile fails
+/// with ETXTBSY ("Text file busy", errno 26): the flake CI hit in
+/// `oracle_live.rs`. So the content goes to `<path>.src`, which is never run,
+/// and `install -m 0755` (a child process, whose descriptors are its own)
+/// creates `path`; once it has exited, nothing holds the file open.
+pub fn write_exe(path: &Path, content: &str) {
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
+    }
+    let src = PathBuf::from(format!("{}.src", path.display()));
+    std::fs::write(&src, content).unwrap_or_else(|e| panic!("{}: {e}", src.display()));
+    let st = Command::new("install")
+        .arg("-m")
+        .arg("0755")
+        .arg(&src)
+        .arg(path)
+        .status()
+        .unwrap_or_else(|e| panic!("install {}: {e}", path.display()));
+    assert!(st.success(), "install {}: {st}", path.display());
+    std::fs::remove_file(&src).unwrap_or_else(|e| panic!("{}: {e}", src.display()));
 }

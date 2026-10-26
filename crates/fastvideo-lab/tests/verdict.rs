@@ -32,7 +32,8 @@
 //! compare report for one cell; `noweights` skips another cell's arms on
 //! their weight gate.
 
-use std::os::unix::fs::PermissionsExt as _;
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -52,12 +53,10 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// A `#!/bin/sh` fake tool, written so no exec of it can race a fork
+/// (`common::write_exe`).
 fn script(path: &Path, body: &str) {
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d).unwrap();
-    }
-    std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_exe(path, &format!("#!/bin/sh\n{body}"));
 }
 
 /// fv-gpucheck on the fake box (`@MODE@`: the mode file). `gen`: frames

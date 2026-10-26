@@ -33,7 +33,8 @@
 //! runpod-matrix.sh oracle`) would hit "unknown family" in the cut copy,
 //! which has no `oracle` branch; no test sets `FV_ORACLE_URL` for it.
 
-use std::os::unix::fs::PermissionsExt as _;
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -47,12 +48,10 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// A `#!/bin/sh` fake tool, written so no exec of it can race a fork
+/// (`common::write_exe`).
 fn script(path: &Path, body: &str) {
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d).unwrap();
-    }
-    std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_exe(path, &format!("#!/bin/sh\n{body}"));
 }
 
 /// fv-gpucheck on the fake box. `compare-dumps --baseline A --candidate B`:
@@ -806,9 +805,7 @@ fn fake_clips(name: &str) -> Fake {
     // The guided target's weight gate fails: its arms skip, its clips are missing.
     let f = fake(name, "no-ltx25-a2v-guided");
     for (tool, body) in [("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)] {
-        let p = f.bin().join(tool);
-        std::fs::write(&p, format!("#!/bin/bash\n{body}")).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        common::write_exe(&f.bin().join(tool), &format!("#!/bin/bash\n{body}"));
     }
     let fx = f.root().join("scripts/gpu/fixtures");
     std::fs::create_dir_all(&fx).unwrap();
@@ -1009,9 +1006,7 @@ fn sfwan13_decodes_compares_and_cleans_up_as_the_script() {
             "",
         );
         for (tool, body) in [("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)] {
-            let p = f.bin().join(tool);
-            std::fs::write(&p, format!("#!/bin/bash\n{body}")).unwrap();
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            common::write_exe(&f.bin().join(tool), &format!("#!/bin/bash\n{body}"));
         }
         // The script puts /usr/local/bin before the caller's PATH: the fakes first.
         let m = f.root().join("scripts/gpu/runpod-matrix.sh");

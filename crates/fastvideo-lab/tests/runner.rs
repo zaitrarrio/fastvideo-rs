@@ -3,19 +3,18 @@
 //! the runner's files, logs, exit codes, gates, compares and promotion gates
 //! are checked without a GPU. The layout is runpod-matrix.sh's.
 
-use std::os::unix::fs::PermissionsExt as _;
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fastvideo_lab::plan::{CellFile, Lab};
 use fastvideo_lab::run::{RunConfig, Runner};
 
+/// A `#!/bin/sh` fake tool, written so no exec of it can race a fork
+/// (`common::write_exe`).
 fn script(path: &Path, body: &str) {
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d).unwrap();
-    }
-    std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_exe(path, &format!("#!/bin/sh\n{body}"));
 }
 
 struct Fake {
@@ -474,15 +473,14 @@ argv = ["gen"]
     .unwrap();
     let gpucheck = f.dir.join("bin/fv-gpucheck");
     let body = read(&gpucheck);
-    std::fs::write(
+    common::write_exe(
         &gpucheck,
-        body.replacen(
+        &body.replacen(
             "#!/bin/sh\n",
             "#!/bin/sh\nif [ -n \"$OOM_EVENTS\" ]; then printf 'oom 1\\noom_kill 1\\n' > \"$OOM_EVENTS\"; kill -9 $$; fi\n",
             1,
         ),
-    )
-    .unwrap();
+    );
     let mut cfg = config(&f);
     cfg.proc_cgroup = f.dir.join("proc-cgroup");
     cfg.cgroup_root = cg.clone();
