@@ -1385,3 +1385,9 @@ ran (pod id, $/hr), result, cost.
   (exit 2), an 85 min idle limit for `volume+r2` pods, a run deadline in the pod's env and the
   driver's 15 min fetch reserve, `r2-weights.py plan --pin`, partial-fetch clean-up, python3 by a capped,
   retried apt install (the runtime image stays Python-free). Build pod `dbf6gok3crgj9x`. No GPU, no R2 or volume write.
+- 2026-10-26, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): gold smoke fix on `claude/gold-cells-techniques`
+  (ADR-0023 §3): the gold smoke on `sha-f93a961` failed `h3-larry-turbo` and `sol-h3` at once (exit 2, the
+  engine refused fv-gpucheck's empty start-up profile); the generated gold cells now pass the family entry's
+  `--techniques <engine.profile>` before `engine` (14 of 32 arms), `ProcessPlan::check_installed` is the engine's
+  check and a CPU test runs it over every gold cell; `gold-dry-run.txt` regenerated. Build pods `dbf6gok3crgj9x`
+  then `dzid0vrox9rjoa`. No GPU, no R2 or volume write; the smoke rerun is the coordinator's.
