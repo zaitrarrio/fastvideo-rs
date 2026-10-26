@@ -42,18 +42,22 @@ FV_LAB_RESTORED="precision-nvfp4:precision:FV_PRECISION_ARM=ltx-nvfp4 ltxvae-gen
 # and `all` for them and names the fv-lab command.
 FV_LAB_EXPERIMENTS="h3-graphs"
 
-# Sibling tiers of a live runpod-matrix.sh family (ADR-0019 §20.5, §21):
+# Sibling tiers of a live runpod-matrix.sh family (ADR-0019 §20.5, §21, §22):
 # `<tier>:<family>` is a tier whose cells are targets of <family>'s branch
 # that its own tier cannot run (another pod: `oracle-r2`, the oracle family's
-# sfwan13 target, reads its tree from R2, `weights = "volume+r2"`). Its
+# sfwan13 target, reads its tree from R2, `weights = "volume+r2"`; another
+# prompt set: `hd5`, the hd family with FV_PROMPTS=scripts/gpu/prompts-hd5.json,
+# the 1080P serve gate's, which fv-lab takes from a cell, §22 S2). Its
 # fixtures are <family>'s dry run under the tier's settings
 # (tests/fv-lab-goldens.sh fam_env) and runpod-http.sh plan's body for the
 # tier; fv-lab's dry run equals the first with the tier's name for the
 # family's and its merged weights root for the volume's
 # (crates/fastvideo-lab/tests/dry_run.rs). No branch of its own:
 # runpod-http.sh refuses `run` / `all` for it and names fv-lab's command; the
-# script runs those targets as <family> (FV_FAMILY=<family>).
-FV_LAB_SIBLINGS="oracle-r2:oracle"
+# script runs those targets as <family> (FV_FAMILY=<family>, with
+# fv_lab_sibling_mode's settings). A sibling of a family that retires is
+# frozen with it (FV_LAB_RETIRED, ADR-0019 §10).
+FV_LAB_SIBLINGS="oracle-r2:oracle hd5:hd"
 
 # The runpod-matrix.sh families retired with no tier (ADR-0019 §18, D1g,
 # coordinator decision 2026-10-26): finished experiments and one-time
@@ -83,6 +87,16 @@ fv_lab_sibling() {
     [[ "${e%%:*}" == "${1:-}" ]] && { echo "${e#*:}"; return 0; }
   done
   return 1
+}
+
+# fv_lab_sibling_mode <tier>: the settings under which the script runs a
+# sibling tier's cells as its family (FV_FAMILY=<family> plus these), for the
+# refusals; tests/fv-lab-goldens.sh makes the tier's dry-run golden under them.
+fv_lab_sibling_mode() {
+  case "${1:-}" in
+    oracle-r2) echo "FV_ORACLE_TARGETS=sfwan13" ;;
+    hd5) echo "FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json" ;;
+  esac
 }
 
 # fv_script_retired <family>: true when the family is retired with no tier.

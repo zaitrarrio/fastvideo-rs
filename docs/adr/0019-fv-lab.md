@@ -37,7 +37,9 @@
   "Results"). `oracle`'s branch stays whole until §20.7's re-run with the Hub token passes too (§21.9). §22 (the
   fifteen other script families: eleven retired with no tier, `hd` and `serve-engine` tiers now, `wan`, `sfstream`
   and a small `mmaudio` tier after one cell addition, `{tae}` without a TAE gate) is accepted (coordinator,
-  2026-10-26, FVID-2026-10-26-d1-remaining); its slices S1-S8 follow
+  2026-10-26, FVID-2026-10-26-d1-remaining); its slices S1-S8 follow. S2 (§22.8: `hd` and its 1080P-gate sibling
+  `hd5` as tiers, the script's derived step dropped in lockstep) is done CPU-side; its GPU check is §22.9, the
+  coordinator's
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -68,6 +70,11 @@
   `tests/{dry_run,repeats_oracle,oracle_driver,lab_files,payload_golden,fv_lab_bin}.rs`,
   `scripts/gpu/tests/{upstream-r2,runpod-r2}.test.sh`; fixtures `oracle-r2-{dry-run.txt,gates.tsv}`,
   `runpod-http-oracle-r2.json`, `runpod-http-upstream-fastvideo-sfwan13.json`, `runpod-http-oracle-sfwan13-r2.json`
+- §22 S2: `lab/cells/{hd-canvases,hd-10s,hd5-canvases}.toml`, the `hd` and `hd5` tiers, `knobs::DROPPED_KNOBS`;
+  `scripts/gpu/runpod-matrix.sh` (`hd)` without its derived step), `runpod-http.sh` (`refuse_dropped`, the hd5
+  sibling refusal), `fv-lab-retired.sh` (`FV_LAB_SIBLINGS` `hd5:hd`, `fv_lab_sibling_mode`); tests
+  `tests/{dry_run,lab_files}.rs`, `knobs::tests`, `scripts/gpu/tests/fv-lab-route.test.sh`; fixtures
+  `hd{,5}-{dry-run.txt,gates.tsv}`, `runpod-http-hd{,5}.json`
 - Plan: D1 (`docs/plan/2026-10-23-execution-plan.md`); review `docs/gaps/2026-10-22-architecture-review.md` §7.5
 
 ## Context
@@ -4148,7 +4155,7 @@ cache file, and the tiers keep the paths for equality.
 - *If wanted later*: (b), after a tier field `lpips = true` and an `{lpips}` placeholder.
 
 **`hd`** (rpm:1694-1790): **(a)**, with the derived step dropped from the script in the same PR. This is a real-run
-change, like §17.2's `ltx` gating.
+change, like §17.2's `ltx` gating. Done in S2 (§22.8; its GPU check §22.9).
 - *Measures*: H3 at the served 1080P canvas (`hd_1080p = true` for `sol-h3` and `fasth3-4step-vsa`,
   `families/h3.toml:66-75, 140-149`):
   - turbo and max at 768p and at 1088x1920 (`--oversize-canvas`), portrait, and 10 s, over the prompts of
@@ -4437,4 +4444,115 @@ After S7 and S8, `runpod-matrix.sh` has no branch left and goes, and with it `ru
 
 #### 22.7 What this section does not change
 
-Nothing yet: no script, cell, tier, golden, schema or test. Each slice above makes its own changes.
+As accepted, nothing: no script, cell, tier, golden, schema or test. Each slice above makes its own changes, recorded
+below as it lands (S2: §22.8, §22.9).
+
+#### 22.8 S2: `hd` and `hd5` as tiers (done, CPU-side)
+
+Built on `claude/d1-s2-hd` from `4f8822a0`, as the `hd` row of §22.3 and §22.6 item 2 decide. No schema change.
+
+- **The `hd` tier**: cells `hd-canvases` (the six `hd_cell` arms, `workload.prompt_set =
+  "scripts/gpu/prompts-hd.json"`, rendered `--prompts {prompt_set}`) and `hd-10s` (the two `hd_long` arms, one
+  prompt), `weights = "volume"`, the rtx6000 tier's pod. Its dry run, gates and pod body are the branch's
+  (`fixtures/hd-dry-run.txt`, `hd-gates.tsv`, `runpod-http-hd.json`, from `fv-lab-goldens.sh`), line for line
+  (`tests/dry_run.rs`, `tests/payload_golden.rs`); `the_hd_tiers_are_the_hd_family_without_its_derived_step` adds
+  that the run is the eight arms in the script's order and nothing else.
+- **The derived step left the script in the same commit** (a real-run change, as §17.2's `ltx` gating): the
+  ffmpeg Lanczos upscale of the 768p clips and its three `compare_cells` pairs, the `FV_HD_POST_URL` post script and
+  the keyframe prune (copy keyframes 0/40/80/120, delete the other PNGs). The frames now stay on the container disk
+  (disk only: each arm's `frames.sha256.json` was written before the prune, and that is what the runs compare;
+  under 1 GB of PNGs per 1080p arm, the 10 s arms' 600 MB each per
+  docs/serve/h3-1080p-and-upscaler.md, well within the 120 GB). The commands: `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
+- **Intended differences**, each named in the code:
+  1. *The per-arm timing line* (`log "<arm> <benchmark.json fields>"` after each arm) is log only. A dry run writes
+     no `benchmark.json`, so the branch logged eight empty `[hd] <arm> ` lines there; it now logs them in a real run
+     only (`[[ "$DRY_RUN" == 1 ]] ||`, as `b4c` and `b4c2` did), and fv-lab never (the numbers are each arm's
+     `benchmark.json`, which `fv-lab report summary --kind hd` prints). This is the only change to the dry run.
+  2. *`hd5`'s `prompt set:` line*: the script logs its `FV_PROMPTS` before `matrix start`; fv-lab's prompt set is
+     the cell's, rendered in each arm's argv. `common::Sibling::prompt_set_line` drops that one line, and the test
+     holds it to the cell's `prompt_set`.
+- **The three orphans** (§22.3):
+  1. `FV_HD_POST_URL` (and its cap `FV_HD_POST_TIMEOUT_S`): **refused**, not removed from `runpod-http.sh:341`. That
+     line is a comment inside the pod start command, so every `runpod-http-*.json` body carries it, the frozen
+     ones and the two restored modes' (which `fv-lab-restored-goldens.sh` holds to the script at `5987e6a4`), and
+     so does fv-lab's `pod-start.sh.in`; editing it would rewrite every pod golden for a comment. The variable is
+     refused instead, with one message naming this section and the commit that has the hook: by `runpod-http.sh`
+     on the script path (`refuse_dropped`, every mode and `plan`, before any pod or key) and on the
+     fv-lab route (`FV_LAB_NOT_READ`), by fv-lab (`knobs::DROPPED_KNOBS`: `run`'s environment, `pod up
+     --extra-env`), and by `runpod-matrix.sh hd` (exit 2 before any arm). `scripts/gpu/hd-upscaler.sh` (it reads the
+     dropped Lanczos baselines) says it is kept for the record and how to re-run it.
+  2. The "Reproduce" section of `docs/serve/h3-1080p-and-upscaler.md`: the tier commands (`pod up --family hd`, the
+     gate through `hd5`), the script's equivalent until S7, and where the dropped commands are.
+  3. The 1080P gate's `FV_PROMPTS=…/prompts-hd5.json` (`docs/serve/h3-1080p-and-upscaler.md:174, 269`): **the
+     `hd5` tier**, a prompt-set cell (`hd5-canvases`: `hd-canvases` word for word with `prompt_set =
+     "scripts/gpu/prompts-hd5.json"`) plus `hd`'s `hd-10s`, which `FV_PROMPTS` never reached (the one shared cell
+     besides `ltxvae-gen`'s, `tests/lab_files.rs`). The gate: `fv-lab run hd5 --cells
+     turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s`. **Why a tier and not `extra_cells`
+     of `hd`**: a tier's arm names are unique over its cells and extra cells (§20.3), so extra cells would need
+     other names (`turbo-768p-hd5`, …), while `hd_report.py` and `fv-lab report summary --kind hd` read the arms by
+     the script's names (`summary.rs` `HD_CELLS`), and the gate's run directories in the doc carry them; and the
+     script's golden of that mode (`FV_PROMPTS` set) names them too, so a tier holds to it with no renaming. It is a
+     sibling of the `hd` family (`FV_LAB_SIBLINGS="… hd5:hd"`, §21's mechanism): its dry-run golden is the
+     branch's under `fv_lab_sibling_mode hd5` (`FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json`, for the
+     dry run only: `runpod-http.sh plan` would forward it into the start command, which fv-lab's pod does not
+     carry), its pod body `runpod-http.sh plan`'s for `FV_FAMILY=hd5`; `runpod-http.sh run` / `all` refuse
+     `FV_FAMILY=hd5` and name both forms. It needs no GPU check of its own: its commands are `hd`'s with another
+     prompt file (data), which both dry runs show.
+- **The AdaLN cache** stays shared as in the script (`{runs}/4step-vsa-adaln.cache`, `{runs}/sol-h3-adaln.cache`, read
+  by both canvas sizes and the 10 s arm of each recipe): inert for these adapter recipes (§22.2), kept for equality.
+- **Before and after** (the §22.1 dry runs of every family, with no `FV_ORACLE_URL` and no `FV_LAB_BIN`, on main
+  `4f8822a0` and on this branch): the fifteen other families' dry runs, exit codes and gate records are byte for byte
+  the same; `hd` lost exactly its eight empty timing lines (18 lines to 10). The gate's form (`FV_PROMPTS=…hd5.json
+  FV_CELLS=<six arms>`) likewise lost only its eight (the line followed skipped arms too). The derived step was never in a dry run (it needs frames).
+- **Lost**, as §22.3 said: re-running the Lanczos comparison, the post-script hook and the keyframe sheets in one
+  command. Kept: `hd_report.py` and `report summary --kind hd` (their compare and keyframe sections are empty for a
+  new run).
+
+#### 22.9 S2: the GPU check
+
+§8's procedure, as §17.5's: one commit `SHA` for both sides (this PR's head or its merge, once
+`fastvideo-rs-runtime:sha-<7>` is published with its `lab/`, fv-lab and `runpod-matrix.sh`: the script side needs the
+branch without its derived step), both sides in parallel, then `fv-lab-compare-runs.sh`. One RTX PRO 6000 Blackwell
+Server Edition per side, EU-RO-1 on `bz0ofkfx45`, about $2.49/hr; pod boot and preflight about 5 min per side. Every
+tree these arms read is on the volume (`h3-base`, `FastH3-4-step-Preview-v1-LoRA`); nothing is fetched. The build pod
+is stopped first (§21.7).
+
+The arms: **`max-1080p`**, the part only `hd` checks (Sol-H3 at 1920x1088 with `--oversize-canvas`, §22.3), and
+**`turbo-768p`**, the cheapest other arm. With the Lanczos compares gone the tier has no compare of its own, so the
+compare exercised is the runners': `fv-lab-compare-runs.sh` over the arms' `frames.sha256.json`. `turbo-768p` is the
+other recipe and technique profile (FastH3 4-step VSA, `h3/fasth3_4step_vsa`) at the trained canvas, over the same
+prompt set, and it runs first, so it fills the shared text cache (`{scratch}/h3-text-cache`) that `max-1080p` then
+reads, as in the full run. §22.3's `turbo-1080p` was there for the 768p → 1080p Lanczos pair, which is gone.
+
+```sh
+SHA=<7>
+# hd: the 4-step VSA arm at 768p (first: the text cache) and Sol-H3 at 1920x1088, three prompts each
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family hd --cells turbo-768p,max-1080p --wall-cap-s 3600 --yes --wait
+RUNPOD_API_KEY=… FV_FAMILY=hd FV_CELLS="turbo-768p max-1080p" FV_POD_CAP_S=3600 \
+  bash scripts/gpu/runpod-http.sh run $SHA
+bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/hd/$SHA-<MMDDHHMMSS>-<hex> artifacts/runpod/hd/$SHA-<MMDDHHMM>
+```
+
+Pass: `fv-lab-compare-runs.sh` exits 0 and both pods end `matrix_exit=0`. No verdict step, so no `--expect-verdicts`;
+no `FV_FETCH_TREE` (both fetches take every file compared). Expected summary line:
+
+"2 arm(s) the same (2 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same
+compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 difference(s)":
+each arm 372 PNG frames (three prompts of 124, as `d46ca17-09282023`'s `benchmark.json` `num_frames`) under
+`frames/<prompt>/`, byte-identical across the runners; no `compare/` or `gate/` report on either side (the script's
+run no longer writes `turbo-768p-lanczos/` or `keyframes/`, so the two run directories hold the same arms). Each
+preflight's `weights.log` ends `exit=1` (`h3-8step` incomplete), as on every run on this volume. A difference in the
+frames is a finding about the build (byte identity on one GPU class from one `SHA`, docs/perf/determinism.md), not
+about the runners: report it and keep the branch.
+
+**Cost** ($2.49/hr, UNVERIFIED until run): per side, boot and preflight ~5 min, `turbo-768p` ~7 min (406 s in
+`d46ca17-09282023`, the first arm, with the 75 s text encode) and `max-1080p` ~5.5 min (321 s there), so ~18 min; with
+margin ~20 min a side, **~$0.83 a side, ~$1.66 both** (§22.5's figure; three arms there, two here). Bounded by the caps
+above at $2.49 a pod, $4.98 both. **Balance needed**: at least $9.70 before starting at the estimate ($8 floor +
+$1.66), and $13 to stay above the floor even if both pods ran to their 1 h caps (CLAUDE.md: stop before the balance
+would drop below $8).
+
+**Then (S7, not this slice)**: on a pass, `hd` joins `FV_LAB_RETIRED`, its branch is deleted and its three
+fixtures frozen (§10's way); `hd5`, a sibling of the family, is frozen with it (out of `FV_LAB_SIBLINGS`, into
+`FV_LAB_RETIRED`, its fixtures kept as they are: the restored modes' way, §12, with the `prompt set:` line mapped as
+here), and `FV_HD_POST_*` stay refused.

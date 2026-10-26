@@ -687,12 +687,33 @@ tier_value() {
 # §11.6, answered with FV_CELLS; det-short's and determinism's FV_DET_* since
 # theirs went, §15.10, FV_DET_CELLS answered with FV_CELLS; attn3's arm
 # pickers FV_ATTN3_ARMS / FV_ATTN3_VSA since its branch went, §17.6, answered
-# with FV_CELLS), the prompts fv-lab ignores (§7), and what the start command
-# sets after FV_EXTRA_ENV anyway.
+# with FV_CELLS), hd's dropped post-script hook (FV_DROPPED_KNOBS below, §22),
+# the prompts fv-lab ignores (§7), and what the start command sets after
+# FV_EXTRA_ENV anyway.
 FV_LAB_NOT_READ="FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_GEN FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS
   FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS
   FV_DET_CELLS FV_DET_REPEATS FV_DET_PROMPT FV_DET_T2V_PROMPT FV_DET_I2V_PROMPT FV_ATTN3_ARMS FV_ATTN3_VSA
+  FV_HD_POST_URL FV_HD_POST_TIMEOUT_S
   FV_PROMPTS FV_PROMPT FV_SEED FV_WORK FV_SCRATCH FV_RUN_TAG FV_CELLS FV_GEN_TIMEOUT_S"
+
+# hd's post-script hook (FV_HD_POST_URL, a script fetched and run on the pod,
+# and its cap FV_HD_POST_TIMEOUT_S) left runpod-matrix.sh with the family's
+# derived step (docs/adr/0019-fv-lab.md §22, S2). Nothing reads them any more,
+# so a run that sets them is refused, not silently different: on the script
+# path here (refuse_dropped, before any pod), on the fv-lab route through
+# FV_LAB_NOT_READ, by fv-lab (knobs::DROPPED_KNOBS) and by runpod-matrix.sh.
+FV_DROPPED_KNOBS="FV_HD_POST_URL FV_HD_POST_TIMEOUT_S"
+dropped_why() {
+  echo "$1: the hd family's post-script hook was dropped with its derived step (the Lanczos compares, the keyframe prune); nothing runs a fetched script (docs/adr/0019-fv-lab.md §22, S2; the upscaler benchmark's commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh)"
+}
+refuse_dropped() {
+  local e extra=()
+  read -r -a extra <<<"${FV_EXTRA_ENV:-}"
+  for e in ${extra[@]+"${extra[@]}"}; do
+    [[ " $FV_DROPPED_KNOBS " != *" ${e%%=*} "* ]] || die "FV_EXTRA_ENV: $(dropped_why "${e%%=*}")"
+  done
+  return 0
+}
 
 # fv_lab_route run|plan <sha> [tag]: `fv-lab pod up` for $FAMILY with this
 # driver's settings mapped across (FV_CELLS -> --cells, FV_BASELINE_SHA ->
@@ -829,6 +850,9 @@ fv_lab_route() {
       FV_ATTN3_ARMS|FV_ATTN3_VSA)
         keys+=("$k")
         why+=("$k: attn3 runs the script's default arms (FV_ATTN3_ARMS \"v2 cudnn\", FV_ATTN3_VSA \"0 1\") and selects by arm, as every tier: FV_CELLS, e.g. FV_CELLS=\"fasth3-4step-vsa-768p-b160 fasth3-4step-vsa-768p-b161\" (fv-lab pod up --cells; ADR-0019 §17.2, §17.6)") ;;
+      FV_HD_POST_URL|FV_HD_POST_TIMEOUT_S)
+        keys+=("$k")
+        why+=("$(dropped_why "$k")") ;;
       FV_ORACLE_URL)
         # The script's determinism ran the oracle family first when given a
         # URL; the tier does not (ADR-0019 §15.5), so it is refused there,
@@ -892,9 +916,13 @@ cmd_run() {
   fi
   # Nor is a sibling tier (fv-lab-retired.sh FV_LAB_SIBLINGS): its cells are
   # its family's targets on another pod (oracle-r2: weights from R2).
+  # hd5: the hd family's prompts-hd5.json mode, whose prompt set its tier's
+  # cells carry (§22, S2).
   local sib
   if sib="$(fv_lab_sibling "$FAMILY")" && [[ "$mode" == run || "$mode" == all ]]; then
-    die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib's targets its tier cannot run (docs/adr/0019-fv-lab.md §21): fv-lab oracle --family $FAMILY --sha $sha --cells <arms> --yes, or fv-lab pod up --sha $sha --family $FAMILY --cells <arms> --yes --wait; the script runs them as FV_FAMILY=$sib"
+    [[ "$sib" == oracle ]] \
+      && die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib's targets its tier cannot run (docs/adr/0019-fv-lab.md §21): fv-lab oracle --family $FAMILY --sha $sha --cells <arms> --yes, or fv-lab pod up --sha $sha --family $FAMILY --cells <arms> --yes --wait; the script runs them as FV_FAMILY=$sib"
+    die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib in a mode its tier does not run (docs/adr/0019-fv-lab.md §22): fv-lab pod up --sha $sha --family $FAMILY --yes --wait (narrowed by arm with --cells <arms>); the script runs it as FV_FAMILY=$sib $(fv_lab_sibling_mode "$FAMILY")"
   fi
   # Nor were the tiers made from a port one-off (fv-lab-retired.sh FV_LAB_EXPERIMENTS).
   if fv_lab_experiment "$FAMILY" && [[ "$mode" == run || "$mode" == all ]]; then
@@ -905,6 +933,7 @@ cmd_run() {
     fv_lab_route run "$sha"
     return
   fi
+  refuse_dropped
   # FV_DRY_RUN=1: say what would run and create nothing (the commands
   # themselves: FV_DRY_RUN=1 bash scripts/gpu/runpod-matrix.sh <family>).
   if [[ "${FV_DRY_RUN:-0}" == 1 ]]; then
@@ -971,6 +1000,7 @@ case "${1:-}" in
       fv_lab_route plan "$sha" "${3:-}"
       exit 0
     fi
+    refuse_dropped
     tag="${3:-$sha-$(date -u +%m%d%H%M)}"
     vol="" dc=""
     if [[ "${RUNPOD_NO_VOLUME:-0}" != 1 ]]; then

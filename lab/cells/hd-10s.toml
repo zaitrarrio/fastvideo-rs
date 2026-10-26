@@ -1,0 +1,42 @@
+# runpod-matrix.sh `hd`'s 10 s arms (docs/adr/0019-fv-lab.md §22, S2): the 1080P tier at 10 s, one prompt, for the
+# time and peak memory of a longer clip at the served canvas, against the serve engine's working-set estimate
+# (fastvideo_models::h3::memory::measured_working_bytes). h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3) at
+# 1920x1088 (`--oversize-canvas`). FV_PROMPTS does not reach these arms in the script, so the hd5 tier (the 1080P
+# serve gate's prompt set) runs this cell as it is: the one cell two tiers share besides ltxvae's
+# (tests/lab_files.rs). The script's per-arm timing line in live.log is log only (each arm's benchmark.json).
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "hd-10s"
+description = "h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3) at 1920x1088 (--oversize-canvas) for 10 s, one prompt: time and peak memory"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 10
+width = 1920
+height = 1088
+note = "runpod-matrix.sh's default PROMPT and SEED; the served 1080P canvas at 10 s. Each recipe's arm reads the AdaLN cache file of hd-canvases' arms of that recipe ({runs}/<recipe>-adaln.cache), as the script's: inert for these adapter recipes (ADR-0019 §22.2), kept for equality"
+
+[lists]
+tail = ["--height", "{height}", "--width", "{width}", "--oversize-canvas", "--seconds", "{seconds}", "--prompt", "{prompt}",
+  "--seed", "{seed}", "--text-encoder", "streamed", "--text-cache", "{scratch}/h3-text-cache", "--text-weights",
+  "{weights}/h3-base"]
+
+[[arm]]
+name = "turbo-1080p-10s"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["--mode", "fast", "--techniques", "h3/fasth3_4step_vsa", "h3", "gen", "--weights", "{weights}/h3-base",
+  "--h3-recipe", "4step-vsa", "{@tail}", "--adaln-cache", "{runs}/4step-vsa-adaln.cache", "--clip-dir",
+  "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "max-1080p-10s"
+gate = "sol-h3"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["--mode", "fast", "--techniques", "h3/sol_h3_4step_engine_ladder", "h3", "gen", "--weights", "{weights}/h3-base",
+  "--h3-recipe", "sol-h3", "{@tail}", "--adaln-cache", "{runs}/sol-h3-adaln.cache", "--clip-dir",
+  "{runs}/{arm}/frames"]

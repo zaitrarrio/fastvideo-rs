@@ -7,8 +7,11 @@
 #     naming their tier, ADR-0019 §12), lists split without globbing, and a
 #     fake FV_LAB_BIN receiving exactly the command;
 #   - `gold`, the experiment tiers (h3-graphs, ADR-0019 §14) and the sibling
-#     tiers (oracle-r2, §21) refused for run / all (their plan still the
-#     script's body);
+#     tiers (oracle-r2, §21; hd5, §22) refused for run / all (their plan still
+#     the script's body);
+#   - hd's dropped post-script hook (FV_HD_POST_URL, FV_HD_POST_TIMEOUT_S,
+#     ADR-0019 §22, S2) refused by runpod-http.sh (script path and fv-lab
+#     route) and runpod-matrix.sh;
 #   - the families retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
 #     ADR-0019 §18) refused by runpod-http.sh run / all / plan (dry run or not,
 #     before the key) and by runpod-matrix.sh, exit 2, naming what replaces
@@ -160,6 +163,10 @@ mx "matrix: precision-nvfp4 was never a script family" \
   "FATAL: precision-nvfp4 is an fv-lab tier (the precision family's FV_PRECISION_ARM=ltx-nvfp4 mode), never a runpod-matrix.sh family: fv-lab run precision-nvfp4" \
   precision-nvfp4
 mx "matrix: ltxvae-gen was never a script family" "ltxvae-gen is an fv-lab tier (the ltxvae family's FV_VAE_GEN=1 mode)" ltxvae-gen
+mx "matrix: hd refuses FV_HD_POST_URL" \
+  "FATAL: FV_HD_POST_URL: the hd family's post-script hook was dropped with its derived step" \
+  FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh hd
+mx "matrix: hd5 is no script family" "FATAL: unknown family hd5" hd5
 mx "matrix: precision alone is the retired family" "FATAL: precision is retired to fv-lab (fv-lab-retired.sh): fv-lab run precision " \
   FV_PRECISION_ARM=all precision
 # The restored tiers themselves are fv-lab only.
@@ -198,6 +205,33 @@ for mode in run all; do
 done
 expect "oracle-r2: plan is runpod-http.sh's body" 0 '"name": "fv-lab-oracle-r2-abc1234-t"' -- RUNPOD_API_KEY=x \
   FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=oracle-r2 bash "$HTTP" plan abc1234 abc1234-t
+# hd5 (ADR-0019 §22, S2): the hd family with FV_PROMPTS=prompts-hd5.json, a
+# sibling tier whose cells its family's tier cannot run (another prompt set):
+# never the script path; the refusal names fv-lab's command and the script's
+# form of the same run; its plan the script's body.
+for mode in run all; do
+  expect "hd5: $mode refused" 1 "fv-lab pod up --sha abc1234 --family hd5" -- RUNPOD_API_KEY=x FV_FAMILY=hd5 bash "$HTTP" "$mode" abc1234
+  expect "hd5: $mode names the script's form" 1 \
+    "the script runs it as FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json" -- \
+    RUNPOD_API_KEY=x FV_FAMILY=hd5 bash "$HTTP" "$mode" abc1234
+done
+expect "hd5: plan is runpod-http.sh's body" 0 '"name": "fv-lab-hd5-abc1234-t"' -- RUNPOD_API_KEY=x \
+  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=hd5 bash "$HTTP" plan abc1234 abc1234-t
+
+# hd's post-script hook (FV_HD_POST_URL, its cap FV_HD_POST_TIMEOUT_S) was
+# dropped with the family's derived step (ADR-0019 §22, S2): refused in
+# FV_EXTRA_ENV on the script path (hd, before any pod or key), on the fv-lab
+# route, and by runpod-matrix.sh itself (exit 2, before any arm).
+for k in FV_HD_POST_URL FV_HD_POST_TIMEOUT_S; do
+  for mode in run all plan; do
+    expect "hd: $k refused ($mode)" 1 "$k: the hd family's post-script hook was dropped with its derived step" -- \
+      FV_DRY_RUN=1 FV_FAMILY=hd FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1" bash "$HTTP" "$mode" abc1234
+  done
+  dry "fv-lab route: $k refused" 1 "reads no $k from FV_EXTRA_ENV ($k: the hd family's post-script hook was dropped" \
+    FV_FAMILY=precision FV_EXTRA_ENV="$k=1"
+done
+expect "hd: the script path without the hook is unchanged" 0 "a pod running runpod-matrix.sh hd" -- \
+  FV_DRY_RUN=1 FV_FAMILY=hd FV_EXTRA_ENV="FASTVIDEO_X=1" bash "$HTTP" run abc1234
 
 # b4a (ADR-0019 §11.6): fv-lab only, its GPU gate's cell selected by arm;
 # the script side's FV_B4A_CELLS in FV_EXTRA_ENV is refused with that answer.

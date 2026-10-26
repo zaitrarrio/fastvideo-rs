@@ -95,6 +95,14 @@ pub const SCRIPT_KNOBS: [&str; 10] = [
     "FV_LTX_EXTEND_PROMPT",
 ];
 
+/// The knobs of a step dropped from a live family's branch, which neither
+/// the branch nor any tier reads any more: `hd`'s post-script hook
+/// (`FV_HD_POST_URL`, a script fetched and run on the pod, and its cap
+/// `FV_HD_POST_TIMEOUT_S`), dropped with the family's derived step when `hd`
+/// became a tier (ADR-0019 §22, S2). Refused everywhere, as runpod-http.sh's
+/// `FV_LAB_NOT_READ` (and its script path) refuses them.
+pub const DROPPED_KNOBS: [&str; 2] = ["FV_HD_POST_URL", "FV_HD_POST_TIMEOUT_S"];
+
 /// The blocks the oracle cells dump (`FASTVIDEO_DUMP_OPS` in every arm's
 /// `env`): the script's default. Another value for the `oracle` tier would be
 /// overridden by the cells, so it is refused.
@@ -121,7 +129,10 @@ pub const START_SET: [&str; 8] = [
 /// Every key `fv-lab pod up --extra-env` refuses: `runpod-http.sh`'s
 /// `FV_LAB_NOT_READ`, in its order.
 pub fn not_read() -> impl Iterator<Item = &'static str> {
-    MODE_KNOBS.into_iter().chain(START_SET)
+    MODE_KNOBS
+        .into_iter()
+        .chain(DROPPED_KNOBS)
+        .chain(START_SET)
 }
 
 /// The restored mode `key=value` selects, if any.
@@ -168,6 +179,11 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
     if key == "FV_ATTN3_ARMS" || key == "FV_ATTN3_VSA" {
         return Some(format!(
             "{key}: the attn3 tier runs the script's default arms (FV_ATTN3_ARMS \"v2 cudnn\", FV_ATTN3_VSA \"0 1\"); narrow it by arm with --cells (FV_CELLS) (ADR-0019 §17.2, §17.6)"
+        ));
+    }
+    if DROPPED_KNOBS.contains(&key) {
+        return Some(format!(
+            "{key}: the hd family's post-script hook was dropped with its derived step (the Lanczos compares, the keyframe prune); nothing runs a fetched script (ADR-0019 §22, S2)"
         ));
     }
     if key == "FV_ORACLE_PREFETCH" {
@@ -237,7 +253,7 @@ pub fn check_extra_env(tier: &str, entries: &[String]) -> Result<(), String> {
     message(found)
 }
 
-/// `fv-lab run`: the [`MODE_KNOBS`] and [`SCRIPT_KNOBS`] set (non-empty) in
+/// `fv-lab run`: the [`MODE_KNOBS`], [`SCRIPT_KNOBS`] and [`DROPPED_KNOBS`] set (non-empty) in
 /// its environment, the oracle's `FASTVIDEO_DUMP_OPS`, and `FV_ORACLE_URL`
 /// for `determinism` (which the script's branch read to run the oracle
 /// first; the tier does not, ADR-0019 §15.10). `get` reads one variable (the
@@ -246,6 +262,7 @@ pub fn check_run_env(tier: &str, get: impl Fn(&str) -> Option<String>) -> Result
     let found = MODE_KNOBS
         .iter()
         .chain(&SCRIPT_KNOBS)
+        .chain(&DROPPED_KNOBS)
         .chain(&["FASTVIDEO_DUMP_OPS", "FV_ORACLE_URL"])
         .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (*k, v)))
         .filter_map(|(k, v)| {
@@ -419,8 +436,39 @@ mod tests {
     }
 
     #[test]
+    fn the_dropped_hd_post_script_knobs_are_not_read() {
+        // hd's post-script hook left the script with its derived step
+        // (ADR-0019 §22, S2): no tier and no branch reads them, so fv-lab
+        // refuses them for every tier, in --extra-env and in fv-lab run's
+        // environment, and runpod-http.sh's FV_LAB_NOT_READ does too
+        // (tests/knobs.rs holds them equal).
+        for tier in ["hd", "hd5", "rtx6000"] {
+            let e = check_extra_env(
+                tier,
+                &["FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh".into()],
+            )
+            .unwrap_err();
+            assert!(
+                e.contains("--extra-env FV_HD_POST_URL: the hd family's post-script hook was dropped"),
+                "{e}"
+            );
+        }
+        let env = |k: &str| (k == "FV_HD_POST_TIMEOUT_S").then(|| "5400".to_owned());
+        let e = check_run_env("hd", env).unwrap_err();
+        assert!(e.contains("FV_HD_POST_TIMEOUT_S: the hd family's"), "{e}");
+        assert!(e.contains("ADR-0019 §22"), "{e}");
+        for k in DROPPED_KNOBS {
+            assert!(not_read().any(|n| n == k), "{k}");
+            assert!(!MODE_KNOBS.contains(&k) && !SCRIPT_KNOBS.contains(&k), "{k}");
+        }
+    }
+
+    #[test]
     fn not_read_is_both_lists() {
-        assert_eq!(not_read().count(), MODE_KNOBS.len() + START_SET.len());
+        assert_eq!(
+            not_read().count(),
+            MODE_KNOBS.len() + DROPPED_KNOBS.len() + START_SET.len()
+        );
         for m in RESTORED_MODES {
             assert!(MODE_KNOBS.contains(&m.key), "{}", m.key);
         }

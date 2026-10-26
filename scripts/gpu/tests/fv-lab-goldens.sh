@@ -47,9 +47,10 @@
 # and its extra cells (ADR-0019 §20.3, the ten clip-metric targets) are the
 # family with FV_ORACLE_TARGETS naming those: oracle-extra-dry-run.txt and
 # oracle-extra-gates.tsv (the pod body is the tier's, one fixture). A sibling
-# tier (fv-lab-retired.sh FV_LAB_SIBLINGS, ADR-0019 §21) has no branch of its
-# own: its dry run and gates are its family's under its settings
-# (`oracle-r2`: the oracle family with FV_ORACLE_TARGETS=sfwan13), its pod
+# tier (fv-lab-retired.sh FV_LAB_SIBLINGS, ADR-0019 §21, §22) has no branch of
+# its own: its dry run and gates are its family's under its settings
+# (`oracle-r2`: the oracle family with FV_ORACLE_TARGETS=sfwan13; `hd5`: the
+# hd family with FV_PROMPTS=…/prompts-hd5.json, for the dry run only), its pod
 # body runpod-http.sh plan's for the tier. A `weights = "volume+r2"` tier's
 # body (gold, oracle-r2) carries its container disk, idle limit and RAM floor.
 #
@@ -179,7 +180,7 @@ for FAMILY in $FAMILIES; do
   # The settings a tier is the script under (ADR-0019 §15), else none; and
   # those its extra cells are (ADR-0019 §20.3: lab/tiers.toml extra_cells,
   # run on request only, so a golden of their own, <f>-extra-*).
-  fam_env=() extra_env=()
+  fam_env=() extra_env=() dry_env=()
   case "$FAMILY" in
     oracle)
       fam_env=("FV_ORACLE_TARGETS=fasth3-8step fasth3-8step-vsa0 fasth3-4step-vsa fasth3-4step-dense h3-ref2va-4step ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense"
@@ -189,6 +190,11 @@ for FAMILY in $FAMILIES; do
     # The oracle family's SF-Wan target, on its volume+r2 tier (ADR-0019 §21).
     oracle-r2)
       fam_env=(FV_ORACLE_TARGETS=sfwan13 FV_GEN_TIMEOUT_S=5400) ;;
+    # The hd family's prompts-hd5.json mode (ADR-0019 §22, S2), for the dry run
+    # only: runpod-http.sh plan would forward FV_PROMPTS into the start command,
+    # which fv-lab's hd5 pod does not carry (its prompt set is its cells').
+    hd5)
+      read -r -a dry_env <<<"$(fv_lab_sibling_mode hd5)" ;;
   esac
   # 1. and 2.: <name>-dry-run.txt and <name>-gates.tsv of the family under <env>.
   dry_golden() { # <name> [K=V …]
@@ -224,7 +230,7 @@ for FAMILY in $FAMILIES; do
       esac
     done <"$TMP/pairs.txt" | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" >"$TMP/new/$name-gates.tsv"
   }
-  dry_golden "$FAMILY" ${fam_env[@]+"${fam_env[@]}"}
+  dry_golden "$FAMILY" ${fam_env[@]+"${fam_env[@]}"} ${dry_env[@]+"${dry_env[@]}"}
   if (( ${#extra_env[@]} )); then
     dry_golden "$FAMILY-extra" "${extra_env[@]}"
     FIXTURES+=("$FAMILY-extra-dry-run.txt" "$FAMILY-extra-gates.tsv")

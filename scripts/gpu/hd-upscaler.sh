@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Upscaler benchmark for the hd matrix family (docs/serve/h3-1080p-and-upscaler.md).
-# Runs ON the pod after the hd cells, before their PNG frames are pruned
-# (FV_HD_POST_URL; runpod-http.sh FV_POD_FILES can ship it as a file:// URL):
+# Kept for the record: its hook left runpod-matrix.sh with the hd family's
+# derived step (docs/adr/0019-fv-lab.md §22, S2; FV_HD_POST_URL is refused
+# now), and it reads that step's turbo-768p-lanczos baselines. To re-run it,
+# use the hd branch of `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`, which
+# ran it ON the pod after the hd cells, before their PNG frames were pruned
+# (FV_HD_POST_URL; runpod-http.sh FV_POD_FILES shipped it as a file:// URL):
 #   bash hd-upscaler.sh <RUNS>        (FV_BIN, FV_LPIPS_ARGS from runpod-matrix.sh)
-# It runs as the matrix cell `upscaler`: with FV_CELLS set, list it there
+# It ran as the matrix cell `upscaler`: with FV_CELLS set, list it there
 # (e.g. FV_CELLS="turbo-768p turbo-1080p upscaler").
 # SeedVR2 3B fp16 (one-step diffusion VSR, Apache-2.0) through the numz
 # standalone CLI (pinned, SDPA) on the turbo-768p clips: 768p -> 1088 short
