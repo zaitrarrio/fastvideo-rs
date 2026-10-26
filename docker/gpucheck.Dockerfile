@@ -362,20 +362,16 @@ RUN apt-get update \
 
 # ---- runtime: what a GPU box runs for fv-gpucheck, benchmarks and remote
 # debugging (ghcr.io/zaitrarrio/fastvideo-rs-runtime). base-cuda + thin layers,
-# most stable first. No PyTorch, no toolkit: hosts boot quickly.
+# most stable first. No Python, no PyTorch, no toolkit: hosts boot quickly.
 # scripts/gpu/remote.sh needs ssh/rsync (Vast boxes), curl (fetch-baseline);
 # `ldd`, tar and gzip come with Ubuntu. NVENC needs the driver's `video`
-# capability (base-cuda sets it). python3 (stdlib only, no pip): the R2 tools
-# `fv-lab run` calls on a `weights = "volume+r2"` tier (scripts/gpu/r2-weights.py
-# plan, r2-fetch.py; docs/adr/0019-fv-lab.md §16), checked by importing what
-# they import beyond the core (`weights::PYTHON_CHECK`).
+# capability (base-cuda sets it).
 FROM base-cuda AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-server rsync curl python3 \
+ && apt-get install -y --no-install-recommends openssh-server rsync curl \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/dpkg.log /var/log/apt \
- && mkdir -p /run/sshd \
- && python3 -c "import concurrent.futures, hashlib, hmac, http.client, json, ssl, urllib.request, xml.etree.ElementTree"
+ && mkdir -p /run/sshd
 # CUPTI for FASTVIDEO_GPU_TRACE (cudarc `cupti`, loaded lazily; fv-serve's
 # variant images go without it).
 COPY --from=cupti-libs /out/ /usr/local/cuda-13.4/lib64/

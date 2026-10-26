@@ -394,8 +394,8 @@ tree from the R2 weights store onto the container disk, right before the first a
 - Per arm, when a tree it reads is not on the disk yet: the fetched trees it does not read are removed, then
   `r2-weights.py plan <dest>@<rev> --pin weights-r2.tsv` (the revisions and manifest SHA-256s of
   `scripts/gpu/weights-r2.tsv`) and `r2-fetch.py` fetch the missing ones under the arm's cap. Logs: `<arm>/r2-fetch.log`,
-  `<arm>/r2-fetch.json`, the `r2 <arm>: …` lines of `live.log`. The runtime image carries `python3`; an older one gets
-  it with apt at the first fetch (`r2-apt.log`).
+  `<arm>/r2-fetch.json`, the `r2 <arm>: …` lines of `live.log`. The runtime image has no Python (by design), so the
+  first fetch installs `python3` with apt (`r2-apt.log`, at most 10 min; a failure is retried at the next fetch).
 - A failed fetch records the arm as skipped (`r2 fetch failed`); a tree in neither place as `weights incomplete`.
 - The root is never on the volume: run by hand, pass `--scratch` (or `FV_SCRATCH`) on the container disk, e.g.
   `fv-lab run gold --all --work /workspace --scratch /fvscratch`; without it (the scratch disk is then the work

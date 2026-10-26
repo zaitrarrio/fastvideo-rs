@@ -31,7 +31,8 @@ pub const R2_TABLE: &str = "scripts/gpu/weights-r2.tsv";
 /// Its file name, beside the R2 tools (`r2-weights.py plan --pin`).
 pub const R2_TABLE_NAME: &str = "weights-r2.tsv";
 /// What the R2 tools import beyond the core (`python3 -c`): a `python3` that
-/// runs this runs them.
+/// runs this runs them. The runtime image has no python3 (Python-free by
+/// design, checked by its CI job); the runner installs it with apt.
 pub const PYTHON_CHECK: &str = "import concurrent.futures, hashlib, hmac, http.client, json, ssl, urllib.request, xml.etree.ElementTree";
 
 /// One fetch's cap (s): the tier's `cell_timeout_s`, 3600 when it is 0.
@@ -44,8 +45,8 @@ pub fn fetch_cap_s(cell_timeout_s: u64) -> u64 {
 }
 
 /// The idle watchdog's limit (min) for a `volume+r2` pod: the longest the
-/// runner keeps the GPU idle on its own, a fallback `apt-get` (10 min) then
-/// one fetch at its cap, plus 15 min; never under the volume tiers' 10 / 30.
+/// runner keeps the GPU idle on its own, the `apt-get` that brings python3
+/// at the first fetch (at most 10 min) then that fetch at its cap, plus 15 min; never under the volume tiers' 10 / 30.
 /// The watchdog counts minutes at 0 % GPU, and an R2 fetch uses none.
 pub fn r2_idle_min(cell_timeout_s: u64) -> u32 {
     let s = crate::run::APT_CAP_S + fetch_cap_s(cell_timeout_s);

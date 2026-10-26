@@ -199,19 +199,21 @@ fn every_cell_file_belongs_to_a_tier() {
 }
 
 #[test]
-fn the_runtime_image_carries_the_python_the_r2_tools_need() {
-    // A `volume+r2` tier (ADR-0019 §16) runs scripts/gpu/r2-weights.py and
-    // r2-fetch.py on the runtime image: its stage installs python3 and checks
-    // the same imports the runner checks before a fetch.
+fn the_runtime_image_stays_python_free_so_the_runner_brings_python3() {
+    // The runtime image is Python-free by design (its CI job fails on a
+    // python3); a `volume+r2` run (ADR-0019 §16) installs python3 with apt at
+    // its first fetch instead, and the pod's idle limit counts that install.
     let docker = read("docker/gpucheck.Dockerfile");
     let stage = docker
         .split("FROM base-cuda AS runtime")
         .nth(1)
         .and_then(|r| r.split("\nFROM ").next())
         .expect("the runtime stage");
-    assert!(stage.contains("--no-install-recommends openssh-server rsync curl python3"));
-    assert!(stage.contains(&format!(
-        "python3 -c \"{}\"",
-        fastvideo_lab::weights::PYTHON_CHECK
-    )));
+    assert!(
+        docker.contains("No Python, no PyTorch"),
+        "the runtime stage's rule"
+    );
+    assert!(!stage.contains("python3"), "python3 in the runtime stage");
+    assert_eq!(fastvideo_lab::run::APT_CAP_S, 600);
+    assert_eq!(fastvideo_lab::weights::r2_idle_min(3600), 85);
 }

@@ -1375,5 +1375,5 @@ ran (pod id, $/hr), result, cost.
 - 2026-10-26, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): #201 review fixes on
   `claude/lab-r2-weights` (ADR-0019 §16.9): the merged weights root refused on or above the volume
   (exit 2), an 85 min idle limit for `volume+r2` pods, a run deadline in the pod's env and the
-  driver's 15 min fetch reserve, `r2-weights.py plan --pin`, partial-fetch clean-up, `python3` in the
-  runtime image. Build pod `dbf6gok3crgj9x`. No GPU, no R2 or volume write.
+  driver's 15 min fetch reserve, `r2-weights.py plan --pin`, partial-fetch clean-up, python3 by a capped,
+  retried apt install (the runtime image stays Python-free). Build pod `dbf6gok3crgj9x`. No GPU, no R2 or volume write.

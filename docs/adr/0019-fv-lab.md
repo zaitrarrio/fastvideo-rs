@@ -1494,11 +1494,15 @@ Before an arm's gate (`Runner::stage_r2`; `gated_cell` and so `tae_gated_cell` a
    fetched tree the arm does not read (and that holds none it reads) is **removed**, then the missing ones are fetched.
    An arm that fetches nothing changes nothing, so a tree stays across volume-only arms until an arm that must fetch
    needs the room. Only directories the run fetched are removed; a symlink is never removed (`remove_fetched`).
-2. `python3`: the runtime image carries it now (`docker/gpucheck.Dockerfile` `runtime`: `python3`, stdlib only, the
-   build checks the tools' imports, `weights::PYTHON_CHECK`; `python3-minimal` alone lacks part of the stdlib they
-   import, so the full interpreter package, no recommends). An older image gets it at the first fetch with `timeout 600
-   apt-get … -o DPkg::Lock::Timeout=120 install python3` (into `<runs>/r2-apt.log`), as fv-boot does; only a success is
-   remembered, so after a failure the next fetching arm tries again.
+2. `python3`: the runtime image has none, and stays so. It is Python-free by design (`docker/gpucheck.Dockerfile`
+   `runtime`: "No Python, no PyTorch, no toolkit: hosts boot quickly"), and the image job fails on a `python3` in it
+   (`gpucheck-runtime-image.yml`); only the `volume+r2` runs need one, so they bring it rather than every runtime pod
+   carrying it. At the first fetch of a run the runner checks the tools' imports (`weights::PYTHON_CHECK`) and, when
+   they fail, runs `apt-get update` and `apt-get install -y --no-install-recommends python3` (`-o
+   DPkg::Lock::Timeout=120`) under one `timeout 600` (`APT_CAP_S`, the bound the idle limit counts, §16.6), into
+   `<runs>/r2-apt.log`, as fv-boot does on an image without it. Only a success is remembered: after a failure the next
+   fetching arm tries again (`tests/r2_runner.rs` `a_failed_python3_install_is_tried_again_…`), and
+   `tests/lab_files.rs` holds the runtime stage Python-free.
 3. `python3 scripts/gpu/r2-weights.py plan <dest>@<rev>… --pin scripts/gpu/weights-r2.tsv --ttl <cap + 600> --out
    <scratch>/r2/plan.json`: the presigned plan for exactly the missing trees, at the revisions `weights-r2.tsv` records
    (no listing). `--pin` (new) refuses a manifest whose SHA-256 is not that table's column 5, as fv-control's
@@ -1611,8 +1615,6 @@ times project past about 3.5 h, splitting the full run in two with `--cells` (th
 
 #### 16.8 Differences, and what stays
 
-- The `scripts/gpu/experiments/*-validate.sh` comments that say the runtime image has no Python are now stale (D1e's
-  files, left to it).
 - A nested R2 tree is fetched only with its parent (refused otherwise, §16.3); no gold arm reads one.
 - The preflight `weights.log` and `tree.txt` at pod start still describe the volume only.
 - `gold-run.yml` needs nothing new: the key is a Runpod secret, not a GitHub one.
@@ -1623,7 +1625,8 @@ The coordinator's review, all fixed on the branch: the merged root may never be 
 finding: without `--scratch` it was `/workspace/weights`, and fetches, removals and the staging clean-up would have
 written and deleted there); the idle watchdog's limit for `volume+r2` pods (§16.6); a run deadline and the driver's
 fetch reserve, so a run near the cap ends and is fetched (§16.7); `plan --pin` (§16.4); a partly failed fetch keeps
-what it completed and removes the rest (§16.4); `python3` in the runtime image, apt as a retried, capped fallback
-(§16.4); the TAE directory read from the volume's marker when the command lines are rendered (`RunConfig::tae`);
+what it completed and removes the rest (§16.4); python3 by a capped apt install retried at the next fetching arm
+(§16.4: the review's suggestion to put python3 in the runtime image was dropped, because that image is Python-free by
+design and its CI check fails on it); the TAE directory read from the volume's marker when the command lines are rendered (`RunConfig::tae`);
 `FV_EU_VOLUME_TREES` names checked; the nested-tree classification pinned by a test; `--skip-trees ''`; `plan.json`
 removed at the run's start; the schema wording (§16.2).

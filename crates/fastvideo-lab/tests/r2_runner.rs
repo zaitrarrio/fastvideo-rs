@@ -210,9 +210,10 @@ esac
     script(
         &f.dir.join("bin/apt-get"),
         &format!(
-            "echo \"apt-get $*\" >> {}\ncase \" $* \" in *\" install \"*) rm -f {} ;; esac\nexit 0\n",
-            rec.display(),
-            gate.display()
+            "echo \"apt-get $*\" >> {rec}\n[ -f {fail} ] && {{ rm -f {fail}; exit 100; }}\ncase \" $* \" in *\" install \"*) rm -f {gate} ;; esac\nexit 0\n",
+            rec = rec.display(),
+            gate = gate.display(),
+            fail = f.dir.join("aptfail").display()
         ),
     );
     py.display().to_string()
@@ -400,9 +401,35 @@ fn a_missing_python3_is_installed_once_with_apt() {
         2,
         "checked before and after: {calls}"
     );
+    assert!(
+        calls.contains("-o DPkg::Lock::Timeout=120 install"),
+        "{calls}"
+    );
+    // update and install under one cap, the one the idle limit counts.
+    assert_eq!(read(&f.dir.join("scratch/r2/cap.txt")), "77\n");
     let runs = f.dir.join("scratch/runs/fam/t1");
     assert!(read(&runs.join("two/summary.json")).contains("\"exit\":0,"));
     assert!(read(&runs.join("live.log")).contains("r2: no python3 in the image"));
+}
+
+#[test]
+fn a_failed_python3_install_is_tried_again_at_the_next_fetch() {
+    let f = fake("apt-retry");
+    let cell = CellFile::parse(CELL, "c.toml").unwrap();
+    let cfg = config(&f, setup(&f, key()));
+    std::fs::write(f.dir.join("nopython"), "").unwrap();
+    std::fs::write(f.dir.join("aptfail"), "").unwrap();
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    let mut r = Runner::new(cfg);
+    r.run(&steps).unwrap();
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    // `one` (the first fetch) found no python3 and its install failed;
+    // `again` reads the same tree, so it fetches and installs again.
+    assert!(read(&runs.join("one/summary.json")).contains("\"skipped\":\"r2 fetch failed\""));
+    assert!(read(&runs.join("live.log")).contains("SKIP one: r2 fetch failed: python3 unavailable"));
+    assert!(read(&runs.join("again/summary.json")).contains("\"exit\":0,"));
+    let calls = read(&f.dir.join("python.log"));
+    assert_eq!(calls.matches("apt-get ").count(), 3, "{calls}");
 }
 
 #[test]

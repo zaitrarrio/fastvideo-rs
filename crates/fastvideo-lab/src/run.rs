@@ -127,7 +127,8 @@ pub const MIN_ARM_S: f64 = 600.0;
 /// The fetch rate the deadline assumes (bytes/s): well under the 0.61-0.79
 /// GB/s two R2-mode pods measured (docs/serve/e2e/h3-test-round-2026-10-14.md).
 pub const R2_RATE_FLOOR: f64 = 250e6;
-/// The fallback `apt-get` (python3 when the image lacks it) runs under this cap (s).
+/// The `apt-get` that brings python3 (the runtime image has none) runs, update
+/// and install together, under this cap (s).
 pub const APT_CAP_S: u64 = 600;
 
 impl RunConfig {
@@ -1555,10 +1556,13 @@ impl Runner {
         Ok(())
     }
 
-    /// `python3` for the R2 tools. The runtime image carries it
-    /// (`docker/gpucheck.Dockerfile` `runtime`); an older image gets it with
-    /// `apt-get install python3` (as fv-boot does), under `timeout 600` and
-    /// a 120 s dpkg lock wait, into `<runs>/r2-apt.log`. Only a success is
+    /// `python3` for the R2 tools. The runtime image is Python-free by design
+    /// (`docker/gpucheck.Dockerfile` `runtime`, enforced by the image job's
+    /// check), so a `volume+r2` run installs it at its first fetch, as fv-boot
+    /// does on an image without it: `apt-get update` then `install python3`
+    /// in one `timeout 600` (so the whole install, the GPU idle meanwhile, is
+    /// bounded by [`APT_CAP_S`], which the pod's idle limit counts), with a
+    /// 120 s dpkg lock wait, into `<runs>/r2-apt.log`. Only a success is
     /// remembered: after a failure the next fetching arm tries again.
     fn ensure_python(&mut self, r: &R2Setup, state: &Path) -> Result<(), String> {
         if self.python_ok {
@@ -1576,32 +1580,26 @@ impl Runner {
         if !ok {
             let log = self.runs.join("r2-apt.log");
             self.log("r2: no python3 in the image: apt-get install python3 (r2-apt.log)");
-            let apt = |args: &[&str]| {
-                let (Ok(o), Ok(e)) = (append(&log), append(&log)) else {
-                    return false;
-                };
-                self.cmd(&self.cfg.timeout)
+            const OPTS: &str =
+                "-o Acquire::http::Timeout=15 -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120";
+            let script = format!(
+                "\"$0\" {OPTS} update -qq && \"$0\" {OPTS} install -y -qq --no-install-recommends python3"
+            );
+            let installed = match (append(&log), append(&log)) {
+                (Ok(o), Ok(e)) => self
+                    .cmd(&self.cfg.timeout)
                     .args(["--signal=TERM", "--kill-after=15", &APT_CAP_S.to_string()])
+                    .args(["sh", "-c", &script])
                     .arg(&r.apt_get)
                     .env("DEBIAN_FRONTEND", "noninteractive")
-                    .args([
-                        "-o",
-                        "Acquire::http::Timeout=15",
-                        "-o",
-                        "Acquire::Retries=3",
-                        "-o",
-                        "DPkg::Lock::Timeout=120",
-                    ])
-                    .args(args)
                     .current_dir(state)
                     .stdout(o)
                     .stderr(e)
                     .status()
-                    .is_ok_and(|s| s.success())
+                    .is_ok_and(|s| s.success()),
+                _ => false,
             };
-            ok = apt(&["update", "-qq"])
-                && apt(&["install", "-y", "-qq", "--no-install-recommends", "python3"])
-                && check(self);
+            ok = installed && check(self);
         }
         self.python_ok = ok;
         if ok {
