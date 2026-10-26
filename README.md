@@ -75,7 +75,9 @@ scripts/gpu/runpod-http.sh upstream [sha] # the upstream Python references (scri
 
 `scripts/gpu/README.md` has the family matrix (`runpod-matrix.sh`), the
 evaluation layer and the older Vast ladder (`validate.sh`, `task clip`), and
-`scripts/gpu/experiments/` holds the per-port experiment drivers. Serving
+`scripts/gpu/experiments/` holds the one port experiment driver still waiting
+for its fv-lab tier's GPU check (`h3-graphs`; the others are deleted or fv-lab
+tiers, `docs/adr/0019-fv-lab.md` §14). Serving
 (fv-serve, images, Runpod serverless and pod deployments, GCP) is documented
 under `docs/serve/`, starting at `docs/serve/design.md` and
 `docs/serve/images.md`.

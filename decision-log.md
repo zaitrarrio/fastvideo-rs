@@ -1831,3 +1831,23 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0018-fv-deploy.md §10.3, §10.4, §10.7
 - Verification: `the_ledger_hears_of_a_create_only_after_its_backstop_and_price_check`, `the_backstop_records_its_delete`, `a_listing_that_is_not_one_is_an_error`, `reconcile_and_sync_stop_on_an_answer_that_is_not_a_listing`, `not_checked_guards_are_refused_and_shown` (missing key), `release_goldens` (28 scenarios, order, the launch channel), `fv-deploy-goldens.sh --check` (jq 1.6 and 1.7), control `launch-goldens.test.ts`
+
+### FVID · 2026-10-26 · FVID-2026-10-26-fv-lab-one-offs
+- Trigger: plan D1, slice D1e (ADR-0019 §8: "the 24 port one-offs in `scripts/gpu/experiments/` become cells or are deleted; `runpod-http.sh` is deleted once nothing calls it")
+- Options: (a) every experiment as cells; (b) keep only what a gold file, a served variant or an open item still depends on and fv-lab can run (EU-volume trees, no upstream stack), delete the finished rest; (c) leave the directory as it is
+- Decision: (agent, proposed for the coordinator's review) (b). `h3-graphs` becomes the tier `h3-graphs` (its h3-turbo cells: the open item of `docs/perf/h3-denoise-graphs.md` §5 on the default H3 tier, all trees on the EU volume), its commands cut from `h3-graphs-pod.sh` itself by `fv-lab-experiment-goldens.sh` and held word for word after a documented path mapping (`tests/experiment_tiers.rs`); its scripts stay until its GPU check (§14.4, ~$1.45). The other nine (`fasth3-nvfp4`, `h3-fp4attn`, `h3-glue`, `h3-tier-options`, `h3-tier-ship`, `h3-trim`, `h3-trim-nvfp4`, `h3-turbo-loras`, `vdn-h3`) are deleted: finished, recorded in `docs/ports` / `docs/perf` with their evidence in `artifacts/`, their trees R2-only and half of them upstream-parity runs (the oracle's, D1d). `FV_LAB_EXPERIMENTS` marks tiers made from a one-off (never script families: `runpod-http.sh run` / `all` refuse them, as `gold`). `runpod-http.sh` stays: its callers are listed (§14.6). The `runpod-matrix.sh` families §9.1 marks "D1e or retired" get a proposal only (§14.7): D1d edits that script in parallel. No new dependency; no live resource touched
+- Reason: a one-off kept as data must run on what fv-lab reaches today and measure something still open; the gold tier, the byte-identity tiers, `fv-gpucheck kernels` and the oracle cover what the deleted ones proved, and their results and evidence stay
+- Reversibility: high (the deleted scripts are in git at `22a5fd7b`; the tier is additive)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §14
+- Verification: CPU: `tests/experiment_tiers.rs` (the four arms equal the pod script's turbo commands under the §14.3 mapping, the tier's dry run equals its golden, the compares), `fv-lab-experiment-goldens.sh --check` (the script's 12 commands, its prompt sets byte for byte; CI `control.yml`), `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, `self-delete.test.sh`, the fastvideo-lab and workspace tests; GPU: §14.4 pending (the coordinator's)
+
+### FVID · 2026-10-26 · FVID-2026-10-26-fv-lab-one-offs-review
+- Trigger: the coordinator's review of #200 at `bfa9a1dc` (nothing blocking; the gawk fix confirmed)
+- Options: fix each in #200; or defer
+- Decision: (coordinator, executed by the D1e agent) fix all in #200. ADR-0019 §14.4 and `scripts/gpu/experiments/README.md` say the commit deleting `h3-graphs-{validate,pod}.sh` must drop its `LOCAL` entry in `self-delete.test.sh` and lower the launcher floor to 2; the §14.2 rows of `h3-tier-options`, `h3-tier-ship`, `h3-fp4attn`, `vdn-h3` (and those docs) say that, until PR #201 (the gold tier on `volume+r2` weights) is merged and the gold run done, their numbers' reproduction is `git show 22a5fd7b:…`; `docs/perf/h3-denoise-graphs.md` uses the §14.4 command (`--wall-cap-s 3600 --fetch-tree --fetch-skip …`); the §14.4 checks fail loudly; the weak "vdn-h3 gold cites the doc" keep reason dropped; the `--warm` cold clip's non-comparison listed among the differences; `--no-renames` on the goldens' deletion lookup; the frames estimate 8-10 GB
+- Reason: the deletion of the kept scripts must not break a test; a deleted experiment's gold numbers must say how to reproduce them until the gold tier can
+- Reversibility: high (docs and a test script)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §14.2-§14.4
+- Verification: `fv-lab-experiment-goldens.sh --check` under gawk, mawk and busybox awk; the shell goldens and route / self-delete tests; the fastvideo-lab tests on the build pod

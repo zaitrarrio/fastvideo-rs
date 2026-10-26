@@ -1,0 +1,35 @@
+# The h3-graphs experiment's h3-turbo trace (scripts/gpu/experiments/h3-graphs-pod.sh, step `trace`, checkpoint
+# `turbo`; docs/perf/h3-denoise-graphs.md §1, §5; docs/adr/0019-fv-lab.md §14): one process with the CUDA graphs of the
+# denoise steps on (FASTVIDEO_H3_GRAPHS=1) and a CUPTI trace of step 1 (FASTVIDEO_GPU_TRACE=1) over the script's
+# trace prompt set: a spark-mountain-lake warm-up request, then h3-demo eager, captured and replayed, at 1344x768,
+# 124 frames, seed 1024. The command is the pod script's, word for word, with its paths mapped (ADR-0019 §14.3;
+# tests/experiment_tiers.rs against fixtures/experiments/h3-graphs-script.txt): /srv/trace/turbo-768p is this arm's
+# run directory, its clip/ is frames/, the script's /fvw scratch files are {runs}/h3-graphs-turbo-adaln.cache and
+# {scratch}/h3-graphs-text-cache, and its prompts file is scripts/gpu/prompts-h3-graphs-trace-768p.json (the
+# script's own prep output, byte for byte). It runs before the timed cell, as in the script, and writes the AdaLN
+# cache and the text cache that cell then reads.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "h3-graphs-turbo-trace"
+description = "h3-turbo (FastH3 4-step VSA, MXFP8) at 1344x768: one traced process with the step graphs on, warm-up then eager / captured / replayed requests (the h3-graphs experiment's trace step)"
+
+[workload]
+model = "h3"
+prompt_set = "scripts/gpu/prompts-h3-graphs-trace-768p.json"
+frames = 124
+width = 1344
+height = 768
+note = "The prompt set carries each request's prompt, seed (1024) and canvas; --height / --width size only an untimed first request, which this process (no --warm) does not make. `--prompt unused` is the script's: gen requires one and the set replaces it."
+
+[[arm]]
+name = "h3-graphs-turbo-trace-768p"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+note = "the recipe's MXFP8 DiT is h3-base/transformer_prequant_4step-vsa_mxfp8, on the EU volume"
+env = ["FASTVIDEO_H3_GRAPHS=1", "FASTVIDEO_GPU_TRACE=1"]
+argv = ["--mode", "fast", "--techniques", "h3/fasth3_4step_vsa", "--out", "{runs}/{arm}/report", "h3", "gen",
+  "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa", "--adaln-cache", "{runs}/h3-graphs-turbo-adaln.cache",
+  "--height", "{height}", "--width", "{width}", "--text-encoder", "streamed", "--text-weights", "{weights}/h3-base",
+  "--text-cache", "{scratch}/h3-graphs-text-cache", "--no-mp4", "--num-frames", "{frames}", "--prompt", "unused",
+  "--prompts", "{prompt_set}", "--clip-dir", "{runs}/{arm}/frames"]

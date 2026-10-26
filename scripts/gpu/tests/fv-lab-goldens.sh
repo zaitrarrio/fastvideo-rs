@@ -20,7 +20,7 @@
 #
 # Fixtures, per family <f> (every [[tier]] name of lab/tiers.toml but the
 # frozen ones; for the `gold` tier, generated from lab/gold/ and no script
-# family, only the pod body):
+# family, and the experiment tiers (FV_LAB_EXPERIMENTS), only the pod body):
 #   <f>-dry-run.txt            FV_DRY_RUN=1 runpod-matrix.sh <f>: every log line of the
 #                              family without its [HH:MM:SS] stamp, the volume at
 #                              /workspace (its auxiliary/tae complete), the container disk at /fvscratch, the
@@ -73,6 +73,11 @@ has_branch() {
 for f in $FV_LAB_RETIRED; do
   grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: retired family $f is no tier of lab/tiers.toml" >&2; exit 2; }
 done
+for f in $FV_LAB_EXPERIMENTS; do
+  grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: experiment tier $f is no tier of lab/tiers.toml" >&2; exit 2; }
+  fv_lab_retired "$f" && { echo "fv-lab-goldens: $f is both an experiment tier and retired (fv-lab-retired.sh)" >&2; exit 2; }
+  ! has_branch "$f" || { echo "fv-lab-goldens: experiment tier $f has a runpod-matrix.sh branch" >&2; exit 2; }
+done
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -90,7 +95,11 @@ for FAMILY in $FAMILIES; do
   # runpod-matrix.sh family: its cells come from lab/gold/ and fv-lab's own dry
   # run is its golden (fixtures/gold-dry-run.txt, tests/gold_tier.rs). Its pod
   # is runpod-http.sh's like every tier's, so only the pod body is written here.
-  if [[ "$FAMILY" == gold ]]; then
+  # The tiers made from a port one-off (fv-lab-retired.sh FV_LAB_EXPERIMENTS,
+  # ADR-0019 §14) are the same: no script family, their commands held to the
+  # experiment's pod script by fv-lab-experiment-goldens.sh, their dry run
+  # fv-lab's own (tests/experiment_tiers.rs).
+  if [[ "$FAMILY" == gold ]] || fv_lab_experiment "$FAMILY"; then
     clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
       bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
     FIXTURES+=("runpod-http-$FAMILY.json")

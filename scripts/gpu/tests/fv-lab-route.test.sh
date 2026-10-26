@@ -6,7 +6,8 @@
 #     dropped modes' knobs refused in FV_EXTRA_ENV (the two restored modes
 #     naming their tier, ADR-0019 §12), lists split without globbing, and a
 #     fake FV_LAB_BIN receiving exactly the command;
-#   - `gold` refused for run / all (its plan still the script's body);
+#   - `gold` and the experiment tiers (h3-graphs, ADR-0019 §14) refused for
+#     run / all (their plan still the script's body);
 #   - runpod-matrix.sh `headline` on a fake box: its cells through a fake
 #     fv-lab (FV_RUNS_DIR), a failing fv-lab logged, a missing one and
 #     FV_PROMPTS / FV_PROMPT / FV_SEED refused (exit 2);
@@ -160,6 +161,14 @@ for mode in run all; do
 done
 expect "gold: plan is runpod-http.sh's body" 0 '"name": "fv-lab-gold-abc1234-t"' -- RUNPOD_API_KEY=x \
   FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=gold bash "$HTTP" plan abc1234 abc1234-t
+
+# The tiers made from a port one-off (fv-lab-retired.sh FV_LAB_EXPERIMENTS,
+# ADR-0019 §14): like gold, never the script path; their plan the script's body.
+for mode in run all; do
+  expect "h3-graphs: $mode refused" 1 "fv-lab pod up --sha abc1234 --family h3-graphs" -- RUNPOD_API_KEY=x FV_FAMILY=h3-graphs bash "$HTTP" "$mode" abc1234
+done
+expect "h3-graphs: plan is runpod-http.sh's body" 0 '"name": "fv-lab-h3-graphs-abc1234-t"' -- RUNPOD_API_KEY=x \
+  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=h3-graphs bash "$HTTP" plan abc1234 abc1234-t
 
 # b4a (ADR-0019 §11.6): fv-lab only, its GPU gate's cell selected by arm;
 # the script side's FV_B4A_CELLS in FV_EXTRA_ENV is refused with that answer.

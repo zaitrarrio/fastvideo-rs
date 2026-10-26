@@ -49,3 +49,11 @@ the four `scripts/gpu/weights-{manifest,r2,revisions,sha256}.tsv`, the R2
 publish (`docs/ops/r2-weights.md`) and `scripts/gpu/verify-weights.sh`; a
 gold file `lab/gold/<variant>.toml` (ADR-0009); and the write-up
 `docs/ports/<fam>.md` plus its `docs/scope.md` row.
+
+GPU runs that prove a port (timing, byte identity, quality against another
+arm) are fv-lab cells and a tier (`lab/cells/`, `lab/tiers.toml`,
+`docs/dev/fv-lab.md`), not a new one-off pod script: D1e
+(`docs/adr/0019-fv-lab.md` §14) deleted the one-offs under
+`scripts/gpu/experiments/` but the one waiting for its tier's GPU check.
+Parity against the upstream implementation is the oracle's
+(`scripts/gpu/upstream/`, `docs/oracle.md`).

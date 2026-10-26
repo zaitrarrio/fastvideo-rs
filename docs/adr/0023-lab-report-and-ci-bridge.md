@@ -176,7 +176,8 @@ shown as failed: that is a finding, not a number.
   `h3-graphs-validate.sh:107`, `h3-graphs-pod.sh:92`, `h3-fp4attn-pod.sh:82`, `h3-tier-ship-pod.sh:74`,
   `h3-trim-pod.sh:56`, `h3-trim-validate.sh:120`, `h3-tier-options-validate.sh:126`, `fasth3-nvfp4-validate.sh:93`,
   `h3-trim-nvfp4-pod.sh:48`, `fasth3-nvfp4-pod.sh:56`, `h3-turbo-loras-pod.sh:49`, `h3-trim-nvfp4-validate.sh:83`).
-  A re-grep found no others. Each now calls `fv_self_delete`, whose one definition is
+  A re-grep found no others. (D1e, docs/adr/0019-fv-lab.md §14, later deleted every one-off above but
+  `h3-graphs-{validate,pod}.sh`; they are in git at `22a5fd7b`.) Each now calls `fv_self_delete`, whose one definition is
   `scripts/gpu/lib/self-delete.sh`; `runpod-http.sh` and `pod-start.sh.in` carry the same text (their goldens
   regenerated). After review (2026-10-25) the function hands curl the `Authorization` header on stdin (`printf … |
   curl … -H @-`: POSIX, the key never in a process's argv), keeps its status in `_fvsd_code` / `_fvsd_ok` (no global
