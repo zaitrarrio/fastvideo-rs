@@ -975,3 +975,7 @@ and LICENSE are byte-identical to `h3-base` @ `42ed227` and `h3-8step` @ `3da2dd
 (`fastvideo_inference.json`, `checkpoint_*.json`, `modular_model_index.json`), schedulers, NOTICE and
 LICENSE-Qwen3-VL equal `h3-8step`'s, and the 4-step's schedulers equal `h3-base`'s. The small files neither R2 tree
 holds come from the Hub at the pinned revisions (`scripts/gpu/experiments/fasth3-nvfp4-pod.sh`, deleted in D1e, docs/adr/0019-fv-lab.md §14; in git at `22a5fd7b`). Neither tree is on the 500 GB EU volume.
+
+`verify-weights.sh` checks the left-out vae shard 3 at h3-base's path, the copy the H3 loader reads (`shared_file`;
+`completed_vae_files` in crates/fastvideo-cudarc/src/h3/pipeline.rs). Before that (2026-10-26) the `variant:` gates of the
+gold run at `e9b9435` skipped all four NVFP4 arms as `MISSING shard` on complete trees.

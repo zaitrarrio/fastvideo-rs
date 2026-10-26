@@ -27,7 +27,9 @@
 #
 # For every weight root a cell needs, this checks:
 #   1. each required component directory / file exists (dir, or file for LoRAs);
-#   2. every `*.safetensors.index.json` lists shards that all exist on disk;
+#   2. every `*.safetensors.index.json` lists shards that all exist on disk (a shard a
+#      published tree leaves out because it is byte-identical in another tree, `shared_file`
+#      below, is checked at that other tree's path instead);
 #   3. every safetensors file is its full length (header + data, via
 #      verify-safetensors.sh), following HF-cache symlinks.
 # The `aux` cell instead checks every auxiliary/ url: row of weights-manifest.tsv (TAE and
@@ -281,16 +283,41 @@ fi
 fail=0
 declare -A checked=()
 
+# shared_file <tree>/<path>: the <tree>/<path> the engine reads in place of a file that a published
+# tree's index names but the tree does not carry, because it is byte-identical there; status 1 for any
+# other file. Only the files listed here may be absent from a tree; the copy is checked in their place.
+#   fasth3-v2-nvfp4, fasth3-4step-vsa-nvfp4: the R2 trees carry vae/ shards 1-2 (the NVFP4 decoder
+#   linears), the config and the index; shard 3 equals h3-base's @ 42ed227 and was not published
+#   (weights-manifest.tsv, docs/ops/r2-weights.md §15). The H3 loader reads it from h3-base's vae/
+#   (crates/fastvideo-cudarc/src/h3/pipeline.rs `completed_vae_files`).
+shared_file() {
+  case "$1" in
+    fasth3-v2-nvfp4/vae/diffusion_pytorch_model-00003-of-00003.safetensors | \
+      fasth3-4step-vsa-nvfp4/vae/diffusion_pytorch_model-00003-of-00003.safetensors)
+      echo "h3-base/vae/${1##*/}" ;;
+    *) return 1 ;;
+  esac
+}
+
 check_index() {
-  # Every shard named in an index's weight_map must be present.
-  local idx="$1" dir shard
+  # Every shard named in an index's weight_map must be present: in its own
+  # directory, or for a shared_file at the path of the copy the engine reads.
+  local idx="$1" dir shard alt
   dir="$(dirname "$idx")"
   while IFS= read -r shard; do
     [[ -n "$shard" ]] || continue
-    if [[ ! -e "$dir/$shard" ]]; then
-      echo "  MISSING shard $dir/$shard (listed in $(basename "$idx"))" >&2
-      return 1
+    [[ -e "$dir/$shard" ]] && continue
+    if alt="$(shared_file "${dir#"$W"/}/$shard")"; then
+      if [[ ! -e "$W/$alt" ]]; then
+        echo "  MISSING shard $dir/$shard (listed in $(basename "$idx")): not published in this tree; the engine reads $W/$alt, which is missing" >&2
+        return 1
+      fi
+      check_path "$W/$alt" || return 1
+      echo "  shared shard $dir/$shard: $W/$alt (byte-identical, read from there)"
+      continue
     fi
+    echo "  MISSING shard $dir/$shard (listed in $(basename "$idx"))" >&2
+    return 1
   done < <(grep -oE '"[^"]+\.safetensors"' "$idx" | tr -d '"' | sort -u)
 }
 
