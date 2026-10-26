@@ -91,10 +91,10 @@ scenario() {
   esac
   reqs="$(curl -sS "$M/__log?since=$since" | jq -c .requests)"
   SCEN="$(jq -c --arg name "$name" --arg prog "$prog" --argjson args "$(printf '%s\n' "$@" | jq -R . | jq -sc .)" \
-    --argjson env "$(printf '%s\n' "${ENVS[@]}" | jq -R 'select(length > 0)' | jq -sc .)" \
+    --argjson envs "$(printf '%s\n' "${ENVS[@]}" | jq -R 'select(length > 0)' | jq -sc .)" \
     --arg out "$out" --argjson rc "$rc" --argjson reqs "$reqs" \
     --arg docker "$(tail -n +"$((docker_n + 1))" "$T/docker.log")" '. + [{
-      name: $name, prog: $prog, args: $args, env: $env, ok: ($rc == 0),
+      name: $name, prog: $prog, args: $args, env: $envs, ok: ($rc == 0),
       stdout: ($out | split("\n") | map(select(length > 0))),
       retags: ($docker | split("\n") | map(select(length > 0) | split("\t"))),
       runpod: [$reqs[] | select((.p | startswith("/v1/")) and .m != "GET") | [.m, .p, .body]],

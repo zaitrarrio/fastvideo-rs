@@ -49,6 +49,33 @@ GCP_SA_KEY_FILE=… FV_GCP_BUDGET_USD=25 ./fv-deploy up --kind gcp --family h3 -
 ./fv-deploy schema launch      # also: instance, offer, account
 ```
 
+### Templates, release channels, reconcile (C3d, ADR-0018 §10)
+
+What `scripts/serve/runpod-templates.sh` and `scripts/serve/release.sh` do (the scripts stay until the owner's live
+gate, §10.6):
+
+```sh
+# The Runpod serve templates (fv-serve-cuda-sls / -pod, fv-serve-cpu-pod):
+./fv-deploy templates plan cuda ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:…   # the create bodies, no request
+RUNPOD_API_KEY=… ./fv-deploy templates list
+RUNPOD_API_KEY=… ./fv-deploy templates id cuda pod
+RUNPOD_API_KEY=… ./fv-deploy templates sync cuda <digest ref> --channel stable   # default FV_RELEASE_CHANNEL
+
+# Release channels (outside GitHub Actions without --local: dispatches release.yml, GH_TOKEN):
+./fv-deploy release resolve <sha|digest|tag>
+./fv-deploy release promote <sha> stable --local --dry-run
+./fv-deploy release promote <sha> stable --local [--notes TEXT] [--no-templates] [--allow-partial] [--force]
+./fv-deploy release rollback stable --local [--to <release id>] [--allow-partial]
+
+# The account against the D1 deployments ledger:
+./fv-deploy reconcile --dry-run          # then --adopt (record unknown fv-serve resources), --fix (record live images)
+```
+
+`promote` / `rollback` with `--local` need a GHCR login with `packages:write` (`docker buildx imagetools create`,
+`FV_DOCKER` to override), `RUNPOD_API_KEY` when the channel is the templates' (`FV_TEMPLATE_CHANNEL`, default
+`stable`) and the D1 token. `up` and `down` record Runpod pods and endpoints in D1's `deployments` (what fv-control's
+Releases page shows) when a D1 token is set; `FV_REGISTRY=0` turns that off.
+
 Options of `plan` / `up`: `--region eu` (the only region with a weights volume; `us` is refused), `--kind pod|serverless|vast|gcp`,
 `--image REF` (instead of `ghcr.io/zaitrarrio/fastvideo-rs-serve:<variant>-<channel>`), `--channel stable|latest`
 (default `stable`; the preset launch runs fv-boot, so use `latest` or a digest built after #159 until `stable` is
@@ -73,6 +100,12 @@ provider GPU names / machine types (Vast: any GPU with a CUDA 13 driver when non
 | `GCP_PROJECT`, `GCP_ZONE` | the project (default: the key's `project_id`); `GCP_ZONE` is not used by commands on an existing VM (they take the recorded zone or `--zone`) |
 | `FV_GCP_BUDGET_USD` | GCP's "balance": the budget of one `up`, less each created VM's price × the cap, that the $8 floor and the projection are checked on; at least $8 + price × cap (G4, 1800 s: $10.48); without it `up` creates nothing |
 | `FV_GCP_COMPUTE_API` | Compute API override (tests, fakes) |
+| `FV_CF_API_TOKEN` (or `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_API_KEY`), `FV_CF_ACCOUNT_ID`, `FV_D1_DATABASE_ID` | D1 (`fv-jobs`): the release history and the `deployments` ledger; the account and database are looked up from the token when unset |
+| `FV_REGISTRY=0` | `up` / `down` write no `deployments` row |
+| `FV_TEMPLATE_CHANNEL`, `FV_RELEASE_CHANNEL`, `RUNPOD_REGISTRY_AUTH_ID` | the channel the templates follow (default `stable`); the channel a template sync names; a private registry's Runpod auth |
+| `FV_SERVE_REPO`, `FV_REGISTRY_API`, `FV_DOCKER` | the serve repository, the registry API (tests: a mock), the docker binary of the retag |
+| `GH_TOKEN` / `GITHUB_TOKEN`, `FV_GITHUB_API`, `FV_GITHUB_REPO`, `FV_RELEASE_REF` | dispatching `release.yml` |
+| `FV_DEPLOYED_BY` | the `created_by` / `promoted_by` word (default `ci:…`, `agent:<user>`, `user:<user>@<host>`) |
 
 ## Guards (all on by default; the numbers are flags)
 
@@ -95,12 +128,15 @@ provider GPU names / machine types (Vast: any GPU with a CUDA 13 driver when non
    endpoints / templates are found by name and deleted. Every exit of `up` does the same sweep (but a `--keep` pod).
 6. **Readiness**: an instance not answering `/ping` 200 within 600 s of its creation is deleted and replaced, at most
    3 instances per `up` (every create counts); if a delete fails, `up` stops instead of creating another.
-7. **Bounds**: `--cap-s` ≤ 4 h, `--ready-cycles` ≤ 3, `--ready-timeout-s` ≤ 600 unless `--force-guards` (never the $8
+7. **"Not checked" guards**: a launch whose `max_usd_per_hr`, `cap_s`, `ready_timeout_s` or `ready_cycles` is `null`
+   (written by a launcher that does not check it, e.g. fv-control's serverless endpoints) is refused by `plan` / `up`;
+   ledgers show such a guard as "not checked" (ADR-0018 §10.4).
+8. **Bounds**: `--cap-s` ≤ 4 h, `--ready-cycles` ≤ 3, `--ready-timeout-s` ≤ 600 unless `--force-guards` (never the $8
    floor).
-8. **Delete on exit**: a failure after the create, a failed smoke, Ctrl-C or SIGTERM delete what `up` created (with
+9. **Delete on exit**: a failure after the create, a failed smoke, Ctrl-C or SIGTERM delete what `up` created (with
    retries; the ledger records `deleted` only when it was). A second Ctrl-C quits at once; the backstop still deletes
    at the cap.
-9. **Serverless**: `down` deletes the endpoint, then its template; a template left behind costs nothing (the exit
+10. **Serverless**: `down` deletes the endpoint, then its template; a template left behind costs nothing (the exit
    sweep retries it).
 
 `status`, `logs`, `smoke` and `down` need `--kind` for an id `up` did not record, unless the id is a serverless
@@ -112,7 +148,8 @@ the $2.50/hr cap.
 
 ## Files
 
-`artifacts/fv-deploy/` (not committed): `ledger.tsv` (every create, ready and delete; the scripts' ledger format),
+`artifacts/fv-deploy/` (not committed): `ledger.tsv` (every create, ready and delete; the scripts' ledger format;
+a create line also names the guards),
 `up-<stamp>.json` (the report: cycles, readiness time, smoke), `instances/<id>.json`, `keys/<id>.key` (mode 0600, with
 `--keep`: the run key `smoke` and your own calls use as `Authorization: Bearer`), `backstop-<stamp>.log`.
 

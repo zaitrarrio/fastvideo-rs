@@ -3,7 +3,9 @@
 - Status: Accepted for C3a (Runpod pods and serverless queue endpoints, the shared guards, the `Launch` schema); the
   live gate (one `fv-deploy up` on Runpod EU) passed; C3c (fv-control on the generated `Launch` types, §7) accepted
   2026-10-25; C3b (§8, §9, 2026-10-25): Vast and GCP providers and the shared Runpod pieces of the autoscaler,
-  proposed, their live gates the owner's (§8.4); templates / release / the D1 ledger (C3d) follow
+  proposed, their live gates the owner's (§8.4); C3d (§10, 2026-10-26): `templates`, `release promote | rollback`,
+  `reconcile`, the D1 `deployments` ledger and the guards' "not checked" (`null`), proposed, the live gates the
+  owner's (§10.6)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-deploy
 - Code: `crates/fastvideo-deploy/src/{provider,launch.rs,guard.rs,lifecycle.rs}`, `src/bin/fv-deploy.rs` (feature
@@ -15,6 +17,10 @@
   Runpod pieces), `launch.rs` (`vast_launch`, `gcp_launch`), `guard.rs`; goldens
   `fixtures/deploy/{vast-offers,vast-create,gcp-firewall,gcp-instance}.json`; `fastvideo-autoscale`
   `src/provider/runpod.rs`
+- C3d code: `crates/fastvideo-deploy/src/release/{mod,d1,registry,ghcr,templates,promote,reconcile}.rs`,
+  `provider/runpod/template.rs` (the serve templates), `provider/types.rs` (`Guards`), `lifecycle.rs` (`Recorder`);
+  goldens `fixtures/deploy/{serve-templates,release}.json` (written by `scripts/serve/tests/fv-deploy-goldens.sh` and
+  `fv-deploy-release-goldens.sh` against `scripts/serve/tests/mock_api.py`); `tests/release_goldens.rs`
 - Usage: `docs/ops/fv-deploy.md`
 - Plan: C3 (`docs/plan/2026-10-23-execution-plan.md`); review `docs/gaps/2026-10-22-architecture-review.md` §7.4
   (C3, the trait sketch and "Collapses"), §4.5 ("`fastvideo-autoscale` is orphaned")
@@ -243,7 +249,8 @@ the coordinator's live gate shows the subcommand equal on Runpod):
 | backstop | the `nohup … curl -X DELETE` lines of the three scripts | with them |
 | region guard | `volumes.sh fv_check_volume` for these paths | kept: sourced by every GPU script |
 
-Kept: `runpod-cuda.sh` (constants), `runpod-templates.sh` and `release.sh` (C3d), `volumes.sh`.
+Kept: `runpod-cuda.sh` (constants), `runpod-templates.sh` and `release.sh` (C3d: their Rust twins are in §10; the
+scripts stay until the owner's live gate, §10.6), `volumes.sh`.
 
 ### 7. C3c: fv-control on the generated `Launch` types
 
@@ -540,9 +547,145 @@ create that the autoscaler runs through `spawn_blocking`, and the live quote rep
   a cold boot needs `--force-guards --ready-timeout-s 2700`, or a GCP bound of its own); Vast's missing region
   constraint; whether a pod whose create reports no price stays in an
   autoscaler pool (§9 (3)).
-- The autoscaler's full move onto the trait (§9 "What remains"), templates / release / the D1 ledger (C3d). C3c
-  follow-ups (§7.3): a CPU section and `gmi` / `brev` kinds in `Launch`; the guards' numbers as options (null = not
-  checked by this launcher), proposed by §7.3, for C3d.
+- The autoscaler's full move onto the trait (§9 "What remains"). C3c follow-ups (§7.3): a CPU section and `gmi` /
+  `brev` kinds in `Launch`. The guards' numbers as options (null = not checked by this launcher) are C3d's (§10.4).
+- **C3d, the owner's** (§10.6): the live gates of `templates`, `release` and `reconcile`, then the switch of
+  `release.yml` and `serve-image.yml` from the scripts to `fv-deploy` and the scripts' deletion; whether fv-control
+  writes its own launches into `deployments` (today it only reads it).
+
+### 10. C3d: templates, release channels and the D1 deployments ledger (2026-10-26)
+
+C3d moves the last two scripts §6 kept, `scripts/serve/runpod-templates.sh` and `scripts/serve/release.sh`
+(`promote`, `rollback`, `reconcile`, `resolve`), into `fv-deploy` on the same seams (`Http`, `Spawner`, `Clock`), and
+writes the D1 `deployments` ledger from `up` / `down`. The `release` module (`src/release/`) is sans network
+policy: every flow runs on the fake seams in tests. **No live resource was touched** (no template, endpoint, pod,
+GHCR tag, D1 row or R2 object); the live gates are the owner's (§10.6).
+
+| fv-deploy | Replaces | Notes |
+|---|---|---|
+| `templates sync <image> <ref> [--channel C]` | `runpod-templates.sh sync` | `--channel`, else `FV_RELEASE_CHANNEL`; a digest reference only; an unchanged template (image, channel, `FV_IMAGE_REF`) is left alone; `RUNPOD_REGISTRY_AUTH_ID` as the script |
+| `templates sync-all <file>` / `list` / `id <image> <sls\|pod>` / `plan <image> <ref>` | the same subcommands | `plan` makes no request |
+| `release promote <sha\|digest\|tag> [channel]` | `release.sh promote` | flags `--dry-run --local --dispatch --notes --no-templates --allow-partial --force --channel` |
+| `release rollback [channel] [--to ID]` | `release.sh rollback` | the same refusals (no earlier release, a release missing an image the channel has, a digest gone from GHCR) |
+| `release resolve <target>` | `release.sh resolve` | JSON |
+| `reconcile [--dry-run] [--adopt] [--fix]` | `release.sh reconcile` | the same lines on stdout |
+| `up` / `down` / the sweeps | `registry.sh` `fv_deploy_created / ready / deleted` in `runpod-pod.sh` / `runpod-endpoint.sh` | Runpod kinds only (§10.3) |
+
+Not moved (they stay in `release.sh`): `list [--verify]`, `history`, `deployed [--probe]` (views, which fv-control's
+Releases page also shows) and `record-build` (CI's `latest` record, `serve-image.yml`). `release.yml` and
+`serve-image.yml` keep calling the scripts until the live gate.
+
+#### 10.1 The serve templates, from the Runpod template builder
+
+A serve template is a `Launch` (`provider::runpod::serve_template_launch`): the digest-pinned image, the Runpod secret
+references, the identity env (`FV_IMAGE_REF`, `FV_IMAGE_DIGEST`, `FV_RELEASE_CHANNEL` when given) and the flavour's
+serve env, no entrypoint (the image's fv-boot) and no worker config (ADR-0011: a launch from the template sends one);
+the body is `serverless::template_body` of that launch plus the template's own fields (`serve_template_body`: the
+readme, a pod's `volumeMountPath` and ports, the registry auth; `isServerless` and `category` on a create only, as
+the update API does not take them). Its guards are all "not checked" but the floor (§10.4): a template launches
+nothing. The CPU image's template is a `Launch` with `gpu.count` 0 that is never sent as a create (CPU stays outside
+Launch v1, §7.3). The images and their flavours come from `deploy/deploy.toml` `[[images]]` (`compute = "cpu"`: the
+pod template only), the source `variants.sh` is generated from.
+
+#### 10.2 Release channels: the same requests as `release.sh`
+
+`promote` resolves the build (a 7–40 hex sha; a digest or tag through its image's revision label; every image of the
+set labelled with that revision), refuses a build missing a serve image unless `--allow-partial`, stops when the
+channel's current release has the same image set (unless `--force`), then **retags** every key's channel tags with
+`$FV_DOCKER buildx imagetools create` (no rebuild) and checks each tag resolves to the digest, **syncs the
+templates** when the channel is `FV_TEMPLATE_CHANNEL`'s (default `stable`; `--no-templates` skips), and **inserts the
+release row**. `rollback` re-promotes the previous release not rolled back (or `--to`), marks the newer ones
+`rolled_back_at` and records its source. Outside GitHub Actions and without `--local` both dispatch `release.yml`
+(the same `workflow_dispatch` body); `--dry-run` prints the plan, the same lines as the script. Every SQL statement
+is the script's text (`release/registry.rs` `SQL_*`), and the `digests` column keeps the stored key order (the
+scripts' readers take the first matching key). A GHCR digest is the SHA-256 of the manifest bytes the registry
+serves (its `docker-content-digest`), as `up`'s `ghcr_resolve`; the registry has no write path in fv-deploy but the
+retag command.
+
+#### 10.3 The D1 `deployments` ledger: one table for the scripts, fv-deploy and fv-control
+
+`deploy/d1/registry.sql` in the `fv-jobs` database is the ledger: the scripts write it (`registry.sh`), fv-control
+reads it (`control/src/releases.ts registry()`, the Releases page) and `reconcile` matches it against the account.
+fv-deploy now writes the same rows with the same statements and columns (`release::registry`: the upsert's column
+order is jq's, the `kv` filters are `_fv_kv_json`'s, the enrichment from `releases` is `_fv_enrich`'s), through the
+lifecycle's new `Recorder` seam (`D1Recorder`): `created` after every create, `ready` when `/ping` is 200, `deleted`
+after every delete (a replacement, the exit, a sweep, `down`). Best effort, as `registry.sh`: a D1 failure is a
+warning, never a failed deploy; without a Cloudflare token (`FV_CF_API_TOKEN`, `CLOUDFLARE_API_TOKEN`,
+`CLOUDFLARE_API_KEY`) nothing is written, and `FV_REGISTRY=0` turns it off. Only Runpod pods and endpoints are
+recorded (`kind` `pod` / `endpoint`, the endpoint's id without its template): the table's `runpod_id` is matched
+against the Runpod account, so a Vast or GCP row would be marked `gone` by the next `reconcile`.
+
+A row of `fv-deploy up` differs from the script's for the same instance only in (pinned by `release_goldens.rs`):
+
+| Column | fv-deploy | `runpod-pod.sh` / `runpod-endpoint.sh` |
+|---|---|---|
+| `created_by` | `<actor>/fv-deploy` | `<actor>/runpod-pod.sh` (`/runpod-endpoint.sh`, `/release.sh`) |
+| `region` | `eu` (the launch's region) | not set |
+| `meta` | the script's keys plus `guards`: the launch's guards, each number or `"not checked"` | the script's keys |
+
+The local ledger (`ledger.tsv`) also gains the guards on every `created` line (`max_usd_per_hr=… cap_s=…`,
+`not-checked` for a `null`).
+
+#### 10.4 Guards: `null` is "not checked by this launcher" (§7.3's proposal)
+
+`Guards.max_usd_per_hr`, `cap_s`, `ready_timeout_s` and `ready_cycles` are `Option` (`number | null` in
+`launch.v1.json`); `min_balance_usd` stays a number (the $8 floor is always checked). Additive: every launch written
+before still reads the same. `null` means the launcher that wrote the launch does not check that guard; it is never a
+cap or a timeout:
+
+- fv-deploy's own `up` refuses it (`Guards::checked`, `GuardError::NotChecked` names the fields), `plan` too; Vast's
+  offer search and GCP's `maxRunDuration` refuse a launch without the number they need;
+- a ledger shows it as `"not checked"` (`Guards::ledger_view`, the D1 row's `meta.guards`, `ledger.tsv`);
+- fv-control's serverless endpoints write `null` for `max_usd_per_hr` and `ready_timeout_s` (were the fail-closed
+  0, §7.2) and for `cap_s` when the endpoint has no deadline (was 0); its pods are unchanged (every guard checked);
+- a serve template's launch (§10.1) leaves all four `null`.
+
+`control/src/launch-gen.ts` is regenerated (`node control/gen-configs.mjs`): `GuardsZ` takes `null` for the four
+fields. No body changes: guards are not in any Runpod payload, and the payload corpus (§7.2) is unchanged.
+
+#### 10.5 Evidence
+
+`scripts/serve/tests/fv-deploy-goldens.sh` (CI `control.yml`, `--check`) now also writes
+`fixtures/deploy/serve-templates.json` (`runpod-templates.sh plan` of the CUDA and CPU images) and
+`fixtures/deploy/release.json`: `fv-deploy-release-goldens.sh` runs 26 scenarios of `release.sh`,
+`runpod-templates.sh sync` and `registry.sh` against `mock_api.py` (D1 on SQLite, Runpod REST, a GHCR-like registry,
+GitHub dispatch) and records per scenario whether it succeeded, its stdout, the retags, the Runpod writes, the D1
+writes and the dispatches (digests as `<build.image>`, times as `<now>`). `mock_api.py` gained a request log
+(`/__log`) and serves manifests whose digest is the SHA-256 of their bytes, as a registry does; `release.test.sh`
+passes unchanged on it. The scenarios: promote (dry run, dispatch, local with notes, again = no-op, to `latest`, a
+build missing an image, by digest without templates), rollback (dry run, previous, nothing earlier, `--to`, dispatch,
+a release from before the one CUDA image refused then `--allow-partial`, back), templates (unchanged, create,
+update with a registry auth on another channel, an unknown image, a tag instead of a digest), reconcile (dry run,
+`--adopt` of a pod and an endpoint with a gone row, drift, `--fix`) and the deployments rows of a pod and an
+endpoint (create, ready, delete).
+
+`tests/release_goldens.rs` runs the same scenarios in the same order with fv-deploy's code against the same mock
+(skipped without python3, as `boot_r2.rs`) and asserts the same effects scenario by scenario, with only §10.3's
+differences; `tests/payload_goldens.rs` `serve_templates_equal_runpod_templates_sh` asserts the template bodies
+without a network. Unit tests: `release::{registry,ghcr,reconcile,promote,d1}` (jq object addition, `_fv_kv_json`,
+ordered digests, `fv_actor`, tags, live resources, channel names), the guards (`guard_upper_bounds_unless_forced`,
+`not_checked_guards_are_refused_and_shown`).
+
+#### 10.6 What remains, and the owner's live gates
+
+The owner's, in order (each a few cents or free; none was run here):
+
+1. `fv-deploy templates plan cuda <digest>` and `cpu <digest>` equal `runpod-templates.sh plan`; `fv-deploy
+   templates list` lists the live templates.
+2. `fv-deploy reconcile --dry-run` prints what `release.sh reconcile --dry-run` prints on the live account (no write).
+3. The next promotion with `fv-deploy release promote <sha> stable --local --dry-run`, then for real with
+   `--local` from a host with a GHCR login (`packages:write`), `RUNPOD_API_KEY` and the D1 token; then `release.sh
+   list --verify` passes and fv-control's Releases page shows the release.
+4. One `fv-deploy up` (the C3a gate) with the D1 token set: its row appears in fv-control's deployment registry with
+   `created_by …/fv-deploy`, `ready_at` and `deleted_at`.
+5. Then `release.yml` runs `fv-deploy release` (a tools release carrying `fv-deploy`, or a build step) instead of
+   `release.sh`, `serve-image.yml` syncs templates with `fv-deploy templates sync`, and `runpod-templates.sh`,
+   `release.sh promote | rollback | reconcile | resolve` are deleted.
+
+Remaining work (not in C3d): `release.sh list | history | deployed | record-build` in Rust (views and CI's record;
+fv-control shows the first three); fv-control writing its own launches into `deployments` (it reads the table; its
+pods and endpoints live in its own tables, so `reconcile` reports fv-control's serve pods as `unknown`, as
+`release.sh` does today); the serverless quote (§5.3).
 
 ## Consequences
 
@@ -570,6 +713,11 @@ create that the autoscaler runs through `spawn_blocking`, and the live quote rep
   `tests/fv_deploy_bin.rs` (feature `deploy`: the real detached backstop process deletes a pod on a local fake Runpod
   by itself; `up --yes` below the floor makes no create; `plan` and a dry `up` make no request and never print the
   key; the US volume is refused), `scripts/serve/tests/fv-deploy-goldens.sh --check` in `control.yml`.
+
+- C3d is pinned by `tests/release_goldens.rs` (26 scenarios against the scripts' mock), `payload_goldens.rs`
+  `serve_templates_equal_runpod_templates_sh`, `fv-deploy-goldens.sh --check` (`serve-templates.json`,
+  `release.json`), the `release` unit tests and the guards' tests; fv-control's `launch-goldens.test.ts` (serverless
+  guards `null`).
 
 - C3b is pinned by `vast_search_and_create_equal_vast_sh`, `gcp_firewall_and_instance_equal_vm_sh`, the preset-diff
   goldens, `provider/tests_c3b.rs` (21 tests, the review's included), `runpod::shared_tests`, `runpod::template::tests`, the autoscaler's

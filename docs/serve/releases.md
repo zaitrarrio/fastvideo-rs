@@ -10,6 +10,15 @@ Code: `crates/fastvideo-serve/build.rs` and `src/build_info.rs` (identity),
 `deploy/d1/registry.sql` (tables), `scripts/serve/tests/release.test.sh`
 (tests against a mocked API).
 
+**fv-deploy (C3d, ADR-0018 §10).** `fv-deploy release promote | rollback |
+resolve`, `fv-deploy reconcile` and `fv-deploy templates …` do what
+`release.sh promote | rollback | resolve | reconcile` and
+`runpod-templates.sh` do, with the same requests (request goldens against the
+same mock); `fv-deploy up` / `down` write the same `deployments` rows as the
+deploy scripts (`created_by …/fv-deploy`). The scripts and `release.yml`
+stay on the shell until the owner's live gate (ADR-0018 §10.6);
+`docs/ops/fv-deploy.md` has the commands.
+
 ## Build identity
 
 `fv-serve --version`:
