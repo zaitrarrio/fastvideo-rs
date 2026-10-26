@@ -89,6 +89,8 @@ info_box() {
   {
     nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
     echo "cpus=$(nproc) mem=$(free -g | awk '/Mem:/{print $2}')G"
+    # The pod's share (cgroup): what a cell can actually use before an OOM kill.
+    echo "cgroup=${CG_VER:-none} ${CG_DIR:-} pod_ram_limit_mib=$(mib_or_null "$(cg_mem max)") oom_kills=$(cg_mem oom_kills)"
     df -h /workspace | tail -1
     du -sh "$UP"/* 2>/dev/null
     ls -la "$HF_HOME" 2>/dev/null | sed 's/token.*/token (present)/'
@@ -323,6 +325,61 @@ lpips_ref() {
 smi_start() { nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500 >"$1/smi.log" 2>/dev/null & echo $!; }
 smi_peak() { sort -n "$1/smi.log" 2>/dev/null | tail -1; }
 
+# The pod's own memory (its cgroup): `free` in box.txt shows the host's RAM,
+# not the pod's share of it. A worker the kernel OOM-kills dies with SIGKILL
+# and prints nothing (FastVideo's parent then says only "See stack trace for
+# root cause"); the oom_kill count is the evidence.
+# cg_dir: "v2 <dir>" or "v1 <dir>" for this process's memory cgroup, from
+# /proc/self/cgroup (v2's "0::<path>", v1's memory controller line) under
+# /sys/fs/cgroup, else the mount's root (a private cgroup namespace); empty
+# when neither has the files.
+cg_dir() {
+  local p
+  p="$(awk -F: '$1 == "0" && $2 == "" {print $3; exit}' /proc/self/cgroup 2>/dev/null)"
+  if [[ -n "$p" && -f "/sys/fs/cgroup${p%/}/memory.current" ]]; then echo "v2 /sys/fs/cgroup${p%/}"; return 0; fi
+  if [[ -f /sys/fs/cgroup/memory.current ]]; then echo "v2 /sys/fs/cgroup"; return 0; fi
+  p="$(awk -F: '$2 ~ /(^|,)memory(,|$)/ {print $3; exit}' /proc/self/cgroup 2>/dev/null)"
+  if [[ -n "$p" && -f "/sys/fs/cgroup/memory${p%/}/memory.usage_in_bytes" ]]; then
+    echo "v1 /sys/fs/cgroup/memory${p%/}"; return 0; fi
+  if [[ -f /sys/fs/cgroup/memory/memory.usage_in_bytes ]]; then echo "v1 /sys/fs/cgroup/memory"; fi
+  return 0
+}
+read -r CG_VER CG_DIR <<<"$(cg_dir)"
+# cg_mem <what>, in bytes (oom_kills: a count); prints nothing when unknown.
+#   max        the pod's RAM limit
+#   used       process memory: anon + shmem (v2) / total_rss + total_shmem (v1),
+#              without the page cache, which a weight-heavy cell fills up to
+#              the limit without any risk of an OOM kill
+#   peak       the cgroup's exact peak since the POD started, page cache
+#              included (v2 memory.peak, v1 memory.max_usage_in_bytes):
+#              cumulative over earlier cells, not this cell's
+#   oom_kills  processes the kernel OOM-killed in this cgroup so far
+cg_mem() {
+  local stat_awk='$1 == a || $1 == b {s += $2; n++} END {if (n) printf "%.0f\n", s}'
+  case "${CG_VER:-}:$1" in
+    v2:max) cat "$CG_DIR/memory.max" 2>/dev/null ;;
+    v1:max) cat "$CG_DIR/memory.limit_in_bytes" 2>/dev/null ;;
+    v2:used) awk -v a=anon -v b=shmem "$stat_awk" "$CG_DIR/memory.stat" 2>/dev/null ;;
+    v1:used) awk -v a=total_rss -v b=total_shmem "$stat_awk" "$CG_DIR/memory.stat" 2>/dev/null ;;
+    v2:peak) cat "$CG_DIR/memory.peak" 2>/dev/null ;;
+    v1:peak) cat "$CG_DIR/memory.max_usage_in_bytes" 2>/dev/null ;;
+    v2:oom_kills) awk '$1 == "oom_kill" {print $2}' "$CG_DIR/memory.events" 2>/dev/null ;;
+    v1:oom_kills) awk '$1 == "oom_kill" {print $2}' "$CG_DIR/memory.oom_control" 2>/dev/null ;;
+  esac
+  return 0
+}
+# Bytes to MiB for cell.json; empty, "max" (v2) or v1's near-2^63 "no limit" -> null.
+mib_or_null() { [[ "${1:-}" =~ ^[0-9]{1,18}$ ]] && (( $1 < 1 << 50 )) && echo $(( $1 >> 20 )) || echo null; }
+# "<used> of <limit> MiB" for live.log, leaving out what is unknown.
+ram_txt() {
+  local s=""
+  [[ "$1" != null ]] && s="ram ${1} MiB"
+  [[ "$2" != null ]] && s="${s:-ram ?} of ${2} MiB"
+  echo "${s:-ram unknown (no memory cgroup)}"
+}
+mem_start() { ( while :; do cg_mem used; sleep 1; done ) >"$1/mem.log" 2>/dev/null & echo $!; }
+mem_peak() { sort -n "$1/mem.log" 2>/dev/null | tail -1; }
+
 gpu_clean() {
   local used i
   for i in $(seq 1 30); do
@@ -334,25 +391,37 @@ gpu_clean() {
   return 1
 }
 
-# run_cell <name> <cmd...>: timeout, stdout/stderr, nvidia-smi peak, cell.json.
+# run_cell <name> <cmd...>: timeout, stdout/stderr, nvidia-smi peak, the pod's
+# RAM peak / limit and OOM kills (cg_mem), cell.json.
 run_cell() {
   local name="$1"; shift
-  local c="$OUT/$name" t0 rc smi
+  local c="$OUT/$name" t0 rc smi mem oom0 oom1
   if [[ -n "${UP_CELLS:-}" && " $UP_CELLS " != *" $name "* ]]; then return 0; fi
   mkdir -p "$c"
   gpu_clean || log "WARN GPU not clean before $name"
   log "▶ cell $name"
   t0=$(date +%s)
   smi="$(smi_start "$c")"
+  mem="$(mem_start "$c")"
+  oom0="$(cg_mem oom_kills)"
   (cd "$c" && timeout --signal=TERM --kill-after=30 "${UP_CELL_TIMEOUT_S:-5400}" "$@") >"$c/stdout.log" 2>"$c/stderr.log"
   rc=$?
-  kill "$smi" 2>/dev/null
-  local secs=$(( $(date +%s) - t0 )) peak
+  kill "$smi" "$mem" 2>/dev/null
+  oom1="$(cg_mem oom_kills)"
+  local secs=$(( $(date +%s) - t0 )) peak ram ram_max pod_peak ooms=null
   peak="$(smi_peak "$c")"
-  printf '{"cell":"%s","exit":%s,"seconds":%s,"peak_smi_mib":%s,"started":%s}\n' \
-    "$name" "$rc" "$secs" "${peak:-null}" "$t0" >"$c/cell.json"
-  if (( rc == 0 )); then log "ok $name ${secs}s peak ${peak}MiB"; else
-    log "FAIL $name ${secs}s exit=$rc"; tail -15 "$c/stderr.log" | tee -a "$LIVE" >&2; fi
+  ram="$(mib_or_null "$(mem_peak "$c")")"
+  ram_max="$(mib_or_null "$(cg_mem max)")"
+  pod_peak="$(mib_or_null "$(cg_mem peak)")"
+  [[ "$oom0" =~ ^[0-9]+$ && "$oom1" =~ ^[0-9]+$ ]] && ooms=$(( oom1 - oom0 ))
+  # peak_ram_mib: this cell's sampled process memory (no page cache);
+  # pod_peak_mib_cumulative: the cgroup's exact peak since the pod started.
+  printf '{"cell":"%s","exit":%s,"seconds":%s,"peak_smi_mib":%s,"peak_ram_mib":%s,"ram_limit_mib":%s,"pod_peak_mib_cumulative":%s,"oom_kills":%s,"started":%s}\n' \
+    "$name" "$rc" "$secs" "${peak:-null}" "$ram" "$ram_max" "$pod_peak" "$ooms" "$t0" >"$c/cell.json"
+  if (( rc == 0 )); then log "ok $name ${secs}s peak ${peak}MiB $(ram_txt "$ram" "$ram_max")"; else
+    log "FAIL $name ${secs}s exit=$rc $(ram_txt "$ram" "$ram_max")$([[ "$ooms" != null ]] && echo ", oom_kills=$ooms")"
+    [[ "$ooms" =~ ^[1-9] ]] && log "FAIL $name: the kernel OOM-killed $ooms process(es) in this pod during the cell (host RAM, not GPU)"
+    tail -15 "$c/stderr.log" | tee -a "$LIVE" >&2; fi
 }
 
 # sol-engine MiniMax-H3 RTX5090 profile: env from config/minimax_h3/rtx5090_<arm>.toml,
