@@ -2473,15 +2473,67 @@ fn vae_index_files(dir: &Path) -> Result<Option<Vec<String>>> {
     Ok(Some(files))
 }
 
+/// A file a published tree's index names but the tree leaves out, because
+/// it is byte-identical in another tree, whose copy the engine reads instead.
+/// Only these files may be absent; [`SHARED_FILES`] mirrors
+/// `scripts/gpu/verify-weights.sh` `shared_file` (a test reads that table),
+/// which also checks the copy's SHA-256 before a lab run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharedFile {
+    /// `<tree>/<path in the tree>` of the file the tree leaves out.
+    pub file: &'static str,
+    /// `<tree>/<path in the tree>` of the copy read in its place.
+    pub copy: &'static str,
+    /// The copy's length in bytes (checked at load).
+    pub bytes: u64,
+    /// The copy's SHA-256 (the Hub's LFS SHA-256; checked by verify-weights.sh).
+    pub sha256: &'static str,
+}
+
+/// H3 VAE shard 3 (`diffusion_pytorch_model-00003-of-00003.safetensors`):
+/// the FastH3 V2 / 4-step NVFP4 R2 trees carry `vae/` shards 1-2 (the NVFP4
+/// decoder linears), the config and the index; shard 3 equals h3-base's @
+/// 42ed227 and was not published (docs/ops/r2-weights.md §15,
+/// docs/ports/fasth3-nvfp4.md §1).
+const H3_VAE_SHARD3_BYTES: u64 = 398_539_336;
+const H3_VAE_SHARD3_SHA256: &str =
+    "c05d6ac4b1a33de372799d708531da6320f6a3ce6d1ce6d895e770988e004a39";
+
+/// Every file a tree may leave out (see [`SharedFile`]).
+pub const SHARED_FILES: &[SharedFile] = &[
+    SharedFile {
+        file: "fasth3-v2-nvfp4/vae/diffusion_pytorch_model-00003-of-00003.safetensors",
+        copy: "h3-base/vae/diffusion_pytorch_model-00003-of-00003.safetensors",
+        bytes: H3_VAE_SHARD3_BYTES,
+        sha256: H3_VAE_SHARD3_SHA256,
+    },
+    SharedFile {
+        file: "fasth3-4step-vsa-nvfp4/vae/diffusion_pytorch_model-00003-of-00003.safetensors",
+        copy: "h3-base/vae/diffusion_pytorch_model-00003-of-00003.safetensors",
+        bytes: H3_VAE_SHARD3_BYTES,
+        sha256: H3_VAE_SHARD3_SHA256,
+    },
+];
+
+/// The last path component of `p`, when it is UTF-8.
+fn last_name(p: Option<&Path>) -> Option<&str> {
+    p.and_then(Path::file_name).and_then(|n| n.to_str())
+}
+
 /// `dir`'s weights, completed from `base` (h3-base's `vae/`) for the shards
-/// its index names but it does not carry: the FastH3 V2 / 4-step NVFP4
-/// releases' `vae/` in R2 carries shards 1-2 (the NVFP4 decoder linears),
-/// shard 3 is byte-identical to h3-base's (docs/ports/fasth3-nvfp4.md §1).
-/// A shard found in neither is an error that names the fix.
+/// its index names but it does not carry, and only for the ones
+/// [`SHARED_FILES`] lists: the FastH3 V2 / 4-step NVFP4 releases' `vae/` in
+/// R2 carries shards 1-2 (the NVFP4 decoder linears), shard 3 is
+/// byte-identical to h3-base's (docs/ports/fasth3-nvfp4.md §1). The tree is
+/// `dir`'s parent's name, the copy's tree `base`'s parent's; the copy must
+/// have the listed length. Any other missing shard is an error: the tree is
+/// incomplete, and h3-base's file of that name is not known to be the same.
 pub fn completed_vae_files(dir: &Path, base: Option<&Path>) -> Result<Vec<PathBuf>> {
     let Some(names) = vae_index_files(dir)? else {
         return vae_files(dir);
     };
+    let index = dir.join(VAE_INDEX);
+    let tree = last_name(dir.parent()).unwrap_or("");
     let mut out = Vec::with_capacity(names.len());
     for name in names {
         let own = dir.join(&name);
@@ -2489,25 +2541,62 @@ pub fn completed_vae_files(dir: &Path, base: Option<&Path>) -> Result<Vec<PathBu
             out.push(own);
             continue;
         }
-        match base.map(|b| b.join(&name)).filter(|p| p.is_file()) {
-            Some(shared) => {
-                crate::rt::log::info(format_args!(
-                    "h3 vae: {} from {} (not in {}; byte-identical in h3-base)",
-                    name,
-                    shared.display(),
-                    dir.display()
-                ));
-                out.push(shared);
+        let key = format!("{tree}/vae/{name}");
+        let Some(shared) = SHARED_FILES.iter().find(|f| f.file == key) else {
+            return Err(msg(format!(
+                "h3 vae: {} names {name}, which is not in {}, and {key} is not a shared file (scripts/gpu/verify-weights.sh shared_file: {}): the tree is incomplete; fetch it again",
+                index.display(),
+                dir.display(),
+                SHARED_FILES
+                    .iter()
+                    .map(|f| f.file)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        };
+        let Some(base) = base else {
+            return Err(msg(format!(
+                "h3 vae: {} names {name}, which is neither in {} nor in h3-base's vae/ (none given): fetch the h3-base tree beside it and give it as the text weights (--text-weights, or the catalog's text_weights); {key} is read from {}",
+                index.display(),
+                dir.display(),
+                shared.copy
+            )));
+        };
+        let copy = base.join(&name);
+        let copy_key = format!("{}/vae/{name}", last_name(base.parent()).unwrap_or(""));
+        if copy_key != shared.copy {
+            return Err(msg(format!(
+                "h3 vae: {key} is read from {}, not from {} ({copy_key}): give the h3-base tree as the text weights (--text-weights, or the catalog's text_weights)",
+                shared.copy,
+                copy.display()
+            )));
+        }
+        match std::fs::metadata(&copy) {
+            Ok(m) if m.is_file() && m.len() == shared.bytes => {}
+            Ok(m) if m.is_file() => {
+                return Err(msg(format!(
+                    "h3 vae: {} is {} bytes, not the {} of the shared copy of {key} (scripts/gpu/verify-weights.sh shared_file): h3-base's vae/ is not the expected revision or is incomplete",
+                    copy.display(),
+                    m.len(),
+                    shared.bytes
+                )))
             }
-            None => {
+            _ => {
                 return Err(msg(format!(
                     "h3 vae: {} names {name}, which is neither in {} nor in h3-base's vae/ ({}): fetch the h3-base tree beside it and give it as the text weights (--text-weights, or the catalog's text_weights)",
-                    dir.join(VAE_INDEX).display(),
+                    index.display(),
                     dir.display(),
-                    base.map_or("none given".to_owned(), |b| b.display().to_string())
+                    base.display()
                 )))
             }
         }
+        crate::rt::log::info(format_args!(
+            "h3 vae: {} from {} (not in {}; byte-identical in h3-base)",
+            name,
+            copy.display(),
+            dir.display()
+        ));
+        out.push(copy);
     }
     Ok(out)
 }
@@ -3369,6 +3458,178 @@ mod tests {
         std::fs::write(path, f).unwrap();
     }
 
+    /// Extends `path` to `len` bytes (zeros; sparse where the filesystem is).
+    fn sized(path: &Path, len: u64) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_len(len)
+            .unwrap();
+    }
+
+    /// Only the shared files (SHARED_FILES, verify-weights.sh `shared_file`)
+    /// are read from h3-base's `vae/`: another missing shard, a tree not in the
+    /// table, a copy outside h3-base or of another length is refused, naming
+    /// what is wrong.
+    #[test]
+    fn only_the_listed_shared_vae_shard_is_read_from_h3_base() {
+        let tmp = std::env::temp_dir().join(format!("h3-vaeshared-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let shard = |i: usize| format!("diffusion_pytorch_model-0000{i}-of-00003.safetensors");
+        let index = serde_json::json!({"weight_map": {
+            "a": shard(1), "b": shard(2), "c": shard(3)
+        }})
+        .to_string();
+        let tree = |name: &str, shards: &[usize]| {
+            let d = tmp.join(name).join("vae");
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(VAE_INDEX), &index).unwrap();
+            for &i in shards {
+                scalar_file(&d.join(shard(i)), &[["a", "b", "c"][i - 1]]);
+            }
+            d
+        };
+        let base = tree("h3-base", &[1, 2, 3]);
+        sized(&base.join(shard(3)), H3_VAE_SHARD3_BYTES);
+        // Both NVFP4 trees: shard 3 from h3-base.
+        for name in ["fasth3-v2-nvfp4", "fasth3-4step-vsa-nvfp4"] {
+            let own = tree(name, &[1, 2]);
+            assert_eq!(
+                completed_vae_files(&own, Some(&base)).unwrap(),
+                [own.join(shard(1)), own.join(shard(2)), base.join(shard(3))],
+                "{name}"
+            );
+        }
+        // Shard 2 missing: not shared, refused although h3-base has one.
+        let odd = tree("y/fasth3-v2-nvfp4", &[1]);
+        let e = completed_vae_files(&odd, Some(&base))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains(&shard(2)) && e.contains("not a shared file") && e.contains("shared_file"),
+            "{e}"
+        );
+        // A tree not in the table missing shard 3: refused.
+        let other = tree("h3-8step-partial", &[1, 2]);
+        let e = completed_vae_files(&other, Some(&base))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("h3-8step-partial/vae/") && e.contains("not a shared file"),
+            "{e}"
+        );
+        // The copy from a tree that is not h3-base: refused.
+        let not_base = tree("h3-8step", &[1, 2, 3]);
+        sized(&not_base.join(shard(3)), H3_VAE_SHARD3_BYTES);
+        let nv = tmp.join("fasth3-v2-nvfp4").join("vae");
+        let e = completed_vae_files(&nv, Some(&not_base))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("h3-base/vae/") && e.contains("--text-weights"),
+            "{e}"
+        );
+        // h3-base's shard 3 of another length: refused.
+        sized(&base.join(shard(3)), H3_VAE_SHARD3_BYTES - 1);
+        let e = completed_vae_files(&nv, Some(&base))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("398539335 bytes") && e.contains("398539336"),
+            "{e}"
+        );
+        // h3-base without shard 3: the error says where to get it.
+        std::fs::remove_file(base.join(shard(3))).unwrap();
+        let e = completed_vae_files(&nv, Some(&base))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains(&shard(3)) && e.contains("--text-weights"), "{e}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// SHARED_FILES is scripts/gpu/verify-weights.sh's `shared_file` table:
+    /// the same files, copies, lengths and SHA-256s (the script is the one
+    /// the lab runs before an arm; gen-configs.mjs reads it too).
+    #[test]
+    fn shared_files_mirror_verify_weights_shared_file() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/gpu/verify-weights.sh");
+        let text = std::fs::read_to_string(&script).unwrap();
+        let mut vars = std::collections::HashMap::new();
+        for line in text.lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                if !k.is_empty()
+                    && k.chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                    && !v.is_empty()
+                    && !v.contains([' ', '"', '$', '('])
+                {
+                    vars.insert(k.to_owned(), v.to_owned());
+                }
+            }
+        }
+        let expand = |s: &str| {
+            let mut out = s.to_owned();
+            for (k, v) in &vars {
+                out = out.replace(&format!("${{{k}}}"), v);
+            }
+            let mut keys: Vec<&String> = vars.keys().collect();
+            keys.sort_by_key(|k| std::cmp::Reverse(k.len()));
+            for k in keys {
+                out = out.replace(&format!("${k}"), &vars[k]);
+            }
+            out
+        };
+        let body: Vec<&str> = text
+            .lines()
+            .skip_while(|l| *l != "shared_file() {")
+            .skip(1)
+            .take_while(|l| *l != "}")
+            .collect();
+        let mut got = Vec::new();
+        let mut patterns: Vec<String> = Vec::new();
+        for line in body {
+            let t = line.trim();
+            if let Some(echo) = t.strip_prefix("echo \"") {
+                let fields: Vec<String> = expand(echo.split('"').next().unwrap())
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect();
+                assert_eq!(fields.len(), 3, "{line}");
+                for p in patterns.drain(..) {
+                    got.push((
+                        p,
+                        fields[0].clone(),
+                        fields[1].parse::<u64>().unwrap(),
+                        fields[2].clone(),
+                    ));
+                }
+            } else if t.ends_with(')') && t.starts_with('"') {
+                patterns = t
+                    .trim_end_matches(')')
+                    .split('|')
+                    .map(|p| expand(p.trim().trim_matches('"')))
+                    .collect();
+            }
+        }
+        got.sort();
+        let mut want: Vec<(String, String, u64, String)> = SHARED_FILES
+            .iter()
+            .map(|f| {
+                (
+                    f.file.to_owned(),
+                    f.copy.to_owned(),
+                    f.bytes,
+                    f.sha256.to_owned(),
+                )
+            })
+            .collect();
+        want.sort();
+        assert!(!want.is_empty());
+        assert_eq!(got, want, "{}", script.display());
+    }
+
     /// The NVFP4 tier's video VAE (owner decision 2026-10-14): the tree's own
     /// published NVFP4 `vae/` by default, its third shard read from h3-base's
     /// (byte-identical; the R2 tree carries shards 1-2); `=0` decodes with
@@ -3402,6 +3663,8 @@ mod tests {
                 ][i - 1]],
             );
         }
+        // The shared copy has the listed length (a sparse tail of zeros).
+        sized(&base.join("vae").join(shard(3)), H3_VAE_SHARD3_BYTES);
         let r = |setting, text: Option<&Path>| resolve_video_vae_on(&nv, text, setting, Some(12));
         // Default (and =1): the tree's NVFP4 vae/, shard 3 from h3-base.
         for setting in [None, Some(true)] {

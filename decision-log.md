@@ -2011,3 +2011,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0023-lab-report-and-ci-bridge.md (the gold tier's refusals)
 - Verification: `crates/fastvideo-engine-service/tests/start_negotiated.rs` (the four gold refusals from the real catalog with a backend that counts `load` calls: 0; an unknown model refused with 0 loads; an accepted request starts and loads, its caps and job equal to `negotiate` against the started engine's table; `caps_table` equal to the started engine's table and public aliases for the whole catalog); `cargo check -p fastvideo-gpucheck --features cuda`; UNVERIFIED on a GPU until the next gold run
+
+### FVID · 2026-10-26 · FVID-2026-10-26-h3-vae-shared-files
+- Trigger: plan D1 follow-up 6: `completed_vae_files` (crates/fastvideo-cudarc/src/h3/pipeline.rs) filled any shard a tree's `vae/` index names but the tree lacks from h3-base's `vae/`, while only the NVFP4 trees' shard 3 is known byte-identical (`verify-weights.sh` `shared_file`, #208)
+- Options: one table in the family manifest (a format change); a Rust constant held to `verify-weights.sh`'s table by a test; match by file name only, whatever the tree
+- Decision: (coordinator's request, executed by the agent) `h3::pipeline::SHARED_FILES` (file, copy, bytes, SHA-256; the two NVFP4 trees' `vae/diffusion_pytorch_model-00003-of-00003.safetensors` from `h3-base/vae/`), keyed by the tree directory's name as the script is; the engine fills only a listed file, only from a `base` whose tree is the listed copy's, only when the copy has the listed length (398,539,336 bytes); any other missing shard is an error naming the table; the SHA-256 stays the script's check (no 0.4 GB hash at every load); `verify-weights.sh` stays the source the test and gen-configs.mjs read
+- Reason: the script is what the lab runs before every arm and gen-configs.mjs can read it, so a format change for one row is not needed; a file of the same name in another revision of h3-base would decode wrong silently
+- Reversibility: high (code and tests)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/ops/r2-weights.md §15
+- Verification: `h3::pipeline::tests::{only_the_listed_shared_vae_shard_is_read_from_h3_base, shared_files_mirror_verify_weights_shared_file, the_nvfp4_trees_vae_is_its_default_decoder_completed_from_h3_base}`, `verify-weights.test.sh`
