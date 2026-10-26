@@ -1,5 +1,5 @@
 //! Weights by tree for a `weights = "volume+r2"` tier (docs/adr/0019-fv-lab.md
-//! §14): every tree an arm reads comes from the EU volume when the volume
+//! §16): every tree an arm reads comes from the EU volume when the volume
 //! holds it (`scripts/gpu/volumes.sh` `FV_EU_VOLUME_TREES`), else from the R2
 //! weights store when it is published there (`scripts/gpu/weights-r2.tsv`),
 //! fetched onto the container disk before the arm by the repository's own

@@ -1,4 +1,4 @@
-//! A `weights = "volume+r2"` run (docs/adr/0019-fv-lab.md §14) against fakes:
+//! A `weights = "volume+r2"` run (docs/adr/0019-fv-lab.md §16) against fakes:
 //!
 //! - a fake `python3` standing in for `r2-weights.py plan` and `r2-fetch.py`
 //!   (what the runner runs, in which order, with which environment; the

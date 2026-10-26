@@ -674,6 +674,10 @@ cmd_run() {
   if [[ "$FAMILY" == gold && ( "$mode" == run || "$mode" == all ) ]]; then
     die "gold is no runpod-matrix.sh family (docs/adr/0023-lab-report-and-ci-bridge.md): fv-lab pod up --sha $sha --family gold --yes --wait"
   fi
+  # Nor were the tiers made from a port one-off (fv-lab-retired.sh FV_LAB_EXPERIMENTS).
+  if fv_lab_experiment "$FAMILY" && [[ "$mode" == run || "$mode" == all ]]; then
+    die "$FAMILY is no runpod-matrix.sh family: an fv-lab tier made from a port one-off (docs/adr/0019-fv-lab.md §14): fv-lab pod up --sha $sha --family $FAMILY --yes --wait"
+  fi
   if [[ "$mode" == run || "$mode" == all ]] && fv_lab_retired "$FAMILY"; then
     [[ "$mode" == run ]] || die "\`all\` runs runpod-matrix.sh $FAMILY after the kernels, and $FAMILY is fv-lab only (fv-lab-retired.sh): run \`kernels\`, then \`run\`"
     fv_lab_route run "$sha"

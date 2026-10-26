@@ -185,7 +185,7 @@ direction". The port follows the inference path (one rounding per fused stage, f
 | LoRA merge at load (`H3LoraFuse::open_vdn`) | `crates/fastvideo-cudarc/src/h3/lora.rs` |
 | pipeline option `vdn` / `FASTVIDEO_H3_VDN`, per-request `VdnPlan` | `crates/fastvideo-cudarc/src/h3/pipeline.rs` |
 | serve catalog `vdn-h3` (`H3Recipe.vdn_weights`) | `crates/fastvideo-engine-service/src/cuda/caps.rs` |
-| oracle, pod runner, validation driver | `scripts/gpu/upstream/oracle_vdn.py`, `scripts/gpu/experiments/vdn-h3-pod.sh`, `scripts/gpu/experiments/vdn-h3-validate.sh` |
+| oracle, pod runner, validation driver | `scripts/gpu/upstream/oracle_vdn.py`, `scripts/gpu/experiments/vdn-h3-pod.sh`, `scripts/gpu/experiments/vdn-h3-validate.sh` (deleted in D1e, docs/adr/0019-fv-lab.md §14; in git at `22a5fd7b`) |
 
 ### 2.2 The block
 
@@ -377,6 +377,7 @@ h3-turbo on the same pod; not optimized.
   (the eager path was used); an H100 run (sm_90: the window kernel is our FA2 MMA kernel, the branch kernels are
   generic CUDA, built but not run there); a served end-to-end request through fv-serve on a GPU (the catalog entry,
   config and preset are tested on CPU only); dense timing at 345 frames.
+- Until PR #201 (`claude/lab-r2-weights`, the gold tier on `volume+r2` weights) is merged and the gold run is done, the reproduction of §5, §6 and §8's numbers is `git show 22a5fd7b:scripts/gpu/experiments/vdn-h3-{validate,pod}.sh` (deleted in D1e, docs/adr/0019-fv-lab.md §14.2): the trees are R2-only, and the `gold` tier on the EU volume skips them.
 
 ## 8. The 8-step model (`vdn-h3-8step`, 2026-10-14)
 

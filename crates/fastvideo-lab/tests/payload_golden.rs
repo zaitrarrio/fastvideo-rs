@@ -8,7 +8,7 @@
 //!    `bash …/runpod-matrix.sh` (the one changed line);
 //! 2. the body carries `env: {}` (fv-deploy's `create_body` always sends it;
 //!    the script sends `env` only with FV_POD_FILES, which fv-lab has not);
-//!    a `weights = "volume+r2"` tier's (`gold`, ADR-0019 §14) holds the R2
+//!    a `weights = "volume+r2"` tier's (`gold`, ADR-0019 §16) holds the R2
 //!    key as Runpod secret references and nothing else
 //!    (`weights::r2_env_refs`), which the script has no way to send;
 //! 3. (`up` only, not in a plan) the image is pinned to its digest.

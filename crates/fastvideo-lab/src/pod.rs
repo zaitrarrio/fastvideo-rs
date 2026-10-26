@@ -117,7 +117,7 @@ impl StartOptions {
     /// `runpod-http.sh`'s defaults for a tier. A `volume+r2` tier's idle
     /// watchdog waits [`crate::weights::r2_idle_min`] minutes (85 for 3600 s
     /// cells), both before and after the GPU's first use: an R2 fetch keeps
-    /// the GPU at 0 % (ADR-0019 §14.6).
+    /// the GPU at 0 % (ADR-0019 §16.6).
     pub fn for_tier(tier: &Tier, tag: &str) -> Self {
         let (idle_min, idle_grace_min) = match tier.weights {
             TierWeights::Volume => (10, 30),
@@ -379,7 +379,7 @@ pub fn launch(tier: &Tier, sha7: &str, start: &StartOptions) -> Result<Launch, P
         entrypoint: Vec::new(),
         args: vec!["/bin/bash".into(), "-c".into(), cmd],
         // A `volume+r2` tier's runner fetches the trees the volume lacks: the
-        // R2 key as Runpod secret references, never values (ADR-0019 §14).
+        // R2 key as Runpod secret references, never values (ADR-0019 §16).
         env: {
             let mut env = match tier.weights {
                 TierWeights::Volume => std::collections::BTreeMap::new(),

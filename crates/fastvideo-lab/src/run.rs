@@ -20,7 +20,7 @@
 //!   lpips-fetch.log             (FV_LPIPS=1)
 //!   <family>-<cell>.verdict.json, <family>.verdict.json, <cell>.<diff>,
 //!   <arm>/<evidence file>       (a cell's [verdict], D1d: b4a's files)
-//!   <arm>/r2-fetch.log, r2-fetch.json, r2-apt.log   (a `volume+r2` tier, ADR-0019 §14)
+//!   <arm>/r2-fetch.log, r2-fetch.json, r2-apt.log   (a `volume+r2` tier, ADR-0019 §16)
 //! ```
 //!
 //! [`Runner::regate`] is `fv-lab gate`: the same gates and verdicts evaluated
@@ -111,7 +111,7 @@ pub struct RunConfig {
     pub aux_dir: Option<PathBuf>,
     /// `FV_TAE_DIR` (default: `<aux>/tae` when complete, else `<scratch>/tae`).
     pub tae_dir: Option<PathBuf>,
-    /// A `weights = "volume+r2"` tier (ADR-0019 §14): `{weights}` is the
+    /// A `weights = "volume+r2"` tier (ADR-0019 §16): `{weights}` is the
     /// merged root on the scratch disk, and the trees the volume lacks are
     /// fetched from R2 before the arms that read them. `None`: the volume.
     pub r2: Option<R2Setup>,
@@ -168,7 +168,7 @@ impl RunConfig {
     /// A `volume+r2` run reads the marker on the volume itself: the merged
     /// root's link to it is made when the run starts, after the command
     /// lines are rendered, and the volume arms read the volume's
-    /// `auxiliary/tae` through it (ADR-0019 §14.3).
+    /// `auxiliary/tae` through it (ADR-0019 §16.3).
     pub fn tae(&self) -> PathBuf {
         let marker = match (&self.r2, &self.aux_dir) {
             (Some(_), None) => self.volume_weights().join("auxiliary/tae/.complete"),
@@ -1426,7 +1426,7 @@ impl Runner {
         self.run_cell(name, command);
     }
 
-    /// A `volume+r2` arm's R2 trees (ADR-0019 §14), before its gate: when
+    /// A `volume+r2` arm's R2 trees (ADR-0019 §16), before its gate: when
     /// one is not on the disk yet, every fetched tree the arm does not read
     /// is removed, then `r2-weights.py plan` (with the R2 key, the only child
     /// that gets it) presigns the missing trees into `<scratch>/r2/plan.json`

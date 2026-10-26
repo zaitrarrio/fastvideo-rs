@@ -239,7 +239,7 @@ cells = ["b4a-h3-fullopt-env", "b4a-h3-fullopt-prof", "b4a-h3-4step-tea"]
 # `fv-lab gold cells --write` (tests/gold_tier.rs holds them equal). The arms are
 # named by variant id, which is how `fv-lab report tiers` finds them. The rtx6000
 # tier's pod: the PRO 6000 every gold file's [tier] names, the same preflight
-# cells, caps and TAE fetch. Weights `volume+r2` (docs/adr/0019-fv-lab.md §14):
+# cells, caps and TAE fetch. Weights `volume+r2` (docs/adr/0019-fv-lab.md §16):
 # the trees on the EU volume are read from it, every other tree (Wan,
 # LongLive, the NVFP4, trim, VDN and turbo-LoRA trees) is fetched from the R2
 # weights store onto the container disk before the arms that read it, so every
@@ -346,3 +346,35 @@ weights = "volume"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["ltxvae-4k5s", "ltxvae-4k5s-untraced", "ltxvae-gen-4k5s", "ltxvae-1080p20s", "ltxvae-1080p20s-untraced", "ltxvae-gen-1080p20s"]
+
+# ---- D1e (docs/adr/0019-fv-lab.md §14): the port one-offs that still measure
+# something a served variant or an open item depends on, as tiers. Never a
+# runpod-matrix.sh family (scripts/gpu/fv-lab-retired.sh FV_LAB_EXPERIMENTS):
+# their commands are the experiment's own pod script's, cut from it and held
+# word for word by scripts/gpu/tests/fv-lab-experiment-goldens.sh and
+# tests/experiment_tiers.rs. The rtx6000 tier's pod.
+
+# Was scripts/gpu/experiments/h3-graphs-{validate,pod}.sh, its h3-turbo
+# checkpoint (FV_CKS=turbo), the open item of docs/perf/h3-denoise-graphs.md §5:
+# the lazy step clock (the default) and the opt-in CUDA graphs of the denoise
+# steps on the default H3 tier, timed and byte-compared with the per-step sync.
+# Every tree is on the EU volume (h3-base with its 4step-vsa MXFP8 DiT, the LoRA);
+# the experiment's NVFP4 checkpoints are R2-only and stay out until the
+# registry's hydrate (ADR-0019 §4).
+[[tier]]
+name = "h3-graphs"
+description = "H3 denoise launch overhead on h3-turbo at 768p: per-step sync, the lazy step clock and CUDA graphs of the steps, traced, timed and byte-compared (was experiments/h3-graphs, FV_CKS=turbo)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["h3-graphs-turbo-trace", "h3-graphs-turbo"]

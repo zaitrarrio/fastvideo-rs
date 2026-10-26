@@ -63,7 +63,7 @@ fn dry_run_prints_the_scripts_lines() {
     assert!(out.lines().all(|l| l.as_bytes().get(9) == Some(&b']')));
 }
 
-/// The `gold` tier (`weights = "volume+r2"`, ADR-0019 §14) through the
+/// The `gold` tier (`weights = "volume+r2"`, ADR-0019 §16) through the
 /// binary: its R2 plan comes from the repository's `volumes.sh` and
 /// `weights-r2.tsv`, and the dry run is its golden, with or without an R2
 /// key in the environment (never printed).
@@ -106,7 +106,7 @@ fn gold_dry_run_prints_its_r2_plan() {
 }
 
 /// A `volume+r2` run never puts its weights root on the volume (ADR-0019
-/// §14.3): without `--scratch` the scratch disk is the work directory, and a
+/// §16.3): without `--scratch` the scratch disk is the work directory, and a
 /// scratch under the work directory or the volume mount is refused too; exit
 /// 2, before anything is written.
 #[test]
@@ -466,7 +466,7 @@ fn pod_up_cells_must_be_arms_of_the_tier() {
         "{}",
         String::from_utf8_lossy(&ok.stderr)
     );
-    // The gold tier's plan (ADR-0019 §14): the R2 key as Runpod secret
+    // The gold tier's plan (ADR-0019 §16): the R2 key as Runpod secret
     // references in the pod's env, and the tier's 300 GB disk.
     let plan = String::from_utf8_lossy(&ok.stdout);
     for want in [

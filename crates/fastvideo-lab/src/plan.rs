@@ -123,7 +123,7 @@ impl ImageFlavour {
     }
 }
 
-/// Where a tier's arms read their weight trees (docs/adr/0019-fv-lab.md §4, §14).
+/// Where a tier's arms read their weight trees (docs/adr/0019-fv-lab.md §4, §16).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum TierWeights {
     /// The EU volume, mounted at `/workspace`; `{weights}` is
@@ -182,7 +182,7 @@ pub struct Tier {
     /// Where the arms' weight trees come from: `volume` (the EU volume,
     /// mounted at `/workspace`, trees under `/workspace/weights`) or
     /// `volume+r2` (the volume's trees, and the rest fetched from the R2
-    /// weights store per arm, ADR-0019 §14); the registry's `hydrate` later
+    /// weights store per arm, ADR-0019 §16); the registry's `hydrate` later
     /// (§4).
     pub weights: TierWeights,
     /// `verify-weights.sh` cells the pod checks at start into `weights.log`

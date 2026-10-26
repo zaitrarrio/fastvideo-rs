@@ -367,7 +367,7 @@ RUN apt-get update \
 # `ldd`, tar and gzip come with Ubuntu. NVENC needs the driver's `video`
 # capability (base-cuda sets it). python3 (stdlib only, no pip): the R2 tools
 # `fv-lab run` calls on a `weights = "volume+r2"` tier (scripts/gpu/r2-weights.py
-# plan, r2-fetch.py; docs/adr/0019-fv-lab.md §14), checked by importing what
+# plan, r2-fetch.py; docs/adr/0019-fv-lab.md §16), checked by importing what
 # they import beyond the core (`weights::PYTHON_CHECK`).
 FROM base-cuda AS runtime
 ARG DEBIAN_FRONTEND=noninteractive

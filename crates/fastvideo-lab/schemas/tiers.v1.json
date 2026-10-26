@@ -120,7 +120,7 @@
           "minimum": 0
         },
         "weights": {
-          "description": "Where the arms' weight trees come from: `volume` (the EU volume,\nmounted at `/workspace`, trees under `/workspace/weights`) or\n`volume+r2` (the volume's trees, and the rest fetched from the R2\nweights store per arm, ADR-0019 §14); the registry's `hydrate` later\n(§4).",
+          "description": "Where the arms' weight trees come from: `volume` (the EU volume,\nmounted at `/workspace`, trees under `/workspace/weights`) or\n`volume+r2` (the volume's trees, and the rest fetched from the R2\nweights store per arm, ADR-0019 §16); the registry's `hydrate` later\n(§4).",
           "$ref": "#/$defs/TierWeights"
         }
       },
@@ -149,7 +149,7 @@
       ]
     },
     "TierWeights": {
-      "description": "Where a tier's arms read their weight trees (docs/adr/0019-fv-lab.md §4, §14).",
+      "description": "Where a tier's arms read their weight trees (docs/adr/0019-fv-lab.md §4, §16).",
       "oneOf": [
         {
           "description": "The EU volume, mounted at `/workspace`; `{weights}` is\n`/workspace/weights`, and a tree it lacks skips its arm.",

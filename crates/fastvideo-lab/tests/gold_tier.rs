@@ -5,7 +5,7 @@
 //! cell with the variant's trees; and `fv-lab run gold --all --dry-run` is
 //! its golden (`fixtures/gold-dry-run.txt`, written by fv-lab itself: the
 //! gold tier has no script to be equal to). Its weights are `volume+r2`
-//! (docs/adr/0019-fv-lab.md §14): every arm's trees are on the EU volume or
+//! (docs/adr/0019-fv-lab.md §16): every arm's trees are on the EU volume or
 //! published in R2, so every variant runs, and the container disk holds the
 //! largest arm's R2 trees.
 

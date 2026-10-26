@@ -571,7 +571,7 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
             a.target
         ));
     }
-    // A `volume+r2` tier (ADR-0019 §14): `{weights}` is the merged root on
+    // A `volume+r2` tier (ADR-0019 §16): `{weights}` is the merged root on
     // the scratch disk, and the trees the volume lacks come from R2. The key
     // is read here (the Runpod secrets fill these in on the pod), held in
     // memory and handed to the plan step only.

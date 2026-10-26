@@ -134,16 +134,26 @@ lever makes a kernel faster. They remove idle time.
   - It fits a fixed-prompt loop (benchmarks, re-renders of one prompt at other seeds), not serving.
 - **h3-turbo (MXFP8, 768p) was not measured.** No RTX PRO 6000 was in stock in EU-RO-1, where the EU volume holds its
   MXFP8 tree. Its 4-step VSA shape matches the 4-step NVFP4 cells: expect (a) to save about 1.4% at 768p, (b) 0.6-0.7%
-  more on a replay, and neither to change a bit. Measure it with `scripts/gpu/experiments/h3-graphs-validate.sh` on an EU-RO-1 pod, where
-  `FV_CKS=turbo` runs it.
+  more on a replay, and neither to change a bit. Measure it with the fv-lab tier `h3-graphs` (D1e,
+  docs/adr/0019-fv-lab.md §14: this experiment's `FV_CKS=turbo` cells, its commands cut from the pod script; every
+  tree is on the EU volume): `fv-lab pod up --sha <7> --family h3-graphs --wall-cap-s 3600 --fetch-tree
+  --fetch-skip '/frames/|\.cache$' --yes --wait` (the tree fetch also brings back each arm's `report/` and
+  logs, which the plain fetch leaves on the pod it deletes; §14.4 there has the checks).
 
 ## 6. Reproduce
 
+The h3-turbo cells (the open item of §5) are the fv-lab tier `h3-graphs` (docs/adr/0019-fv-lab.md §14, the GPU check
+there): the trace, then sync / lazy / graphs at 768p over the same prompt set, with `--off-identity` compares of
+lazy against sync and graphs. The experiment's own driver, below, stays until that check passes; its NVFP4 cells
+(R2-only trees) have no tier until the registry's hydrate.
+
 ```bash
+fv-lab pod up --sha <7> --family h3-graphs --wall-cap-s 3600 \
+  --fetch-tree --fetch-skip '/frames/|\.cache$' --yes --wait   # h3-turbo only (EU volume), from a host with RUNPOD_API_KEY
 scripts/gpu/experiments/h3-graphs-validate.sh up ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-<7>   # backstop marker fv-h3graphs-backstop-<pod>
 scripts/gpu/experiments/h3-graphs-validate.sh status <pod>
 scripts/gpu/experiments/h3-graphs-validate.sh fetch <pod> DIR && scripts/gpu/experiments/h3-graphs-validate.sh down <pod>
-fv-lab report summary --kind h3-graphs DIR    # was scripts/gpu/experiments/h3-graphs-summary.py (D1c)
+fv-lab report summary --kind h3-graphs DIR    # the experiment's run directory (cells/, trace/, hashes.tsv), not an fv-lab one; was h3-graphs-summary.py (D1c)
 ```
 
 Spend: one pod for 46 min at $2.49/hr, about $1.91.

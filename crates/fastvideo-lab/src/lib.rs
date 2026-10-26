@@ -18,7 +18,7 @@
 //!   its `--dry-run`; `fv-lab gate`, a finished run's gates and verdicts
 //!   evaluated again offline.
 //! - [`weights`]: a `volume+r2` tier's trees: which come from the EU volume
-//!   and which from the R2 weights store, fetched per arm (ADR-0019 §14).
+//!   and which from the R2 weights store, fetched per arm (ADR-0019 §16).
 //! - [`pod`]: `fv-lab pod`, a tier's Runpod pod on fv-deploy's `Provider`
 //!   trait, guards and lifecycle.
 //! - [`goldcheck`]: `fv-lab gold check`, the CI bridge (plan D4): every

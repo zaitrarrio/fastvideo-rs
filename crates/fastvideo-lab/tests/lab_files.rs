@@ -200,7 +200,7 @@ fn every_cell_file_belongs_to_a_tier() {
 
 #[test]
 fn the_runtime_image_carries_the_python_the_r2_tools_need() {
-    // A `volume+r2` tier (ADR-0019 §14) runs scripts/gpu/r2-weights.py and
+    // A `volume+r2` tier (ADR-0019 §16) runs scripts/gpu/r2-weights.py and
     // r2-fetch.py on the runtime image: its stage installs python3 and checks
     // the same imports the runner checks before a fetch.
     let docker = read("docker/gpucheck.Dockerfile");

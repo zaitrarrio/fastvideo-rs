@@ -2,7 +2,7 @@
 
 - Status: Accepted for the CPU parts of D3 and D4 (`fv-lab report tiers`, `docs/perf/tiers.md` with no run set,
   `fv-lab gold check`, the `gold` tier and its cells, the two workflows). The GPU gold runs that fill the table are
-  not run here (budget); the `gold-run` workflow needs the owner's `RUNPOD_API_KEY` secret (§4). Since ADR-0019 §14
+  not run here (budget); the `gold-run` workflow needs the owner's `RUNPOD_API_KEY` secret (§4). Since ADR-0019 §16
   the `gold` tier reads the trees the EU volume lacks from R2 (`weights = "volume+r2"`), so every variant runs; the
   full run's command and cost are in §3
 - Date: 2026-10-24
@@ -111,15 +111,15 @@ the script-equality tests (`dry_run.rs`, `lab_files.rs`) leave the gold tier out
 explicitly (the default for a tier; refused for a single cell and with `--cells`).
 
 On the EU volume alone about eleven arms run (the H3 and LTX-2.5 variants whose trees are there); the Wan, LongLive,
-trim, NVFP4, VDN and turbo-LoRA trees are R2-only. **Since 2026-10-26 (ADR-0019 §14) the tier is `weights =
+trim, NVFP4, VDN and turbo-LoRA trees are R2-only. **Since 2026-10-26 (ADR-0019 §16) the tier is `weights =
 "volume+r2"`**: those trees (18, 530.74 GB) are fetched from the R2 weights store onto the container disk before the
 arms that read them, at most 147.86 GB at once (`container_disk_gb = 300`), so all 32 arms run; a tree in neither place
 would still be recorded as skipped (`weights incomplete`), and a failed fetch as `r2 fetch failed`. Variants the engine
 cannot run from a text request (reference-to-video, audio-to-video) fail and are shown as failed: that is a finding,
 not a number.
 
-**The full gold run (the coordinator's GPU check, ADR-0019 §14.7).** On a commit whose runtime image is published with
-§14 in it, from the repository root:
+**The full gold run (the coordinator's GPU check, ADR-0019 §16.7).** On a commit whose runtime image is published with
+§16 in it, from the repository root:
 
 ```sh
 SHA=<7>
@@ -132,7 +132,7 @@ Estimate on the RTX PRO 6000 at about $2.49/hr: boot 5-10 min, R2 11-15 min, 32 
 1.5-3.1 h and $3.70-$7.70; at most $9.96 at the 4 h cap; a balance of at least $17.96 before the create (fv-deploy's $8
 floor over the cap). The R2 key reaches the pod as Runpod secret references (`fv_r2_access_key_id`,
 `fv_r2_secret_access_key`); nothing new in GitHub. A run near the cap skips its remaining arms (`wall cap near`), and the
-driver fetches what is there 15 min before the cap (ADR-0019 §14.7), so even an overlong run leaves its record.
+driver fetches what is there 15 min before the cap (ADR-0019 §16.7), so even an overlong run leaves its record.
 
 ### 4. CI
 
@@ -197,7 +197,8 @@ driver fetches what is there 15 min before the cap (ADR-0019 §14.7), so even an
   `h3-graphs-validate.sh:107`, `h3-graphs-pod.sh:92`, `h3-fp4attn-pod.sh:82`, `h3-tier-ship-pod.sh:74`,
   `h3-trim-pod.sh:56`, `h3-trim-validate.sh:120`, `h3-tier-options-validate.sh:126`, `fasth3-nvfp4-validate.sh:93`,
   `h3-trim-nvfp4-pod.sh:48`, `fasth3-nvfp4-pod.sh:56`, `h3-turbo-loras-pod.sh:49`, `h3-trim-nvfp4-validate.sh:83`).
-  A re-grep found no others. Each now calls `fv_self_delete`, whose one definition is
+  A re-grep found no others. (D1e, docs/adr/0019-fv-lab.md §14, later deleted every one-off above but
+  `h3-graphs-{validate,pod}.sh`; they are in git at `22a5fd7b`.) Each now calls `fv_self_delete`, whose one definition is
   `scripts/gpu/lib/self-delete.sh`; `runpod-http.sh` and `pod-start.sh.in` carry the same text (their goldens
   regenerated). After review (2026-10-25) the function hands curl the `Authorization` header on stdin (`printf … |
   curl … -H @-`: POSIX, the key never in a process's argv), keeps its status in `_fvsd_code` / `_fvsd_ok` (no global
