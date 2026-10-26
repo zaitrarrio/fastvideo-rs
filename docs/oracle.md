@@ -85,6 +85,35 @@ with depth, no block where it jumps. A jump is bisected with the block's op
 dumps (`FASTVIDEO_DUMP_OPS=<i>`): the first op whose rel-L2 leaves the bf16
 floor is the divergent one.
 
+## Upstream cells: host RAM
+
+On 2026-10-26 the `fasth3-4step-vsa` reference (same image, FastVideo
+e90be598, same argv as 2026-09-29) failed on an RTX PRO 6000 in EU-RO-1 at
+402 s with only "WorkerMultiprocProc initialization failed ... See stack
+trace for root cause." The parent raises that text, with no worker error, when the
+worker's ready pipe closes and the worker sent nothing (`wait_for_ready`'s
+`EOFError` branch). A worker that raises sends its traceback up that pipe.
+A fatal native signal makes `faulthandler` print a stack dump. Neither
+happened, so the worker was killed with SIGKILL. The worker logged
+"Converting transformer to LoRA Transformer" and never "Converted N layers",
+so it died in `_convert_one_transformer`. There, every wrapped linear keeps a
+host copy of its base weight (`BaseLayerWithLoRA.cpu_weight =
+weight.to("cpu")`, about 70 GB for the 35B DiT). That copy comes on top of the
+pinned, CPU-offloaded text encoder (about 66 GB). The leading suspect is the pod's
+cgroup OOM killer. The 2026-09 runs' host (EUR-IS-1) had 1511 GB, and this one had
+755 GB with the same GPU and driver (595.91.07). Runpod gives a pod a share of
+the host's RAM unless `minRAMPerGPU` is set.
+
+What records it now: `box.txt` has `pod_ram_limit_mib` (the cgroup limit, not
+`free`'s host total). Each cell's `cell.json` has `peak_ram_mib`,
+`ram_limit_mib` and `oom_kills` (from the cgroup's `memory.events`), and its
+`mem.log` samples the pod's RAM each second. On a start failure,
+`bench_fastvideo.py` writes each worker's exit code to `result.json`
+`worker_exits` and to stderr (-9 = SIGKILL). `FV_MIN_RAM_GB=<n>` makes
+`runpod-http.sh` ask for `minRAMPerGPU: n`, and the driver log prints the RAM
+the pod was given (`memoryInGb`). None of this changes the reference's
+arguments or numerics.
+
 ## Results: H3 turbo on H100 with the datacenter VSA kernel (2026-09-29)
 
 Target `fasth3-4step-vsa`, runtime f9be674 (WP-D). The reference was run

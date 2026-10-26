@@ -61,7 +61,7 @@ dry "lists split without globbing" 0 "--cells sol-h3 \\* --extra-env FASTVIDEO_X
 dry "the reviewer's case" 1 "which has no FV_AVOID_MACHINES" FV_FAMILY=precision FV_POD_CAP_S=1800 \
   RUNPOD_VOLUME_ID=other RUNPOD_CLOUD_TYPE=COMMUNITY FV_AVOID_MACHINES=m1 FV_SKIP_TAE=1
 for kv in FV_POD_FILES=x FV_POD_SCRIPT=x FV_POD_FILE=x FV_PROMPTS=5 FV_PROMPT=x FV_SEED=1 FV_AVOID_MACHINES=m1 \
-  FV_CREATE_WAIT_S=60 RUNPOD_ALLOWED_CUDA=13.0; do
+  FV_CREATE_WAIT_S=60 RUNPOD_ALLOWED_CUDA=13.0 FV_MIN_RAM_GB=192; do
   dry "refused: $kv" 1 "which has no ${kv%%=*}" FV_FAMILY=trace "$kv"
 done
 # FV_FETCH_TREE=1 is fv-lab's --fetch-tree (ADR-0019 §13); its settings act only with it.

@@ -89,6 +89,8 @@ info_box() {
   {
     nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
     echo "cpus=$(nproc) mem=$(free -g | awk '/Mem:/{print $2}')G"
+    # The pod's share (cgroup): what a cell can actually use before an OOM kill.
+    echo "pod_ram_limit_mib=$(mib_or_null "$(cg_mem max)") oom_kills=$(cg_mem oom_kills)"
     df -h /workspace | tail -1
     du -sh "$UP"/* 2>/dev/null
     ls -la "$HF_HOME" 2>/dev/null | sed 's/token.*/token (present)/'
@@ -323,6 +325,26 @@ lpips_ref() {
 smi_start() { nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500 >"$1/smi.log" 2>/dev/null & echo $!; }
 smi_peak() { sort -n "$1/smi.log" 2>/dev/null | tail -1; }
 
+# The pod's own memory (its cgroup, v2 then v1), in bytes: `free` in box.txt
+# shows the host's RAM, not the pod's share of it. A worker the kernel
+# OOM-kills dies with SIGKILL and prints nothing (FastVideo's parent then says
+# only "See stack trace for root cause"); the oom_kill count is the evidence.
+# $1 = max | current | oom_kills; prints nothing when the file is absent.
+cg_mem() {
+  local v2=/sys/fs/cgroup v1=/sys/fs/cgroup/memory
+  case "$1" in
+    max) cat "$v2/memory.max" 2>/dev/null || cat "$v1/memory.limit_in_bytes" 2>/dev/null ;;
+    current) cat "$v2/memory.current" 2>/dev/null || cat "$v1/memory.usage_in_bytes" 2>/dev/null ;;
+    oom_kills)
+      if [[ -f "$v2/memory.events" ]]; then awk '$1 == "oom_kill" {print $2}' "$v2/memory.events"
+      elif [[ -f "$v1/memory.oom_control" ]]; then awk '$1 == "oom_kill" {print $2}' "$v1/memory.oom_control"; fi ;;
+  esac
+}
+# Bytes to MiB for cell.json; empty, "max" (v2) or v1's near-2^63 "no limit" -> null.
+mib_or_null() { [[ "${1:-}" =~ ^[0-9]{1,18}$ ]] && (( $1 < 1 << 50 )) && echo $(( $1 >> 20 )) || echo null; }
+mem_start() { ( while :; do cg_mem current; sleep 1; done ) >"$1/mem.log" 2>/dev/null & echo $!; }
+mem_peak() { sort -n "$1/mem.log" 2>/dev/null | tail -1; }
+
 gpu_clean() {
   local used i
   for i in $(seq 1 30); do
@@ -334,25 +356,34 @@ gpu_clean() {
   return 1
 }
 
-# run_cell <name> <cmd...>: timeout, stdout/stderr, nvidia-smi peak, cell.json.
+# run_cell <name> <cmd...>: timeout, stdout/stderr, nvidia-smi peak, the pod's
+# RAM peak / limit and OOM kills (cg_mem), cell.json.
 run_cell() {
   local name="$1"; shift
-  local c="$OUT/$name" t0 rc smi
+  local c="$OUT/$name" t0 rc smi mem oom0 oom1
   if [[ -n "${UP_CELLS:-}" && " $UP_CELLS " != *" $name "* ]]; then return 0; fi
   mkdir -p "$c"
   gpu_clean || log "WARN GPU not clean before $name"
   log "▶ cell $name"
   t0=$(date +%s)
   smi="$(smi_start "$c")"
+  mem="$(mem_start "$c")"
+  oom0="$(cg_mem oom_kills)"
   (cd "$c" && timeout --signal=TERM --kill-after=30 "${UP_CELL_TIMEOUT_S:-5400}" "$@") >"$c/stdout.log" 2>"$c/stderr.log"
   rc=$?
-  kill "$smi" 2>/dev/null
-  local secs=$(( $(date +%s) - t0 )) peak
+  kill "$smi" "$mem" 2>/dev/null
+  oom1="$(cg_mem oom_kills)"
+  local secs=$(( $(date +%s) - t0 )) peak ram ram_max ooms=null
   peak="$(smi_peak "$c")"
-  printf '{"cell":"%s","exit":%s,"seconds":%s,"peak_smi_mib":%s,"started":%s}\n' \
-    "$name" "$rc" "$secs" "${peak:-null}" "$t0" >"$c/cell.json"
-  if (( rc == 0 )); then log "ok $name ${secs}s peak ${peak}MiB"; else
-    log "FAIL $name ${secs}s exit=$rc"; tail -15 "$c/stderr.log" | tee -a "$LIVE" >&2; fi
+  ram="$(mib_or_null "$(mem_peak "$c")")"
+  ram_max="$(mib_or_null "$(cg_mem max)")"
+  [[ "$oom0" =~ ^[0-9]+$ && "$oom1" =~ ^[0-9]+$ ]] && ooms=$(( oom1 - oom0 ))
+  printf '{"cell":"%s","exit":%s,"seconds":%s,"peak_smi_mib":%s,"peak_ram_mib":%s,"ram_limit_mib":%s,"oom_kills":%s,"started":%s}\n' \
+    "$name" "$rc" "$secs" "${peak:-null}" "$ram" "$ram_max" "$ooms" "$t0" >"$c/cell.json"
+  if (( rc == 0 )); then log "ok $name ${secs}s peak ${peak}MiB ram ${ram}/${ram_max}MiB"; else
+    log "FAIL $name ${secs}s exit=$rc ram ${ram}/${ram_max}MiB oom_kills=$ooms"
+    [[ "$ooms" =~ ^[1-9] ]] && log "FAIL $name: the kernel OOM-killed $ooms process(es) in this pod during the cell (host RAM, not GPU)"
+    tail -15 "$c/stderr.log" | tee -a "$LIVE" >&2; fi
 }
 
 # sol-engine MiniMax-H3 RTX5090 profile: env from config/minimax_h3/rtx5090_<arm>.toml,

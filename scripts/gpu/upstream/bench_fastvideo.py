@@ -26,6 +26,43 @@ import traceback
 from pathlib import Path
 
 
+def _record_worker_exits(res: dict) -> None:
+    """Record how FastVideo's worker processes ended when one dies before READY.
+
+    A worker that raises sends its traceback up the ready pipe; one that is
+    killed (SIGKILL from the kernel's OOM killer when the pod runs out of host
+    RAM) sends nothing, and the parent raises only "WorkerMultiprocProc
+    initialization failed ... See stack trace for root cause." with no stack
+    trace anywhere. The exit codes say which: -9 is SIGKILL. This wraps
+    wait_for_ready's failure path only; READY workers and the generation are
+    untouched.
+    """
+    try:
+        from fastvideo.worker.multiproc_executor import WorkerMultiprocProc
+    except Exception:  # noqa: BLE001  (another executor, or a renamed module)
+        return
+    original = WorkerMultiprocProc.wait_for_ready
+
+    def wait_for_ready(handles):
+        try:
+            return original(handles)
+        except BaseException:
+            exits = []
+            for h in handles:
+                h.proc.join(timeout=30)
+                code = h.proc.exitcode
+                exits.append({"rank": h.rank, "pid": h.proc.pid, "exitcode": code})
+                why = ("SIGKILL: most likely the kernel OOM killer (host RAM; see the cell's "
+                       "cell.json oom_kills and peak_ram_mib)") if code == -9 else (
+                           "still running after 30 s" if code is None else "see the worker's log above")
+                print(f"[bench_fastvideo] worker rank {h.rank} pid {h.proc.pid} exit code {code}: {why}",
+                      file=sys.stderr, flush=True)
+            res["worker_exits"] = exits
+            raise
+
+    WorkerMultiprocProc.wait_for_ready = staticmethod(wait_for_ready)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fastvideo-src", required=True)
@@ -92,6 +129,7 @@ def main() -> int:
             )
         else:
             cfg = basic_fasth3.build_generator_config(args)
+        _record_worker_exits(res)
         t0 = time.perf_counter()
         gen = VideoGenerator.from_config(cfg)
         res["load_s"] = time.perf_counter() - t0

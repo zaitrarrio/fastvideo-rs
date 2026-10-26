@@ -57,6 +57,9 @@
 # runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells),
 # FV_POD_FILES (space-separated local files, at most a few hundred KB in all,
 # unpacked on the pod into /fvscratch/files/<basename>; run mode only),
+# FV_MIN_RAM_GB (PodCreateInput minRAMPerGPU: the pod's host RAM floor; unset
+# = Runpod's default share; too small a share is the suspected cause of the
+# 2026-10-26 upstream H3 LoRA failure, docs/oracle.md "Upstream cells: host RAM"),
 # FV_AVOID_MACHINES (space-separated Runpod machine ids: a pod placed on one
 # is deleted at once and created again),
 # FV_POD_SCRIPT (the basename of one of FV_POD_FILES, run instead of the
@@ -323,11 +326,13 @@ pod_payload() {
   fi
   jq -n --arg files "$files" --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
-    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
+    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" \
+    --arg ram "${FV_MIN_RAM_GB:-}" '{
       name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
     } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)
+      + (if $ram == "" then {} else {minRAMPerGPU: ($ram|tonumber)} end)
       + (if $files == "" then {} else {env: {FV_POD_FILES_TGZ: $files}} end)
       + (if $vol == "" then {} else
       {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)'
@@ -379,7 +384,7 @@ create_pod() {
     rest DELETE "/pods/$id" >/dev/null || true
     die "pod $id at \$$dph/hr exceeds cap \$$MAX_DPH"
   fi
-  log "pod $id  \$$dph/hr  (hard cap ${CAP_S}s)"
+  log "pod $id  \$$dph/hr  (hard cap ${CAP_S}s)  ram=$(jq -r '.memoryInGb // "?"' <<<"$resp")GB vcpu=$(jq -r '.vcpuCount // "?"' <<<"$resp")"
   # Wall-clock backstop independent of this shell's lifetime.
   nohup bash -c "sleep $CAP_S; curl -sS -X DELETE -H 'Authorization: Bearer $RUNPOD_API_KEY' '$API/pods/$id' >/dev/null" >/dev/null 2>&1 &
   echo "$id"
@@ -561,7 +566,7 @@ fv_lab_route() {
     || die "$FAMILY: no complete [[tier]] in lab/tiers.toml"
   # No equivalent at all.
   for v in FV_POD_FILES FV_POD_SCRIPT FV_POD_FILE FV_PROMPTS FV_PROMPT FV_SEED FV_AVOID_MACHINES \
-    FV_CREATE_WAIT_S RUNPOD_ALLOWED_CUDA; do
+    FV_CREATE_WAIT_S RUNPOD_ALLOWED_CUDA FV_MIN_RAM_GB; do
     [[ -z "${!v:-}" ]] || refuse "has no $v"
   done
   # The tree fetch's settings act only with it (fetch_tree), as here.
