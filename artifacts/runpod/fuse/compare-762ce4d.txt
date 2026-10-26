@@ -1,0 +1,12 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/fuse/762ce4d-1026124004-44af artifacts/runpod/fuse/762ce4d-10261240
+same fasth3-4step-vsa-768p-off: {"exit":0,"skipped":null}, 248 frames byte-identical
+same fasth3-4step-vsa-768p-on: {"exit":0,"skipped":null}, 248 frames byte-identical
+same fasth3-8step-768p-off: {"exit":null,"skipped":"weights incomplete"}, no frames
+same fasth3-8step-768p-on: {"exit":null,"skipped":"weights incomplete"}, no frames
+same kernels-fuse: {"exit":0,"skipped":null}, no frames
+same compare/compare-clips-fasth3-4step-vsa-768p-off--fasth3-4step-vsa-768p-on.json: {"status":"pass","off_identity":"ok"}
+same compare/compare-clips-fasth3-8step-768p-off--fasth3-8step-768p-on.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-ltx25-4k5s-sol-off--ltx25-4k5s-sol-on.json: {"status":"skipped","off_identity":null}
+same gate/gate-fasth3-4step-vsa-768p-off--fasth3-4step-vsa-768p-on.json: present
+5 arm(s) the same (2 ran with byte-identical frames, 2 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 4 report(s) the same, 0 verdict file(s) the same, 0 difference(s)
+exit 0

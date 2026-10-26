@@ -1,0 +1,15 @@
+{
+  "id": "zsz3k16tggu58v",
+  "name": "fv-lab-ltx-762ce4d-1026124138-4dd8",
+  "family": "ltx",
+  "tag": "762ce4d-1026124138-4dd8",
+  "sha": "762ce4d",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:ae688277d596110669173d39ccb6458768246f31ba2a237b27cebb0712508d0e",
+  "url": "https://zsz3k16tggu58v-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793018501.4796033,
+  "cap_s": 3600,
+  "memory_gb": 94.0,
+  "vcpus": 32.0
+}
