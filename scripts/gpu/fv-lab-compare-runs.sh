@@ -38,6 +38,14 @@
 # `oracle` tier's tensor diffs against one upstream reference) in either run:
 #   - those lines are the same in both (they follow from the dumps, which
 #     follow from the frames' computation; timings are on other lines).
+# and for every derived-clip report (ADR-0019 §20: `<dir>/metrics.txt`, the
+# `oracle` tier's clip-metric targets, `oracle-<target>-frames/`) of either run:
+#   - the report exists in both and is byte-identical; or, when only the
+#     values differ (each line cut at its last `: ` is the same in both: the
+#     same clips, measures and order), it is reported (`metrics <file>: the
+#     same measurements, values differ`) and is no difference: the numbers
+#     read the clips' mp4 encodes, which the frames records do not cover
+#     (§20.6). Any other change (a line missing, another order) is one.
 # (`fv-lab pod fetch` takes these; on the runpod-http.sh side they need
 # FV_FETCH_TREE=1.) --expect-verdicts N fails unless at least N verdict files
 # compared the same: a tier with verdict cells whose files never arrived
@@ -268,7 +276,25 @@ while IFS= read -r r; do
   echo "same $r"
   nver=$((nver + 1))
 done < <({ vfiles "$A"; vfiles "$B"; } | LC_ALL=C sort -u)
-echo "$same arm(s) the same ($ran ran with byte-identical frames, $skipped skipped in both, $failed failed in both; $ndumps with the same compare-dumps lines), $nctl control arm(s) reported, $nrep report(s) the same, $nver verdict file(s) the same, $diffs difference(s)"
+# The derived-clip reports (ADR-0019 §20): metrics.txt, judged on its shape.
+mfiles() { (cd "$1" && for r in */metrics.txt; do [[ -f "$r" ]] && echo "$r"; done) | LC_ALL=C sort; }
+# Each line up to its last ": " (its words), `.` after (trailing lines kept).
+mshape() { sed 's/\(.*\): .*/\1/' "$1" && echo .; }
+nmet=0
+while IFS= read -r r; do
+  if [[ ! -f "$A/$r" ]]; then say "DIFF $r: only in the runpod-http run"; continue; fi
+  if [[ ! -f "$B/$r" ]]; then say "DIFF $r: only in the fv-lab run"; continue; fi
+  if cmp -s "$A/$r" "$B/$r"; then
+    echo "same $r"
+  else
+    if ! ma="$(mshape "$A/$r" 2>/dev/null)" || ! mb="$(mshape "$B/$r" 2>/dev/null)" || [[ "$ma" != "$mb" ]]; then
+      say "DIFF $r: other measurements (diff the two files)"; continue
+    fi
+    echo "metrics $r: the same measurements, values differ (reported, not judged: the clips' encodes)"
+  fi
+  nmet=$((nmet + 1))
+done < <({ mfiles "$A"; mfiles "$B"; } | LC_ALL=C sort -u)
+echo "$same arm(s) the same ($ran ran with byte-identical frames, $skipped skipped in both, $failed failed in both; $ndumps with the same compare-dumps lines), $nctl control arm(s) reported, $nrep report(s) the same, $nver verdict file(s) the same, $nmet metrics report(s), $diffs difference(s)"
 if (( nver < EXPECT_VERDICTS )); then
   echo "expected at least $EXPECT_VERDICTS verdict file(s) the same, found $nver"
   exit 1

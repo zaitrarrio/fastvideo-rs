@@ -188,7 +188,7 @@ fn every_cell_file_belongs_to_exactly_one_tier() {
     );
     let mut seen = BTreeSet::new();
     for t in lab.tiers.tiers.iter().filter(|t| t.name != "ltxvae-gen") {
-        for c in &t.cells {
+        for c in t.all_cells() {
             assert!(
                 seen.insert(c.as_str()),
                 "lab/cells/{c}.toml is in two tiers"
@@ -210,7 +210,7 @@ fn every_cell_file_belongs_to_a_tier() {
         .tiers
         .tiers
         .iter()
-        .flat_map(|t| t.cells.iter().map(String::as_str))
+        .flat_map(|t| t.all_cells().map(String::as_str))
         .collect();
     for name in lab.cells.keys() {
         assert!(

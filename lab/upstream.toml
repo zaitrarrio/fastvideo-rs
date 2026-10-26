@@ -62,7 +62,7 @@ steps = []
 # No host-RAM floor: none measured for these references yet.
 [[stack]]
 name = "sol-ltx25"
-description = "sol-engine LTX-2.5 references: the distilled two-stage at 512p and 4k, Sol and dense stage 2"
+description = "sol-engine LTX-2.5 references: the distilled two-stage at 512p and 4k, Sol and dense stage 2; image and keyframe conditioning, IC-LoRA reference-to-video, audio-to-video (guided too), retake and extend"
 image = "sol-ltx25"
 gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
 gpu_count = 1
@@ -89,3 +89,48 @@ steps = ["weights:ltx25"]
 [[stack.target]]
 name = "ltx25-4k-dense"
 steps = ["weights:ltx25"]
+
+# The clip-metric targets (ADR-0019 §20; scripts/gpu/upstream/oracle.sh
+# run_oracle's order): the distilled DiT's packs (weights:ltx25) for all but
+# the guided audio-to-video, which reads the dev DiT and the distilled LoRA
+# (weights:ltx25-dev), as oracle.sh's ltxw. ltx25-ref2v's IC-LoRA is read from
+# the volume as it is (ltx25-ic-lora-ingredients).
+[[stack.target]]
+name = "ltx25-i2v"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-kf"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-ref2v"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-a2v"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-a2v-i2v"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-retake"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-retake-v"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-retake-a"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-extend"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-a2v-guided"
+steps = ["weights:ltx25-dev"]

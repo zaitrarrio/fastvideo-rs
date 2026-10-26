@@ -199,8 +199,23 @@ pub struct Tier {
     /// at start, as `runpod-http.sh` does unless `FV_SKIP_TAE=1`.
     #[serde(default)]
     pub tae: bool,
-    /// The cell files (`lab/cells/<name>.toml`), in run order.
+    /// The cell files (`lab/cells/<name>.toml`), in run order: the tier's
+    /// default run (no `--cells` / `FV_CELLS`).
     pub cells: Vec<String>,
+    /// Cells of the tier that run only on request (ADR-0019 §20.3): after
+    /// `cells`, in this order, and only when `--cells` / `FV_CELLS` names one
+    /// of their arms. A run without a selection runs `cells` alone, so a
+    /// tier's default run (its goldens, its GPU-checked plan) stays what it
+    /// was when cells are added here (the `oracle` tier's clip-metric targets).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_cells: Vec<String>,
+}
+
+impl Tier {
+    /// Every cell of the tier: `cells`, then `extra_cells`.
+    pub fn all_cells(&self) -> impl Iterator<Item = &String> {
+        self.cells.iter().chain(&self.extra_cells)
+    }
 }
 
 impl Tiers {
@@ -297,6 +312,21 @@ impl Tiers {
                     format!("`{c}` is not a cell name"),
                 ));
             }
+            if let Some(c) = t.extra_cells.iter().find(|c| !is_name(c)) {
+                return Err(field(
+                    file,
+                    at("extra_cells"),
+                    format!("`{c}` is not a cell name"),
+                ));
+            }
+            let mut listed = BTreeSet::new();
+            if let Some(c) = t.all_cells().find(|c| !listed.insert(c.as_str())) {
+                return Err(field(
+                    file,
+                    at("extra_cells"),
+                    format!("`{c}` twice in the tier (cells and extra_cells)"),
+                ));
+            }
         }
         Ok(())
     }
@@ -343,6 +373,103 @@ pub struct CellFile {
     /// `det-short` / `determinism` families' hashes and `determinism.txt`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeats: Option<Repeats>,
+    /// Derived-clip measurements after the cell's arms, compares and gates
+    /// (ADR-0019 §20: the oracle's clip-metric targets; `hd` later): ffmpeg
+    /// SSIM / PSNR and ffprobe stream lines into a report's `metrics.txt`,
+    /// in order ([`Metric`]). A report, not a verdict.
+    #[serde(default, rename = "metric", skip_serializing_if = "Vec::is_empty")]
+    pub metrics: Vec<Metric>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// One clip of a [`Metric`]: its label (the report's words and the copy's
+/// file name `<label>.mp4`) and its path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Clip {
+    pub label: String,
+    /// Under `{runs}`, `{scratch}`, `{ref}` or `{root}`.
+    pub path: String,
+}
+
+/// A derived-clip measurement (docs/adr/0019-fv-lab.md §20): a pass over
+/// clips, as the script's `for src in "<label>:<path>" …` loops. Into the
+/// report directory `report`, for each clip in order:
+///
+/// 1. the clip and every `requires` file must be regular files; else, with
+///    `missing`, the line `<label> missing <path>` (and ` or <file name>` per
+///    `requires` entry) is appended to `metrics.txt`, and the next clip;
+/// 2. with `copy`, the clip is copied to `<report>/<label>.mp4`;
+/// 3. each [`Measure`], in order, appends its lines (SSIM then PSNR for the
+///    comparisons).
+///
+/// Then, with `echo`, every line of `metrics.txt` (the whole file) goes into
+/// the log as `[<tag>] <line>`. A dry run lists each ffmpeg / ffprobe command
+/// as `dry-run metric <tag>: <command>`, every clip assumed present. Nothing
+/// judges the numbers (ADR-0019 §20, decision 2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Metric {
+    /// The report directory, below `{runs}/` (`metrics.txt`, the copies).
+    pub report: String,
+    /// The echoed lines' prefix and the dry-run lines' name.
+    pub tag: String,
+    /// The clips, in order.
+    pub clips: Vec<Clip>,
+    /// Files every clip's measures need besides the clip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    /// Write `<label> missing …` for a clip that is not there (else nothing).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub missing: bool,
+    /// Copy each present clip to `<report>/<label>.mp4` before its measures.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub copy: bool,
+    /// What is measured of each present clip, in order.
+    #[serde(default, rename = "measure", skip_serializing_if = "Vec::is_empty")]
+    pub measures: Vec<Measure>,
+    /// After the pass, `metrics.txt` (all of it) into the log.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub echo: bool,
+}
+
+/// What a [`Metric`] measures of one clip. The comparisons run ffmpeg's
+/// `ssim` then `psnr` filter and write `<words> <filter>: <result>`, the
+/// result the last `Parsed_<filter>` line of ffmpeg's output after its last
+/// `] ` (the script's `grep | tail -1` and `${r##*] }`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Measure {
+    /// `ffprobe -v error -show_entries stream=codec_type,codec_name,
+    /// sample_rate,channels,nb_frames,r_frame_rate,width,height -of compact
+    /// <clip>`: each stdout line as `<label>: <line>`. (A struct variant,
+    /// so `deny_unknown_fields` refuses a stray key on it too.)
+    Probe {},
+    /// The whole clip against another (both as yuv420p): `<label> vs
+    /// <against label> clip <filter>: …`.
+    ClipVsClip { against: Clip },
+    /// The frames `select` keeps of the clip against the same frames of
+    /// `source` (both re-timed to `fps`): `<label> kept frames vs source
+    /// <filter>: …`.
+    KeptFramesVsSource {
+        source: String,
+        /// An ffmpeg `select` expression (`lt(n\,33)+gte(n\,89)`), quoted
+        /// with `'` in the filter graph.
+        select: String,
+        fps: u32,
+    },
+    /// Frame `frame` of the clip against an image scaled to cover
+    /// `width`x`height` (bilinear) and centre-cropped to it: `<label> frame
+    /// <frame> <filter>: …`.
+    FrameVsImage {
+        frame: u32,
+        image: String,
+        width: u32,
+        height: u32,
+    },
 }
 
 /// The reference of an oracle cell (docs/adr/0019-fv-lab.md §15): what an
@@ -1150,6 +1277,120 @@ impl CellFile {
             self.validate_verdict(v, file, &names)?;
         }
         self.validate_d1d(file)?;
+        self.validate_metrics(file)?;
+        Ok(())
+    }
+
+    /// `[[metric]]` (ADR-0019 §20).
+    fn validate_metrics(&self, file: &str) -> Result<(), LabError> {
+        let path_ok = |s: &str| {
+            ["{runs}", "{scratch}", "{ref}", "{root}"]
+                .iter()
+                .any(|r| s.starts_with(&format!("{r}/")))
+                && !s.split('/').any(|p| p == ".." || p == ".")
+                && !s.contains(['\n', '\r', '\'', '"'])
+                && placeholders(s).is_ok_and(|ph| {
+                    ph.len() == 1 && matches!(ph[0], "runs" | "scratch" | "ref" | "root")
+                })
+        };
+        for (i, m) in self.metrics.iter().enumerate() {
+            let at = |f: &str| format!("metric[{i}].{f}");
+            let check = |f: &str, p: &str| -> Result<(), LabError> {
+                if !path_ok(p) {
+                    return Err(field(
+                        file,
+                        at(f),
+                        format!("`{p}` is not a path under `{{runs}}`, `{{scratch}}`, `{{ref}}` or `{{root}}`"),
+                    ));
+                }
+                if p.starts_with("{ref}/") && self.reference.is_none() {
+                    return Err(field(
+                        file,
+                        at(f),
+                        "`{ref}` in a cell without a [reference]",
+                    ));
+                }
+                Ok(())
+            };
+            let below_runs = m.report.strip_prefix("{runs}/").is_some_and(|rest| {
+                !rest.is_empty()
+                    && rest
+                        .split('/')
+                        .all(|c| !c.is_empty() && c != "." && c != "..")
+            });
+            if !below_runs || !path_ok(&m.report) {
+                return Err(field(
+                    file,
+                    at("report"),
+                    format!("`{}` is not a directory below `{{runs}}/`", m.report),
+                ));
+            }
+            if !is_name(&m.tag) {
+                return Err(field(
+                    file,
+                    at("tag"),
+                    format!("`{}` is not [a-z0-9][a-z0-9._-]*", m.tag),
+                ));
+            }
+            if m.clips.is_empty() {
+                return Err(field(file, at("clips"), "no clip"));
+            }
+            if m.measures.is_empty() && !m.copy {
+                return Err(field(file, at("measure"), "nothing to measure or copy"));
+            }
+            let mut labels = BTreeSet::new();
+            for c in &m.clips {
+                if !is_name(&c.label) {
+                    return Err(field(
+                        file,
+                        at("clips"),
+                        format!("`{}` is not a label ([a-z0-9][a-z0-9._-]*)", c.label),
+                    ));
+                }
+                if !labels.insert(c.label.as_str()) {
+                    return Err(field(file, at("clips"), format!("`{}` twice", c.label)));
+                }
+                check("clips", &c.path)?;
+            }
+            for r in &m.requires {
+                check("requires", r)?;
+            }
+            for me in &m.measures {
+                for p in me.inputs() {
+                    check("measure", p)?;
+                }
+                match me {
+                    Measure::ClipVsClip { against } if !is_name(&against.label) => {
+                        return Err(field(
+                            file,
+                            at("measure"),
+                            format!("`{}` is not a label", against.label),
+                        ));
+                    }
+                    Measure::KeptFramesVsSource { select, fps, .. } => {
+                        let ok = !select.is_empty()
+                            && select.bytes().all(|b| {
+                                b.is_ascii_graphic()
+                                    && !matches!(b, b'\'' | b'"' | b'{' | b'}' | b';' | b'[' | b']')
+                            });
+                        if !ok {
+                            return Err(field(
+                                file,
+                                at("measure"),
+                                format!("`{select}` is not an ffmpeg select expression (printable, no quotes, braces, `;` or brackets)"),
+                            ));
+                        }
+                        if *fps == 0 {
+                            return Err(field(file, at("measure"), "fps: positive"));
+                        }
+                    }
+                    Measure::FrameVsImage { width, height, .. } if *width == 0 || *height == 0 => {
+                        return Err(field(file, at("measure"), "width, height: positive"));
+                    }
+                    _ => {}
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1647,6 +1888,166 @@ pub enum Step {
         hash: RepeatHash,
         cells: Vec<RepeatsCell>,
     },
+    /// A [`Metric`], rendered: done when one of `arms` (its cell's) is
+    /// selected.
+    Metric {
+        arms: Vec<String>,
+        tag: String,
+        report: PathBuf,
+        clips: Vec<MetricClip>,
+        requires: Vec<PathBuf>,
+        missing: bool,
+        copy: bool,
+        echo: bool,
+    },
+}
+
+/// One clip of a [`Step::Metric`] and the commands measuring it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetricClip {
+    pub label: String,
+    pub path: PathBuf,
+    pub commands: Vec<MetricCommand>,
+}
+
+/// One ffmpeg / ffprobe command of a [`Step::Metric`] (`argv[0]` is the
+/// tool's name, `ffmpeg` or `ffprobe`; the runner runs its configured
+/// binary) and how its output becomes `metrics.txt` lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetricCommand {
+    pub argv: Vec<String>,
+    pub line: MetricLine,
+}
+
+/// How a [`MetricCommand`]'s output is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetricLine {
+    /// Every stdout line with this prefix (`<label>: `; ffprobe).
+    Prefixed(String),
+    /// `<words>: <value>`, the value the last line (stdout and stderr
+    /// together) holding `Parsed_<filter>`, after its last `] `.
+    Value { words: String, filter: String },
+}
+
+/// The ffmpeg filters the comparisons run, in order (the script's
+/// `for m in ssim psnr`).
+pub const METRIC_FILTERS: [&str; 2] = ["ssim", "psnr"];
+
+impl Measure {
+    /// The commands measuring the clip `label` at `clip` (paths rendered).
+    fn commands(
+        &self,
+        label: &str,
+        clip: &str,
+        path: &dyn Fn(&str) -> Result<String, String>,
+    ) -> Result<Vec<MetricCommand>, String> {
+        let ffmpeg = |input: &str, graph: String, frames: bool, words: String, m: &str| {
+            let mut argv: Vec<String> = [
+                "ffmpeg", "-v", "info", "-nostats", "-i", clip, "-i", input, "-lavfi",
+            ]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+            argv.push(graph);
+            if frames {
+                argv.extend(["-frames:v".to_owned(), "1".to_owned()]);
+            }
+            argv.extend(["-f", "null", "-"].iter().map(|s| (*s).to_owned()));
+            MetricCommand {
+                argv,
+                line: MetricLine::Value {
+                    words,
+                    filter: m.to_owned(),
+                },
+            }
+        };
+        Ok(match self {
+            Measure::Probe {} => vec![MetricCommand {
+                argv: [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "stream=codec_type,codec_name,sample_rate,channels,nb_frames,r_frame_rate,width,height",
+                    "-of",
+                    "compact",
+                    clip,
+                ]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+                line: MetricLine::Prefixed(format!("{label}: ")),
+            }],
+            Measure::ClipVsClip { against } => {
+                let other = path(&against.path)?;
+                METRIC_FILTERS
+                    .iter()
+                    .map(|m| {
+                        ffmpeg(
+                            &other,
+                            format!("[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]{m}"),
+                            false,
+                            format!("{label} vs {} clip {m}", against.label),
+                            m,
+                        )
+                    })
+                    .collect()
+            }
+            Measure::KeptFramesVsSource {
+                source,
+                select,
+                fps,
+            } => {
+                let src = path(source)?;
+                METRIC_FILTERS
+                    .iter()
+                    .map(|m| {
+                        ffmpeg(
+                            &src,
+                            format!(
+                                "[0:v]select='{select}',setpts=N/{fps}/TB,format=yuv420p[a];[1:v]select='{select}',setpts=N/{fps}/TB,format=yuv420p[b];[a][b]{m}"
+                            ),
+                            false,
+                            format!("{label} kept frames vs source {m}"),
+                            m,
+                        )
+                    })
+                    .collect()
+            }
+            Measure::FrameVsImage {
+                frame,
+                image,
+                width,
+                height,
+            } => {
+                let img = path(image)?;
+                METRIC_FILTERS
+                    .iter()
+                    .map(|m| {
+                        ffmpeg(
+                            &img,
+                            format!(
+                                "[0:v]select=eq(n\\,{frame}),setpts=N/TB[a];[1:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=bilinear,crop={width}:{height},format=yuv420p[b];[a]format=yuv420p[c];[c][b]{m}"
+                            ),
+                            true,
+                            format!("{label} frame {frame} {m}"),
+                            m,
+                        )
+                    })
+                    .collect()
+            }
+        })
+    }
+
+    /// The paths the measure reads besides the clip (placeholders kept).
+    fn inputs(&self) -> Vec<&str> {
+        match self {
+            Measure::Probe {} => vec![],
+            Measure::ClipVsClip { against } => vec![against.path.as_str()],
+            Measure::KeptFramesVsSource { source, .. } => vec![source.as_str()],
+            Measure::FrameVsImage { image, .. } => vec![image.as_str()],
+        }
+    }
 }
 
 /// One [`Repeats`] cell of a [`Step::RepeatsReport`].
@@ -1745,7 +2146,7 @@ impl Lab {
             let mut prompt_files = BTreeSet::new();
             let mut hashes = BTreeSet::new();
             let mut targets = BTreeSet::new();
-            for c in t.cells.iter().filter_map(|c| self.cells.get(c)) {
+            for c in t.all_cells().filter_map(|c| self.cells.get(c)) {
                 // Two cells of one target would fetch into one directory at
                 // once, and the first to finish would remove it.
                 if let Some(r) = c
@@ -1782,7 +2183,7 @@ impl Lab {
                     "one determinism.txt per run: every [repeats] cell of a tier hashes the same way",
                 ));
             }
-            for c in &t.cells {
+            for c in t.all_cells() {
                 let cell = self.cells.get(c).ok_or_else(|| {
                     field(
                         TIERS_PATH,
@@ -1818,16 +2219,38 @@ impl Lab {
         self.tiers.tiers.iter().find(|t| t.name == name)
     }
 
-    /// `fv-lab run <target>`: a tier (all its cells), or one cell of a tier
-    /// (`family`: the tier whose run directory it writes into; default the
-    /// first tier listing it). The tier and the cells, in run order.
+    /// `fv-lab run <target>` without a selection: a tier (its `cells`, the
+    /// default run), or one cell of a tier (`family`: the tier whose run
+    /// directory it writes into; default the first tier listing it). The
+    /// tier and the cells, in run order.
     pub fn resolve(
         &self,
         target: &str,
         family: Option<&str>,
     ) -> Result<(&Tier, Vec<&CellFile>), LabError> {
+        self.resolve_selected(target, family, None)
+    }
+
+    /// [`Lab::resolve`] for a run that selects `only` (`--cells` /
+    /// `FV_CELLS`, by arm): a tier's `cells`, then each of its
+    /// `extra_cells` one of whose arms is selected (ADR-0019 §20.3).
+    pub fn resolve_selected(
+        &self,
+        target: &str,
+        family: Option<&str>,
+        only: Option<&[String]>,
+    ) -> Result<(&Tier, Vec<&CellFile>), LabError> {
         if let Some(t) = self.tier(target) {
-            let cells = t.cells.iter().filter_map(|c| self.cells.get(c)).collect();
+            let mut cells: Vec<&CellFile> =
+                t.cells.iter().filter_map(|c| self.cells.get(c)).collect();
+            if let Some(only) = only {
+                cells.extend(
+                    t.extra_cells
+                        .iter()
+                        .filter_map(|c| self.cells.get(c))
+                        .filter(|c| c.arms.iter().any(|a| only.contains(&a.name))),
+                );
+            }
             return Ok((t, cells));
         }
         let cell = self
@@ -1842,7 +2265,7 @@ impl Lab {
                 .tiers
                 .tiers
                 .iter()
-                .find(|t| t.cells.iter().any(|c| c == target))
+                .find(|t| t.all_cells().any(|c| c == target))
                 .ok_or_else(|| {
                     LabError::Unknown(format!("{target} (in no tier; pass --family)"))
                 })?,
@@ -1986,6 +2409,38 @@ impl Lab {
                 candidate: g.candidate.clone(),
                 kind: g.kind,
                 off: g.off.clone(),
+            });
+        }
+        for (i, m) in c.metrics.iter().enumerate() {
+            let err = |e: String| field(&label, format!("metric[{i}]"), e);
+            let path = |s: &str| c.render(s, "", paths);
+            let mut clips = Vec::new();
+            for clip in &m.clips {
+                let p = path(&clip.path).map_err(err)?;
+                let mut commands = Vec::new();
+                for me in &m.measures {
+                    commands.extend(me.commands(&clip.label, &p, &path).map_err(err)?);
+                }
+                clips.push(MetricClip {
+                    label: clip.label.clone(),
+                    path: PathBuf::from(p),
+                    commands,
+                });
+            }
+            out.push(Step::Metric {
+                arms: c.arms.iter().map(|a| a.name.clone()).collect(),
+                tag: m.tag.clone(),
+                report: PathBuf::from(path(&m.report).map_err(err)?),
+                clips,
+                requires: m
+                    .requires
+                    .iter()
+                    .map(|r| path(r).map(PathBuf::from))
+                    .collect::<Result<_, _>>()
+                    .map_err(err)?,
+                missing: m.missing,
+                copy: m.copy,
+                echo: m.echo,
             });
         }
         Ok(out)
@@ -2707,6 +3162,319 @@ keep = ["frame-000.png"]
         let e = lab("t1").validate().unwrap_err().to_string();
         assert!(e.contains("reference target `t1` in two cells"), "{e}");
         assert!(lab("t2").validate().is_ok());
+    }
+
+    /// `[[metric]]` (ADR-0019 §20) on the oracle cell: rendered after the
+    /// cell's arms, inside its reference step, the script's exact argv.
+    const METRICS: &str = r#"
+[[metric]]
+report = "{runs}/o1-frames"
+tag = "o1-frames"
+clips = [
+  { label = "ours", path = "{runs}/o1-main/frames/output.mp4" },
+  { label = "reference", path = "{ref}/ref.mp4" },
+]
+missing = true
+copy = true
+measure = [
+  { kind = "probe" },
+  { kind = "kept-frames-vs-source", source = "{root}/s.mp4", select = 'lt(n\,33)+gte(n\,89)', fps = 24 },
+  { kind = "frame-vs-image", frame = 120, image = "{root}/i.jpg", width = 768, height = 512 },
+]
+
+[[metric]]
+report = "{runs}/o1-frames"
+tag = "o1-frames"
+clips = [{ label = "ours", path = "{runs}/o1-frames/ours.mp4" }]
+requires = ["{runs}/o1-frames/reference.mp4"]
+measure = [{ kind = "clip-vs-clip", against = { label = "reference", path = "{runs}/o1-frames/reference.mp4" } }]
+echo = true
+"#;
+
+    #[test]
+    fn metrics_render_the_scripts_commands_after_the_arms() {
+        let c = CellFile::parse(&format!("{ORACLE}{METRICS}"), "o1.toml").unwrap();
+        assert_eq!(c.metrics.len(), 2);
+        let steps = Lab::steps(&[&c], Path::new("/bin/fv"), &paths()).unwrap();
+        let Step::Reference { steps: inner, .. } = &steps[0] else {
+            panic!("{steps:?}")
+        };
+        let metrics: Vec<&Step> = inner
+            .iter()
+            .filter(|s| matches!(s, Step::Metric { .. }))
+            .collect();
+        assert_eq!(metrics.len(), 2);
+        assert!(matches!(inner[inner.len() - 2], Step::Metric { .. }));
+        let Step::Metric {
+            arms,
+            tag,
+            report,
+            clips,
+            missing,
+            copy,
+            echo,
+            ..
+        } = metrics[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(arms, &["o1-main", "o1-diff"]);
+        assert_eq!(tag, "o1-frames");
+        assert_eq!(report, Path::new("/fvscratch/runs/f/t/o1-frames"));
+        assert!(*missing && *copy && !*echo);
+        assert_eq!(
+            clips[1].path,
+            Path::new("/fvscratch/oracle-ref/t1/dump/ref.mp4")
+        );
+        // probe, kept ssim / psnr, frame ssim / psnr per clip.
+        assert_eq!(clips[0].commands.len(), 5);
+        let c0 = &clips[0].commands;
+        assert_eq!(
+            c0[0].argv,
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,codec_name,sample_rate,channels,nb_frames,r_frame_rate,width,height",
+                "-of",
+                "compact",
+                "/fvscratch/runs/f/t/o1-main/frames/output.mp4"
+            ]
+        );
+        assert_eq!(c0[0].line, MetricLine::Prefixed("ours: ".into()));
+        assert_eq!(
+            c0[1].argv[7..],
+            [
+                "/opt/fastvideo-rs/s.mp4",
+                "-lavfi",
+                "[0:v]select='lt(n\\,33)+gte(n\\,89)',setpts=N/24/TB,format=yuv420p[a];[1:v]select='lt(n\\,33)+gte(n\\,89)',setpts=N/24/TB,format=yuv420p[b];[a][b]ssim",
+                "-f",
+                "null",
+                "-"
+            ]
+        );
+        assert_eq!(
+            c0[2].line,
+            MetricLine::Value {
+                words: "ours kept frames vs source psnr".into(),
+                filter: "psnr".into()
+            }
+        );
+        assert_eq!(
+            c0[3].argv[8..],
+            [
+                "-lavfi",
+                "[0:v]select=eq(n\\,120),setpts=N/TB[a];[1:v]scale=768:512:force_original_aspect_ratio=increase:flags=bilinear,crop=768:512,format=yuv420p[b];[a]format=yuv420p[c];[c][b]ssim",
+                "-frames:v",
+                "1",
+                "-f",
+                "null",
+                "-"
+            ]
+        );
+        let Step::Metric {
+            clips, requires, ..
+        } = metrics[1]
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            requires,
+            &[PathBuf::from("/fvscratch/runs/f/t/o1-frames/reference.mp4")]
+        );
+        assert_eq!(
+            clips[0].commands[0].argv[..9],
+            [
+                "ffmpeg",
+                "-v",
+                "info",
+                "-nostats",
+                "-i",
+                "/fvscratch/runs/f/t/o1-frames/ours.mp4",
+                "-i",
+                "/fvscratch/runs/f/t/o1-frames/reference.mp4",
+                "-lavfi"
+            ]
+        );
+        assert_eq!(
+            clips[0].commands[1].line,
+            MetricLine::Value {
+                words: "ours vs reference clip psnr".into(),
+                filter: "psnr".into()
+            }
+        );
+        // A cell without metrics serializes without the key (additive).
+        let plain = CellFile::parse(ORACLE, "o1.toml").unwrap();
+        assert!(!toml::to_string(&plain).unwrap().contains("metric"));
+    }
+
+    #[test]
+    fn metrics_refuse_what_would_not_run_as_declared() {
+        let text = format!("{ORACLE}{METRICS}");
+        assert!(CellFile::parse(&text, "o1.toml").is_ok());
+        for (from, to, want) in [
+            (
+                "report = \"{runs}/o1-frames\"",
+                "report = \"{runs}\"",
+                "below `{runs}/`",
+            ),
+            (
+                "report = \"{runs}/o1-frames\"",
+                "report = \"{root}/x\"",
+                "below `{runs}/`",
+            ),
+            ("tag = \"o1-frames\"", "tag = \"O 1\"", "tag"),
+            (
+                "label = \"ours\", path = \"{runs}/o1-main",
+                "label = \"Ours\", path = \"{runs}/o1-main",
+                "not a label",
+            ),
+            (
+                "label = \"reference\", path = \"{ref}/ref.mp4\"",
+                "label = \"ours\", path = \"{ref}/ref.mp4\"",
+                "twice",
+            ),
+            (
+                "path = \"{ref}/ref.mp4\"",
+                "path = \"{weights}/x.mp4\"",
+                "not a path",
+            ),
+            (
+                "path = \"{ref}/ref.mp4\"",
+                "path = \"/abs/ref.mp4\"",
+                "not a path",
+            ),
+            (
+                "path = \"{ref}/ref.mp4\"",
+                "path = \"{runs}/../x.mp4\"",
+                "not a path",
+            ),
+            (
+                "source = \"{root}/s.mp4\"",
+                "source = \"{runs}/{arm}/s.mp4\"",
+                "not a path",
+            ),
+            (
+                "select = 'lt(n\\,33)+gte(n\\,89)'",
+                "select = \"a'b\"",
+                "select expression",
+            ),
+            (
+                "select = 'lt(n\\,33)+gte(n\\,89)'",
+                "select = \"a;b\"",
+                "select expression",
+            ),
+            ("fps = 24", "fps = 0", "fps"),
+            ("width = 768", "width = 0", "width"),
+            (
+                "{ kind = \"probe\" }",
+                "{ kind = \"probe\", x = 1 }",
+                "unknown field",
+            ),
+            (
+                "{ kind = \"probe\" }",
+                "{ kind = \"lpips\" }",
+                "unknown variant",
+            ),
+            ("echo = true", "echo = true\nunknown = 1", "unknown field"),
+        ] {
+            assert!(text.contains(from), "{from}");
+            let e = CellFile::parse(&text.replacen(from, to, 1), "o1.toml")
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(want), "{from} -> {to}: {e} lacks {want}");
+        }
+        // Nothing to measure or copy; `{ref}` in a cell without a reference.
+        let e = CellFile::parse(
+            &text.replace(
+                "measure = [{ kind = \"clip-vs-clip\", against = { label = \"reference\", path = \"{runs}/o1-frames/reference.mp4\" } }]\n",
+                "",
+            ),
+            "o1.toml",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("nothing to measure or copy"), "{e}");
+        let e = CellFile::parse(
+            &format!("{CELL}{METRICS}").replace("{runs}/o1-main", "{runs}/a1"),
+            "c1.toml",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("without a [reference]"), "{e}");
+    }
+
+    /// `extra_cells` (ADR-0019 §20.3): run when the selection names one of
+    /// their arms; never otherwise; listed once in the tier.
+    #[test]
+    fn extra_cells_run_on_request() {
+        let cell = |name: &str| {
+            CellFile::parse(
+                &CELL
+                    .replace("c1", name)
+                    .replace("\"a1\"", &format!("\"{name}-a1\""))
+                    .replace("\"a2\"", &format!("\"{name}-a2\"")),
+                "x.toml",
+            )
+            .unwrap()
+        };
+        let tiers = TIERS.replace(
+            "cells = [\"c1\"]",
+            "cells = [\"c1\"]\nextra_cells = [\"c2\"]",
+        );
+        let lab = Lab {
+            root: PathBuf::new(),
+            tiers: Tiers::parse(&tiers, "tiers.toml").unwrap(),
+            cells: [("c1".into(), cell("c1")), ("c2".into(), cell("c2"))].into(),
+        };
+        lab.validate().unwrap();
+        let names =
+            |cells: Vec<&CellFile>| cells.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(lab.resolve("t1", None).unwrap().1), ["c1"]);
+        let only = vec!["c1-a1".to_owned()];
+        assert_eq!(
+            names(lab.resolve_selected("t1", None, Some(&only)).unwrap().1),
+            ["c1"]
+        );
+        let only = vec!["c2-a2".to_owned()];
+        assert_eq!(
+            names(lab.resolve_selected("t1", None, Some(&only)).unwrap().1),
+            ["c1", "c2"]
+        );
+        // A cell named on its own finds its tier through extra_cells too.
+        assert_eq!(lab.resolve("c2", None).unwrap().0.name, "t1");
+        for (to, want) in [
+            ("extra_cells = [\"c1\"]", "twice in the tier"),
+            ("extra_cells = [\"C2\"]", "not a cell name"),
+        ] {
+            let e = Tiers::parse(&tiers.replace("extra_cells = [\"c2\"]", to), "tiers.toml")
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(want), "{e} lacks {want}");
+        }
+        // An extra cell that does not exist, or whose arm another cell has.
+        let missing = Lab {
+            cells: [("c1".into(), cell("c1"))].into(),
+            ..lab.clone()
+        };
+        assert!(missing
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("no lab/cells/c2.toml"));
+        let clash = Lab {
+            cells: [("c1".into(), cell("c1")), ("c2".into(), cell("c1"))].into(),
+            ..lab.clone()
+        };
+        assert!(clash
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("in two cells"));
+        // Serialized only when set.
+        let t = Tiers::parse(TIERS, "tiers.toml").unwrap();
+        assert!(!toml::to_string(&t).unwrap().contains("extra_cells"));
     }
 
     #[test]

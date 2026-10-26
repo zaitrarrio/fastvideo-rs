@@ -198,6 +198,27 @@ fn every_oracle_cell_has_a_stack_and_every_stack_target_a_cell() {
     for t in &refs {
         assert!(stacks.for_target(t).is_some(), "{t}");
     }
+    // The tier's extra cells (ADR-0019 §20): the ten clip-metric targets, all
+    // made by the sol-ltx25 stack; the guided one reads the dev DiT's view.
+    let extra: Vec<String> = lab
+        .tier("oracle")
+        .expect("oracle tier")
+        .extra_cells
+        .iter()
+        .filter_map(|c| lab.cells.get(c))
+        .filter_map(|c| c.reference.as_ref().map(|r| r.target.clone()))
+        .collect();
+    assert_eq!(extra.len(), 10);
+    for t in &extra {
+        let (s, st) = stacks.for_target(t).expect("a stack");
+        assert_eq!(s.name, "sol-ltx25", "{t}");
+        let want = if t == "ltx25-a2v-guided" {
+            "weights:ltx25-dev"
+        } else {
+            "weights:ltx25"
+        };
+        assert_eq!(st.steps, [want], "{t}");
+    }
     // The H3 LoRA references need the host-RAM floor (docs/oracle.md).
     assert_eq!(
         stacks
@@ -257,7 +278,7 @@ fn the_stacks_file_refuses_what_it_cannot_run() {
     // A target no cell reads, or a cell reference no stack makes.
     let (lab, _) = lab();
     let extra = Stacks::parse(
-        &text.replacen("name = \"ltx25-4k-dense\"", "name = \"ltx25-i2v\"", 1),
+        &text.replacen("name = \"ltx25-4k-dense\"", "name = \"ltx25-no-cell\"", 1),
         "u",
     )
     .unwrap();
@@ -389,6 +410,62 @@ fn the_plan_brings_up_one_pod_per_stack_of_the_selected_targets() {
             "--yes",
             "--wait"
         ]
+    );
+}
+
+/// The tier's extra cells (ADR-0019 §20.3) are selected by arm like any
+/// other: the GPU check's two clip-metric targets bring up one sol-ltx25 pod
+/// whose steps are their union, once each, in the stack's order.
+#[test]
+fn the_plan_takes_the_extra_cells_by_arm() {
+    let (lab, stacks) = lab();
+    let arms =
+        |c: &str| -> Vec<String> { lab.cells[c].arms.iter().map(|a| a.name.clone()).collect() };
+    let mut cells = arms("oracle-ltx25-retake");
+    cells.extend(arms("oracle-ltx25-a2v-i2v"));
+    let names: Vec<&str> = cells.iter().map(String::as_str).collect();
+    let p = plan_oracle(&lab, &stacks, &request(&names)).expect("plan");
+    assert_eq!(p.upstream.len(), 1);
+    assert_eq!(p.upstream[0].stack, "sol-ltx25");
+    assert_eq!(p.upstream[0].targets, ["ltx25-a2v-i2v", "ltx25-retake"]);
+    assert_eq!(
+        p.upstream[0].start.up_steps,
+        "info:box weights:ltx25 oracle:ltx25-a2v-i2v,ltx25-retake"
+    );
+    // The tier's order (extra cells in theirs), whatever --cells' order.
+    let mut want = arms("oracle-ltx25-a2v-i2v");
+    want.extend(arms("oracle-ltx25-retake"));
+    assert_eq!(p.cells, want);
+    // The GPU check fetches the runtime run's tree (metrics.txt and the
+    // clips' copies): `pod up`'s fetch arguments, before --yes --wait.
+    let mut p2 = p.clone();
+    p2.runtime_fetch = vec![
+        "--fetch-tree".into(),
+        "--fetch-skip".into(),
+        "/frames/".into(),
+    ];
+    let a = runtime_args(&p2, &["https://a/upstream/t".into()], &p2.cells);
+    assert_eq!(
+        a[a.len() - 5..],
+        [
+            "--fetch-tree",
+            "--fetch-skip",
+            "/frames/",
+            "--yes",
+            "--wait"
+        ]
+    );
+    assert!(
+        !runtime_args(&p, &["https://a/upstream/t".into()], &p.cells)
+            .contains(&"--fetch-tree".to_owned())
+    );
+    // The guided target adds the dev view after the distilled one.
+    let mut g = names.clone();
+    g.push("oracle-ltx25-a2v-guided");
+    let p = plan_oracle(&lab, &stacks, &request(&g)).expect("plan");
+    assert_eq!(
+        p.upstream[0].start.up_steps,
+        "info:box weights:ltx25 weights:ltx25-dev oracle:ltx25-a2v-i2v,ltx25-retake,ltx25-a2v-guided"
     );
 }
 

@@ -575,6 +575,11 @@ pub struct OraclePlan {
     /// the same price) ($): the balance must stay above fv-deploy's floor
     /// after all of them.
     pub projection_usd: f64,
+    /// More `pod up` arguments for the runtime side's fetch (`--fetch-tree
+    /// [--fetch-skip ERE] [--fetch-max-mb N]`; ADR-0019 §20.6: the clip-metric
+    /// targets' `metrics.txt` is a file of the tree, not of the summaries).
+    /// Empty: `pod up`'s default fetch.
+    pub runtime_fetch: Vec<String>,
 }
 
 impl OraclePlan {
@@ -601,7 +606,9 @@ pub fn plan_oracle(lab: &Lab, stacks: &Stacks, r: &OracleRequest) -> Result<Orac
     let tier: &Tier = lab
         .tier(&r.tier)
         .ok_or_else(|| format!("no tier `{}` in lab/tiers.toml", r.tier))?;
-    let cells: Vec<_> = tier.cells.iter().filter_map(|c| lab.cells.get(c)).collect();
+    // Every cell of the tier, its extra cells too (ADR-0019 §20.3): a
+    // clip-metric target is selected by its arms like any other.
+    let cells: Vec<_> = tier.all_cells().filter_map(|c| lab.cells.get(c)).collect();
     if !cells.iter().any(|c| c.reference.is_some()) {
         return Err(format!(
             "tier `{}` reads no upstream reference: `fv-lab pod up --family {}` runs it",
@@ -758,6 +765,7 @@ pub fn plan_oracle(lab: &Lab, stacks: &Stacks, r: &OracleRequest) -> Result<Orac
         hold: r.hold,
         hold_limit_s: min_cap.saturating_sub(crate::pod::FETCH_RESERVE_S),
         projection_usd: projection,
+        runtime_fetch: Vec::new(),
     })
 }
 
@@ -787,6 +795,7 @@ pub fn runtime_args(plan: &OraclePlan, urls: &[String], cells: &[String]) -> Vec
     ];
     a.extend(plan.extra_env.iter().cloned());
     a.extend(["--wall-cap-s".into(), plan.runtime_cap_s.to_string()]);
+    a.extend(plan.runtime_fetch.iter().cloned());
     a.extend(["--yes".into(), "--wait".into()]);
     a
 }

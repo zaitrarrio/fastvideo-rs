@@ -53,7 +53,7 @@
           "minimum": 0
         },
         "cells": {
-          "description": "The cell files (`lab/cells/<name>.toml`), in run order.",
+          "description": "The cell files (`lab/cells/<name>.toml`), in run order: the tier's\ndefault run (no `--cells` / `FV_CELLS`).",
           "type": "array",
           "items": {
             "type": "string"
@@ -70,6 +70,13 @@
         },
         "description": {
           "type": "string"
+        },
+        "extra_cells": {
+          "description": "Cells of the tier that run only on request (ADR-0019 §20.3): after\n`cells`, in this order, and only when `--cells` / `FV_CELLS` names one\nof their arms. A run without a selection runs `cells` alone, so a\ntier's default run (its goldens, its GPU-checked plan) stays what it\nwas when cells are added here (the `oracle` tier's clip-metric targets).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "gpu": {
           "description": "The provider's GPU type id.",

@@ -2079,3 +2079,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §19
 - Verification: `tests/oracle_driver.rs` (payload goldens from `runpod-http.sh plan-upstream`, the plan's refusals, the balance guard, the driver's order and releases on fakes), `tests/fv_lab_bin.rs::oracle_without_yes_is_the_plan_and_needs_no_key`, `tests/schema.rs`, `fv-lab-goldens.sh --check`; GPU check §19.7 pending (the coordinator's)
+
+### FVID · 2026-10-26 · FVID-2026-10-26-d1i-oracle-metrics
+- Trigger: ADR-0019 §19.9: the oracle's clip-metric targets and `sfwan13` need a derived-clip step the cell schema lacks (the coordinator's D1i)
+- Options: where the step lives: (a) a typed `[[metric]]` list in the cell, or (b) an ungated arm running a repository script; what `metrics.txt` is judged by: a threshold (a verdict) or nothing (a report); `sfwan13`: the `oracle` tier moved to `volume+r2`, or a sibling tier
+- Decision: (coordinator decision 2026-10-26, executed by the agent) (a), additive, the script's exact ffmpeg / ffprobe argv, listed by the dry run and held by goldens, not oracle-only (`hd` later); `metrics.txt` a report, no verdict; `sfwan13` a sibling tier `oracle-r2` with `weights = "volume+r2"` if its upstream R2 fetch is small, else a follow-up. As executed: a metric is a pass over clips with four kinds of measure (`probe`, `clip-vs-clip`, `kept-frames-vs-source`, `frame-vs-image`), since the script interleaves measures per clip; the ten LTX targets are the `oracle` tier's new `extra_cells` (tiers v1, additive), run only when `--cells` names their arms, so the default run and its goldens are unchanged; `sfwan13` is the follow-up (its upstream R2 fetch needs a schema step, the R2 key on the upstream pod, `pod.sh` and the upstream `oracle.sh`; its runtime cell needs a `decode` measure and a compare of frame directories)
+- Reason: §19.9; decision 2 keeps the script's meaning; the extra cells keep the GPU-checked default run byte-identical
+- Reversibility: high (additive fields; the script branch, `oracle.sh` and every pod body unchanged)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §20
+- Verification: `tests/dry_run.rs::the_extra_cells_dry_run_as_the_script_with_their_targets` (145 golden lines, 87 metric commands), `tests/repeats_oracle.rs::clip_metrics_report_as_the_script`, `plan::tests::metrics_*`, `plan::tests::extra_cells_run_on_request`, `tests/oracle_driver.rs::the_plan_takes_the_extra_cells_by_arm`, `tests/schema.rs`, `fv-lab-goldens.sh --check` (the existing `oracle` fixtures unchanged); GPU check §20.7 pending (the coordinator's)

@@ -56,7 +56,8 @@ use fastvideo_deploy::boot::sys::utc_hms;
 use fastvideo_deploy::launch::utc_iso;
 
 use crate::plan::{
-    line_matches, log_lines, GateKind, Paths, RepeatHash, RepeatsCell, Step, Verdict,
+    line_matches, log_lines, GateKind, MetricClip, MetricLine, Paths, RepeatHash, RepeatsCell,
+    Step, Verdict,
 };
 use crate::podmem::{self, MemCgroup, Sampler};
 use crate::quote::printf_q_line;
@@ -146,6 +147,11 @@ pub struct RunConfig {
     pub oracle_retry: Duration,
     /// `curl` (a test points it at a fake).
     pub curl: String,
+    /// `ffmpeg` and `ffprobe`, the derived-clip metrics' tools (ADR-0019
+    /// §20; the runtime image's, on the children's `PATH`; a test points
+    /// them at fakes).
+    pub ffmpeg: String,
+    pub ffprobe: String,
     /// Also take `file://` reference URLs (tests only: no flag or variable of
     /// the binary sets it; a run reads `http(s)://` only, [`oracle_url_ok`]).
     pub allow_file_urls: bool,
@@ -213,6 +219,8 @@ impl RunConfig {
             oracle_poll: Duration::from_secs(30),
             oracle_retry: Duration::from_secs(10),
             curl: "curl".into(),
+            ffmpeg: "ffmpeg".into(),
+            ffprobe: "ffprobe".into(),
             allow_file_urls: false,
             proc_cgroup: PathBuf::from(podmem::PROC_SELF_CGROUP),
             cgroup_root: PathBuf::from(podmem::CGROUP_ROOT),
@@ -495,6 +503,23 @@ fn dry_run_steps(
             // Written or computed on a real run only; the script's dry run
             // logs none of them.
             Step::PromptFile { .. } | Step::Hash { .. } | Step::RepeatsReport { .. } => {}
+            // The script's dry `metric_dry` (ADR-0019 §20): every command,
+            // every clip assumed present.
+            Step::Metric {
+                arms, tag, clips, ..
+            } => {
+                if !verdict_selected(cfg, arms) {
+                    continue;
+                }
+                for c in clips {
+                    for m in &c.commands {
+                        out.push(format!(
+                            "[{f}] dry-run metric {tag}: {}",
+                            printf_q_line(&m.argv)
+                        ));
+                    }
+                }
+            }
         }
     }
 }
@@ -606,7 +631,8 @@ pub fn outputs(steps: &[Step]) -> Vec<String> {
             | Step::Compare { .. }
             | Step::Reference { .. }
             | Step::PromptFile { .. }
-            | Step::Hash { .. } => {}
+            | Step::Hash { .. }
+            | Step::Metric { .. } => {}
         }
     }
     out
@@ -1117,6 +1143,7 @@ impl Runner {
             | Step::Compare { .. }
             | Step::PromptFile { .. }
             | Step::Hash { .. }
+            | Step::Metric { .. }
                 if self.offline => {}
             Step::Arm {
                 name,
@@ -1177,6 +1204,20 @@ impl Runner {
                 }
             }
             Step::RepeatsReport { hash, cells } => self.repeats_report(*hash, cells),
+            Step::Metric {
+                arms,
+                tag,
+                report,
+                clips,
+                requires,
+                missing,
+                copy,
+                echo,
+            } => {
+                if verdict_selected(&self.cfg, arms) {
+                    self.metric(tag, report, clips, requires, *missing, *copy, *echo);
+                }
+            }
             Step::Compare {
                 baseline,
                 candidate,
@@ -1212,6 +1253,94 @@ impl Runner {
                 steps,
             } => self.verdict_cell(cell, verdict, steps),
             Step::FamilyVerdict { family, cells } => self.family_verdict(family, cells),
+        }
+    }
+
+    /// A derived-clip measurement (ADR-0019 §20; the script's clip loops in
+    /// its `oracle` branch): `metrics.txt` in `report`, the copies, and the
+    /// file echoed into the log. A command that fails or prints no result
+    /// leaves its value empty; the run goes on (the script, under `set -e`,
+    /// did the same since §20: `|| true`).
+    #[allow(clippy::too_many_arguments)]
+    fn metric(
+        &self,
+        tag: &str,
+        report: &Path,
+        clips: &[MetricClip],
+        requires: &[PathBuf],
+        missing: bool,
+        copy: bool,
+        echo: bool,
+    ) {
+        let _ = fs::create_dir_all(report);
+        let txt = report.join("metrics.txt");
+        let append = |bytes: &[u8]| {
+            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&txt) {
+                let _ = f.write_all(bytes);
+            }
+        };
+        for c in clips {
+            if !(c.path.is_file() && requires.iter().all(|r| r.is_file())) {
+                if missing {
+                    let mut l = format!("{} missing {}", c.label, c.path.display());
+                    for r in requires {
+                        let name = r.file_name().map(|n| n.to_string_lossy().into_owned());
+                        l.push_str(&format!(" or {}", name.unwrap_or_default()));
+                    }
+                    l.push('\n');
+                    append(l.as_bytes());
+                }
+                continue;
+            }
+            if copy {
+                let _ = fs::copy(&c.path, report.join(format!("{}.mp4", c.label)));
+            }
+            for m in &c.commands {
+                let tool = match m.argv[0].as_str() {
+                    "ffprobe" => &self.cfg.ffprobe,
+                    _ => &self.cfg.ffmpeg,
+                };
+                let cap = self.cfg.arm_cap_s();
+                let mut cmd = if cap == 0 {
+                    self.cmd(tool)
+                } else {
+                    let mut c = self.cmd(&self.cfg.timeout);
+                    c.args(["--signal=TERM", "--kill-after=15", &cap.to_string()])
+                        .arg(tool);
+                    c
+                };
+                cmd.args(&m.argv[1..]);
+                match &m.line {
+                    MetricLine::Prefixed(prefix) => {
+                        // `ffprobe … | sed "s/^/<label>: /"`: stdout only.
+                        let out = cmd.stderr(Stdio::inherit()).output();
+                        let text = out.map(|o| o.stdout).unwrap_or_default();
+                        let mut b = Vec::new();
+                        for l in text.split_inclusive(|&x| x == b'\n') {
+                            b.extend_from_slice(prefix.as_bytes());
+                            b.extend_from_slice(l);
+                        }
+                        append(&b);
+                    }
+                    MetricLine::Value { words, filter } => {
+                        // `$(ffmpeg … 2>&1 | grep -E "Parsed_<m>" | tail -1)`
+                        // (`-f null -` writes nothing to stdout).
+                        let mut all = Vec::new();
+                        if let Ok(o) = cmd.output() {
+                            all = o.stdout;
+                            all.extend_from_slice(&o.stderr);
+                        }
+                        let line = format!("{words}: {}\n", metric_value(&all, filter.as_bytes()));
+                        append(line.as_bytes());
+                    }
+                }
+            }
+        }
+        if echo {
+            let text = fs::read(&txt).unwrap_or_default();
+            for l in log_lines(&text) {
+                self.raw(&format!("[{tag}] {}", String::from_utf8_lossy(l)));
+            }
         }
     }
 
@@ -2407,12 +2536,36 @@ impl Runner {
 /// One line to stdout and the log file, as is (`tee -a "$LOG"`). Never a
 /// panic on a closed stdout (`println!` would): the line still reaches the
 /// log.
+///
+/// One `write` of the whole line (`O_APPEND`): the background reference
+/// fetches log from their own threads, and a line written in two parts (the
+/// text, then the newline, as `writeln!` on a `File` may) could interleave
+/// with another thread's and split both (seen with five references at once,
+/// ADR-0019 §20).
 fn raw_line(log: Option<&Path>, line: &str) {
-    let _ = writeln!(std::io::stdout().lock(), "{line}");
+    let whole = format!("{line}\n");
+    let _ = std::io::stdout().lock().write_all(whole.as_bytes());
     let Some(log) = log else { return };
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log) {
-        let _ = writeln!(f, "{line}");
+        let _ = f.write_all(whole.as_bytes());
     }
+}
+
+/// The value of a metric comparison's output: the last line holding
+/// `Parsed_<filter>` (`grep -E "Parsed_<m>" | tail -1`), after its last
+/// `] ` (`${r##*] }`); empty without such a line.
+pub fn metric_value(output: &[u8], filter: &[u8]) -> String {
+    let mut needle = b"Parsed_".to_vec();
+    needle.extend_from_slice(filter);
+    let last = output
+        .split(|&b| b == b'\n')
+        .rfind(|l| contains(l, &needle))
+        .unwrap_or_default();
+    let cut = last
+        .windows(2)
+        .rposition(|w| w == b"] ")
+        .map_or(last, |i| &last[i + 2..]);
+    String::from_utf8_lossy(cut).into_owned()
 }
 
 /// `rm -rf <p>`.
@@ -2824,6 +2977,21 @@ mod tests {
             assert_eq!(oracle_url_ok(u, false), http, "{u}");
             assert_eq!(oracle_url_ok(u, true), file, "{u}");
         }
+    }
+
+    /// `$(… 2>&1 | grep -E "Parsed_<m>" | tail -1)` then `${r##*] }`
+    /// (ADR-0019 §20).
+    #[test]
+    fn metric_values_are_the_last_parsed_line_after_its_last_bracket() {
+        let out = b"[Parsed_ssim_1 @ 0x1] early\n[Parsed_psnr_2 @ 0x2] PSNR y:40\n[Parsed_ssim_4 @ 0x5] SSIM Y:0.9 [x] All:0.98 (17.0)\n[out#0 @ 0x9] video:1kB";
+        assert_eq!(metric_value(out, b"ssim"), "All:0.98 (17.0)");
+        assert_eq!(metric_value(out, b"psnr"), "PSNR y:40");
+        assert_eq!(metric_value(out, b"lpips"), "");
+        assert_eq!(
+            metric_value(b"Parsed_ssim no bracket", b"ssim"),
+            "Parsed_ssim no bracket"
+        );
+        assert_eq!(metric_value(b"", b"ssim"), "");
     }
 
     #[test]

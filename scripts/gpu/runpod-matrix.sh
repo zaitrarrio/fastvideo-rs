@@ -433,6 +433,17 @@ oracle_run() {
   gated_cell "$cell" "$wcell" env "${envs[@]}" FASTVIDEO_DUMP_DIR="$dump" "$@" "${cmd[@]}" "${out[@]}"
 }
 
+# metric_dry <tag> <cmd...>: a derived-clip metric command (ffmpeg /
+# ffprobe, the oracle's clip-metric targets): a dry run logs it and succeeds,
+# so the caller skips it (fv-lab's goldens, docs/adr/0019-fv-lab.md §20);
+# otherwise it fails and the caller runs the command.
+metric_dry() {
+  [[ "$DRY_RUN" == 1 ]] || return 1
+  local tag="$1"
+  shift
+  log "dry-run metric $tag: $(printf '%q ' "$@")"
+}
+
 # oracle_diff <cell> <baseline dump> <candidate dump>: compare-dumps, logged.
 oracle_diff() {
   # (A dry run has no dumps; it logs the command.)
@@ -1349,11 +1360,12 @@ Audio: male speech, clear voice, quiet room"
         mkdir -p "$fm"
         for src in "ours:$RUNS/oracle-$target/frames/output.mp4" "ownimg:$RUNS/oracle-$target-ownimg/frames/output.mp4"; do
           mp4="${src#*:}"
-          [[ -f "$mp4" && -f "$ref/dump/ref.mp4" ]] || { echo "${src%%:*} missing $mp4 or ref.mp4" >>"$fm/metrics.txt"; continue; }
+          [[ "$DRY_RUN" == 1 || ( -f "$mp4" && -f "$ref/dump/ref.mp4" ) ]] || { echo "${src%%:*} missing $mp4 or ref.mp4" >>"$fm/metrics.txt"; continue; }
           cp "$mp4" "$fm/${src%%:*}.mp4" 2>/dev/null || true
           for m in ssim psnr; do
-            r="$(ffmpeg -v info -nostats -i "$mp4" -i "$ref/dump/ref.mp4" -lavfi "[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]$m" \
-              -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+            cmd=(ffmpeg -v info -nostats -i "$mp4" -i "$ref/dump/ref.mp4" -lavfi "[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]$m" -f null -)
+            metric_dry "$target-frames" "${cmd[@]}" && continue
+            r="$("${cmd[@]}" 2>&1 | grep -E "Parsed_$m" | tail -1 || true)"
             echo "${src%%:*} vs reference clip $m: ${r##*] }" >>"$fm/metrics.txt"
           done
         done
@@ -1373,15 +1385,16 @@ Audio: male speech, clear voice, quiet room"
         for src in "ours:$RUNS/oracle-$target/frames/output.mp4" "ownaud:$RUNS/oracle-$target-ownaud/frames/output.mp4" \
           "reference:$ref/dump/ref.mp4"; do
           mp4="${src#*:}"
-          [[ -f "$mp4" ]] || { echo "${src%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
+          [[ "$DRY_RUN" == 1 || -f "$mp4" ]] || { echo "${src%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
           cp "$mp4" "$fm/${src%%:*}.mp4" 2>/dev/null || true
-          ffprobe -v error -show_entries stream=codec_type,codec_name,sample_rate,channels,nb_frames,r_frame_rate,width,height \
-            -of compact "$mp4" | sed "s/^/${src%%:*}: /" >>"$fm/metrics.txt" 2>&1
+          cmd=(ffprobe -v error -show_entries stream=codec_type,codec_name,sample_rate,channels,nb_frames,r_frame_rate,width,height -of compact "$mp4")
+          metric_dry "$target-frames" "${cmd[@]}" || "${cmd[@]}" | sed "s/^/${src%%:*}: /" >>"$fm/metrics.txt" 2>&1 || true
         done
-        if [[ -f "$fm/ours.mp4" && -f "$fm/reference.mp4" ]]; then
+        if [[ "$DRY_RUN" == 1 || ( -f "$fm/ours.mp4" && -f "$fm/reference.mp4" ) ]]; then
           for m in ssim psnr; do
-            r="$(ffmpeg -v info -nostats -i "$fm/ours.mp4" -i "$fm/reference.mp4" -lavfi "[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]$m" \
-              -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+            cmd=(ffmpeg -v info -nostats -i "$fm/ours.mp4" -i "$fm/reference.mp4" -lavfi "[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]$m" -f null -)
+            metric_dry "$target-frames" "${cmd[@]}" && continue
+            r="$("${cmd[@]}" 2>&1 | grep -E "Parsed_$m" | tail -1 || true)"
             echo "ours vs reference clip $m: ${r##*] }" >>"$fm/metrics.txt"
           done
         fi
@@ -1400,10 +1413,10 @@ Audio: male speech, clear voice, quiet room"
         for c in "ours:$RUNS/oracle-$target/frames/output.mp4" "ownenc:$RUNS/oracle-$target-ownenc/frames/output.mp4" \
           "reference:$ref/dump/ref.mp4"; do
           mp4="${c#*:}"
-          [[ -f "$mp4" ]] || { echo "${c%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
+          [[ "$DRY_RUN" == 1 || -f "$mp4" ]] || { echo "${c%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
           cp "$mp4" "$fm/${c%%:*}.mp4" 2>/dev/null || true
-          ffprobe -v error -show_entries stream=codec_type,codec_name,sample_rate,channels,nb_frames,r_frame_rate,width,height \
-            -of compact "$mp4" | sed "s/^/${c%%:*}: /" >>"$fm/metrics.txt" 2>&1
+          cmd=(ffprobe -v error -show_entries stream=codec_type,codec_name,sample_rate,channels,nb_frames,r_frame_rate,width,height -of compact "$mp4")
+          metric_dry "$target-frames" "${cmd[@]}" || "${cmd[@]}" | sed "s/^/${c%%:*}: /" >>"$fm/metrics.txt" 2>&1 || true
           # Kept source frames: 0..32 and 89..120 for the retake of [1.5, 3.5) s
           # (the regenerated latent frames 5..11 cover pixel frames 33..88);
           # 0..104 for the extension (its 0.5 s feather regenerates latent
@@ -1414,15 +1427,17 @@ Audio: male speech, clear voice, quiet room"
             *) keep="lt(n\,105)" ;;
           esac
           for m in ssim psnr; do
-            r="$(ffmpeg -v info -nostats -i "$mp4" -i "$src" -lavfi "[0:v]select='$keep',setpts=N/24/TB,format=yuv420p[a];[1:v]select='$keep',setpts=N/24/TB,format=yuv420p[b];[a][b]$m" \
-              -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+            cmd=(ffmpeg -v info -nostats -i "$mp4" -i "$src" -lavfi "[0:v]select='$keep',setpts=N/24/TB,format=yuv420p[a];[1:v]select='$keep',setpts=N/24/TB,format=yuv420p[b];[a][b]$m" -f null -)
+            metric_dry "$target-frames" "${cmd[@]}" && continue
+            r="$("${cmd[@]}" 2>&1 | grep -E "Parsed_$m" | tail -1 || true)"
             echo "${c%%:*} kept frames vs source $m: ${r##*] }" >>"$fm/metrics.txt"
           done
         done
-        if [[ -f "$fm/ours.mp4" && -f "$fm/reference.mp4" ]]; then
+        if [[ "$DRY_RUN" == 1 || ( -f "$fm/ours.mp4" && -f "$fm/reference.mp4" ) ]]; then
           for m in ssim psnr; do
-            r="$(ffmpeg -v info -nostats -i "$fm/ours.mp4" -i "$fm/reference.mp4" -lavfi "[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]$m" \
-              -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+            cmd=(ffmpeg -v info -nostats -i "$fm/ours.mp4" -i "$fm/reference.mp4" -lavfi "[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]$m" -f null -)
+            metric_dry "$target-frames" "${cmd[@]}" && continue
+            r="$("${cmd[@]}" 2>&1 | grep -E "Parsed_$m" | tail -1 || true)"
             echo "ours vs reference clip $m: ${r##*] }" >>"$fm/metrics.txt"
           done
         fi
@@ -1444,14 +1459,16 @@ Audio: male speech, clear voice, quiet room"
         [[ "$target" == ltx25-a2v-i2v ]] && own="ownaud:$RUNS/oracle-$target-ownaud/frames/output.mp4"
         for src in "ours:$RUNS/oracle-$target/frames/output.mp4" "$own" "reference:$ref/dump/ref.mp4"; do
           mp4="${src#*:}"
-          [[ -f "$mp4" ]] || { echo "${src%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
+          [[ "$DRY_RUN" == 1 || -f "$mp4" ]] || { echo "${src%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
           cp "$mp4" "$fm/${src%%:*}.mp4" 2>/dev/null || true
           for pin in "${pins[@]}"; do
             idx="${pin%% *}" img="${pin#* }"
             for m in ssim psnr; do
-              r="$(ffmpeg -v info -nostats -i "$mp4" -i "$img" -lavfi \
-                "[0:v]select=eq(n\,$idx),setpts=N/TB[a];[1:v]scale=768:512:force_original_aspect_ratio=increase:flags=bilinear,crop=768:512,format=yuv420p[b];[a]format=yuv420p[c];[c][b]$m" \
-                -frames:v 1 -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+              cmd=(ffmpeg -v info -nostats -i "$mp4" -i "$img" -lavfi
+                "[0:v]select=eq(n\,$idx),setpts=N/TB[a];[1:v]scale=768:512:force_original_aspect_ratio=increase:flags=bilinear,crop=768:512,format=yuv420p[b];[a]format=yuv420p[c];[c][b]$m"
+                -frames:v 1 -f null -)
+              metric_dry "$target-frames" "${cmd[@]}" && continue
+              r="$("${cmd[@]}" 2>&1 | grep -E "Parsed_$m" | tail -1 || true)"
               echo "${src%%:*} frame $idx $m: ${r##*] }" >>"$fm/metrics.txt"
             done
           done
@@ -1482,7 +1499,7 @@ Audio: male speech, clear voice, quiet room"
         rm -rf "$ours-legacy" "$ours-composed"
       fi
       # The dumps are hundreds of MB each; the report keeps the numbers.
-      rm -rf "$ours" "$ours-f32" "$ours-owntext" "$ours-ownenc" "$ours-ownimg" "$ref"
+      rm -rf "$ours" "$ours-f32" "$ours-owntext" "$ours-ownenc" "$ours-ownimg" "$ours-ownaud" "$ref"
     done
     ;;
   ltxoffload)

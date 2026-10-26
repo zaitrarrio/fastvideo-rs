@@ -161,6 +161,7 @@ pub fn gold_cell(g: &Gold, v: &VariantManifest) -> Result<CellFile, String> {
         reference: None,
         prompt_files: Vec::new(),
         repeats: None,
+        metrics: Vec::new(),
     })
 }
 

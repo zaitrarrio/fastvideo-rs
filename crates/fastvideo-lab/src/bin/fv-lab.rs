@@ -507,6 +507,11 @@ struct OracleArgs {
     /// side and an interrupt release them at once.
     #[arg(long)]
     hold_upstream: Option<PathBuf>,
+    /// The runtime side's fetch (`pod up --wait`'s): the whole run directory
+    /// with --fetch-tree (the clip-metric targets' metrics.txt and clips,
+    /// ADR-0019 §20.6), else the summaries.
+    #[command(flatten)]
+    tree: TreeArgs,
     /// Create (without it: print the plan).
     #[arg(long)]
     yes: bool,
@@ -594,8 +599,15 @@ fn split_list(s: &str) -> Vec<String> {
 fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
     let root = find_root(a.root.as_ref())?;
     let lab = Lab::load(&root).map_err(|e| e.to_string())?;
+    let only: Option<Vec<String>> = a
+        .cells
+        .clone()
+        .or_else(|| env_nonempty("FV_CELLS"))
+        .map(|s| split_list(&s));
+    // A tier's extra cells run when the selection names one of their arms
+    // (ADR-0019 §20.3).
     let (tier, cells) = lab
-        .resolve(&a.target, a.family.as_deref())
+        .resolve_selected(&a.target, a.family.as_deref(), only.as_deref())
         .map_err(|e| e.to_string())?;
     // A script knob no tier reads (a retired family's mode knob, b4a's
     // FV_B4A_CELLS) would be ignored: refused (`knobs`; ADR-0019 §11.5, §12).
@@ -636,11 +648,7 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
             .map_err(|_| format!("FV_GEN_TIMEOUT_S `{t}` is not a number of seconds"))?,
         (None, None) => tier.cell_timeout_s,
     };
-    cfg.only = a
-        .cells
-        .clone()
-        .or_else(|| env_nonempty("FV_CELLS"))
-        .map(|s| split_list(&s));
+    cfg.only = only;
     cfg.lpips = env_nonempty("FV_LPIPS").as_deref() == Some("1");
     cfg.gate_policy = env_nonempty("FV_GATE_POLICY").map(PathBuf::from);
     cfg.aux_dir = env_nonempty("FV_AUX_DIR").map(PathBuf::from);
@@ -766,7 +774,9 @@ fn cmd_gate(a: &GateArgs) -> Result<ExitCode, String> {
                 )
             })?,
     };
-    let (tier, cells) = lab.resolve(&family, None).map_err(|e| e.to_string())?;
+    let tier = lab
+        .tier(&family)
+        .ok_or_else(|| format!("no tier `{family}` in lab/tiers.toml"))?;
     let mut cfg = RunConfig::new(&tier.name, &root);
     cfg.runs_dir = Some(run_dir.clone());
     if let Some(b) = a
@@ -780,8 +790,11 @@ fn cmd_gate(a: &GateArgs) -> Result<ExitCode, String> {
         .policy
         .clone()
         .or_else(|| env_nonempty("FV_GATE_POLICY").map(PathBuf::from));
-    let arms: Vec<String> = cells
-        .iter()
+    // Every arm of the tier, its extra cells' too (ADR-0019 §20.3); the
+    // run's selection then picks the cells.
+    let arms: Vec<String> = tier
+        .all_cells()
+        .filter_map(|c| lab.cells.get(c))
         .flat_map(|c| &c.arms)
         .map(|arm| arm.name.clone())
         .collect();
@@ -791,6 +804,9 @@ fn cmd_gate(a: &GateArgs) -> Result<ExitCode, String> {
         &run_dir,
         a.cells.as_deref().map(split_list),
     )?);
+    let (_, cells) = lab
+        .resolve_selected(&family, None, cfg.only.as_deref())
+        .map_err(|e| e.to_string())?;
     // The commands are rendered but never run here: a baseline arm needs
     // some binary path to render.
     let mut paths: Paths = cfg.paths();
@@ -991,15 +1007,20 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     so.extra_env = u.extra_env.clone();
     // What no tier reads would be ignored on the pod: refused (`knobs`).
     fastvideo_lab::knobs::check_extra_env(&t.name, &so.extra_env)?;
-    let cells: Vec<_> = t.cells.iter().filter_map(|c| lab.cells.get(c)).collect();
     check_cells(
         &t.name,
-        cells
-            .iter()
+        t.all_cells()
+            .filter_map(|c| lab.cells.get(c))
             .flat_map(|c| c.arms.iter().map(|a| a.name.as_str())),
         &so.cells,
     )
     .map_err(|e| e.to_string())?;
+    // The cells the pod runs: the tier's, and its extra cells the selection
+    // names an arm of (ADR-0019 §20.3).
+    let only = (!so.cells.is_empty()).then_some(so.cells.as_slice());
+    let (_, cells) = lab
+        .resolve_selected(&t.name, None, only)
+        .map_err(|e| e.to_string())?;
     baseline_for_pod(
         &u.sha,
         u.baseline_sha.as_deref(),
@@ -1555,7 +1576,21 @@ fn cmd_oracle(a: &OracleArgs) -> Result<ExitCode, String> {
         refs_wait_s: a.refs_wait_s,
         hold: a.hold_upstream.is_some(),
     };
-    let plan = plan_oracle(&lab, &stacks, &req)?;
+    let mut plan = plan_oracle(&lab, &stacks, &req)?;
+    // The runtime side's tree fetch, checked here (its skip pattern parses)
+    // and passed to `pod up` as given.
+    a.tree.tree()?;
+    if a.tree.fetch_tree {
+        plan.runtime_fetch.push("--fetch-tree".into());
+        if let Some(s) = &a.tree.fetch_skip {
+            plan.runtime_fetch
+                .extend(["--fetch-skip".into(), s.clone()]);
+        }
+        if let Some(m) = a.tree.fetch_max_mb {
+            plan.runtime_fetch
+                .extend(["--fetch-max-mb".into(), m.to_string()]);
+        }
+    }
     // A reused tag would read another run's pod.json as this run's pod.
     let rdir = run_dir(&root, &plan.tier, &plan.runtime_tag);
     if a.yes && rdir.exists() {
@@ -1756,8 +1791,23 @@ fn run() -> Result<ExitCode, String> {
                     .filter_map(|c| lab.cells.get(c))
                     .map(|c| c.arms.len())
                     .sum();
+                // A tier's extra cells (ADR-0019 §20.3), run on request only.
+                let extra = if t.extra_cells.is_empty() {
+                    String::new()
+                } else {
+                    let n: usize = t
+                        .extra_cells
+                        .iter()
+                        .filter_map(|c| lab.cells.get(c))
+                        .map(|c| c.arms.len())
+                        .sum();
+                    format!(
+                        " (+{} extra cell(s), {n} arm(s), on request)",
+                        t.extra_cells.len()
+                    )
+                };
                 println!(
-                    "{}: {} cell(s), {arms} arm(s), {} at <= ${}/hr, cap {} s",
+                    "{}: {} cell(s), {arms} arm(s){extra}, {} at <= ${}/hr, cap {} s",
                     t.name,
                     t.cells.len(),
                     t.gpu,

@@ -43,7 +43,10 @@
 # FV_* / RUNPOD_* settings cannot reach the fixtures. One tier is the script
 # under fixed settings (fam_env below, ADR-0019 §15): `oracle` is the family
 # with FV_ORACLE_TARGETS naming its nine tensor-diff targets and the
-# FV_GEN_TIMEOUT_S scripts/gpu/oracle.sh passes (5400), for all three fixtures.
+# FV_GEN_TIMEOUT_S scripts/gpu/oracle.sh passes (5400), for all three fixtures;
+# and its extra cells (ADR-0019 §20.3, the ten clip-metric targets) are the
+# family with FV_ORACLE_TARGETS naming those: oracle-extra-dry-run.txt and
+# oracle-extra-gates.tsv (the pod body is the tier's, one fixture).
 #
 # No network, no GPU, no weights: the dry run logs instead of running, and the
 # plan takes the volume's datacentre from FV_PLAN_VOLUME. Needs bash and jq.
@@ -155,42 +158,56 @@ for FAMILY in $FAMILIES; do
     echo "fv-lab-goldens: tier $FAMILY has no runpod-matrix.sh branch and is not in fv-lab-retired.sh (freeze its fixtures there, or restore the branch)" >&2
     exit 2
   }
-  # The settings a tier is the script under (ADR-0019 §15), else none.
-  fam_env=()
+  # The settings a tier is the script under (ADR-0019 §15), else none; and
+  # those its extra cells are (ADR-0019 §20.3: lab/tiers.toml extra_cells,
+  # run on request only, so a golden of their own, <f>-extra-*).
+  fam_env=() extra_env=()
   case "$FAMILY" in
     oracle)
       fam_env=("FV_ORACLE_TARGETS=fasth3-8step fasth3-8step-vsa0 fasth3-4step-vsa fasth3-4step-dense h3-ref2va-4step ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense"
+        FV_GEN_TIMEOUT_S=5400)
+      extra_env=("FV_ORACLE_TARGETS=ltx25-i2v ltx25-kf ltx25-ref2v ltx25-a2v ltx25-a2v-i2v ltx25-retake ltx25-retake-v ltx25-retake-a ltx25-extend ltx25-a2v-guided"
         FV_GEN_TIMEOUT_S=5400) ;;
   esac
-  rm -rf "$TMP/work" "$TMP/scratch" "$TMP/pairs.txt"
-  # The volume's TAE copy is complete, as on bz0ofkfx45 (auxiliary/tae): the
-  # script's $TAE is then /workspace/weights/auxiliary/tae, not the container
-  # disk, so a cell that hard-codes {scratch}/tae differs.
-  mkdir -p "$TMP/work/weights/auxiliary/tae" "$TMP/scratch"
-  : >"$TMP/work/weights/auxiliary/tae/.complete"
-  # 1. The dry run: the commands, in order (the family's own log lines).
-  clean ${fam_env[@]+"${fam_env[@]}"} FV_DRY_RUN=1 FV_DRY_RUN_GATES="$TMP/pairs.txt" FV_WORK="$TMP/work" FV_SCRATCH="$TMP/scratch" \
-    FV_RUN_TAG="$TAG" FV_BASELINE_SHA="$BASELINE_SHA" \
-    bash "$ROOT/scripts/gpu/runpod-matrix.sh" "$FAMILY" 2>/dev/null \
-    | sed -E 's/^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] //' \
-    | grep -F "[$FAMILY] " \
-    | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" -e "s#$ROOT#/opt/fastvideo-rs#g" \
-      >"$TMP/new/$FAMILY-dry-run.txt"
+  # 1. and 2.: <name>-dry-run.txt and <name>-gates.tsv of the family under <env>.
+  dry_golden() { # <name> [K=V …]
+    local name="$1"
+    shift
+    rm -rf "$TMP/work" "$TMP/scratch" "$TMP/pairs.txt"
+    # The volume's TAE copy is complete, as on bz0ofkfx45 (auxiliary/tae): the
+    # script's $TAE is then /workspace/weights/auxiliary/tae, not the container
+    # disk, so a cell that hard-codes {scratch}/tae differs.
+    mkdir -p "$TMP/work/weights/auxiliary/tae" "$TMP/scratch"
+    : >"$TMP/work/weights/auxiliary/tae/.complete"
+    # 1. The dry run: the commands, in order (the family's own log lines).
+    clean "$@" FV_DRY_RUN=1 FV_DRY_RUN_GATES="$TMP/pairs.txt" FV_WORK="$TMP/work" FV_SCRATCH="$TMP/scratch" \
+      FV_RUN_TAG="$TAG" FV_BASELINE_SHA="$BASELINE_SHA" \
+      bash "$ROOT/scripts/gpu/runpod-matrix.sh" "$FAMILY" 2>/dev/null \
+      | sed -E 's/^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] //' \
+      | grep -F "[$FAMILY] " \
+      | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" -e "s#$ROOT#/opt/fastvideo-rs#g" \
+        >"$TMP/new/$name-dry-run.txt"
 
-  # 2. The gates, in run order: every `gated_cell` the dry run reached
-  #    (arm, weight cell, TAE file or -, the cell's needs) and every
-  #    `gate_cells` (gate, baseline, candidate, kind, OFF arm or -).
-  [[ -s "$TMP/pairs.txt" ]] || { echo "fv-lab-goldens: $FAMILY gated no cell" >&2; exit 2; }
-  while IFS=$'\t' read -r what a b c d; do
-    case "$what" in
-      arm)
-        needs="$(awk -v x="$b" '$1 == x { $1 = ""; sub(/^ +/, ""); print; exit }' <<<"$list")"
-        [[ -n "$needs" ]] || { echo "fv-lab-goldens: verify-weights.sh --list has no cell $b" >&2; exit 2; }
-        printf 'arm\t%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$needs" ;;
-      gate) printf 'gate\t%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$d" ;;
-      *) echo "fv-lab-goldens: unknown FV_DRY_RUN_GATES line $what" >&2; exit 2 ;;
-    esac
-  done <"$TMP/pairs.txt" | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" >"$TMP/new/$FAMILY-gates.tsv"
+    # 2. The gates, in run order: every `gated_cell` the dry run reached
+    #    (arm, weight cell, TAE file or -, the cell's needs) and every
+    #    `gate_cells` (gate, baseline, candidate, kind, OFF arm or -).
+    [[ -s "$TMP/pairs.txt" ]] || { echo "fv-lab-goldens: $name gated no cell" >&2; exit 2; }
+    while IFS=$'\t' read -r what a b c d; do
+      case "$what" in
+        arm)
+          needs="$(awk -v x="$b" '$1 == x { $1 = ""; sub(/^ +/, ""); print; exit }' <<<"$list")"
+          [[ -n "$needs" ]] || { echo "fv-lab-goldens: verify-weights.sh --list has no cell $b" >&2; exit 2; }
+          printf 'arm\t%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$needs" ;;
+        gate) printf 'gate\t%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$d" ;;
+        *) echo "fv-lab-goldens: unknown FV_DRY_RUN_GATES line $what" >&2; exit 2 ;;
+      esac
+    done <"$TMP/pairs.txt" | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" >"$TMP/new/$name-gates.tsv"
+  }
+  dry_golden "$FAMILY" ${fam_env[@]+"${fam_env[@]}"}
+  if (( ${#extra_env[@]} )); then
+    dry_golden "$FAMILY-extra" "${extra_env[@]}"
+    FIXTURES+=("$FAMILY-extra-dry-run.txt" "$FAMILY-extra-gates.tsv")
+  fi
 
   # 3. The pod body.
   clean ${fam_env[@]+"${fam_env[@]}"} RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
@@ -324,6 +341,25 @@ cp -a "$TMP/db" "$TMP/dd"; echo 'compare-dumps latent rel_l2 2.0e-3' >"$TMP/dd/a
 cp -a "$TMP/db" "$TMP/de"; rm "$TMP/de/a/hashes.json"
 for bad in dc dd de; do
   if clean bash "$CMP" "$TMP/da" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a hash or dump difference ($bad)" >&2; rc=1; fi
+done
+# The derived-clip reports (ADR-0019 §20): metrics.txt equal passes; only
+# its values differing passes and is reported; a line missing, another
+# order, or a report in one run only fails.
+cp -a "$TMP/rb" "$TMP/ma"; cp -a "$TMP/rb" "$TMP/mb"
+for r in ma mb; do
+  mkdir -p "$TMP/$r/oracle-t-frames"
+  printf '%s\n' 'ours: stream|codec_type=video|nb_frames=121' 'ours vs reference clip ssim: SSIM All:0.98' >"$TMP/$r/oracle-t-frames/metrics.txt"
+done
+clean bash "$CMP" "$TMP/ma" "$TMP/mb" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on equal metrics reports" >&2; rc=1; }
+cp -a "$TMP/mb" "$TMP/mc"; sed -i 's/0.98/0.97/' "$TMP/mc/oracle-t-frames/metrics.txt"
+out="$(clean bash "$CMP" "$TMP/ma" "$TMP/mc" || echo FAILED)"
+{ grep -q '^metrics oracle-t-frames/metrics.txt: the same measurements, values differ' <<<"$out" && ! grep -q FAILED <<<"$out"; } \
+  || { echo "fv-lab-goldens: compare-runs judged a metrics report whose values alone differ" >&2; rc=1; }
+cp -a "$TMP/mb" "$TMP/md"; sed -i '1d' "$TMP/md/oracle-t-frames/metrics.txt"
+cp -a "$TMP/mb" "$TMP/me"; printf '%s\n' 'ours vs reference clip ssim: SSIM All:0.98' 'ours: stream|codec_type=video|nb_frames=121' >"$TMP/me/oracle-t-frames/metrics.txt"
+cp -a "$TMP/mb" "$TMP/mf"; rm "$TMP/mf/oracle-t-frames/metrics.txt"
+for bad in md me mf; do
+  if clean bash "$CMP" "$TMP/ma" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a metrics difference ($bad)" >&2; rc=1; fi
 done
 # Control arms (ADR-0019 §15.7): an arm a cell lists in `[repeats] controls`
 # (the timed-pick control) is reported, not judged. Cells of their own

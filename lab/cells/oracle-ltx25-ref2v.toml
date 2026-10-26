@@ -1,0 +1,109 @@
+# runpod-matrix.sh `oracle`, clip-metric target ltx25-ref2v (docs/oracle.md; docs/adr/0019-fv-lab.md §15, §20): the upstream
+# reference's dump fetched into {ref}, its noise and text (and conditioning) injected into our run, our run dumped the
+# same way (blocks 0,1,24,47) and compared tensor by tensor (compare-dumps, its lines echoed into the log).
+# Then reference-to-video: -ownenc / -ownimg as for the image targets (the reference latent, then the whole
+# reference path, ours); then ours' and ownimg's whole clip against the reference's (SSIM / PSNR over every frame)
+# into oracle-<target>-frames/metrics.txt, and the reference's clip copied there ([[metric]], ADR-0019 §20).
+# An extra cell of the `oracle` tier: run when --cells names its arms. After the cell the dumps and the reference are
+# removed (the clips stay in the report).
+schema = 1
+name = "oracle-ltx25-ref2v"
+description = "Oracle diff of LTX-2.5 reference-to-video (the Ingredients IC-LoRA on the reference sheet) at 1536x896, against the sol-ltx25 reference; the whole clip against the reference's"
+
+[workload]
+model = "ltx2"
+prompt = "Reference sheet: Top Row Left (Setting): a rocky coastline at golden hour, dark boulders in the surf and green hills behind a sandy beach. Top Row Right (Setting): a closer view of the same boulders with waves breaking around them. Bottom Row Left (Prop): a red and white striped beach umbrella, shown twice. Bottom Row Right (Character): a cartoon orange crab with big claws and eyes on stalks, shown twice. Generated video: A bright 3D animated shot on the rocky beach at golden hour. The cheerful orange cartoon crab scuttles sideways across the wet sand in front of the dark boulders, waving its big claws, next to the red and white striped beach umbrella planted in the sand, while waves roll in and break into white foam behind it."
+seed = 1024
+frames = 121
+width = 1536
+height = 896
+note = "the IC-LoRA's 768x448 stage-1 bucket; prompt and sheet as scripts/gpu/upstream/oracle.sh oracle_ltx_ref (FV_LTX_REF_PROMPT's default)"
+
+[reference]
+target = "ltx25-ref2v"
+
+[lists]
+gen = [
+  "--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--height", "{height}", "--width", "{width}", "--num-frames", "{frames}",
+  "--dense-stage2", "--reference", "{root}/scripts/gpu/fixtures/ltx-ref-sheet-768x448.png", "--ic-lora",
+  "{weights}/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors", "--prompt",
+  "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--clip", "{runs}/{arm}/frames"
+]
+
+[[arm]]
+name = "oracle-ltx25-ref2v"
+gate = "ltx25-ref2v"
+trees = ["ltx25", "ltx25-ic-lora-ingredients"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-ltx25-ref2v-dump"
+]
+argv = ["{@gen}"]
+fresh = ["{runs}/oracle-ltx25-ref2v-dump"]
+
+[[arm]]
+name = "oracle-ltx25-ref2v-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-ltx25-ref2v-dump"]
+requires = ["{ref}", "{runs}/oracle-ltx25-ref2v-dump"]
+echo = ["compare-dumps"]
+
+[[arm]]
+name = "oracle-ltx25-ref2v-ownenc"
+gate = "ltx25-ref2v"
+trees = ["ltx25", "ltx25-ic-lora-ingredients"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-ltx25-ref2v-dump-ownenc", "FASTVIDEO_INJECT_COND=0"
+]
+argv = ["{@gen}"]
+fresh = ["{runs}/oracle-ltx25-ref2v-dump-ownenc"]
+
+[[arm]]
+name = "oracle-ltx25-ref2v-ownenc-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-ltx25-ref2v-dump-ownenc"]
+requires = ["{ref}", "{runs}/oracle-ltx25-ref2v-dump-ownenc"]
+echo = ["compare-dumps"]
+
+[[arm]]
+name = "oracle-ltx25-ref2v-ownimg"
+gate = "ltx25-ref2v"
+trees = ["ltx25", "ltx25-ic-lora-ingredients"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-ltx25-ref2v-dump-ownimg", "FASTVIDEO_INJECT_COND=0",
+  "FASTVIDEO_INJECT_PIXELS=0"
+]
+argv = ["{@gen}"]
+fresh = ["{runs}/oracle-ltx25-ref2v-dump-ownimg"]
+
+[[arm]]
+name = "oracle-ltx25-ref2v-ownimg-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-ltx25-ref2v-dump-ownimg"]
+requires = ["{ref}", "{runs}/oracle-ltx25-ref2v-dump-ownimg"]
+echo = ["compare-dumps"]
+
+# Each clip against the reference's, every frame.
+[[metric]]
+report = "{runs}/oracle-ltx25-ref2v-frames"
+tag = "ltx25-ref2v-frames"
+clips = [
+  { label = "ours", path = "{runs}/oracle-ltx25-ref2v/frames/output.mp4" },
+  { label = "ownimg", path = "{runs}/oracle-ltx25-ref2v-ownimg/frames/output.mp4" },
+]
+requires = ["{ref}/ref.mp4"]
+missing = true
+copy = true
+measure = [
+  { kind = "clip-vs-clip", against = { label = "reference", path = "{ref}/ref.mp4" } },
+]
+
+# The reference's clip kept beside them.
+[[metric]]
+report = "{runs}/oracle-ltx25-ref2v-frames"
+tag = "ltx25-ref2v-frames"
+clips = [
+  { label = "reference", path = "{ref}/ref.mp4" },
+]
+copy = true
+echo = true

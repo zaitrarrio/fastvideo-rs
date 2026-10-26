@@ -78,13 +78,21 @@ pub const MODE_KNOBS: [&str; 18] = [
 ///
 /// `oracle` (ADR-0019 §15), whose branch stays whole (§15.10: its
 /// clip-metric targets, `sfwan13` and `scripts/gpu/oracle.sh`'s runtime side
-/// still run there): `FV_ORACLE_*`, `FV_REF2VA_PROMPT`.
-pub const SCRIPT_KNOBS: [&str; 5] = [
+/// still run there): `FV_ORACLE_*`, `FV_REF2VA_PROMPT`, and the prompts of
+/// the clip-metric targets (§20: the tier's extra cells are their defaults):
+/// `FV_LTX_REF_PROMPT`, `FV_LTX_A2V_PROMPT`, `FV_LTX_A2V_I2V_PROMPT`,
+/// `FV_LTX_RETAKE_PROMPT`, `FV_LTX_EXTEND_PROMPT`.
+pub const SCRIPT_KNOBS: [&str; 10] = [
     "FV_ORACLE_TARGETS",
     "FV_ORACLE_F32",
     "FV_ORACLE_OWN_TEXT",
     "FV_ORACLE_PREFETCH",
     "FV_REF2VA_PROMPT",
+    "FV_LTX_REF_PROMPT",
+    "FV_LTX_A2V_PROMPT",
+    "FV_LTX_A2V_I2V_PROMPT",
+    "FV_LTX_RETAKE_PROMPT",
+    "FV_LTX_EXTEND_PROMPT",
 ];
 
 /// The blocks the oracle cells dump (`FASTVIDEO_DUMP_OPS` in every arm's
