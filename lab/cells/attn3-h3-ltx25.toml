@@ -1,0 +1,87 @@
+# runpod-matrix.sh `attn3` (FVID-2026-09-27-attention-sm120): sm_120 dense attention
+# A/B, flash_mma_fwd2 (FASTVIDEO_FLASH_KERNEL=v2) against cuDNN's unified SDPA node
+# (=cudnn), on FastH3 4-step dense (768p in the arm names: the recipe's default
+# canvas) and LTX-2.5 1080p20s dense stage 2; then VSA on bf16 activations read in
+# place (FASTVIDEO_VSA_BF16=1) against the f32 widening path (=0), whose frames must
+# match bit for bit. Same prompt and seed throughout; the frame diffs after all six
+# arms. One cell with H3 and LTX-2.5 arms: the script's three compares follow every
+# arm, so per-pipeline cells would move them (docs/adr/0019-fv-lab.md §17). The
+# script's FV_ATTN3_ARMS / FV_ATTN3_VSA picked arms; the cell is their defaults
+# (v2 cudnn, 0 1): narrow by arm with --cells (both are refused by fv-lab).
+# Each H3 pair shares its AdaLN cache, as in the script. Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "attn3-h3-ltx25"
+description = "Dense attention kernel A/B (flash v2 against cuDNN SDPA) on FastH3 4-step dense and LTX-2.5 1080p20s dense, and VSA bf16 in place against f32"
+
+[workload]
+model = "h3 ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; the H3 recipes' default canvas, LTX-2.5's 1080p20s workload (--workload) with dense stage 2; two pipelines in one cell"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+ltx_common = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "1080p20s", "--dense-stage2", "--prompt", "{prompt}", "--seed", "{seed}",
+  "--two-stage", "--text", "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "fasth3-4step-dense-768p-v2"
+gate = "fasth3-4step-dense"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_FLASH_KERNEL=v2"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-dense",
+  "--adaln-cache", "{runs}/fasth3-4step-dense-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-dense-768p-cudnn"
+gate = "fasth3-4step-dense"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_FLASH_KERNEL=cudnn"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-dense",
+  "--adaln-cache", "{runs}/fasth3-4step-dense-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "ltx25-1080p20s-dense-v2"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = ["FASTVIDEO_FLASH_KERNEL=v2"]
+argv = ["{@ltx_common}"]
+
+[[arm]]
+name = "ltx25-1080p20s-dense-cudnn"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = ["FASTVIDEO_FLASH_KERNEL=cudnn"]
+argv = ["{@ltx_common}"]
+
+[[arm]]
+name = "fasth3-4step-vsa-768p-b160"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_VSA_BF16=0"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--adaln-cache", "{runs}/fasth3-4step-vsa-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-vsa-768p-b161"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_VSA_BF16=1"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--adaln-cache", "{runs}/fasth3-4step-vsa-768p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[compare]]
+baseline = "fasth3-4step-dense-768p-v2"
+candidate = "fasth3-4step-dense-768p-cudnn"
+
+[[compare]]
+baseline = "ltx25-1080p20s-dense-v2"
+candidate = "ltx25-1080p20s-dense-cudnn"
+
+[[compare]]
+baseline = "fasth3-4step-vsa-768p-b160"
+candidate = "fasth3-4step-vsa-768p-b161"

@@ -242,8 +242,9 @@ fn arms_and_gates_are_the_scripts_and_arms_name_their_trees() {
         }
     }
     // rtx5090 (5), fastvideo (7), h3arms (4) read a tiny autoencoder;
-    // fastvideo (7), h3arms (10), precision (6), precision-nvfp4 (2) gate.
-    assert_eq!((tae_arms, gates_seen), (16, 25));
+    // fastvideo (7), h3arms (10), precision (6), precision-nvfp4 (2) and
+    // fuse (3, exact, D1f) gate.
+    assert_eq!((tae_arms, gates_seen), (16, 28));
 }
 
 /// `FV_LAB_RETIRED` of `scripts/gpu/fv-lab-retired.sh`.
