@@ -283,6 +283,111 @@ pub struct CellFile {
     /// pass / fail file after its compares ([`Verdict`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
+    /// The upstream reference dump the cell's arms read as `{ref}` (D1d §14,
+    /// the `oracle` family): fetched before the cell's first arm
+    /// ([`Reference`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Reference>,
+    /// Prompt-set files written into the run directory before the cell's
+    /// first arm (D1d §14, the `determinism` family's `det_set`).
+    #[serde(default, rename = "prompt_file", skip_serializing_if = "Vec::is_empty")]
+    pub prompt_files: Vec<PromptFile>,
+    /// Frame-hash equality across the cell's repeated arms (D1d §14, the
+    /// `det-short` / `determinism` families' hashes and `determinism.txt`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeats: Option<Repeats>,
+}
+
+/// The reference of an oracle cell (docs/adr/0019-fv-lab.md §14): what an
+/// upstream pod made for `oracle-<target>` (`scripts/gpu/upstream/oracle.sh`),
+/// served under `FV_ORACLE_URL` as `oracle-<target>/oracle-dump.tar` once
+/// `oracle-<target>/ORACLE_DONE` exists. The runner fetches it (in the
+/// background from the start of the run, as the script's prefetch) into
+/// `<scratch>/oracle-ref/<target>/`, the arms read `{ref}`
+/// (`<scratch>/oracle-ref/<target>/dump`). Unavailable (no URL, not finished
+/// within `FV_ORACLE_WAIT_S`, a failed download): the cell's first arm is
+/// recorded as skipped (`reference dump unavailable`) and nothing else of the
+/// cell runs. After the cell, the reference and every arm's `fresh` path are
+/// removed (the dumps are hundreds of MB).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Reference {
+    /// The upstream target (`fasth3-4step-vsa`): `oracle-<target>` there.
+    pub target: String,
+}
+
+/// A prompt set of one prompt repeated under several names, written to
+/// `{runs}/<file>` before the cell's first arm, byte for byte as the
+/// script's `det_set` writes it:
+/// `{"prompts": [{"name": "<n>", "seed": <seed>, "prompt": "<prompt>"},…]}`,
+/// the prompt and the seed the cell's workload's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PromptFile {
+    /// The file name (`t2v-ab.json`), in the run directory.
+    pub file: String,
+    /// The prompt names, in order (`run1`, `run2`): each a run directory
+    /// `frames/<name>/` of the arm that reads the set.
+    pub names: Vec<String>,
+}
+
+/// How [`Repeats`] hashes an arm's frames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepeatHash {
+    /// One hash per arm (`det-short`'s `sh_hash`): every `frame-*.png` under
+    /// the arm's directory but `*/warmup/*`, in path order, concatenated,
+    /// and every `audio.wav` the same way, into `<arm>/hashes.json` and a
+    /// line of `<runs>/hashes.txt`.
+    Arm,
+    /// One hash per run directory `frames/<run>/` but `warmup`
+    /// (`determinism`'s `det_hash`, a prompt set's runs): its `frame-*.png`
+    /// in name order and its `audio.wav`, into `<arm>/hashes.txt`; the
+    /// stage digests of `stderr.log` into `<arm>/digests.txt`.
+    Run,
+}
+
+/// Frame-hash equality across repeats (docs/adr/0019-fv-lab.md §14): after
+/// each arm of the cell its frames are hashed ([`RepeatHash`]) and all but
+/// `keep` deleted; after every cell, `<runs>/determinism.txt` reports each
+/// hash against the reference's (`IDENTICAL` / `DIFFERENT`), as the script
+/// writes it. The verdict (fv-lab's; the script only reports): the cell
+/// passes when the reference has frames and every hash of the `judged` arms
+/// equals it; `controls` are reported, not judged (the timed-pick control,
+/// which may differ by design); a reference arm that did not run (skipped)
+/// leaves the cell undecided.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Repeats {
+    pub hash: RepeatHash,
+    /// The hash every other is compared with: an arm (`hash = "arm"`), or
+    /// `<arm>/<run>` (`hash = "run"`: `ltx-t2v-ab/run1`).
+    pub reference: String,
+    /// The arms whose every hash must equal the reference's; the reference
+    /// arm is one of them.
+    pub judged: Vec<String>,
+    /// The arms reported but not judged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<String>,
+    /// The frame files kept after hashing (`frame-000.png`); every other
+    /// `frame-*.png` is deleted, as the script does (the hashes and
+    /// `frames.sha256.json` are written before).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keep: Vec<String>,
+}
+
+impl Repeats {
+    /// The reference arm.
+    pub fn reference_arm(&self) -> &str {
+        self.reference
+            .split_once('/')
+            .map_or(self.reference.as_str(), |(a, _)| a)
+    }
+
+    /// The reference run (`hash = "run"`).
+    pub fn reference_run(&self) -> Option<&str> {
+        self.reference.split_once('/').map(|(_, r)| r)
+    }
 }
 
 /// A cell's verdict (docs/adr/0019-fv-lab.md §11, D1d): what the script's
@@ -451,7 +556,7 @@ impl LineCount {
 }
 
 /// The lines of a log as grep reads them: split on `\n`, no empty last line.
-fn log_lines(text: &[u8]) -> impl Iterator<Item = &[u8]> {
+pub fn log_lines(text: &[u8]) -> impl Iterator<Item = &[u8]> {
     let body = (!text.is_empty()).then(|| text.strip_suffix(b"\n").unwrap_or(text));
     body.into_iter().flat_map(|b| b.split(|&c| c == b'\n'))
 }
@@ -524,10 +629,15 @@ pub struct Arm {
     /// The run directory (unique within a tier).
     pub name: String,
     /// The `verify-weights.sh` cell that must pass before the arm runs (an
-    /// incomplete tree is recorded as skipped, not run).
-    pub gate: String,
+    /// incomplete tree is recorded as skipped, not run). Absent: an ungated
+    /// arm (the script's bare `run_cell`, D1d §14: `compare-dumps`), which
+    /// reads no weight tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<String>,
     /// The weight trees the arm reads (weights-manifest.tsv `dest` names):
-    /// the roots of `gate` and every `{weights}/<tree>` of the command.
+    /// the roots of `gate` and every `{weights}/<tree>` of the command
+    /// (none for an ungated arm).
+    #[serde(default)]
     pub trees: Vec<String>,
     /// Denoising steps when the recipe fixes them (descriptive: the recipe
     /// flag sets them, no `--steps` is passed).
@@ -551,6 +661,21 @@ pub struct Arm {
     pub env: Option<Vec<String>>,
     /// fv-gpucheck's arguments (the binary is the runner's).
     pub argv: Vec<String>,
+    /// Paths under `{runs}/` removed before the arm (selected or not), as the
+    /// script's `oracle_run` removes its dump directory; in a cell with a
+    /// [`Reference`] also removed after the cell.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fresh: Vec<String>,
+    /// Directories that must all exist for the arm to run; otherwise it is
+    /// passed over without a trace (the script's `oracle_diff`: no dumps,
+    /// nothing to compare). A dry run lists the arm all the same.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    /// Line patterns (as [`Evidence::lines`]) of the arm's `stderr.log`
+    /// copied into the log after it, each line as `[<arm>] <line>`
+    /// (`oracle_diff`'s `compare-dumps` lines).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub echo: Vec<String>,
 }
 
 impl Arm {
@@ -618,6 +743,12 @@ pub struct GatePair {
     pub off: Option<String>,
 }
 
+/// `<scratch>/oracle-ref/<target>`: where a [`Reference`] is fetched (its
+/// `dump/` is `{ref}`), as the script's `oracle` family.
+pub fn reference_dir(p: &Paths, target: &str) -> PathBuf {
+    p.scratch.join("oracle-ref").join(target)
+}
+
 /// The run-time paths placeholders stand for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
@@ -638,7 +769,7 @@ pub struct Paths {
     pub baseline: Option<PathBuf>,
 }
 
-const PATH_KEYS: [&str; 6] = ["weights", "scratch", "runs", "root", "arm", "tae"];
+const PATH_KEYS: [&str; 7] = ["weights", "scratch", "runs", "root", "arm", "tae", "ref"];
 const WORKLOAD_KEYS: [&str; 8] = [
     "prompt",
     "prompt_set",
@@ -753,20 +884,33 @@ impl CellFile {
             if !names.insert(arm.name.as_str()) {
                 return Err(field(file, at("name"), format!("`{}` twice", arm.name)));
             }
-            if !is_token(&arm.gate) {
-                return Err(field(
-                    file,
-                    at("gate"),
-                    format!("`{}` is not a verify-weights.sh cell", arm.gate),
-                ));
+            match &arm.gate {
+                Some(g) if !is_token(g) => {
+                    return Err(field(
+                        file,
+                        at("gate"),
+                        format!("`{g}` is not a verify-weights.sh cell"),
+                    ));
+                }
+                Some(_) if arm.trees.is_empty() => {
+                    return Err(field(
+                        file,
+                        at("trees"),
+                        "name the weight trees the arm reads",
+                    ));
+                }
+                Some(_) => {}
+                // An ungated arm reads no weights (no gate checks them).
+                None if !arm.trees.is_empty() || arm.tae.is_some() => {
+                    return Err(field(
+                        file,
+                        at("gate"),
+                        "an arm that reads weight trees or a tiny autoencoder gates on them",
+                    ));
+                }
+                None => {}
             }
-            if arm.trees.is_empty() {
-                return Err(field(
-                    file,
-                    at("trees"),
-                    "name the weight trees the arm reads",
-                ));
-            }
+            self.validate_arm_paths(arm, file, &at)?;
             for t in &arm.trees {
                 if !is_token(t)
                     || t.starts_with('/')
@@ -834,6 +978,13 @@ impl CellFile {
                             format!("`{s}`: a list splice is a whole element"),
                         ));
                     }
+                    if p == "ref" && self.reference.is_none() {
+                        return Err(field(
+                            file,
+                            at("argv"),
+                            "`{ref}` in a cell without a [reference]",
+                        ));
+                    }
                     if p == "tae" && arm.tae.is_none() {
                         return Err(field(
                             file,
@@ -866,6 +1017,13 @@ impl CellFile {
                     rest = &after[end..];
                 }
             }
+            if arm.gate.is_none() && !referenced_trees.is_empty() {
+                return Err(field(
+                    file,
+                    at("gate"),
+                    "the command reads `{weights}/…`: gate the arm on its trees",
+                ));
+            }
             for t in &referenced_trees {
                 let covered = arm
                     .trees
@@ -878,6 +1036,19 @@ impl CellFile {
                         format!("the command reads `{{weights}}/{t}`; list `{t}` in trees"),
                     ));
                 }
+            }
+        }
+        if !self.prompt_files.is_empty() {
+            // det_set writes the workload's prompt and seed into the file.
+            for key in ["prompt", "seed"] {
+                if self.workload.value(key).is_none() {
+                    return Err(field(
+                        file,
+                        "prompt_file",
+                        format!("a prompt file needs workload.{key}"),
+                    ));
+                }
+                used_workload.insert(key.to_owned());
             }
         }
         for key in WORKLOAD_KEYS {
@@ -924,6 +1095,176 @@ impl CellFile {
         }
         if let Some(v) = &self.verdict {
             self.validate_verdict(v, file, &names)?;
+        }
+        self.validate_d1d(file)?;
+        Ok(())
+    }
+
+    /// An arm's `fresh`, `requires` and `echo` (D1d §14).
+    fn validate_arm_paths(
+        &self,
+        arm: &Arm,
+        file: &str,
+        at: &dyn Fn(&str) -> String,
+    ) -> Result<(), LabError> {
+        let path_ok = |s: &str, roots: &[&str]| {
+            roots
+                .iter()
+                .any(|r| s == *r || s.starts_with(&format!("{r}/")))
+                && !s.split('/').any(|p| p == "..")
+                && placeholders(s).is_ok_and(|ph| {
+                    ph.iter()
+                        .all(|p| matches!(*p, "runs" | "scratch" | "ref" | "arm"))
+                })
+        };
+        for f in &arm.fresh {
+            // Removed with rm -rf: only below the run directory.
+            if !f.starts_with("{runs}/") || !path_ok(f, &["{runs}"]) {
+                return Err(field(
+                    file,
+                    at("fresh"),
+                    format!("`{f}` is not a path below `{{runs}}/`"),
+                ));
+            }
+        }
+        for r in &arm.requires {
+            if !path_ok(r, &["{runs}", "{scratch}", "{ref}"]) {
+                return Err(field(
+                    file,
+                    at("requires"),
+                    format!("`{r}` is not a path under `{{runs}}`, `{{scratch}}` or `{{ref}}`"),
+                ));
+            }
+        }
+        for s in arm.fresh.iter().chain(&arm.requires) {
+            if s.contains("{ref}") && self.reference.is_none() {
+                return Err(field(
+                    file,
+                    at("requires"),
+                    "`{ref}` in a cell without a [reference]",
+                ));
+            }
+        }
+        if let Some(p) = arm.echo.iter().find(|p| {
+            p.trim().is_empty() || p.contains(['\n', '\r']) || p.trim_matches('*').is_empty()
+        }) {
+            return Err(field(
+                file,
+                at("echo"),
+                format!("`{p}` is not a one-line pattern with text besides `*`"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// `[reference]`, `[[prompt_file]]` and `[repeats]` (D1d §14).
+    fn validate_d1d(&self, file: &str) -> Result<(), LabError> {
+        if let Some(r) = &self.reference {
+            if !is_name(&r.target) {
+                return Err(field(
+                    file,
+                    "reference.target",
+                    format!("`{}` is not a target name", r.target),
+                ));
+            }
+        }
+        let mut files = BTreeSet::new();
+        for (i, pf) in self.prompt_files.iter().enumerate() {
+            let at = |f: &str| format!("prompt_file[{i}].{f}");
+            if !is_name(&pf.file) || !pf.file.ends_with(".json") {
+                return Err(field(
+                    file,
+                    at("file"),
+                    format!("`{}` is not a file name ending in .json", pf.file),
+                ));
+            }
+            if !files.insert(pf.file.as_str()) {
+                return Err(field(file, at("file"), format!("`{}` twice", pf.file)));
+            }
+            if pf.names.is_empty() {
+                return Err(field(file, at("names"), "no name"));
+            }
+            if let Some(n) = pf.names.iter().find(|n| !is_name(n)) {
+                return Err(field(file, at("names"), format!("`{n}` is not a run name")));
+            }
+            let want = format!("{{runs}}/{}", pf.file);
+            let read = self
+                .arms
+                .iter()
+                .filter_map(|a| self.spliced(a).ok())
+                .any(|argv| argv.contains(&want));
+            if !read {
+                return Err(field(file, at("file"), format!("no arm reads `{want}`")));
+            }
+        }
+        if let Some(r) = &self.repeats {
+            let arms: Vec<&str> = self.arms.iter().map(|a| a.name.as_str()).collect();
+            let ref_arm = r.reference_arm();
+            if !arms.contains(&ref_arm) {
+                return Err(field(
+                    file,
+                    "repeats.reference",
+                    format!("`{ref_arm}` is not an arm of this cell"),
+                ));
+            }
+            match (r.hash, r.reference_run()) {
+                (RepeatHash::Arm, Some(_)) => {
+                    return Err(field(
+                        file,
+                        "repeats.reference",
+                        "hash = \"arm\": an arm, not `<arm>/<run>`",
+                    ));
+                }
+                (RepeatHash::Run, None) => {
+                    return Err(field(
+                        file,
+                        "repeats.reference",
+                        "hash = \"run\": `<arm>/<run>`",
+                    ));
+                }
+                (RepeatHash::Run, Some(run)) if !is_name(run) || run == "warmup" => {
+                    return Err(field(
+                        file,
+                        "repeats.reference",
+                        format!("`{run}` is not a run name"),
+                    ));
+                }
+                _ => {}
+            }
+            let mut seen = BTreeSet::new();
+            for a in r.judged.iter().chain(&r.controls) {
+                if !arms.contains(&a.as_str()) {
+                    return Err(field(
+                        file,
+                        "repeats",
+                        format!("`{a}` is not an arm of this cell"),
+                    ));
+                }
+                if !seen.insert(a.as_str()) {
+                    return Err(field(file, "repeats", format!("`{a}` twice")));
+                }
+            }
+            if seen.len() != arms.len() {
+                return Err(field(file, "repeats", "every arm is judged or a control"));
+            }
+            if !r.judged.iter().any(|a| a == ref_arm) {
+                return Err(field(
+                    file,
+                    "repeats.judged",
+                    format!("the reference arm `{ref_arm}` is judged"),
+                ));
+            }
+            if let Some(k) = r
+                .keep
+                .iter()
+                .find(|k| !(k.starts_with("frame-") && k.ends_with(".png") && is_name(k)))
+            {
+                return Err(field(
+                    file,
+                    "repeats.keep",
+                    format!("`{k}` is not a frame-*.png name"),
+                ));
+            }
         }
         Ok(())
     }
@@ -1071,6 +1412,24 @@ impl CellFile {
         Ok(())
     }
 
+    /// A [`PromptFile`]'s bytes, as the script's `det_set` prints them: the
+    /// workload's prompt with `\` and `"` escaped (its `sed`), its seed.
+    pub fn prompt_file_text(&self, pf: &PromptFile) -> String {
+        let prompt = self.workload.prompt.as_deref().unwrap_or("");
+        let esc = prompt.replace('\\', "\\\\").replace('"', "\\\"");
+        let seed = self
+            .workload
+            .seed
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let entries: Vec<String> = pf
+            .names
+            .iter()
+            .map(|n| format!("{{\"name\": \"{n}\", \"seed\": {seed}, \"prompt\": \"{esc}\"}}"))
+            .collect();
+        format!("{{\"prompts\": [{}]}}\n", entries.join(","))
+    }
+
     /// One string with its placeholders replaced.
     fn render(&self, s: &str, arm: &str, p: &Paths) -> Result<String, String> {
         let mut out = String::with_capacity(s.len());
@@ -1088,6 +1447,13 @@ impl CellFile {
                 "runs" => p.runs.display().to_string(),
                 "root" => p.root.display().to_string(),
                 "tae" => p.tae.display().to_string(),
+                "ref" => match &self.reference {
+                    Some(r) => reference_dir(p, &r.target)
+                        .join("dump")
+                        .display()
+                        .to_string(),
+                    None => return Err(format!("`{s}`: the cell has no [reference]")),
+                },
                 "arm" => arm.to_owned(),
                 "prompt_set" => match &self.workload.prompt_set {
                     Some(ps) => p.root.join(ps).display().to_string(),
@@ -1140,13 +1506,20 @@ pub enum Step {
     /// `tae_gated_cell <name> <tae file> <gate> <command…>`.
     Arm {
         name: String,
-        gate: String,
+        /// `None`: an ungated arm (`run_cell` without `gated_cell`).
+        gate: Option<String>,
         trees: Vec<String>,
         command: Vec<String>,
         /// The tiny-autoencoder file the arm needs (`{tae}/<Arm::tae>`).
         tae: Option<PathBuf>,
         /// The arm runs the baseline binary (fetched before the first arm).
         baseline: bool,
+        /// Removed before the arm ([`Arm::fresh`]).
+        fresh: Vec<PathBuf>,
+        /// Directories the arm needs, else it is passed over ([`Arm::requires`]).
+        requires: Vec<PathBuf>,
+        /// `stderr.log` line patterns echoed into the log after it ([`Arm::echo`]).
+        echo: Vec<String>,
     },
     /// `compare_cells <baseline> <candidate> <args…>`.
     Compare {
@@ -1177,6 +1550,43 @@ pub enum Step {
         family: String,
         cells: Vec<VerdictCellArms>,
     },
+    /// A cell with a [`Reference`] (D1d §14): the reference fetched into
+    /// `dir` (`dir/dump` is `{ref}`), then the cell's steps, then `dir` and
+    /// `remove` deleted. Run only when one of `arms` is selected.
+    Reference {
+        cell: String,
+        target: String,
+        dir: PathBuf,
+        arms: Vec<String>,
+        steps: Vec<Step>,
+        remove: Vec<PathBuf>,
+    },
+    /// A [`PromptFile`], rendered: its bytes at `path`.
+    PromptFile { path: PathBuf, text: String },
+    /// After an arm of a [`Repeats`] cell: its frames hashed, all but `keep`
+    /// deleted. Done only when one of `cell_arms` is selected (the script
+    /// hashes every arm of a group it runs, an unselected one too).
+    Hash {
+        arm: String,
+        hash: RepeatHash,
+        keep: Vec<String>,
+        cell_arms: Vec<String>,
+    },
+    /// After every cell: `<runs>/determinism.txt` over the [`Repeats`] cells
+    /// that ran, in order, and their verdicts.
+    RepeatsReport {
+        hash: RepeatHash,
+        cells: Vec<RepeatsCell>,
+    },
+}
+
+/// One [`Repeats`] cell of a [`Step::RepeatsReport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepeatsCell {
+    pub cell: String,
+    /// The cell's arms, in order (the report's order).
+    pub arms: Vec<String>,
+    pub repeats: Repeats,
 }
 
 /// A verdict cell and its verdict arms (what decides whether it ran).
@@ -1189,7 +1599,7 @@ impl Step {
         let mut out = Vec::new();
         for s in steps {
             out.push(s);
-            if let Step::Verdict { steps, .. } = s {
+            if let Step::Verdict { steps, .. } | Step::Reference { steps, .. } = s {
                 out.extend(Step::flatten(steps));
             }
         }
@@ -1263,6 +1673,29 @@ impl Lab {
     fn validate(&self) -> Result<(), LabError> {
         for t in &self.tiers.tiers {
             let mut arms = BTreeSet::new();
+            let mut prompt_files = BTreeSet::new();
+            let mut hashes = BTreeSet::new();
+            for c in t.cells.iter().filter_map(|c| self.cells.get(c)) {
+                for pf in &c.prompt_files {
+                    if !prompt_files.insert(pf.file.as_str()) {
+                        return Err(field(
+                            TIERS_PATH,
+                            format!("tier `{}`.cells", t.name),
+                            format!("prompt file `{}` in two cells (one run directory)", pf.file),
+                        ));
+                    }
+                }
+                if let Some(r) = &c.repeats {
+                    hashes.insert(format!("{:?}", r.hash));
+                }
+            }
+            if hashes.len() > 1 {
+                return Err(field(
+                    TIERS_PATH,
+                    format!("tier `{}`.cells", t.name),
+                    "one determinism.txt per run: every [repeats] cell of a tier hashes the same way",
+                ));
+            }
             for c in &t.cells {
                 let cell = self.cells.get(c).ok_or_else(|| {
                     field(
@@ -1348,8 +1781,37 @@ impl Lab {
     pub fn steps(cells: &[&CellFile], bin: &Path, paths: &Paths) -> Result<Vec<Step>, LabError> {
         let mut out = Vec::new();
         let mut families: Vec<(String, Vec<VerdictCellArms>)> = Vec::new();
+        let mut repeats: Vec<RepeatsCell> = Vec::new();
         for c in cells {
             let steps = Self::cell_steps(c, bin, paths)?;
+            if let Some(r) = &c.repeats {
+                repeats.push(RepeatsCell {
+                    cell: c.name.clone(),
+                    arms: c.arms.iter().map(|a| a.name.clone()).collect(),
+                    repeats: r.clone(),
+                });
+            }
+            if let Some(r) = &c.reference {
+                let label = format!("{CELLS_DIR}/{}.toml", c.name);
+                let mut remove = Vec::new();
+                for a in &c.arms {
+                    for f in &a.fresh {
+                        remove.push(PathBuf::from(
+                            c.render(f, &a.name, paths)
+                                .map_err(|m| field(&label, format!("arm `{}`", a.name), m))?,
+                        ));
+                    }
+                }
+                out.push(Step::Reference {
+                    cell: c.name.clone(),
+                    target: r.target.clone(),
+                    dir: reference_dir(paths, &r.target),
+                    arms: c.arms.iter().map(|a| a.name.clone()).collect(),
+                    steps,
+                    remove,
+                });
+                continue;
+            }
             match &c.verdict {
                 None => out.extend(steps),
                 Some(v) => {
@@ -1366,6 +1828,12 @@ impl Lab {
                 }
             }
         }
+        if let Some(first) = repeats.first() {
+            out.push(Step::RepeatsReport {
+                hash: first.repeats.hash,
+                cells: repeats,
+            });
+        }
         out.extend(
             families
                 .into_iter()
@@ -1377,10 +1845,20 @@ impl Lab {
     fn cell_steps(c: &CellFile, bin: &Path, paths: &Paths) -> Result<Vec<Step>, LabError> {
         let mut out = Vec::new();
         let label = format!("{CELLS_DIR}/{}.toml", c.name);
+        for pf in &c.prompt_files {
+            out.push(Step::PromptFile {
+                path: paths.runs.join(&pf.file),
+                text: c.prompt_file_text(pf),
+            });
+        }
         for a in &c.arms {
-            let command = c
-                .command(a, bin, paths)
-                .map_err(|m| field(&label, format!("arm `{}`", a.name), m))?;
+            let err = |m: String| field(&label, format!("arm `{}`", a.name), m);
+            let command = c.command(a, bin, paths).map_err(err)?;
+            let render_all = |list: &[String]| -> Result<Vec<PathBuf>, LabError> {
+                list.iter()
+                    .map(|x| c.render(x, &a.name, paths).map(PathBuf::from).map_err(err))
+                    .collect()
+            };
             out.push(Step::Arm {
                 name: a.name.clone(),
                 gate: a.gate.clone(),
@@ -1388,7 +1866,18 @@ impl Lab {
                 command,
                 tae: a.tae.as_ref().map(|t| paths.tae.join(t)),
                 baseline: a.bin == ArmBin::Baseline,
+                fresh: render_all(&a.fresh)?,
+                requires: render_all(&a.requires)?,
+                echo: a.echo.clone(),
             });
+            if let Some(r) = &c.repeats {
+                out.push(Step::Hash {
+                    arm: a.name.clone(),
+                    hash: r.hash,
+                    keep: r.keep.clone(),
+                    cell_arms: c.arms.iter().map(|a| a.name.clone()).collect(),
+                });
+            }
         }
         for cmp in &c.compares {
             out.push(Step::Compare {
@@ -1672,6 +2161,7 @@ candidate = "x-tae"
                 } => format!("gate {baseline}--{candidate} {} {off:?}", kind.as_str()),
                 Step::Verdict { cell, .. } => format!("verdict {cell}"),
                 Step::FamilyVerdict { family, .. } => format!("family {family}"),
+                other => format!("{other:?}"),
             })
             .collect();
         assert_eq!(
@@ -1870,6 +2360,169 @@ candidate = "v1-pr"
         assert_eq!(c.count(b"REUSE h3 teacache step 1\n"), 0, "in order");
         assert!(line_matches(b"abcabc", "c*a*c") && !line_matches(b"abc", "c*a"));
         assert_eq!(strip_bracket_prefixes(b"[x]   [y]z [w]"), b"z [w]");
+    }
+
+    const ORACLE: &str = r#"
+schema = 1
+name = "o1"
+description = "an oracle cell"
+
+[workload]
+model = "h3"
+prompt = "a \"b\" c\\d"
+seed = 7
+
+[reference]
+target = "t1"
+
+[[prompt_file]]
+file = "p-ab.json"
+names = ["run1", "run2"]
+
+[[arm]]
+name = "o1-main"
+gate = "h3-base"
+trees = ["h3-base"]
+env = ["FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_DIR={runs}/o1-dump"]
+argv = ["h3", "gen", "--prompt", "{prompt}", "--seed", "{seed}", "--prompts", "{runs}/p-ab.json"]
+fresh = ["{runs}/o1-dump"]
+
+[[arm]]
+name = "o1-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/o1-dump"]
+requires = ["{ref}", "{runs}/o1-dump"]
+echo = ["compare-dumps"]
+
+[repeats]
+hash = "arm"
+reference = "o1-main"
+judged = ["o1-main"]
+controls = ["o1-diff"]
+keep = ["frame-000.png"]
+"#;
+
+    #[test]
+    fn references_ungated_arms_prompt_files_and_repeats() {
+        let c = CellFile::parse(ORACLE, "o1.toml").unwrap();
+        let p = paths();
+        let steps = Lab::steps(&[&c], Path::new("/bin/fv"), &p).unwrap();
+        // The reference cell, then the repeats report.
+        assert_eq!(steps.len(), 2, "{steps:?}");
+        let Step::Reference {
+            target,
+            dir,
+            arms,
+            steps: inner,
+            remove,
+            ..
+        } = &steps[0]
+        else {
+            panic!("{:?}", steps[0]);
+        };
+        assert_eq!(
+            (target.as_str(), dir.as_path()),
+            ("t1", Path::new("/fvscratch/oracle-ref/t1"))
+        );
+        assert_eq!(arms, &["o1-main", "o1-diff"]);
+        assert_eq!(remove, &[PathBuf::from("/fvscratch/runs/f/t/o1-dump")]);
+        let Step::PromptFile { path, text } = &inner[0] else {
+            panic!("{:?}", inner[0]);
+        };
+        assert_eq!(path, Path::new("/fvscratch/runs/f/t/p-ab.json"));
+        // det_set's bytes: `\` and `"` escaped, the workload's seed.
+        assert_eq!(
+            text,
+            "{\"prompts\": [{\"name\": \"run1\", \"seed\": 7, \"prompt\": \"a \\\"b\\\" c\\\\d\"},{\"name\": \"run2\", \"seed\": 7, \"prompt\": \"a \\\"b\\\" c\\\\d\"}]}\n"
+        );
+        let Step::Arm { command, gate, .. } = &inner[3] else {
+            panic!("{:?}", inner[3]);
+        };
+        assert_eq!(gate, &None);
+        assert_eq!(
+            command,
+            &[
+                "/bin/fv",
+                "compare-dumps",
+                "--baseline",
+                "/fvscratch/oracle-ref/t1/dump",
+                "--candidate",
+                "/fvscratch/runs/f/t/o1-dump"
+            ]
+        );
+        assert!(matches!(&inner[2], Step::Hash { arm, .. } if arm == "o1-main"));
+        assert!(
+            matches!(&steps[1], Step::RepeatsReport { hash: RepeatHash::Arm, cells } if cells.len() == 1)
+        );
+        let bad = |from: &str, to: &str, want: &str| {
+            let e = CellFile::parse(&ORACLE.replacen(from, to, 1), "o1.toml")
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(want), "{from} -> {to}: {e} lacks {want}");
+        };
+        bad(
+            "[reference]\ntarget = \"t1\"\n",
+            "",
+            "without a [reference]",
+        );
+        bad(
+            "fresh = [\"{runs}/o1-dump\"]",
+            "fresh = [\"{scratch}/x\"]",
+            "below `{runs}/`",
+        );
+        bad(
+            "fresh = [\"{runs}/o1-dump\"]",
+            "fresh = [\"{runs}/../x\"]",
+            "below `{runs}/`",
+        );
+        bad(
+            "requires = [\"{ref}\"",
+            "requires = [\"/etc\"",
+            "not a path under",
+        );
+        bad(
+            "echo = [\"compare-dumps\"]",
+            "echo = [\"*\"]",
+            "one-line pattern",
+        );
+        bad(
+            "argv = [\"compare-dumps\"",
+            "trees = [\"h3-base\"]\nargv = [\"compare-dumps\"",
+            "gates on them",
+        );
+        bad(
+            "\"compare-dumps\", \"--baseline\"",
+            "\"--weights\", \"{weights}/h3-base\", \"--baseline\"",
+            "gate the arm on its trees",
+        );
+        bad("names = [\"run1\", \"run2\"]", "names = []", "no name");
+        bad("file = \"p-ab.json\"", "file = \"p-ab.txt\"", ".json");
+        bad("file = \"p-ab.json\"", "file = \"q.json\"", "no arm reads");
+        bad("judged = [\"o1-main\"]", "judged = []", "is judged");
+        bad(
+            "controls = [\"o1-diff\"]\n",
+            "",
+            "every arm is judged or a control",
+        );
+        bad(
+            "reference = \"o1-main\"",
+            "reference = \"o1-main/run1\"",
+            "an arm, not",
+        );
+        bad("hash = \"arm\"", "hash = \"run\"", "`<arm>/<run>`");
+        bad(
+            "keep = [\"frame-000.png\"]",
+            "keep = [\"x.png\"]",
+            "frame-*.png",
+        );
+        let e = CellFile::parse(
+            &ORACLE
+                .replacen("seed = 7\n", "", 1)
+                .replacen("\"--seed\", \"{seed}\", ", "", 1),
+            "o1.toml",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("needs workload.seed"), "{e}");
     }
 
     #[test]

@@ -381,6 +381,12 @@ fi
 # no dump or never finished.
 oracle_fetch() {
   local target="$1" dest="$2" t0 base="" u attempt
+  # A dry run fetches nothing: it names the reference and goes on as if it
+  # had it, so the target's commands are logged (fv-lab's goldens).
+  if [[ "$DRY_RUN" == 1 ]]; then
+    log "dry-run reference $target: $dest/dump"
+    return 0
+  fi
   [[ -n "${FV_ORACLE_URL:-}" ]] || { log "oracle: FV_ORACLE_URL unset"; return 1; }
   t0=$(date +%s)
   while [[ -z "$base" ]]; do
@@ -427,8 +433,10 @@ oracle_run() {
 
 # oracle_diff <cell> <baseline dump> <candidate dump>: compare-dumps, logged.
 oracle_diff() {
-  [[ -d "$2" && -d "$3" ]] || return 0
+  # (A dry run has no dumps; it logs the command.)
+  [[ "$DRY_RUN" == 1 || ( -d "$2" && -d "$3" ) ]] || return 0
   run_cell "$1" "$BIN" compare-dumps --baseline "$2" --candidate "$3"
+  [[ "$DRY_RUN" == 1 ]] && return 0
   grep -h 'compare-dumps' "$RUNS/$1/stderr.log" | sed "s/^/[$1] /" | tee -a "$LOG" || true
 }
 
@@ -2147,6 +2155,8 @@ Audio: male speech, clear voice, quiet room"
     # audio.wav; keep frames 000 / 072 / 120 of each run.
     det_hash() {
       local cell="$RUNS/$1" d run
+      # A dry run writes no arm directory, so there is nothing to hash.
+      [[ "$DRY_RUN" == 1 ]] && return 0
       : >"$cell/hashes.txt"
       for d in "$cell"/frames/*/; do
         [[ -d "$d" ]] || continue
@@ -2197,8 +2207,10 @@ Audio: male speech, clear voice, quiet room"
     # other; the timed control's too, for reference) against run1.
     {
       for m in ltx-t2v ltx-i2v h3; do
-        ref="$(grep -h '^run1 frames' "$RUNS/$m-ab/hashes.txt" 2>/dev/null | awk '{print $4}')"
-        refa="$(grep -h '^run1 audio' "$RUNS/$m-ab/hashes.txt" 2>/dev/null | awk '{print $3}')"
+        # (|| true: a model that did not run has no hashes.txt, and pipefail +
+        # set -e would end the family there, before `matrix done`.)
+        ref="$(grep -h '^run1 frames' "$RUNS/$m-ab/hashes.txt" 2>/dev/null | awk '{print $4}' || true)"
+        refa="$(grep -h '^run1 audio' "$RUNS/$m-ab/hashes.txt" 2>/dev/null | awk '{print $3}' || true)"
         for f in "$RUNS/$m-ab/hashes.txt" "$RUNS/$m-c/hashes.txt" "$RUNS/$m-timed/hashes.txt"; do
           [[ -f "$f" ]] || continue
           c="$(basename "$(dirname "$f")")"
@@ -2245,20 +2257,25 @@ Audio: male speech, clear voice, quiet room"
       printf '%s frames=%s frames_sha256=%s audio_sha256=%s\n' "$1" "$n" "$fh" "$ah" | tee -a "$RUNS/hashes.txt" | tee -a "$LOG"
       find "$c" -name 'frame-*.png' ! -name 'frame-000.png' -delete
     }
-    # args_<arm> <cell dir>: that arm's command for one run, into ARGS.
+    # args_<arm> <cell dir>: that arm's command for one run, into ARGS, and
+    # its own settings into ENVS (one flat `env` with the run's caches before
+    # them: fv-lab's det-short cells, docs/adr/0019-fv-lab.md §14).
     args_h3() {
+      ENVS=()
       ARGS=("$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense --seconds 5
         --prompt "$det_p" --seed 7 --text-encoder resident-fp8 --text-weights "$W/h3-base" --no-text-cache
         --adaln-cache "$1/adaln.cache" --clip-dir "$1/frames")
     }
     args_wan() {
-      ARGS=(env FASTVIDEO_WAN_VAE=full "$BIN" --mode fast wan gen --weights "$W/fastwan22-ti2v-5b"
+      ENVS=(FASTVIDEO_WAN_VAE=full)
+      ARGS=("$BIN" --mode fast wan gen --weights "$W/fastwan22-ti2v-5b"
         --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24 --seed 7 --height 704 --width 1280
         --num-frames 121 --prompt "$det_p" --no-text-cache --no-mp4 --clip-dir "$1/frames")
     }
     ltx_args() {
       local c="$1" sage="$2" route="$3"
-      ARGS=(env FASTVIDEO_ATTN_SAGE="$sage" "$BIN" --mode fast --techniques "ltx2/ltx25_distill_$route" ltx2 gen
+      ENVS=(FASTVIDEO_ATTN_SAGE="$sage")
+      ARGS=("$BIN" --mode fast --techniques "ltx2/ltx25_distill_$route" ltx2 gen
         --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25" --two-stage "--$route-stage2"
         --height 1088 --width 1920 --num-frames 97 --frame-rate 24 --text streamed --no-text-cache
         --prompt "$det_p" --seed 7 --clip "$c/frames")
@@ -2278,7 +2295,7 @@ Audio: male speech, clear voice, quiet room"
         mkdir -p "$RUNS/$cell"
         "args_$arm" "$RUNS/$cell"
         gated_cell "$cell" "$wcell" env FASTVIDEO_CACHE="$RUNS/$cell/cache" XDG_CACHE_HOME="$RUNS/$cell/cache" \
-          ${timed[@]+"${timed[@]}"} "${ARGS[@]}"
+          ${timed[@]+"${timed[@]}"} ${ENVS[@]+"${ENVS[@]}"} "${ARGS[@]}"
         sh_hash "$cell"
       done
     }
@@ -2328,7 +2345,7 @@ Audio: male speech, clear voice, quiet room"
     # ready (FV_ORACLE_PREFETCH, default on), so an upstream pod that finishes
     # early can go (its idle watchdog) before our runs reach the last target.
     declare -A prefetch=()
-    if [[ "${FV_ORACLE_PREFETCH:-1}" == 1 ]]; then
+    if [[ "${FV_ORACLE_PREFETCH:-1}" == 1 && "$DRY_RUN" != 1 ]]; then
       mkdir -p "$SCRATCH/oracle-ref"
       for target in $oracle_targets; do
         oracle_fetch "$target" "$SCRATCH/oracle-ref/$target" >"$SCRATCH/oracle-ref/$target.fetch.log" 2>&1 &

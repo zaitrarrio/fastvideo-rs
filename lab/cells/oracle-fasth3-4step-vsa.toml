@@ -1,0 +1,83 @@
+# runpod-matrix.sh `oracle`, target fasth3-4step-vsa (docs/oracle.md; docs/adr/0019-fv-lab.md §14): the upstream
+# reference's dump (scripts/gpu/upstream/oracle.sh on an upstream pod, served under FV_ORACLE_URL) fetched
+# into {ref}, its noise and text conditioning injected into our run (FASTVIDEO_INJECT_DIR), our run dumped
+# the same way (FASTVIDEO_DUMP_DIR, blocks 0,1,24,47) and the two compared tensor by tensor (compare-dumps,
+# ungated, only when both dumps exist; its lines echoed into the log). The bf16 noise floor (FV_ORACLE_F32's
+# default for H3): ours with f32 activations against the reference, and our bf16 run against our f32 run. After the cell the dumps and
+# the reference are removed. The references run bf16 without FP8: FASTVIDEO_H3_QUANT=off pins our H3
+# default (MXFP8) off.
+schema = 1
+name = "oracle-fasth3-4step-vsa"
+description = "Oracle diff of FastH3 4step-vsa against the FastVideo reference: tensors per step and block, the bf16 noise floor"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED, the recipe's canvas"
+
+[reference]
+target = "fasth3-4step-vsa"
+
+[lists]
+h3_oracle = [
+  "--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "streamed",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base"
+]
+
+[[arm]]
+name = "oracle-fasth3-4step-vsa"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-fasth3-4step-vsa-dump"
+]
+argv = [
+  "--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "{@h3_oracle}", "--clip-dir", "{runs}/{arm}/frames", "--adaln-cache",
+  "{runs}/oracle-fasth3-4step-vsa-adaln.cache"
+]
+fresh = ["{runs}/oracle-fasth3-4step-vsa-dump"]
+
+[[arm]]
+name = "oracle-fasth3-4step-vsa-diff"
+argv = [
+  "compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-fasth3-4step-vsa-dump"
+]
+requires = ["{ref}", "{runs}/oracle-fasth3-4step-vsa-dump"]
+echo = ["compare-dumps"]
+
+[[arm]]
+name = "oracle-fasth3-4step-vsa-f32"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-fasth3-4step-vsa-dump-f32", "FASTVIDEO_BF16_ACT=0",
+  "FASTVIDEO_H3_QUANT=off"
+]
+argv = [
+  "--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "{@h3_oracle}", "--clip-dir", "{runs}/{arm}/frames", "--adaln-cache",
+  "{runs}/oracle-fasth3-4step-vsa-adaln.cache"
+]
+fresh = ["{runs}/oracle-fasth3-4step-vsa-dump-f32"]
+
+[[arm]]
+name = "oracle-fasth3-4step-vsa-f32-diff"
+argv = [
+  "compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-fasth3-4step-vsa-dump-f32"
+]
+requires = ["{ref}", "{runs}/oracle-fasth3-4step-vsa-dump-f32"]
+echo = ["compare-dumps"]
+
+[[arm]]
+name = "oracle-fasth3-4step-vsa-bf16-vs-f32"
+argv = [
+  "compare-dumps", "--baseline", "{runs}/oracle-fasth3-4step-vsa-dump-f32", "--candidate",
+  "{runs}/oracle-fasth3-4step-vsa-dump"
+]
+requires = ["{runs}/oracle-fasth3-4step-vsa-dump-f32", "{runs}/oracle-fasth3-4step-vsa-dump"]
+echo = ["compare-dumps"]

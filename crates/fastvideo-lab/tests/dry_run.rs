@@ -152,11 +152,15 @@ fn baseline_arms_run_the_fetched_binary() {
     assert!(!Lab::needs_baseline(&cells));
 }
 
-/// One row of `<tier>-gates.tsv`, what `FV_DRY_RUN_GATES` recorded.
+/// One row of `<tier>-gates.tsv`, what `FV_DRY_RUN_GATES` recorded: a
+/// gated arm (an ungated one, the script's bare `run_cell`, records none).
 fn gate_row(s: &Step) -> Option<Vec<String>> {
     match s {
         Step::Arm {
-            name, gate, tae, ..
+            name,
+            gate: Some(gate),
+            tae,
+            ..
         } => Some(vec![
             "arm".into(),
             name.clone(),
@@ -176,7 +180,7 @@ fn gate_row(s: &Step) -> Option<Vec<String>> {
             kind.as_str().to_owned(),
             off.clone().unwrap_or_else(|| "-".into()),
         ]),
-        Step::Compare { .. } | Step::Verdict { .. } | Step::FamilyVerdict { .. } => None,
+        _ => None,
     }
 }
 
@@ -209,7 +213,10 @@ fn arms_and_gates_are_the_scripts_and_arms_name_their_trees() {
         }
         let arms = steps.iter().filter_map(|s| match s {
             Step::Arm {
-                name, gate, trees, ..
+                name,
+                gate: Some(gate),
+                trees,
+                ..
             } => Some((name, gate, trees)),
             _ => None,
         });

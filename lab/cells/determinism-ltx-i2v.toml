@@ -1,0 +1,64 @@
+# runpod-matrix.sh `determinism` (docs/perf/determinism.md; docs/adr/0019-fv-lab.md §14): LTX-2.5 1080p 6 s image-to-video (the beach fixture),
+# run twice in one process (prompt set i2v-ab.json: run1, run2), once in a second process (i2v-c.json:
+# run3) and once more with FASTVIDEO_SDPA_AUTO=timed (the old per-process timed pick, on i2v-ab.json: the
+# speed baseline, reported, not judged), all with FASTVIDEO_DIGEST=1 (stage digests in stderr, into
+# <arm>/digests.txt). After each arm its runs' frames and audio are hashed (det_hash, `[repeats]` hash =
+# "run") and pruned to three keyframes; <runs>/determinism.txt reports every run against ltx-i2v-ab/run1.
+# The prompt sets are written as the script's det_set writes them (`[[prompt_file]]`).
+schema = 1
+name = "determinism-ltx-i2v"
+description = "LTX-2.5 1088x1920x145 I2V on the beach fixture: two runs in one process, one in another, and the timed-pick control"
+
+[workload]
+model = "ltx2"
+prompt = "Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam on the sand, the camera glides slowly forward along the shoreline, bright sunny day."
+seed = 11
+frames = 145
+width = 1920
+height = 1088
+note = "scripts/gpu/fixtures/ti2v-beach-832x480.jpg as the first frame; FV_DET_I2V_PROMPT's default"
+
+[[prompt_file]]
+file = "i2v-ab.json"
+names = ["run1", "run2"]
+
+[[prompt_file]]
+file = "i2v-c.json"
+names = ["run3"]
+
+[lists]
+before = [
+  "--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--height", "{height}", "--width", "{width}", "--num-frames", "{frames}",
+  "--frame-rate", "24", "--two-stage", "--text", "streamed", "--image",
+  "{root}/scripts/gpu/fixtures/ti2v-beach-832x480.jpg", "--prompt", "{prompt}", "--seed", "{seed}"
+]
+after = ["--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx-i2v-ab"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = ["FASTVIDEO_DIGEST=1"]
+argv = ["{@before}", "--prompts", "{runs}/i2v-ab.json", "{@after}"]
+
+[[arm]]
+name = "ltx-i2v-c"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = ["FASTVIDEO_DIGEST=1"]
+argv = ["{@before}", "--prompts", "{runs}/i2v-c.json", "{@after}"]
+
+[[arm]]
+name = "ltx-i2v-timed"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = ["FASTVIDEO_DIGEST=1", "FASTVIDEO_SDPA_AUTO=timed"]
+argv = ["{@before}", "--prompts", "{runs}/i2v-ab.json", "{@after}"]
+
+[repeats]
+hash = "run"
+reference = "ltx-i2v-ab/run1"
+judged = ["ltx-i2v-ab", "ltx-i2v-c"]
+controls = ["ltx-i2v-timed"]
+keep = ["frame-000.png", "frame-072.png", "frame-120.png"]

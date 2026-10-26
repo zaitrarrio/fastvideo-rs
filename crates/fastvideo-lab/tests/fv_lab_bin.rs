@@ -834,3 +834,57 @@ fn the_tree_fetch_is_checked_before_any_pod_exists() {
         "100",
     ]));
 }
+
+/// The oracle tier (ADR-0019 §14) reads upstream references: `pod up` refuses
+/// it without their URL or without `--cells` (a reference the upstream pods
+/// never make is waited for, FV_ORACLE_WAIT_S, on a GPU pod), and passes the
+/// URL to the run; the D1d families' script knobs are refused, not ignored.
+#[test]
+fn the_oracle_pod_needs_its_references_and_the_d1d_knobs_are_refused() {
+    let up = [
+        "pod",
+        "up",
+        "--sha",
+        "1234567",
+        "--family",
+        "oracle",
+        "--tag",
+        "1234567-10241200",
+    ];
+    let cells = [
+        "--cells",
+        "oracle-fasth3-4step-vsa,oracle-fasth3-4step-vsa-diff",
+    ];
+    let url = [
+        "--extra-env",
+        "FV_ORACLE_URL=https://abc-8000.proxy.runpod.net/upstream/1234567-10260100",
+    ];
+    for args in [vec![], cells.to_vec(), url.to_vec()] {
+        let (code, _, err) = out_err(fv_lab().args(up).args(&args));
+        assert_ne!(code, Some(0), "{args:?}");
+        assert!(err.contains("FV_ORACLE_URL=<base URL>"), "{args:?}: {err}");
+    }
+    let plan = stdout(fv_lab().args(up).args(cells).args(url));
+    let v: serde_json::Value = serde_json::from_str(&plan).expect("json plan");
+    let cmd = v["requests"][0]["body"]["dockerStartCmd"][2]
+        .as_str()
+        .unwrap_or("");
+    assert!(cmd.contains("env FV_ORACLE_URL=https://abc-8000.proxy.runpod.net/upstream/1234567-10260100 FV_WORK=/workspace"), "{cmd}");
+    assert!(cmd.contains("FV_GEN_TIMEOUT_S=5400"), "{cmd}");
+    let (code, _, err) = out_err(
+        fv_lab()
+            .args(up)
+            .args(cells)
+            .args(url)
+            .args(["--extra-env", "FV_ORACLE_TARGETS=fasth3-4step-vsa"]),
+    );
+    assert_ne!(code, Some(0));
+    assert!(err.contains("fv-lab selects by arm"), "{err}");
+    let (code, _, err) = out_err(
+        fv_lab()
+            .args(["run", "det-short", "--dry-run"])
+            .env("FV_DET_REPEATS", "5"),
+    );
+    assert_ne!(code, Some(0));
+    assert!(err.contains("FV_DET_REPEATS: no tier reads it"), "{err}");
+}

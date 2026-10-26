@@ -1,0 +1,70 @@
+# runpod-matrix.sh `det-short` (docs/perf/determinism.md "Results"; docs/adr/0019-fv-lab.md §14):
+# the wan arm group, run three times (r1, r2, r3) in a fresh process each with its own caches (FASTVIDEO_CACHE and
+# XDG_CACHE_HOME under the arm), then once more with FASTVIDEO_SDPA_AUTO=timed (the old per-process timed pick: the speed
+# baseline, reported, not judged); every arm's frames hashed after it (sh_hash, `[repeats]`
+# hash = "arm"), the report in <runs>/determinism.txt. Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "det-short-wan"
+description = "FastWan2.2 TI2V-5B, 3 steps, 704x1280x121, three fresh processes and the timed-pick control: byte identity across processes"
+
+[workload]
+model = "wan"
+prompt = "A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field"
+seed = 7
+frames = 121
+width = 1280
+height = 704
+steps = 3
+note = "self-attention 24 x 27 280 (the rule picks cuDNN); the full Wan VAE; fastwan22-ti2v-5b is R2-only, not on the EU volume, so on bz0ofkfx45 every arm is skipped (weights incomplete), as the script skips them"
+
+[lists]
+det = [
+  "--mode", "fast", "wan", "gen", "--weights", "{weights}/fastwan22-ti2v-5b", "--preset",
+  "fast_wan_2_2_ti2v_5b", "--steps", "{steps}", "--flow-shift", "5.0", "--fps", "24", "--seed", "{seed}",
+  "--height", "{height}", "--width", "{width}", "--num-frames", "{frames}", "--prompt", "{prompt}",
+  "--no-text-cache", "--no-mp4", "--clip-dir", "{runs}/{arm}/frames"
+]
+
+[[arm]]
+name = "wan-r1"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = [
+  "FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache", "FASTVIDEO_WAN_VAE=full"
+]
+argv = ["{@det}"]
+
+[[arm]]
+name = "wan-r2"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = [
+  "FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache", "FASTVIDEO_WAN_VAE=full"
+]
+argv = ["{@det}"]
+
+[[arm]]
+name = "wan-r3"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = [
+  "FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache", "FASTVIDEO_WAN_VAE=full"
+]
+argv = ["{@det}"]
+
+[[arm]]
+name = "wan-timed"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = [
+  "FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache", "FASTVIDEO_SDPA_AUTO=timed",
+  "FASTVIDEO_WAN_VAE=full"
+]
+argv = ["{@det}"]
+
+[repeats]
+hash = "arm"
+reference = "wan-r1"
+judged = ["wan-r1", "wan-r2", "wan-r3"]
+controls = ["wan-timed"]
+keep = ["frame-000.png"]

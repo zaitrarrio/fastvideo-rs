@@ -493,6 +493,14 @@ fn print_json(v: &impl serde::Serialize) {
     }
 }
 
+/// `FV_ORACLE_URL`: base URLs separated by spaces (the script's) or commas.
+fn oracle_urls(s: &str) -> Vec<String> {
+    s.split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|u| !u.is_empty())
+        .map(|u| u.trim_end_matches('/').to_owned())
+        .collect()
+}
+
 fn split_list(s: &str) -> Vec<String> {
     s.split([',', ' '])
         .filter(|x| !x.is_empty())
@@ -560,6 +568,17 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
         .baseline_sha
         .clone()
         .or_else(|| env_nonempty("FV_BASELINE_SHA"));
+    // The oracle cells' references (ADR-0019 §14): the upstream pods' base
+    // URLs, space or comma separated (a comma is what `pod up --extra-env`
+    // can carry), and how long a reference may take there.
+    cfg.oracle_urls = env_nonempty("FV_ORACLE_URL")
+        .map(|u| oracle_urls(&u))
+        .unwrap_or_default();
+    if let Some(w) = env_nonempty("FV_ORACLE_WAIT_S") {
+        cfg.oracle_wait_s = w
+            .parse()
+            .map_err(|_| format!("FV_ORACLE_WAIT_S `{w}` is not a number of seconds"))?;
+    }
     if let Some(sha) = &cfg.baseline_sha {
         check_sha7_named("--baseline-sha / FV_BASELINE_SHA", sha).map_err(|e| e.to_string())?;
     }
@@ -877,6 +896,25 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         Lab::needs_baseline(&cells),
     )
     .map_err(|e| format!("tier `{}`: {e}", t.name))?;
+    // A tier of oracle cells reads upstream references (ADR-0019 §14):
+    // without their URL every cell is skipped, and a reference the upstream
+    // pods never make is waited for (FV_ORACLE_WAIT_S, 3 h) on a GPU pod.
+    if cells.iter().any(|c| c.reference.is_some()) {
+        let url = so
+            .extra_env
+            .iter()
+            .flat_map(|e| e.split_whitespace())
+            .any(|e| {
+                e.strip_prefix("FV_ORACLE_URL=")
+                    .is_some_and(|v| !v.is_empty())
+            });
+        if !url || so.cells.is_empty() {
+            return Err(format!(
+                "tier `{}` reads upstream references: pass --extra-env FV_ORACLE_URL=<base URL>[,<base URL>] (the upstream pods, scripts/gpu/oracle.sh) and --cells with the arms of the targets they make (each missing reference is waited for up to FV_ORACLE_WAIT_S)",
+                t.name
+            ));
+        }
+    }
     so.lpips = u.lpips;
     let mut l = launch(t, &u.sha, &so).map_err(|e| e.to_string())?;
     guard::check_guards(&l.guards).map_err(|e| e.to_string())?;

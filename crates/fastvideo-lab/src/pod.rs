@@ -1144,14 +1144,20 @@ fn tree_dir(
 /// A file of the verdict step (`plan::Verdict`) the fetch takes: in the run
 /// directory (`top`) a verdict (`*.verdict.json`), an evidence diff (`*.diff`)
 /// or the run's arm selection (`*.arms.json`); in an arm's directory an
-/// evidence file (`*-evidence.log`).
+/// evidence file (`*-evidence.log`). And the repeats' (`plan::Repeats`, D1d
+/// §14): `hashes.txt` and `determinism.txt` in the run directory, an arm's
+/// `hashes.txt` and `digests.txt` (its `hashes.json` is taken as every JSON).
 pub fn is_verdict_file(name: &str, top: bool) -> bool {
     if top {
         // `<tier>.arms.json`: the arms the run selected (`run::selection_file`),
         // which `fv-lab gate` reads.
-        name.ends_with(".verdict.json") || name.ends_with(".diff") || name.ends_with(".arms.json")
+        name.ends_with(".verdict.json")
+            || name.ends_with(".diff")
+            || name.ends_with(".arms.json")
+            || name == "hashes.txt"
+            || name == "determinism.txt"
     } else {
-        name.ends_with("-evidence.log")
+        name.ends_with("-evidence.log") || name == "hashes.txt" || name == "digests.txt"
     }
 }
 
