@@ -147,8 +147,11 @@ in turn (the cudarc rollout's `DenoiseStep` counts `index / total` across blocks
 steps per 12-frame block reports 7 x 4 = 28 events, `step / total` rising once from 0 to 1 (the fraction every API
 surface serves). Reporting 4, or 1..4 per block, would break that. The check expected the recipe's steps
 (`describe().steps`, per block). It now expects `CudaModel::progress_steps(job.num_frames)`: the recipe's steps, times
-`SfWanRecipe::blocks` (`num_frames.div_ceil(block_frames)`, `block_frames` from the family file) on a causal recipe;
-the engine's own `planned` total for the clip uses the same product. The check's `limits` keep `steps` (the recipe's,
+`SfWanRecipe::blocks` (`num_frames.div_ceil(block_frames)`, `block_frames` from the family file, held by a test to the
+pipeline's `latent_frames / num_frames_per_block` of its preset over the whole frame grid) on a causal recipe. That is
+the default causal settings, as the gold cells run: `FASTVIDEO_WAN_CAUSAL_FPB` / `FASTVIDEO_WAN_CAUSAL_AR` change the
+pipeline's count and not the family file's, so the engine's own `planned` total stays the per-block steps (a lower
+bound: `deliver` takes the pipeline's total from its first event). The check's `limits` keep `steps` (the recipe's,
 per block: what §1's `vs gold` compares with the gold file's `[workload] steps = 4`) and add `events`. No cell changes.
 
 **The full gold run (the coordinator's GPU check, ADR-0019 §16.7).** On a commit whose runtime image is published with

@@ -518,7 +518,18 @@ impl CudaModel {
     /// which steps every causal block in turn: the recipe's steps per block
     /// times [`SfWanRecipe::blocks`] (81 frames, 4 steps: 28), so the
     /// fraction `step / total` rises once from 0 to 1 over the rollout.
+    ///
+    /// The block count is the family file's, i.e. the default causal
+    /// settings (no `FASTVIDEO_WAN_CAUSAL_FPB` / `FASTVIDEO_WAN_CAUSAL_AR`
+    /// override, as the gold cells run); the pipeline's own count follows
+    /// those settings, and the engine's `planned` total stays the
+    /// per-block steps, a lower bound under the pipeline's total.
     pub fn progress_steps(&self, num_frames: u32) -> Option<u32> {
+        // The recipe's steps, not the job's: this must agree with
+        // `wan::planned_steps`, which honours `job.sampling.steps`. Both
+        // causal variants have `knobs.steps = false` (the job cannot set
+        // steps); a causal recipe that enables the knob must take the
+        // job's steps here and in `wan::planned_steps` alike.
         let steps = self.describe().steps?;
         Some(match &self.recipe {
             CudaRecipe::SfWan(r) => steps * r.blocks(num_frames),
@@ -1560,25 +1571,49 @@ mod tests {
     /// A causal clip reports every block's steps (the cudarc SF-Wan rollout
     /// counts `index / total` across blocks): the default 81-frame clip of
     /// the family file's 4-step, 12-frame-block recipe is 7 blocks, 28
-    /// events, while the recipe's steps stay 4. A bidirectional Wan reports
-    /// its recipe's steps.
+    /// events, while the recipe's steps stay 4. The family file's
+    /// `block_frames` is held to the preset the pipeline loads: over the
+    /// whole frame grid, `blocks` is the pipeline's `latent_frames /
+    /// num_frames_per_block` (`WanVideoArchConfig::from_preset`, the VAE's
+    /// temporal compression chosen as `check_geometry` does). A
+    /// bidirectional Wan reports its recipe's steps.
     #[test]
     fn causal_clip_progress_counts_every_block() {
+        use fastvideo_models::wan::{WanVaeConfig, WanVideoArchConfig};
         let cat = catalog(&WeightLayout::default()).unwrap();
         for id in ["sfwan21-1.3b", "longlive-1.3b"] {
             let m = find(&cat, id).unwrap();
             let CudaRecipe::SfWan(r) = &m.recipe else {
                 panic!("{id}: not a causal recipe")
             };
+            let dit = WanVideoArchConfig::from_preset(&r.wan.preset);
+            assert!(dit.causal, "{id}: {} is not causal", r.wan.preset);
+            let tc = if dit.out_channels == 48 {
+                WanVaeConfig::wan_2_2()
+            } else {
+                WanVaeConfig::wan_2_1()
+            }
+            .temporal_compression() as u32;
+            let fpb = dit.num_frames_per_block.max(1) as u32;
+            assert_eq!(r.block_frames, tc * fpb, "{id}");
+            let caps = m.caps();
+            // progress_steps reads the recipe's steps: the job cannot set them.
+            assert!(!caps.knobs.steps, "{id}");
+            let g = &caps.frames;
+            assert!(g.step > 0 && g.min > 0 && g.min <= g.max, "{id}: {g:?}");
+            let mut n = g.min;
+            while n <= g.max {
+                assert_eq!(r.blocks(n), ((n - 1) / tc + 1) / fpb, "{id}: {n} frames");
+                n += g.step;
+            }
             assert_eq!(m.describe().steps, Some(4), "{id}");
-            let frames = &m.caps().frames;
             assert_eq!(
-                (r.blocks(9), r.blocks(21), r.blocks(frames.default)),
+                (r.blocks(9), r.blocks(21), r.blocks(g.default)),
                 (1, 2, 7),
                 "{id}"
             );
             assert_eq!(m.progress_steps(9), Some(4), "{id}");
-            assert_eq!(m.progress_steps(frames.default), Some(28), "{id}");
+            assert_eq!(m.progress_steps(g.default), Some(28), "{id}");
         }
         let m = find(&cat, "fastwan21-1.3b").unwrap();
         let steps = m.describe().steps;

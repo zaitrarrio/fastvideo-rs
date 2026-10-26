@@ -692,9 +692,7 @@ impl EngineBackend for CudaBackend {
                     text_cache.as_ref().map(|c| c.join("wan")).as_deref(),
                     job,
                 )?;
-                // Every causal block's steps (CudaModel::progress_steps).
-                let planned =
-                    super::wan::planned_steps(&m.recipe.wan, job) * m.recipe.blocks(job.num_frames);
+                let planned = super::wan::planned_steps(&m.recipe.wan, job);
                 let pipe = m.pipe;
                 deliver(job, ctl, out, &opts, Some(planned), |h| {
                     super::wan::run_pipeline(pipe, &cfg, &work, h)

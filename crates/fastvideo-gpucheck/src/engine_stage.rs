@@ -204,7 +204,9 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
     // `steps`: the recipe's denoise steps (per causal block on SF-Wan; what
     // fv-lab compares with the gold file's `[workload] steps`). `events`:
     // the Progress events the job reports, every block's steps on a causal
-    // rollout (CudaModel::progress_steps).
+    // rollout (CudaModel::progress_steps). That count assumes the default
+    // causal settings (no FASTVIDEO_WAN_CAUSAL_FPB / _AR override), as the
+    // gold cells run.
     let want_steps = model.describe().steps.unwrap_or(0);
     let want_events = model.progress_steps(job.num_frames).unwrap_or(0);
     report.check(
