@@ -1,4 +1,4 @@
-# runpod-matrix.sh `oracle`, target fasth3-4step-vsa (docs/oracle.md; docs/adr/0019-fv-lab.md §14): the upstream
+# runpod-matrix.sh `oracle`, target fasth3-4step-vsa (docs/oracle.md; docs/adr/0019-fv-lab.md §15): the upstream
 # reference's dump (scripts/gpu/upstream/oracle.sh on an upstream pod, served under FV_ORACLE_URL) fetched
 # into {ref}, its noise and text conditioning injected into our run (FASTVIDEO_INJECT_DIR), our run dumped
 # the same way (FASTVIDEO_DUMP_DIR, blocks 0,1,24,47) and the two compared tensor by tensor (compare-dumps,

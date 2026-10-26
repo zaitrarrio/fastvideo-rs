@@ -342,10 +342,42 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["ltxvae-4k5s", "ltxvae-4k5s-untraced", "ltxvae-gen-4k5s", "ltxvae-1080p20s", "ltxvae-1080p20s-untraced", "ltxvae-gen-1080p20s"]
 
-# ---- D1d, second slice (docs/adr/0019-fv-lab.md §14): the determinism families
+# ---- D1e (docs/adr/0019-fv-lab.md §14): the port one-offs that still measure
+# something a served variant or an open item depends on, as tiers. Never a
+# runpod-matrix.sh family (scripts/gpu/fv-lab-retired.sh FV_LAB_EXPERIMENTS):
+# their commands are the experiment's own pod script's, cut from it and held
+# word for word by scripts/gpu/tests/fv-lab-experiment-goldens.sh and
+# tests/experiment_tiers.rs. The rtx6000 tier's pod.
+
+# Was scripts/gpu/experiments/h3-graphs-{validate,pod}.sh, its h3-turbo
+# checkpoint (FV_CKS=turbo), the open item of docs/perf/h3-denoise-graphs.md §5:
+# the lazy step clock (the default) and the opt-in CUDA graphs of the denoise
+# steps on the default H3 tier, timed and byte-compared with the per-step sync.
+# Every tree is on the EU volume (h3-base with its 4step-vsa MXFP8 DiT, the LoRA);
+# the experiment's NVFP4 checkpoints are R2-only and stay out until the
+# registry's hydrate (ADR-0019 §4).
+[[tier]]
+name = "h3-graphs"
+description = "H3 denoise launch overhead on h3-turbo at 768p: per-step sync, the lazy step clock and CUDA graphs of the steps, traced, timed and byte-compared (was experiments/h3-graphs, FV_CKS=turbo)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["h3-graphs-turbo-trace", "h3-graphs-turbo"]
+
+# ---- D1d, second slice (docs/adr/0019-fv-lab.md §15): the determinism families
 # and the oracle as tiers, each held equal to the script's dry run by a golden
 # (fv-lab-goldens.sh). Their runpod-matrix.sh branches stay until each one's GPU
-# check through both runners (§14.7). Every tier is the rtx6000 tier's pod, as
+# check through both runners (§15.7). Every tier is the rtx6000 tier's pod, as
 # runpod-http.sh gives every FV_FAMILY the same pod.
 
 # runpod-matrix.sh `det-short`: one cell per arm group of its default
@@ -392,7 +424,7 @@ cells = ["determinism-ltx-t2v", "determinism-ltx-i2v", "determinism-h3"]
 
 # runpod-matrix.sh `oracle` with FV_ORACLE_TARGETS naming its nine tensor-diff
 # targets (the clip-metric targets, ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,a2v-guided,
-# retake*,extend} and sfwan13, stay in the script, §14.6): one cell per target,
+# retake*,extend} and sfwan13, stay in the script, §15.6): one cell per target,
 # its reference fetched from FV_ORACLE_URL. cell_timeout_s 5400 as
 # scripts/gpu/oracle.sh passes FV_GEN_TIMEOUT_S. `pod up` needs FV_ORACLE_URL
 # (--extra-env) and --cells (the targets the upstream pods make).

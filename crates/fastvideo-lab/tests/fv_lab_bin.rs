@@ -835,7 +835,7 @@ fn the_tree_fetch_is_checked_before_any_pod_exists() {
     ]));
 }
 
-/// The oracle tier (ADR-0019 §14) reads upstream references: `pod up` refuses
+/// The oracle tier (ADR-0019 §15) reads upstream references: `pod up` refuses
 /// it without their URL or without `--cells` (a reference the upstream pods
 /// never make is waited for, FV_ORACLE_WAIT_S, on a GPU pod), and passes the
 /// URL to the run; the D1d families' script knobs are refused, not ignored.

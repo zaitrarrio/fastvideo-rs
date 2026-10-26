@@ -20,10 +20,10 @@
 //!   lpips-fetch.log             (FV_LPIPS=1)
 //!   <family>-<cell>.verdict.json, <family>.verdict.json, <cell>.<diff>,
 //!   <arm>/<evidence file>       (a cell's [verdict], D1d: b4a's files)
-//!   <prompt file>.json          (a cell's [[prompt_file]], D1d §14)
+//!   <prompt file>.json          (a cell's [[prompt_file]], D1d §15)
 //!   hashes.txt, determinism.txt, <arm>/hashes.{json,txt}, <arm>/digests.txt
-//!                               (a cell's [repeats], D1d §14)
-//!   ORACLE_REFS_DONE            (every [reference] of the run fetched, D1d §14)
+//!                               (a cell's [repeats], D1d §15)
+//!   ORACLE_REFS_DONE            (every [reference] of the run fetched, D1d §15)
 //! ```
 //!
 //! [`Runner::regate`] is `fv-lab gate`: the same gates and verdicts evaluated
@@ -315,7 +315,7 @@ fn dry_run_steps(cfg: &RunConfig, steps: &[Step], out: &mut Vec<String>) {
                 selected_cells(cfg, cells).join(" "),
                 cfg.runs().join(format!("{family}.verdict.json")).display()
             )),
-            // The script's dry `oracle_fetch` (D1d §14): the reference named,
+            // The script's dry `oracle_fetch` (D1d §15): the reference named,
             // nothing fetched, the target's commands logged.
             Step::Reference {
                 cell,

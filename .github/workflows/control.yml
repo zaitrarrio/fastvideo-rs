@@ -49,6 +49,11 @@ on:
       - "scripts/gpu/fv-lab-retired.sh"
       - "scripts/gpu/tests/fv-lab-route.test.sh"
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
+      # D1e (ADR-0019 §14): the experiment tiers' goldens, cut from the experiments' pod scripts
+      - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
+      - "scripts/gpu/experiments/**"
+      - "scripts/gpu/prompts-hd5.json"
+      - "scripts/gpu/prompts-h3-graphs-*.json"
       - "scripts/gpu/hd_report.py"
       - "scripts/gpu/timings.sh"
       # the report goldens' inputs (fixtures/report is under crates/fastvideo-lab/fixtures/**)
@@ -113,6 +118,11 @@ on:
       - "scripts/gpu/fv-lab-retired.sh"
       - "scripts/gpu/tests/fv-lab-route.test.sh"
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
+      # D1e (ADR-0019 §14): the experiment tiers' goldens, cut from the experiments' pod scripts
+      - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
+      - "scripts/gpu/experiments/**"
+      - "scripts/gpu/prompts-hd5.json"
+      - "scripts/gpu/prompts-h3-graphs-*.json"
       - "scripts/gpu/hd_report.py"
       - "scripts/gpu/timings.sh"
       # the report goldens' inputs (fixtures/report is under crates/fastvideo-lab/fixtures/**)
@@ -183,6 +193,9 @@ jobs:
       - name: fv-lab report goldens are what the report scripts print on committed run directories (ADR-0019 §13.2)
         working-directory: .
         run: bash scripts/gpu/tests/fv-lab-report-goldens.sh --check
+      - name: the experiment tiers run their one-off's own pod-script commands (ADR-0019 §14)
+        working-directory: .
+        run: bash scripts/gpu/tests/fv-lab-experiment-goldens.sh --check
       - name: runpod-http.sh routes the retired families to fv-lab, refusing what fv-lab would not honour (ADR-0019 §10)
         working-directory: .
         run: bash scripts/gpu/tests/fv-lab-route.test.sh

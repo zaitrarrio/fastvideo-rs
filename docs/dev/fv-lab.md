@@ -57,10 +57,11 @@ dry run show what will run.
 | `b4a` | `b4a-h3-*` (3) | 6 | the H3 TeaCache step cache, baseline binary vs this build: byte identity and equal cache decisions, a verdict per cell | D1d; needs `--baseline-sha`; retired after its GPU gate (§11.6) |
 | `precision-nvfp4` | `precision-nvfp4-ltx25-{4k5s,1080p20s}` | 4 | NVFP4 video FFN against bf16, LTX-2.5 Sol, compare + lossy gate | was `precision`'s `FV_PRECISION_ARM=ltx-nvfp4` mode; restored (§12) |
 | `ltxvae-gen` | `ltxvae`'s 4 + `ltxvae-gen-{4k5s,1080p20s}` | 16 | `ltxvae`, plus per workload a cold gen saving its latents and the streaming decoder on them | was `ltxvae`'s `FV_VAE_GEN=1`; restored (§12); shares `ltxvae`'s cells |
-| `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | byte identity across fresh processes at short configs, three runs per group and the timed-pick control; `determinism.txt` | D1d (§14); its script branch stays until its GPU check; `wan` skips on the EU volume |
-| `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | byte identity of 1080p runs within one process and across two; prompt sets as files, hashes per run, stage digests | D1d (§14); branch stays until its GPU check |
-| `oracle` | `oracle-<target>` (9) | 32 | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`) | D1d (§14); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; the clip-metric targets stay in the script |
+| `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | byte identity across fresh processes at short configs, three runs per group and the timed-pick control; `determinism.txt` | D1d (§15); its script branch stays until its GPU check; `wan` skips on the EU volume |
+| `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | byte identity of 1080p runs within one process and across two; prompt sets as files, hashes per run, stage digests | D1d (§15); branch stays until its GPU check |
+| `oracle` | `oracle-<target>` (9) | 32 | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; the clip-metric targets stay in the script |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)) |
+| `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`), [below](#port-one-offs-the-experiment-tiers) |
 
 All eleven above `precision-nvfp4` are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10; `b4a`
 §11.6): their `runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps the other families.
@@ -98,6 +99,26 @@ Their goldens are what the script wrote in that mode at `5987e6a4` (`scripts/gpu
 --check` reproduces them from git history), frozen from the start; fv-lab's dry run and pod equal them with the
 family named by the tier and without the mode's `FV_EXTRA_ENV` setting. `FV_VAE_TRACE=0` has no tier. NVFP4 needs
 sm_100 / sm_120: the tier is the PRO 6000, as the mode was.
+
+### Port one-offs: the experiment tiers
+
+D1e ([ADR-0019 §14](../adr/0019-fv-lab.md)) decided the ten port experiments F1 moved to `scripts/gpu/experiments/`:
+nine are deleted (finished; results in `docs/ports/*.md`, `docs/perf/*.md`, evidence in `artifacts/`, scripts in git at
+`22a5fd7b`), and `h3-graphs` is the tier above, for the open item of `docs/perf/h3-denoise-graphs.md` §5 (h3-turbo
+was never measured). Such a tier is listed in `FV_LAB_EXPERIMENTS` (`scripts/gpu/fv-lab-retired.sh`): never a
+`runpod-matrix.sh` family, so `runpod-http.sh run` / `all` refuse it as they refuse `gold`. Its commands are the
+experiment pod script's own:
+
+```sh
+bash scripts/gpu/tests/fv-lab-experiment-goldens.sh [--check]   # cut from h3-graphs-pod.sh: fixtures/experiments/h3-graphs-script.txt, the prompt sets
+./fv-lab run h3-graphs --dry-run                                 # fv-lab's own golden: fixtures/h3-graphs-dry-run.txt
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family h3-graphs --wall-cap-s 3600 \
+  --fetch-tree --fetch-skip '/frames/|\.cache$' --yes --wait    # the GPU check, ADR-0019 §14.4 (~35 min, ~$1.45)
+```
+
+`tests/experiment_tiers.rs` holds each arm to the script's command word for word after the path mapping of §14.3
+(the run directory for `/srv/…`, `frames/` for `clip/`, the tier's cache paths for `/fvw/…`, the committed prompt sets,
+the runner's cap for `timeout 2400`). The experiment's own scripts stay until that GPU check passes.
 
 ### `runpod-http.sh` for a retired tier
 
@@ -240,8 +261,8 @@ by `fv-lab run`, `pod up --extra-env` and `runpod-http.sh`'s `FV_EXTRA_ENV`: sel
 
 ## Determinism and the oracle (D1d, second slice)
 
-[ADR-0019 §14](../adr/0019-fv-lab.md). Three tiers keep their `runpod-matrix.sh` branches until each one's GPU check
-through both runners (§14.7); their goldens come from the live branches (`fv-lab-goldens.sh`).
+[ADR-0019 §15](../adr/0019-fv-lab.md). Three tiers keep their `runpod-matrix.sh` branches until each one's GPU check
+through both runners (§15.7); their goldens come from the live branches (`fv-lab-goldens.sh`).
 
 - **`[repeats]`** (det-short, determinism): after each arm its frames are hashed (`hash = "arm"`: one hash per arm,
   `<arm>/hashes.json` and `<runs>/hashes.txt`; `hash = "run"`: one per prompt-set run, `<arm>/hashes.txt` and the
@@ -275,7 +296,7 @@ up --extra-env` (the script still reads them): `FV_DET_CELLS`, `FV_DET_REPEATS`,
 `FV_DET_T2V_PROMPT`, `FV_DET_I2V_PROMPT`, `FV_ORACLE_TARGETS`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`,
 `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT`, and for `oracle` a `FASTVIDEO_DUMP_OPS` other than `0,1,24,47`. `pod fetch`
 takes `determinism.txt`, `hashes.txt` and each arm's `hashes.txt` / `digests.txt`; `fv-lab-compare-runs.sh` compares
-the hashes files byte for byte and each arm's `compare-dumps` lines. Still in the script (§14.6): the oracle's ffmpeg
+the hashes files byte for byte and each arm's `compare-dumps` lines. Still in the script (§15.6): the oracle's ffmpeg
 clip-metric targets (`ltx25-{i2v,kf,ref2v,a2v*,retake*,extend}`, `sfwan13`), `FV_ORACLE_OWN_TEXT=1`, det-short's
 `ltx-sol`, and `runpod-http.sh upstream` (the reference pods; it moves with an `fv-lab oracle` driver).
 
@@ -412,6 +433,7 @@ artifact. It needs the `RUNPOD_API_KEY` repository secret, which is the owner's 
 bash scripts/gpu/tests/fv-lab-goldens.sh           # regenerate crates/fastvideo-lab/fixtures/ from the scripts
 bash scripts/gpu/tests/fv-lab-goldens.sh --check   # CI (control.yml)
 bash scripts/gpu/tests/fv-lab-report-goldens.sh [--check]   # the reports' fixtures (fixtures/report/, ADR-0019 §13.2)
+bash scripts/gpu/tests/fv-lab-experiment-goldens.sh [--check]   # the experiment tiers' commands (ADR-0019 §14.3)
 ```
 
 The report goldens are the report scripts' output on committed run directories (`python3 -I`, `env -i`,
@@ -435,6 +457,8 @@ gate, ADR-0019 §11.6), and so are the two
 restored modes (`precision-nvfp4`, `ltxvae-gen`), whose fixtures come from the script at `5987e6a4` in that mode
 (`FV_LAB_RESTORED` in `fv-lab-retired.sh`; `fv-lab-restored-goldens.sh --check` reproduces them); `gold` was never a
 script family (only its pod body comes from `runpod-http.sh plan`). The `gold` tier is no script family: only its pod body is written there, and its dry run is fv-lab's own golden
-(`fixtures/gold-dry-run.txt`, `tests/gold_tier.rs`). Once, there is also its `frames_digest` of a sample. A new tier fails
+(`fixtures/gold-dry-run.txt`, `tests/gold_tier.rs`). The experiment tiers (`FV_LAB_EXPERIMENTS`, D1e) are the same: only
+their pod body is written there, their dry run is fv-lab's own golden (`fixtures/<tier>-dry-run.txt`) and
+`fv-lab-experiment-goldens.sh` holds their commands to the experiment's pod script (`tests/experiment_tiers.rs`). Once, there is also its `frames_digest` of a sample. A new tier fails
 `--check` until its fixtures are written; `tests/{dry_run,payload_golden,frames_digest,fv_lab_bin}.rs` hold fv-lab to
 them. The script runs every script under `env -i`, so your `FV_*` / `RUNPOD_*` settings do not leak in.

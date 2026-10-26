@@ -29,7 +29,7 @@
 #     are compared as sets: fv-lab lists the cells in the tier's order, the
 #     script in FV_B4A_CELLS's (ADR-0019 §11.5; a script run of b4a from
 #     before its branch was deleted, §11.6).
-# and for every file of the determinism families' hashes (D1d, ADR-0019 §14:
+# and for every file of the determinism families' hashes (D1d, ADR-0019 §15:
 # the run's determinism.txt and hashes.txt, each arm's hashes.txt and
 # hashes.json; `det-short`, `determinism`) of either run:
 #   - the file exists in both and is byte-identical (pure functions of the

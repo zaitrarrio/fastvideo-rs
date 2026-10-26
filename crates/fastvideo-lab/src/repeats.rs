@@ -1,4 +1,4 @@
-//! Frame-hash equality across repeats (docs/adr/0019-fv-lab.md §14): the
+//! Frame-hash equality across repeats (docs/adr/0019-fv-lab.md §15): the
 //! hashes and the report the `det-short` and `determinism` families of
 //! `scripts/gpu/runpod-matrix.sh` write, ported byte for byte, and the typed
 //! verdict the script left to a reader of `determinism.txt`.

@@ -1,4 +1,4 @@
-# runpod-matrix.sh `det-short` (docs/perf/determinism.md "Results"; docs/adr/0019-fv-lab.md §14):
+# runpod-matrix.sh `det-short` (docs/perf/determinism.md "Results"; docs/adr/0019-fv-lab.md §15):
 # the ltx-sage arm group, run three times (r1, r2, r3) in a fresh process each with its own caches (FASTVIDEO_CACHE and
 # XDG_CACHE_HOME under the arm), (no timed control: Sage takes the long shapes, so the timed pick only
 # moves cross-attention); every arm's frames hashed after it (sh_hash, `[repeats]`

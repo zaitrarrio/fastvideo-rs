@@ -1,0 +1,64 @@
+# The h3-graphs experiment's h3-turbo cells (scripts/gpu/experiments/h3-graphs-pod.sh, step `cells`, checkpoint
+# `turbo`; docs/perf/h3-denoise-graphs.md §5: "h3-turbo (MXFP8, 768p) was not measured"; docs/adr/0019-fv-lab.md
+# §14): one warm process per arm over the script's 768p prompt set (h3-demo and spark-mountain-lake, three requests
+# each, seed 1024, 124 frames), the arms
+#   sync    FASTVIDEO_H3_STEP_SYNC=1: a synchronize after every step (the timing before the lazy step clock)
+#   lazy    no setting: the default lazy step clock (`env = []`, the script's bare `env`)
+#   graphs  FASTVIDEO_H3_GRAPHS=1: per request shape, the 1st request eager, the 2nd captured, later ones replayed
+# and every request's frames compared lazy -> sync and lazy -> graphs with --off-identity (one report per request
+# directory): the experiment's byte identity, which its hash step checked with sha256 over the PNGs and WAV.
+# The commands are the pod script's, word for word, with its paths mapped (ADR-0019 §14.3; tests/experiment_tiers.rs
+# against fixtures/experiments/h3-graphs-script.txt); the prompts file is the script's own prep output.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "h3-graphs-turbo"
+description = "h3-turbo (FastH3 4-step VSA, MXFP8) at 1344x768: per-step sync vs the lazy step clock vs CUDA graphs of the steps, timed warm, byte identity (the h3-graphs experiment's cells)"
+
+[workload]
+model = "h3"
+prompt_set = "scripts/gpu/prompts-h3-graphs-768.json"
+frames = 124
+width = 1344
+height = 768
+note = "The prompt set carries each request's prompt, seed (1024) and canvas; --height / --width size --warm's untimed first request (the set's first prompt). `--prompt unused` is the script's: gen requires one and the set replaces it. All three arms share the trace cell's AdaLN and text caches, as the script's did (one binary)."
+
+[lists]
+h3_graphs = ["--mode", "fast", "--techniques", "h3/fasth3_4step_vsa", "--out", "{runs}/{arm}/report", "h3", "gen",
+  "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa", "--adaln-cache", "{runs}/h3-graphs-turbo-adaln.cache",
+  "--height", "{height}", "--width", "{width}", "--text-encoder", "streamed", "--text-weights", "{weights}/h3-base",
+  "--text-cache", "{scratch}/h3-graphs-text-cache", "--no-mp4", "--num-frames", "{frames}", "--prompt", "unused",
+  "--prompts", "{prompt_set}", "--clip-dir", "{runs}/{arm}/frames", "--warm"]
+
+[[arm]]
+name = "h3-graphs-turbo-sync"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+env = ["FASTVIDEO_H3_STEP_SYNC=1"]
+argv = ["{@h3_graphs}"]
+
+[[arm]]
+name = "h3-graphs-turbo-lazy"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+env = []
+argv = ["{@h3_graphs}"]
+
+[[arm]]
+name = "h3-graphs-turbo-graphs"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+env = ["FASTVIDEO_H3_GRAPHS=1"]
+argv = ["{@h3_graphs}"]
+
+[[compare]]
+baseline = "h3-graphs-turbo-lazy"
+candidate = "h3-graphs-turbo-sync"
+args = ["--off-identity"]
+
+[[compare]]
+baseline = "h3-graphs-turbo-lazy"
+candidate = "h3-graphs-turbo-graphs"
+args = ["--off-identity"]

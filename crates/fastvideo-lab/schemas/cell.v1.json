@@ -43,14 +43,14 @@
       "type": "string"
     },
     "prompt_file": {
-      "description": "Prompt-set files written into the run directory before the cell's\nfirst arm (D1d §14, the `determinism` family's `det_set`).",
+      "description": "Prompt-set files written into the run directory before the cell's\nfirst arm (D1d §15, the `determinism` family's `det_set`).",
       "type": "array",
       "items": {
         "$ref": "#/$defs/PromptFile"
       }
     },
     "reference": {
-      "description": "The upstream reference dump the cell's arms read as `{ref}` (D1d §14,\nthe `oracle` family): fetched before the cell's first arm\n([`Reference`]).",
+      "description": "The upstream reference dump the cell's arms read as `{ref}` (D1d §15,\nthe `oracle` family): fetched before the cell's first arm\n([`Reference`]).",
       "anyOf": [
         {
           "$ref": "#/$defs/Reference"
@@ -61,7 +61,7 @@
       ]
     },
     "repeats": {
-      "description": "Frame-hash equality across the cell's repeated arms (D1d §14, the\n`det-short` / `determinism` families' hashes and `determinism.txt`).",
+      "description": "Frame-hash equality across the cell's repeated arms (D1d §15, the\n`det-short` / `determinism` families' hashes and `determinism.txt`).",
       "anyOf": [
         {
           "$ref": "#/$defs/Repeats"
@@ -141,7 +141,7 @@
           }
         },
         "gate": {
-          "description": "The `verify-weights.sh` cell that must pass before the arm runs (an\nincomplete tree is recorded as skipped, not run). Absent: an ungated\narm (the script's bare `run_cell`, D1d §14: `compare-dumps`), which\nreads no weight tree.",
+          "description": "The `verify-weights.sh` cell that must pass before the arm runs (an\nincomplete tree is recorded as skipped, not run). Absent: an ungated\narm (the script's bare `run_cell`, D1d §15: `compare-dumps`), which\nreads no weight tree.",
           "type": [
             "string",
             "null"
@@ -428,7 +428,7 @@
       ]
     },
     "Reference": {
-      "description": "The reference of an oracle cell (docs/adr/0019-fv-lab.md §14): what an\nupstream pod made for `oracle-<target>` (`scripts/gpu/upstream/oracle.sh`),\nserved under `FV_ORACLE_URL` as `oracle-<target>/oracle-dump.tar` once\n`oracle-<target>/ORACLE_DONE` exists. The runner fetches it (in the\nbackground from the start of the run, as the script's prefetch) into\n`<scratch>/oracle-ref/<target>/`, the arms read `{ref}`\n(`<scratch>/oracle-ref/<target>/dump`). Unavailable (no URL, not finished\nwithin `FV_ORACLE_WAIT_S`, a failed download): the cell's first arm is\nrecorded as skipped (`reference dump unavailable`) and nothing else of the\ncell runs. After the cell, the reference and every arm's `fresh` path are\nremoved (the dumps are hundreds of MB).",
+      "description": "The reference of an oracle cell (docs/adr/0019-fv-lab.md §15): what an\nupstream pod made for `oracle-<target>` (`scripts/gpu/upstream/oracle.sh`),\nserved under `FV_ORACLE_URL` as `oracle-<target>/oracle-dump.tar` once\n`oracle-<target>/ORACLE_DONE` exists. The runner fetches it (in the\nbackground from the start of the run, as the script's prefetch) into\n`<scratch>/oracle-ref/<target>/`, the arms read `{ref}`\n(`<scratch>/oracle-ref/<target>/dump`). Unavailable (no URL, not finished\nwithin `FV_ORACLE_WAIT_S`, a failed download): the cell's first arm is\nrecorded as skipped (`reference dump unavailable`) and nothing else of the\ncell runs. After the cell, the reference and every arm's `fresh` path are\nremoved (the dumps are hundreds of MB).",
       "type": "object",
       "properties": {
         "target": {
@@ -457,7 +457,7 @@
       ]
     },
     "Repeats": {
-      "description": "Frame-hash equality across repeats (docs/adr/0019-fv-lab.md §14): after\neach arm of the cell its frames are hashed ([`RepeatHash`]) and all but\n`keep` deleted; after every cell, `<runs>/determinism.txt` reports each\nhash against the reference's (`IDENTICAL` / `DIFFERENT`), as the script\nwrites it. The verdict (fv-lab's; the script only reports): the cell\npasses when the reference has frames and every hash of the `judged` arms\nequals it; `controls` are reported, not judged (the timed-pick control,\nwhich may differ by design); a reference arm that did not run (skipped)\nleaves the cell undecided.",
+      "description": "Frame-hash equality across repeats (docs/adr/0019-fv-lab.md §15): after\neach arm of the cell its frames are hashed ([`RepeatHash`]) and all but\n`keep` deleted; after every cell, `<runs>/determinism.txt` reports each\nhash against the reference's (`IDENTICAL` / `DIFFERENT`), as the script\nwrites it. The verdict (fv-lab's; the script only reports): the cell\npasses when the reference has frames and every hash of the `judged` arms\nequals it; `controls` are reported, not judged (the timed-pick control,\nwhich may differ by design); a reference arm that did not run (skipped)\nleaves the cell undecided.",
       "type": "object",
       "properties": {
         "controls": {

@@ -1,4 +1,4 @@
-//! D1d's second slice (docs/adr/0019-fv-lab.md §14) against the script it
+//! D1d's second slice (docs/adr/0019-fv-lab.md §15) against the script it
 //! moves: `runpod-matrix.sh det-short`, `determinism` and `oracle` (their live
 //! branches, copied with what they source into a fake root) and `fv-lab run`
 //! of the committed tiers, on one fake box: a fake fv-gpucheck that writes
@@ -423,7 +423,7 @@ fn det_short_hashes_and_report_as_the_script() {
 #[test]
 fn determinism_hashes_runs_and_reports_as_the_script() {
     // `noh3`: the h3 model's arms skip on their weights, so its reference
-    // arm has no run1 hashes (the script ended the family there before §14).
+    // arm has no run1 hashes (the script ended the family there before §15).
     for mode in ["", "flaky", "noh3"] {
         let f = fake(&format!("determinism{mode}"), mode);
         let s = script_run(&f, "determinism");

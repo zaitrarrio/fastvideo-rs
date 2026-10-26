@@ -59,7 +59,7 @@ pub const MODE_KNOBS: [&str; 11] = [
     "FV_B4A_CELLS",
 ];
 
-/// The knobs of the families D1d's second slice made tiers (ADR-0019 §14:
+/// The knobs of the families D1d's second slice made tiers (ADR-0019 §15:
 /// `det-short`, `determinism`, `oracle`) while their `runpod-matrix.sh`
 /// branches stay (until their GPU checks): the script reads them, no tier
 /// does. fv-lab refuses them; `runpod-http.sh`'s `FV_LAB_NOT_READ` gains them
@@ -138,23 +138,23 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
     }
     if key == "FV_DET_CELLS" || key == "FV_ORACLE_TARGETS" {
         return Some(format!(
-            "{key}: fv-lab selects by arm: pass --cells (FV_CELLS) with the arms of those groups or targets, one cell each (ADR-0019 §14)"
+            "{key}: fv-lab selects by arm: pass --cells (FV_CELLS) with the arms of those groups or targets, one cell each (ADR-0019 §15)"
         ));
     }
     if key == "FV_ORACLE_PREFETCH" {
         return Some(
-            "FV_ORACLE_PREFETCH: fv-lab always fetches the references in the background (ADR-0019 §14)"
+            "FV_ORACLE_PREFETCH: fv-lab always fetches the references in the background (ADR-0019 §15)"
                 .to_owned(),
         );
     }
     if SCRIPT_KNOBS.contains(&key) {
         return Some(format!(
-            "{key}: no tier reads it; the det-short, determinism and oracle tiers are the script's defaults (ADR-0019 §14)"
+            "{key}: no tier reads it; the det-short, determinism and oracle tiers are the script's defaults (ADR-0019 §15)"
         ));
     }
     if key == "FASTVIDEO_DUMP_OPS" && tier == Some("oracle") && value != ORACLE_DUMP_OPS {
         return Some(format!(
-            "FASTVIDEO_DUMP_OPS={value}: the oracle cells dump blocks {ORACLE_DUMP_OPS} (each arm sets it; ADR-0019 §14)"
+            "FASTVIDEO_DUMP_OPS={value}: the oracle cells dump blocks {ORACLE_DUMP_OPS} (each arm sets it; ADR-0019 §15)"
         ));
     }
     if BY_ARM.contains(&key) {

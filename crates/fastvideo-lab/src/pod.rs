@@ -1145,7 +1145,7 @@ fn tree_dir(
 /// directory (`top`) a verdict (`*.verdict.json`), an evidence diff (`*.diff`)
 /// or the run's arm selection (`*.arms.json`); in an arm's directory an
 /// evidence file (`*-evidence.log`). And the repeats' (`plan::Repeats`, D1d
-/// §14): `hashes.txt` and `determinism.txt` in the run directory, an arm's
+/// §15): `hashes.txt` and `determinism.txt` in the run directory, an arm's
 /// `hashes.txt` and `digests.txt` (its `hashes.json` is taken as every JSON).
 pub fn is_verdict_file(name: &str, top: bool) -> bool {
     if top {

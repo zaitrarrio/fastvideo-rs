@@ -27,7 +27,20 @@ FV_LAB_RETIRED="rtx6000 techniques b6 rtx5090 fastvideo h3arms trace ltxfps ltxv
 # runpod-http.sh refuses <K=V> in FV_EXTRA_ENV and names the tier.
 FV_LAB_RESTORED="precision-nvfp4:precision:FV_PRECISION_ARM=ltx-nvfp4 ltxvae-gen:ltxvae:FV_VAE_GEN=1"
 
+# Tiers made from a port one-off of scripts/gpu/experiments/ (ADR-0019 §14,
+# D1e): never runpod-matrix.sh families. Their commands are the experiment pod
+# script's own, cut from it by tests/fv-lab-experiment-goldens.sh; their dry
+# run is fv-lab's own golden (fixtures/<tier>-dry-run.txt) and their pod body
+# runpod-http.sh plan's, like the `gold` tier's. runpod-http.sh refuses `run`
+# and `all` for them and names the fv-lab command.
+FV_LAB_EXPERIMENTS="h3-graphs"
+
 # fv_lab_retired <family>: true when the family is fv-lab only.
 fv_lab_retired() {
   [[ " $FV_LAB_RETIRED " == *" ${1:-} "* ]]
+}
+
+# fv_lab_experiment <tier>: true for a tier made from a port one-off.
+fv_lab_experiment() {
+  [[ " $FV_LAB_EXPERIMENTS " == *" ${1:-} "* ]]
 }

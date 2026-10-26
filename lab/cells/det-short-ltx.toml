@@ -1,4 +1,4 @@
-# runpod-matrix.sh `det-short` (docs/perf/determinism.md "Results"; docs/adr/0019-fv-lab.md §14):
+# runpod-matrix.sh `det-short` (docs/perf/determinism.md "Results"; docs/adr/0019-fv-lab.md §15):
 # the ltx arm group, run three times (r1, r2, r3) in a fresh process each with its own caches (FASTVIDEO_CACHE and
 # XDG_CACHE_HOME under the arm), then once more with FASTVIDEO_SDPA_AUTO=timed (the old per-process timed pick: the speed
 # baseline, reported, not judged); every arm's frames hashed after it (sh_hash, `[repeats]`

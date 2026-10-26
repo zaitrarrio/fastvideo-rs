@@ -12,7 +12,7 @@ keeps bf16 VSA. Every other DiT is unchanged.
 | taken when | the DiT is a ModelOpt NVFP4 `transformer/` (`h3::nvfp4::is_modelopt_dir`) **and** the device is sm_120 with the kernel loaded; otherwise bf16 VSA (logged). An explicit `=1` on any other DiT logs that it is ignored; on an NVFP4 DiT without the kernel it refuses to load |
 | code | `crates/fastvideo-cudarc/src/wan/attn_fp4.{cu,rs}` (kernels, host twins), `h3/vsa.rs` (`H3Vsa::with_fp4`), `h3/pipeline.rs` (`vsa_fp4_choice`), `build.rs` (an sm_120a cubin) |
 | checks | `fv-gpucheck kernels --groups h3_fp4_attn` (`crates/fastvideo-gpucheck/src/kernels_fp4.rs`) |
-| GPU runs | `scripts/gpu/experiments/h3-fp4attn-validate.sh` + `h3-fp4attn-pod.sh` |
+| GPU runs | `scripts/gpu/experiments/h3-fp4attn-validate.sh` + `h3-fp4attn-pod.sh` (deleted in D1e, docs/adr/0019-fv-lab.md §14; in git at `22a5fd7b`) |
 
 ## 1. The reference: what upstream actually does
 
@@ -202,6 +202,8 @@ softer (sharpness 0.92) and has less frame-to-frame change (jitter 0.84), each j
 prompt and one seed were measured; the five-prompt gate was not run within the budget. It stays an opt-in speed
 tier for the NVFP4 checkpoints, which already fail the gate against bf16 and against upstream (docs/ports/fasth3-nvfp4.md
 §6).
+
+Until PR #201 (`claude/lab-r2-weights`, the gold tier on `volume+r2` weights) is merged and the gold run is done, the reproduction of §3.3-§3.4's numbers is `git show 22a5fd7b:scripts/gpu/experiments/h3-fp4attn-{validate,pod}.sh` (deleted in D1e, docs/adr/0019-fv-lab.md §14.2): the trees are R2-only, and the `gold` tier on the EU volume skips them.
 
 ### 3.5 Cost
 

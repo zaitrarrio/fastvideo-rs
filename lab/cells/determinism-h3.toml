@@ -1,4 +1,4 @@
-# runpod-matrix.sh `determinism` (docs/perf/determinism.md; docs/adr/0019-fv-lab.md §14): FastH3 4-step VSA at 1088x1920 5 s (without the text cache, so its second
+# runpod-matrix.sh `determinism` (docs/perf/determinism.md; docs/adr/0019-fv-lab.md §15): FastH3 4-step VSA at 1088x1920 5 s (without the text cache, so its second
 # run re-encodes after `auto` released the resident encoder),
 # run twice in one process (prompt set h3-ab.json: run1, run2), once in a second process (h3-c.json:
 # run3) and once more with FASTVIDEO_SDPA_AUTO=timed (the old per-process timed pick, on h3-ab.json: the

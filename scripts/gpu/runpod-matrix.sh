@@ -2264,7 +2264,7 @@ Audio: male speech, clear voice, quiet room"
     }
     # args_<arm> <cell dir>: that arm's command for one run, into ARGS, and
     # its own settings into ENVS (one flat `env` with the run's caches before
-    # them: fv-lab's det-short cells, docs/adr/0019-fv-lab.md §14).
+    # them: fv-lab's det-short cells, docs/adr/0019-fv-lab.md §15).
     args_h3() {
       ENVS=()
       ARGS=("$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense --seconds 5

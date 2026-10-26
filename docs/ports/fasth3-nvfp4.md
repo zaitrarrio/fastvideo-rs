@@ -70,7 +70,7 @@ One RTX PRO 6000 Blackwell Server Edition (EU-NL-1, driver 595.91, CUDA 13.2), i
 `ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo-nvfp4:sha-056aa71` (FastVideo `d5253fd`, fastvideo-kernel built for
 sm_120a with the SageAttention3 FP4 kernels against CUTLASS `e67e63c`), and this branch's `fv-gpucheck` (`3d8e52b`)
 with the runtime's CUDA 13.4 libraries. Both sides ran on the same pod:
-`scripts/gpu/experiments/fasth3-nvfp4-validate.sh up <image> <bin>` and `scripts/gpu/experiments/fasth3-nvfp4-pod.sh`. Weights came from R2
+`scripts/gpu/experiments/fasth3-nvfp4-validate.sh up <image> <bin>` and `scripts/gpu/experiments/fasth3-nvfp4-pod.sh` (deleted in D1e, docs/adr/0019-fv-lab.md §14; in git at `22a5fd7b`). Weights came from R2
 (185 GB at ~180 MB/s from EU-NL-1 to the WNAM bucket, 17 min). Results are in `artifacts/ports/fasth3-nvfp4/run-2026-10-14/`
 (`summary.md` from `scripts/gpu/experiments/fasth3-nvfp4-summary.py`, now `fv-lab report summary --kind fasth3-nvfp4 DIR --json OUT`). Every step passed (`status.tsv`).
 

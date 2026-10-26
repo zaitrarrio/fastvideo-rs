@@ -60,7 +60,7 @@ fn trees_and_gates_exist() {
     }
     for c in script_cells(&lab) {
         for a in &c.arms {
-            // An ungated arm (D1d §14: compare-dumps) reads no tree.
+            // An ungated arm (D1d §15: compare-dumps) reads no tree.
             let Some(gate) = &a.gate else {
                 assert!(a.trees.is_empty(), "{}: ungated with trees", a.name);
                 continue;
@@ -103,7 +103,7 @@ fn the_trees_tiers_lack_on_the_eu_volume_are_h3_8step_and_fastwan22() {
     // FV_EU_VOLUME_TREES): the GPU runs exercise every arm but these, which
     // both runners record as skipped there: h3-8step (R2-only since
     // 2026-10-13; rtx6000, the D1b families, the oracle's fasth3-8step
-    // cells) and fastwan22-ti2v-5b (det-short's wan group, ADR-0019 §14).
+    // cells) and fastwan22-ti2v-5b (det-short's wan group, ADR-0019 §15).
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let eu: BTreeSet<String> = parse_eu_trees(&read("scripts/gpu/volumes.sh"))
         .into_iter()

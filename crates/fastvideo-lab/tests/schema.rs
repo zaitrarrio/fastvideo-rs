@@ -182,7 +182,7 @@ fn run_plan_schemas_are_strict_and_name_their_fields() {
             ("Evidence", vec!["file", "lines", "strip", "diff"]),
             ("LineCount", vec!["what", "lines", "min", "why"]),
             ("Identical", vec!["baseline", "candidate", "why"]),
-            // D1d's second slice (ADR-0019 §14).
+            // D1d's second slice (ADR-0019 §15).
             ("Reference", vec!["target"]),
             ("PromptFile", vec!["file", "names"]),
             (

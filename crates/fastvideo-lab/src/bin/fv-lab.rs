@@ -568,7 +568,7 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
         .baseline_sha
         .clone()
         .or_else(|| env_nonempty("FV_BASELINE_SHA"));
-    // The oracle cells' references (ADR-0019 §14): the upstream pods' base
+    // The oracle cells' references (ADR-0019 §15): the upstream pods' base
     // URLs, space or comma separated (a comma is what `pod up --extra-env`
     // can carry), and how long a reference may take there.
     cfg.oracle_urls = env_nonempty("FV_ORACLE_URL")
@@ -906,7 +906,7 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         Lab::needs_baseline(&cells),
     )
     .map_err(|e| format!("tier `{}`: {e}", t.name))?;
-    // A tier of oracle cells reads upstream references (ADR-0019 §14):
+    // A tier of oracle cells reads upstream references (ADR-0019 §15):
     // without their URL every cell is skipped, and a reference the upstream
     // pods never make is waited for (FV_ORACLE_WAIT_S, 3 h) on a GPU pod.
     if cells.iter().any(|c| c.reference.is_some()) {

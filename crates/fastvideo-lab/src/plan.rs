@@ -283,22 +283,22 @@ pub struct CellFile {
     /// pass / fail file after its compares ([`Verdict`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
-    /// The upstream reference dump the cell's arms read as `{ref}` (D1d §14,
+    /// The upstream reference dump the cell's arms read as `{ref}` (D1d §15,
     /// the `oracle` family): fetched before the cell's first arm
     /// ([`Reference`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<Reference>,
     /// Prompt-set files written into the run directory before the cell's
-    /// first arm (D1d §14, the `determinism` family's `det_set`).
+    /// first arm (D1d §15, the `determinism` family's `det_set`).
     #[serde(default, rename = "prompt_file", skip_serializing_if = "Vec::is_empty")]
     pub prompt_files: Vec<PromptFile>,
-    /// Frame-hash equality across the cell's repeated arms (D1d §14, the
+    /// Frame-hash equality across the cell's repeated arms (D1d §15, the
     /// `det-short` / `determinism` families' hashes and `determinism.txt`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeats: Option<Repeats>,
 }
 
-/// The reference of an oracle cell (docs/adr/0019-fv-lab.md §14): what an
+/// The reference of an oracle cell (docs/adr/0019-fv-lab.md §15): what an
 /// upstream pod made for `oracle-<target>` (`scripts/gpu/upstream/oracle.sh`),
 /// served under `FV_ORACLE_URL` as `oracle-<target>/oracle-dump.tar` once
 /// `oracle-<target>/ORACLE_DONE` exists. The runner fetches it (in the
@@ -347,7 +347,7 @@ pub enum RepeatHash {
     Run,
 }
 
-/// Frame-hash equality across repeats (docs/adr/0019-fv-lab.md §14): after
+/// Frame-hash equality across repeats (docs/adr/0019-fv-lab.md §15): after
 /// each arm of the cell its frames are hashed ([`RepeatHash`]) and all but
 /// `keep` deleted; after every cell, `<runs>/determinism.txt` reports each
 /// hash against the reference's (`IDENTICAL` / `DIFFERENT`), as the script
@@ -630,7 +630,7 @@ pub struct Arm {
     pub name: String,
     /// The `verify-weights.sh` cell that must pass before the arm runs (an
     /// incomplete tree is recorded as skipped, not run). Absent: an ungated
-    /// arm (the script's bare `run_cell`, D1d §14: `compare-dumps`), which
+    /// arm (the script's bare `run_cell`, D1d §15: `compare-dumps`), which
     /// reads no weight tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<String>,
@@ -1100,7 +1100,7 @@ impl CellFile {
         Ok(())
     }
 
-    /// An arm's `fresh`, `requires` and `echo` (D1d §14).
+    /// An arm's `fresh`, `requires` and `echo` (D1d §15).
     fn validate_arm_paths(
         &self,
         arm: &Arm,
@@ -1164,7 +1164,7 @@ impl CellFile {
         Ok(())
     }
 
-    /// `[reference]`, `[[prompt_file]]` and `[repeats]` (D1d §14).
+    /// `[reference]`, `[[prompt_file]]` and `[repeats]` (D1d §15).
     fn validate_d1d(&self, file: &str) -> Result<(), LabError> {
         // A reference cell runs as its own step: a verdict on it would never
         // be evaluated.
@@ -1566,7 +1566,7 @@ pub enum Step {
         family: String,
         cells: Vec<VerdictCellArms>,
     },
-    /// A cell with a [`Reference`] (D1d §14): the reference fetched into
+    /// A cell with a [`Reference`] (D1d §15): the reference fetched into
     /// `dir` (`dir/dump` is `{ref}`), then the cell's steps, then `dir` and
     /// `remove` deleted. Run only when one of `arms` is selected.
     Reference {

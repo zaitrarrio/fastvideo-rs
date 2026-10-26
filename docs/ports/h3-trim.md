@@ -95,7 +95,7 @@ PSNR 50 dB; docs/perf/h3-vae-decode-speed.md §6).
 | `crates/fastvideo-engine-service/src/cuda/caps.rs` | catalog `fasth3-trim-8step` (served `h3-trim`; `recipe = "trim-8step"` / `"h3-trim"`), weights `fasth3-trim-8step` + `text_weights` h3-base, VSA (not dense), T2V only, untiered |
 | `configs/serve/runpod-h3-trim.toml` | the worker config (openai_videos, minimax, fal, native) |
 | `control/` | preset `fasth3-trim` (weights `fasth3-trim-8step` + `h3-base`, prequant `h3-base/text_encoder_fp8`), `RECIPE_TREES["h3-trim"]`, catalog / serverless recipe tables, Brev tree size |
-| `scripts/gpu/` | `weights-manifest.tsv` / `weights-revisions.tsv` / `weights-sha256.tsv` / `weights-r2.tsv` rows, `verify-weights.sh` cells `fasth3-trim-8step` and `fasth3-trim-8step-nvfp4`, `r2-publish-hub.sh` (Hub -> R2 from a CPU pod), `experiments/h3-trim-validate.sh` + `experiments/h3-trim-pod.sh` (§6), `upstream/av_psnr.py` |
+| `scripts/gpu/` | `weights-manifest.tsv` / `weights-revisions.tsv` / `weights-sha256.tsv` / `weights-r2.tsv` rows, `verify-weights.sh` cells `fasth3-trim-8step` and `fasth3-trim-8step-nvfp4`, `r2-publish-hub.sh` (Hub -> R2 from a CPU pod), `experiments/h3-trim-validate.sh` + `experiments/h3-trim-pod.sh` (§6; deleted in D1e, docs/adr/0019-fv-lab.md §14; in git at `22a5fd7b`), `upstream/av_psnr.py` |
 
 Tests (§6.4 has the counts): `fastvideo-cudarc` `h3::manifest_tests` (every Trim DiT and VAE key requested with its
 published shape, none left over, the dtypes), `h3::pipeline` (the Hub's own config files parse into the port's
@@ -194,7 +194,7 @@ Low-nibble-first or a row-major scale reading gives 0.72-1.45; `fc1` read in the
 | `crates/fastvideo-engine-service/src/cuda/caps.rs`, `configs/serve/runpod-h3-trim-nvfp4.toml` | catalog `fasth3-trim-nvfp4` (untiered, T2V only, served `h3-trim-nvfp4`); the worker config |
 | `control/` | preset `fasth3-trim-nvfp4` (weights `fasth3-trim-8step`, `fasth3-trim-8step-nvfp4`, `h3-base`; prequant `h3-base/text_encoder_fp8`; R2 by default), `RECIPE_TREES["h3-trim-nvfp4"]`, catalog / serverless tables, Brev tree size, `scripts/serve/variants.sh` |
 | `fv-gpucheck` | `h3 gen --nvfp4-dit`; `kernels --groups nvfp4_linear` check `nvfp4_published_stack_matches_host` |
-| `scripts/gpu/experiments/h3-trim-nvfp4-{validate,pod}.sh`, `h3-trim-nvfp4-plan.py`, `h3-trim-nvfp4-summary.py` (since D1c `fv-lab report summary --kind h3-trim-nvfp4`) | §5.4 |
+| `scripts/gpu/experiments/h3-trim-nvfp4-{validate,pod}.sh`, `h3-trim-nvfp4-plan.py` (deleted in D1e, docs/adr/0019-fv-lab.md §14; in git at `22a5fd7b`), `h3-trim-nvfp4-summary.py` (since D1c `fv-lab report summary --kind h3-trim-nvfp4`) | §5.4 |
 
 **Hardware.** The GEMM is cuBLASLt `VEC16_UE4M3`, which exists on sm_100 / sm_120 only. On any other GPU (or a CPU
 build) the load fails with "the published NVFP4 DiT runs only on NVFP4 tensor cores ... No bf16 fallback"; the
@@ -218,7 +218,7 @@ m = 300) PASS, rel-L2 1.66e-3 against exact host math (limit 4e-3). `control`: `
 
 ### 5.4 GPU validation (RTX PRO 6000 Blackwell, EU-RO-1, 2026-10-14)
 
-`scripts/gpu/experiments/h3-trim-nvfp4-validate.sh up ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-b407063` (this branch's runtime
+`scripts/gpu/experiments/h3-trim-nvfp4-validate.sh up ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-b407063` (deleted in D1e, docs/adr/0019-fv-lab.md §14; in git at `22a5fd7b`; this branch's runtime
 image; the R2 plan from the read-only key passed in the pod's env, nothing staged in R2), EU volume for h3-base (read
 only), the two Trim trees from R2 (54 GB in 51 s). The bf16 text encoder streamed once per prompt, then from the
 conditioning cache, so every arm runs on bit-identical text (`text_hidden` / `text_refined` rel-L2 0). Arms: **bf16**
@@ -290,7 +290,7 @@ and checked gone (`GET /pods/<id>`: not found).
 ## 6. GPU validation (RTX PRO 6000, 2026-10-13)
 
 Scripts: `scripts/gpu/experiments/h3-trim-validate.sh` (launcher: stock / price check, the R2 plan, the staged bundle, a
-wall-clock backstop) and `scripts/gpu/experiments/h3-trim-pod.sh` (on the pod). Image `fastvideo-rs-runtime:sha-8f20822` with this
+wall-clock backstop) and `scripts/gpu/experiments/h3-trim-pod.sh` (on the pod), both deleted in D1e, docs/adr/0019-fv-lab.md §14; in git at `22a5fd7b`. Image `fastvideo-rs-runtime:sha-8f20822` with this
 branch's `fv-gpucheck` (built on the build pod); RTX PRO 6000 Blackwell Workstation Edition (driver 580.178.04, CUDA
 13.0), EU-RO-1, the EU volume for h3-base, the Trim and V2 trees from R2 (fetched at 0.5-1 GB/s).
 
@@ -416,7 +416,9 @@ were removed by each `down`.
 - **The served path end to end**: the `fasth3-trim` pool / fv-serve config, its warm-up and the R2 boot (h3-base +
   the Trim tree) were exercised by unit / integration tests only, not on a GPU worker.
 - **MXFP8 versus bf16 speed**: the Trim's bf16 forwards were faster than MXFP8 at 480p on another pod (§6.2); a
-  same-pod measurement for both models and resolutions would decide the default.
+  same-pod measurement for both models and resolutions would decide the default. For the Trim, §5.4 (2026-10-14) is that
+  measurement: on one pod, MXFP8 denoised 1.30x / 1.27x faster than bf16 at 480p / 768p and passed the lossy gate
+  against it, so nothing measured since argues for a bf16 default (D1e, docs/adr/0019-fv-lab.md §14).
 - `norm_out`'s `1 + scale` is bf16-rounded where the reference keeps float16 (§1.2); its effect was not isolated.
 - Quality beyond these clips (the model card says Trim trades some quality for speed): no prompt set or LPIPS gate.
 - 1080p, TAEH3, TeaCache, Sol-Attn and LoRA paths on the Trim.
