@@ -1,0 +1,46 @@
+{
+  "checks": [],
+  "context": {
+    "cuda_feature": true,
+    "dumps": [
+      {
+        "cosine": 0.9194888037801703,
+        "max_abs": 2.6484375,
+        "name": "sf_c0_s0_flow",
+        "non_finite": 0,
+        "numel": 299520,
+        "ref_norm": 633.8185259863575,
+        "rel_l2": 0.4000181771163341
+      },
+      {
+        "cosine": 0.515530257295081,
+        "max_abs": 4.974164247512817,
+        "name": "sf_latents_out",
+        "non_finite": 0,
+        "numel": 2096640,
+        "ref_norm": 1300.1686699877214,
+        "rel_l2": 0.9713389486235458
+      },
+      {
+        "cosine": 0.9998015973728138,
+        "max_abs": 0.08204340934753418,
+        "name": "text_hidden",
+        "non_finite": 0,
+        "numel": 2097152,
+        "ref_norm": 36.30465948497312,
+        "rel_l2": 0.01994968461266523
+      }
+    ],
+    "mode": "exact"
+  },
+  "elapsed_s": 0.022165944,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "compare-dumps",
+  "status": "pass"
+}

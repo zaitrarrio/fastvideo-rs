@@ -1,0 +1,1 @@
+{"state": "done", "bytes_done": 28928814212, "bytes_total": 28928814212, "elapsed_s": 29.7, "mb_per_s": 973.0, "trees": {"sfwan21-1.3b": "ready"}, "error": null, "stream": false, "ready": false, "retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 5, "boosts": 0}

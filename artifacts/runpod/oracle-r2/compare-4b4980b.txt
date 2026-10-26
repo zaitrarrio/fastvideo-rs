@@ -1,0 +1,16 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/oracle-r2/4b4980b-1026212538-1552 artifacts/runpod/oracle/4b4980b-10262131
+same oracle-sfwan13: {"exit":0,"skipped":null}, 81 frames byte-identical
+same oracle-sfwan13-bf16-vs-f32: {"exit":0,"skipped":null}, no frames
+same oracle-sfwan13-composed: {"exit":0,"skipped":null}, 81 frames byte-identical
+same oracle-sfwan13-composed-diff: {"exit":0,"skipped":null}, no frames
+same oracle-sfwan13-diff: {"exit":0,"skipped":null}, no frames
+same oracle-sfwan13-f32: {"exit":0,"skipped":null}, 81 frames byte-identical
+same oracle-sfwan13-f32-diff: {"exit":0,"skipped":null}, no frames
+same oracle-sfwan13-flash-vs-composed: {"exit":0,"skipped":null}, no frames
+same oracle-sfwan13-legacy: {"exit":0,"skipped":null}, 81 frames byte-identical
+same oracle-sfwan13-legacy-diff: {"exit":0,"skipped":null}, no frames
+same compare/compare-clips-oracle-sfwan13-codec-floor.json: {"status":"pass","off_identity":"different"}
+same compare/compare-clips-oracle-sfwan13-frames-vs-ref.json: {"status":"pass","off_identity":"different"}
+same compare/compare-clips-oracle-sfwan13-legacy-frames-vs-ref.json: {"status":"pass","off_identity":"different"}
+10 arm(s) the same (4 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 6 with the same compare-dumps lines), 0 control arm(s) reported, 3 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+exit 0

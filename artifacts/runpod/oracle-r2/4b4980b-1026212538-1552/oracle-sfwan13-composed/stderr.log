@@ -1,0 +1,70 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] wan load: host peak RSS 75.3 GiB (eager dit)
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":12738,"moe":null,"seconds":23.031284848}
+[fastvideo] generate preset=sf_wan_t2v_1_3b tiny=false 832x480 frames=81 steps=4 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] inject: sf_latents_in [1, 16, 21, 60, 104] from the reference
+[fastvideo] inject: text_hidden [1, 512, 4096] from the reference
+[fastvideo] denoise=causal-dmd blocks of 3 frames, timesteps [1000.0, 937.5, 833.3333, 625.0]
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=4680 Sk=512 D=128
+[fastvideo] inject: sf_noise_000 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 1/7 step 1/4 t=1000.0 done in 352ms
+[fastvideo] inject: sf_noise_001 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 1/7 step 2/4 t=937.5 done in 199ms
+[fastvideo] inject: sf_noise_002 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 1/7 step 3/4 t=833.3 done in 198ms
+[fastvideo] causal block 1/7 step 4/4 t=625.0 done in 198ms
+[fastvideo] inject: sf_noise_003 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 2/7 step 1/4 t=1000.0 done in 464ms
+[fastvideo] inject: sf_noise_004 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 2/7 step 2/4 t=937.5 done in 347ms
+[fastvideo] inject: sf_noise_005 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 2/7 step 3/4 t=833.3 done in 368ms
+[fastvideo] causal block 2/7 step 4/4 t=625.0 done in 346ms
+[fastvideo] inject: sf_noise_006 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 3/7 step 1/4 t=1000.0 done in 497ms
+[fastvideo] inject: sf_noise_007 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 3/7 step 2/4 t=937.5 done in 500ms
+[fastvideo] inject: sf_noise_008 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 3/7 step 3/4 t=833.3 done in 500ms
+[fastvideo] causal block 3/7 step 4/4 t=625.0 done in 500ms
+[fastvideo] inject: sf_noise_009 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 4/7 step 1/4 t=1000.0 done in 683ms
+[fastvideo] inject: sf_noise_010 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 4/7 step 2/4 t=937.5 done in 689ms
+[fastvideo] inject: sf_noise_011 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 4/7 step 3/4 t=833.3 done in 689ms
+[fastvideo] causal block 4/7 step 4/4 t=625.0 done in 689ms
+[fastvideo] inject: sf_noise_012 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 5/7 step 1/4 t=1000.0 done in 986ms
+[fastvideo] inject: sf_noise_013 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 5/7 step 2/4 t=937.5 done in 998ms
+[fastvideo] inject: sf_noise_014 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 5/7 step 3/4 t=833.3 done in 997ms
+[fastvideo] causal block 5/7 step 4/4 t=625.0 done in 996ms
+[fastvideo] inject: sf_noise_015 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 6/7 step 1/4 t=1000.0 done in 1248ms
+[fastvideo] inject: sf_noise_016 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 6/7 step 2/4 t=937.5 done in 1259ms
+[fastvideo] inject: sf_noise_017 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 6/7 step 3/4 t=833.3 done in 1258ms
+[fastvideo] causal block 6/7 step 4/4 t=625.0 done in 1258ms
+[fastvideo] inject: sf_noise_018 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 7/7 step 1/4 t=1000.0 done in 1492ms
+[fastvideo] inject: sf_noise_019 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 7/7 step 2/4 t=937.5 done in 1507ms
+[fastvideo] inject: sf_noise_020 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 7/7 step 3/4 t=833.3 done in 1506ms
+[fastvideo] causal block 7/7 step 4/4 t=625.0 done in 1507ms
+[fastvideo] causal dmd 4 steps done in 27823ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] vae.decode done in 2242ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.04s, 0.04 GiB, synced), ffmpeg feed blocked 0.08s, mp4 tail 0.02s, buffered peak 0.09 GiB of 41.35
+[fastvideo] wrote mp4 /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-composed/frames/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-composed/frames (text 0.41s, denoise 27.83s, decode+mp4 3.01s, png 0.04s)
+[fastvideo] generate done in 31296ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":3.006042148,"decoder":"wan-vae","denoise_s":27.825205932,"frames_sha256":"7740d9ac9415dfd839af48dec45a4ff4331fe0700ad7b64cc98c667c2ca2b8fc","peak_mib":41348,"step_s":[0.353748629,0.19985911,0.19891134,0.19843609,0.738274003,0.34784414,0.368822646,0.346390481,0.842912691,0.50038878,0.50049819,0.50057916,1.183886483,0.689937682,0.689829032,0.689909892,1.675874754,0.999004501,0.99732367,0.996520111,2.24484488,1.259930438,1.2589634379999999,1.258869698,2.75020301,1.507015799,1.5063580779999999,1.507029909],"text_cache":"miss","text_s":0.412050198,"total_s":31.256574265,"video_encode_s":0.024274205,"video_push_s":0.00003267,"video_rgb_s":0.027626962002109977,"video_vae_s":2.9753478164672855,"video_wait_s":0.736012472,"write_s":0.040113692}
+wan gen default: total 31.26s (text 0.41s, denoise 27.83s, decode 3.01s) png 0.04s peak Some(41348) MiB frames 7740d9ac9415dfd839af48dec45a4ff4331fe0700ad7b64cc98c667c2ca2b8fc
+[PASS] wan/frames {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-composed/frames/frame-040.png","mean":0.4635055718722376,"std":0.2724765006544899} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-composed/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (54.8s)

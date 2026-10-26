@@ -1,0 +1,3 @@
+$ fv-lab pod reap --account   # list only (no --yes), 2026-10-26T21:53:58Z
+nothing to reap (no fv-lab-<tier>-<sha7>-<stamp>-<suffix> pod past its tier's cap)
+exit 0

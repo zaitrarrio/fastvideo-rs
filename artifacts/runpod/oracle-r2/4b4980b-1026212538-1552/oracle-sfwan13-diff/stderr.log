@@ -1,0 +1,196 @@
+compare-dumps sf_c0_ctx_b0_attn_x          rel_l2 1.905e-1  cosine 0.981950  max_abs 8.938e0  n 113664
+compare-dumps sf_c0_ctx_b0_kwin            rel_l2 3.823e-2  cosine 0.999269  max_abs 2.969e0  n 113664
+compare-dumps sf_c0_ctx_b1_attn_x          rel_l2 1.821e-1  cosine 0.983465  max_abs 2.293e0  n 113664
+compare-dumps sf_c0_ctx_b1_kwin            rel_l2 9.263e-2  cosine 0.995708  max_abs 5.500e0  n 113664
+compare-dumps sf_c0_ctx_b24_attn_x         rel_l2 3.405e-1  cosine 0.942497  max_abs 3.117e0  n 113664
+compare-dumps sf_c0_ctx_b24_kwin           rel_l2 2.721e-1  cosine 0.962952  max_abs 6.438e0  n 113664
+compare-dumps sf_c0_ctx_block_0            rel_l2 8.642e-2  cosine 0.996259  max_abs 4.570e0  n 113664
+compare-dumps sf_c0_ctx_block_1            rel_l2 1.096e-1  cosine 0.994006  max_abs 4.812e0  n 113664
+compare-dumps sf_c0_ctx_block_2            rel_l2 1.167e-1  cosine 0.993211  max_abs 4.898e0  n 113664
+compare-dumps sf_c0_ctx_block_3            rel_l2 1.385e-1  cosine 0.990418  max_abs 5.086e0  n 113664
+compare-dumps sf_c0_ctx_block_4            rel_l2 1.352e-1  cosine 0.990827  max_abs 5.109e0  n 113664
+compare-dumps sf_c0_ctx_block_5            rel_l2 1.462e-1  cosine 0.989264  max_abs 5.094e0  n 113664
+compare-dumps sf_c0_ctx_block_6            rel_l2 1.559e-1  cosine 0.987838  max_abs 5.195e0  n 113664
+compare-dumps sf_c0_ctx_block_7            rel_l2 1.441e-1  cosine 0.989580  max_abs 5.188e0  n 113664
+compare-dumps sf_c0_ctx_block_8            rel_l2 1.630e-1  cosine 0.986699  max_abs 5.203e0  n 113664
+compare-dumps sf_c0_ctx_block_9            rel_l2 1.661e-1  cosine 0.986144  max_abs 5.234e0  n 113664
+compare-dumps sf_c0_ctx_block_10           rel_l2 1.646e-1  cosine 0.986369  max_abs 5.266e0  n 113664
+compare-dumps sf_c0_ctx_block_11           rel_l2 1.649e-1  cosine 0.986387  max_abs 5.266e0  n 113664
+compare-dumps sf_c0_ctx_block_12           rel_l2 1.734e-1  cosine 0.984959  max_abs 5.242e0  n 113664
+compare-dumps sf_c0_ctx_block_13           rel_l2 1.834e-1  cosine 0.983126  max_abs 5.250e0  n 113664
+compare-dumps sf_c0_ctx_block_14           rel_l2 2.111e-1  cosine 0.977542  max_abs 5.242e0  n 113664
+compare-dumps sf_c0_ctx_block_15           rel_l2 1.815e-1  cosine 0.983540  max_abs 5.195e0  n 113664
+compare-dumps sf_c0_ctx_block_16           rel_l2 1.601e-1  cosine 0.987157  max_abs 6.750e0  n 113664
+compare-dumps sf_c0_ctx_block_17           rel_l2 2.107e-1  cosine 0.977665  max_abs 8.125e0  n 113664
+compare-dumps sf_c0_ctx_block_18           rel_l2 1.754e-1  cosine 0.984549  max_abs 5.055e0  n 113664
+compare-dumps sf_c0_ctx_block_19           rel_l2 1.301e-1  cosine 0.991558  max_abs 4.938e0  n 113664
+compare-dumps sf_c0_ctx_block_20           rel_l2 1.449e-1  cosine 0.989471  max_abs 4.836e0  n 113664
+compare-dumps sf_c0_ctx_block_21           rel_l2 1.786e-1  cosine 0.983935  max_abs 8.625e0  n 113664
+compare-dumps sf_c0_ctx_block_22           rel_l2 1.607e-1  cosine 0.987080  max_abs 4.602e0  n 113664
+compare-dumps sf_c0_ctx_block_23           rel_l2 1.892e-1  cosine 0.981949  max_abs 1.306e1  n 113664
+compare-dumps sf_c0_ctx_block_24           rel_l2 1.639e-1  cosine 0.986576  max_abs 6.250e0  n 113664
+compare-dumps sf_c0_ctx_block_25           rel_l2 1.479e-1  cosine 0.989049  max_abs 4.258e0  n 113664
+compare-dumps sf_c0_ctx_block_26           rel_l2 1.703e-1  cosine 0.985541  max_abs 4.625e0  n 113664
+compare-dumps sf_c0_ctx_block_27           rel_l2 1.542e-1  cosine 0.988175  max_abs 8.250e0  n 113664
+compare-dumps sf_c0_ctx_block_28           rel_l2 1.690e-1  cosine 0.985742  max_abs 6.000e0  n 113664
+compare-dumps sf_c0_ctx_block_29           rel_l2 1.918e-1  cosine 0.981647  max_abs 4.750e0  n 113664
+compare-dumps sf_c0_out                    rel_l2 1.528e-1  cosine 0.988322  max_abs 2.680e0  n 299520
+compare-dumps sf_c0_s0_b0_attn_x           rel_l2 1.141e-2  cosine 0.999935  max_abs 6.250e-2  n 113664
+compare-dumps sf_c0_s0_b0_kwin             rel_l2 4.562e-3  cosine 0.999990  max_abs 9.375e-2  n 113664
+compare-dumps sf_c0_s0_b1_attn_x           rel_l2 2.015e-2  cosine 0.999816  max_abs 9.766e-2  n 113664
+compare-dumps sf_c0_s0_b1_kwin             rel_l2 7.584e-3  cosine 0.999971  max_abs 1.250e-1  n 113664
+compare-dumps sf_c0_s0_b24_attn_x          rel_l2 5.930e-2  cosine 0.998245  max_abs 3.164e-1  n 113664
+compare-dumps sf_c0_s0_b24_kwin            rel_l2 5.350e-2  cosine 0.998569  max_abs 1.500e0  n 113664
+compare-dumps sf_c0_s0_block_0             rel_l2 7.643e-3  cosine 0.999982  max_abs 3.750e-1  n 113664
+compare-dumps sf_c0_s0_block_1             rel_l2 6.510e-3  cosine 0.999980  max_abs 3.125e-1  n 113664
+compare-dumps sf_c0_s0_block_2             rel_l2 6.920e-3  cosine 0.999977  max_abs 2.500e-1  n 113664
+compare-dumps sf_c0_s0_block_3             rel_l2 6.429e-3  cosine 0.999980  max_abs 2.500e-1  n 113664
+compare-dumps sf_c0_s0_block_4             rel_l2 6.838e-3  cosine 0.999977  max_abs 2.500e-1  n 113664
+compare-dumps sf_c0_s0_block_5             rel_l2 6.371e-3  cosine 0.999980  max_abs 2.500e-1  n 113664
+compare-dumps sf_c0_s0_block_6             rel_l2 8.493e-3  cosine 0.999970  max_abs 3.750e-1  n 113664
+compare-dumps sf_c0_s0_block_7             rel_l2 8.501e-3  cosine 0.999965  max_abs 2.500e-1  n 113664
+compare-dumps sf_c0_s0_block_8             rel_l2 1.361e-2  cosine 0.999910  max_abs 1.750e0  n 113664
+compare-dumps sf_c0_s0_block_9             rel_l2 1.522e-2  cosine 0.999900  max_abs 7.500e-1  n 113664
+compare-dumps sf_c0_s0_block_10            rel_l2 1.562e-2  cosine 0.999883  max_abs 2.000e0  n 113664
+compare-dumps sf_c0_s0_block_11            rel_l2 1.451e-2  cosine 0.999897  max_abs 1.500e0  n 113664
+compare-dumps sf_c0_s0_block_12            rel_l2 1.738e-2  cosine 0.999849  max_abs 2.000e0  n 113664
+compare-dumps sf_c0_s0_block_13            rel_l2 2.410e-2  cosine 0.999710  max_abs 2.875e0  n 113664
+compare-dumps sf_c0_s0_block_14            rel_l2 2.526e-2  cosine 0.999681  max_abs 3.000e0  n 113664
+compare-dumps sf_c0_s0_block_15            rel_l2 2.601e-2  cosine 0.999678  max_abs 2.500e0  n 113664
+compare-dumps sf_c0_s0_block_16            rel_l2 2.575e-2  cosine 0.999669  max_abs 2.250e0  n 113664
+compare-dumps sf_c0_s0_block_17            rel_l2 4.088e-2  cosine 0.999244  max_abs 7.750e0  n 113664
+compare-dumps sf_c0_s0_block_18            rel_l2 3.151e-2  cosine 0.999512  max_abs 2.875e0  n 113664
+compare-dumps sf_c0_s0_block_19            rel_l2 2.339e-2  cosine 0.999731  max_abs 6.250e-1  n 113664
+compare-dumps sf_c0_s0_block_20            rel_l2 2.537e-2  cosine 0.999678  max_abs 5.000e-1  n 113664
+compare-dumps sf_c0_s0_block_21            rel_l2 3.621e-2  cosine 0.999344  max_abs 3.625e0  n 113664
+compare-dumps sf_c0_s0_block_22            rel_l2 3.290e-2  cosine 0.999459  max_abs 2.000e0  n 113664
+compare-dumps sf_c0_s0_block_23            rel_l2 3.264e-2  cosine 0.999468  max_abs 1.750e0  n 113664
+compare-dumps sf_c0_s0_block_24            rel_l2 3.292e-2  cosine 0.999458  max_abs 1.188e0  n 113664
+compare-dumps sf_c0_s0_block_25            rel_l2 2.734e-2  cosine 0.999626  max_abs 5.000e-1  n 113664
+compare-dumps sf_c0_s0_block_26            rel_l2 2.862e-2  cosine 0.999590  max_abs 5.625e-1  n 113664
+compare-dumps sf_c0_s0_block_27            rel_l2 2.324e-2  cosine 0.999730  max_abs 5.000e-1  n 113664
+compare-dumps sf_c0_s0_block_28            rel_l2 2.452e-2  cosine 0.999700  max_abs 6.250e-1  n 113664
+compare-dumps sf_c0_s0_block_29            rel_l2 1.649e-2  cosine 0.999865  max_abs 7.500e-1  n 113664
+compare-dumps sf_c0_s0_flow                rel_l2 1.880e-2  cosine 0.999825  max_abs 1.992e-1  n 299520
+compare-dumps sf_c0_s0_x0                  rel_l2 2.955e-2  cosine 0.999567  max_abs 1.992e-1  n 299520
+compare-dumps sf_c0_s1_flow                rel_l2 4.359e-2  cosine 0.999051  max_abs 1.664e0  n 299520
+compare-dumps sf_c0_s1_x0                  rel_l2 6.582e-2  cosine 0.997834  max_abs 1.561e0  n 299520
+compare-dumps sf_c0_s2_flow                rel_l2 9.051e-2  cosine 0.995903  max_abs 2.828e0  n 299520
+compare-dumps sf_c0_s2_x0                  rel_l2 1.273e-1  cosine 0.991903  max_abs 2.453e0  n 299520
+compare-dumps sf_c0_s3_flow                rel_l2 1.161e-1  cosine 0.993255  max_abs 3.508e0  n 299520
+compare-dumps sf_c0_s3_x0                  rel_l2 1.528e-1  cosine 0.988322  max_abs 2.680e0  n 299520
+compare-dumps sf_c1_out                    rel_l2 2.406e-1  cosine 0.970941  max_abs 4.047e0  n 299520
+compare-dumps sf_c1_s0_b0_attn_x           rel_l2 2.851e-2  cosine 0.999594  max_abs 5.312e-1  n 113664
+compare-dumps sf_c1_s0_b0_kwin             rel_l2 2.748e-2  cosine 0.999622  max_abs 2.969e0  n 225792
+compare-dumps sf_c1_s0_b1_attn_x           rel_l2 7.541e-2  cosine 0.997153  max_abs 1.246e0  n 113664
+compare-dumps sf_c1_s0_b1_kwin             rel_l2 6.680e-2  cosine 0.997768  max_abs 5.500e0  n 225792
+compare-dumps sf_c1_s0_b24_attn_x          rel_l2 3.374e-1  cosine 0.943367  max_abs 2.336e0  n 113664
+compare-dumps sf_c1_s0_b24_kwin            rel_l2 2.470e-1  cosine 0.969473  max_abs 6.438e0  n 225792
+compare-dumps sf_c1_s0_block_0             rel_l2 9.431e-3  cosine 0.999967  max_abs 3.750e-1  n 113664
+compare-dumps sf_c1_s0_block_1             rel_l2 1.288e-2  cosine 0.999921  max_abs 2.500e-1  n 113664
+compare-dumps sf_c1_s0_block_2             rel_l2 1.497e-2  cosine 0.999891  max_abs 2.896e-1  n 113664
+compare-dumps sf_c1_s0_block_3             rel_l2 1.483e-2  cosine 0.999894  max_abs 3.027e-1  n 113664
+compare-dumps sf_c1_s0_block_4             rel_l2 2.237e-2  cosine 0.999750  max_abs 1.062e0  n 113664
+compare-dumps sf_c1_s0_block_5             rel_l2 2.715e-2  cosine 0.999632  max_abs 8.750e-1  n 113664
+compare-dumps sf_c1_s0_block_6             rel_l2 2.976e-2  cosine 0.999563  max_abs 6.875e-1  n 113664
+compare-dumps sf_c1_s0_block_7             rel_l2 3.610e-2  cosine 0.999349  max_abs 1.625e0  n 113664
+compare-dumps sf_c1_s0_block_8             rel_l2 3.421e-2  cosine 0.999424  max_abs 1.375e0  n 113664
+compare-dumps sf_c1_s0_block_9             rel_l2 3.924e-2  cosine 0.999234  max_abs 1.875e0  n 113664
+compare-dumps sf_c1_s0_block_10            rel_l2 4.718e-2  cosine 0.998892  max_abs 2.750e0  n 113664
+compare-dumps sf_c1_s0_block_11            rel_l2 5.169e-2  cosine 0.998663  max_abs 1.250e0  n 113664
+compare-dumps sf_c1_s0_block_12            rel_l2 5.417e-2  cosine 0.998532  max_abs 2.000e0  n 113664
+compare-dumps sf_c1_s0_block_13            rel_l2 7.638e-2  cosine 0.997079  max_abs 3.125e0  n 113664
+compare-dumps sf_c1_s0_block_14            rel_l2 8.747e-2  cosine 0.996183  max_abs 4.500e0  n 113664
+compare-dumps sf_c1_s0_block_15            rel_l2 9.030e-2  cosine 0.995926  max_abs 5.500e0  n 113664
+compare-dumps sf_c1_s0_block_16            rel_l2 8.808e-2  cosine 0.996113  max_abs 3.125e0  n 113664
+compare-dumps sf_c1_s0_block_17            rel_l2 1.522e-1  cosine 0.988393  max_abs 1.077e1  n 113664
+compare-dumps sf_c1_s0_block_18            rel_l2 1.121e-1  cosine 0.993697  max_abs 7.812e0  n 113664
+compare-dumps sf_c1_s0_block_19            rel_l2 8.021e-2  cosine 0.996789  max_abs 1.272e0  n 113664
+compare-dumps sf_c1_s0_block_20            rel_l2 9.700e-2  cosine 0.995291  max_abs 1.125e0  n 113664
+compare-dumps sf_c1_s0_block_21            rel_l2 1.309e-1  cosine 0.991398  max_abs 5.844e0  n 113664
+compare-dumps sf_c1_s0_block_22            rel_l2 1.223e-1  cosine 0.992529  max_abs 2.188e0  n 113664
+compare-dumps sf_c1_s0_block_23            rel_l2 1.457e-1  cosine 0.989338  max_abs 8.875e0  n 113664
+compare-dumps sf_c1_s0_block_24            rel_l2 1.358e-1  cosine 0.990755  max_abs 3.750e0  n 113664
+compare-dumps sf_c1_s0_block_25            rel_l2 1.272e-1  cosine 0.991923  max_abs 2.211e0  n 113664
+compare-dumps sf_c1_s0_block_26            rel_l2 1.424e-1  cosine 0.989871  max_abs 3.125e0  n 113664
+compare-dumps sf_c1_s0_block_27            rel_l2 1.415e-1  cosine 0.990012  max_abs 6.000e0  n 113664
+compare-dumps sf_c1_s0_block_28            rel_l2 1.545e-1  cosine 0.988074  max_abs 5.125e0  n 113664
+compare-dumps sf_c1_s0_block_29            rel_l2 9.228e-2  cosine 0.995738  max_abs 3.883e0  n 113664
+compare-dumps sf_c1_s0_flow                rel_l2 1.140e-1  cosine 0.993531  max_abs 3.148e0  n 299520
+compare-dumps sf_c1_s0_x0                  rel_l2 1.627e-1  cosine 0.986824  max_abs 3.148e0  n 299520
+compare-dumps sf_c1_s1_flow                rel_l2 1.677e-1  cosine 0.985942  max_abs 3.648e0  n 299520
+compare-dumps sf_c1_s1_x0                  rel_l2 2.296e-1  cosine 0.973652  max_abs 3.477e0  n 299520
+compare-dumps sf_c1_s2_flow                rel_l2 1.709e-1  cosine 0.985358  max_abs 4.406e0  n 299520
+compare-dumps sf_c1_s2_x0                  rel_l2 2.345e-1  cosine 0.972431  max_abs 3.988e0  n 299520
+compare-dumps sf_c1_s3_flow                rel_l2 1.778e-1  cosine 0.984153  max_abs 4.398e0  n 299520
+compare-dumps sf_c1_s3_x0                  rel_l2 2.406e-1  cosine 0.970941  max_abs 4.047e0  n 299520
+compare-dumps sf_c2_out                    rel_l2 1.711e-1  cosine 0.985357  max_abs 3.375e0  n 299520
+compare-dumps sf_c2_s0_flow                rel_l2 1.135e-1  cosine 0.993572  max_abs 3.492e0  n 299520
+compare-dumps sf_c2_s0_x0                  rel_l2 1.634e-1  cosine 0.986673  max_abs 3.492e0  n 299520
+compare-dumps sf_c2_s1_flow                rel_l2 1.142e-1  cosine 0.993488  max_abs 3.527e0  n 299520
+compare-dumps sf_c2_s1_x0                  rel_l2 1.613e-1  cosine 0.987008  max_abs 3.391e0  n 299520
+compare-dumps sf_c2_s2_flow                rel_l2 1.184e-1  cosine 0.992996  max_abs 3.617e0  n 299520
+compare-dumps sf_c2_s2_x0                  rel_l2 1.661e-1  cosine 0.986217  max_abs 3.520e0  n 299520
+compare-dumps sf_c2_s3_flow                rel_l2 1.250e-1  cosine 0.992186  max_abs 3.672e0  n 299520
+compare-dumps sf_c2_s3_x0                  rel_l2 1.711e-1  cosine 0.985357  max_abs 3.375e0  n 299520
+compare-dumps sf_c3_out                    rel_l2 1.813e-1  cosine 0.983534  max_abs 3.055e0  n 299520
+compare-dumps sf_c3_s0_flow                rel_l2 1.159e-1  cosine 0.993288  max_abs 2.566e0  n 299520
+compare-dumps sf_c3_s0_x0                  rel_l2 1.670e-1  cosine 0.986069  max_abs 2.574e0  n 299520
+compare-dumps sf_c3_s1_flow                rel_l2 1.219e-1  cosine 0.992564  max_abs 2.840e0  n 299520
+compare-dumps sf_c3_s1_x0                  rel_l2 1.722e-1  cosine 0.985161  max_abs 2.820e0  n 299520
+compare-dumps sf_c3_s2_flow                rel_l2 1.281e-1  cosine 0.991785  max_abs 2.977e0  n 299520
+compare-dumps sf_c3_s2_x0                  rel_l2 1.792e-1  cosine 0.983908  max_abs 2.945e0  n 299520
+compare-dumps sf_c3_s3_flow                rel_l2 1.300e-1  cosine 0.991536  max_abs 3.266e0  n 299520
+compare-dumps sf_c3_s3_x0                  rel_l2 1.813e-1  cosine 0.983534  max_abs 3.055e0  n 299520
+compare-dumps sf_c4_out                    rel_l2 2.155e-1  cosine 0.976702  max_abs 3.982e0  n 299520
+compare-dumps sf_c4_s0_flow                rel_l2 1.442e-1  cosine 0.989608  max_abs 2.840e0  n 299520
+compare-dumps sf_c4_s0_x0                  rel_l2 2.089e-1  cosine 0.978162  max_abs 2.847e0  n 299520
+compare-dumps sf_c4_s1_flow                rel_l2 1.451e-1  cosine 0.989464  max_abs 3.758e0  n 299520
+compare-dumps sf_c4_s1_x0                  rel_l2 2.058e-1  cosine 0.978793  max_abs 3.633e0  n 299520
+compare-dumps sf_c4_s2_flow                rel_l2 1.514e-1  cosine 0.988520  max_abs 3.840e0  n 299520
+compare-dumps sf_c4_s2_x0                  rel_l2 2.120e-1  cosine 0.977459  max_abs 3.722e0  n 299520
+compare-dumps sf_c4_s3_flow                rel_l2 1.553e-1  cosine 0.987923  max_abs 4.625e0  n 299520
+compare-dumps sf_c4_s3_x0                  rel_l2 2.155e-1  cosine 0.976702  max_abs 3.982e0  n 299520
+compare-dumps sf_c5_out                    rel_l2 2.803e-1  cosine 0.960779  max_abs 3.668e0  n 299520
+compare-dumps sf_c5_s0_flow                rel_l2 1.416e-1  cosine 0.989981  max_abs 2.709e0  n 299520
+compare-dumps sf_c5_s0_x0                  rel_l2 2.052e-1  cosine 0.978953  max_abs 2.711e0  n 299520
+compare-dumps sf_c5_s1_flow                rel_l2 1.727e-1  cosine 0.985065  max_abs 3.188e0  n 299520
+compare-dumps sf_c5_s1_x0                  rel_l2 2.433e-1  cosine 0.970406  max_abs 3.047e0  n 299520
+compare-dumps sf_c5_s2_flow                rel_l2 1.924e-1  cosine 0.981478  max_abs 3.758e0  n 299520
+compare-dumps sf_c5_s2_x0                  rel_l2 2.656e-1  cosine 0.964750  max_abs 3.570e0  n 299520
+compare-dumps sf_c5_s3_flow                rel_l2 2.081e-1  cosine 0.978330  max_abs 4.008e0  n 299520
+compare-dumps sf_c5_s3_x0                  rel_l2 2.803e-1  cosine 0.960779  max_abs 3.668e0  n 299520
+compare-dumps sf_c6_out                    rel_l2 2.987e-1  cosine 0.955255  max_abs 4.016e0  n 299520
+compare-dumps sf_c6_s0_flow                rel_l2 1.651e-1  cosine 0.986371  max_abs 3.484e0  n 299520
+compare-dumps sf_c6_s0_x0                  rel_l2 2.391e-1  cosine 0.971462  max_abs 3.477e0  n 299520
+compare-dumps sf_c6_s1_flow                rel_l2 1.908e-1  cosine 0.981796  max_abs 3.969e0  n 299520
+compare-dumps sf_c6_s1_x0                  rel_l2 2.675e-1  cosine 0.964206  max_abs 3.773e0  n 299520
+compare-dumps sf_c6_s2_flow                rel_l2 2.081e-1  cosine 0.978313  max_abs 3.922e0  n 299520
+compare-dumps sf_c6_s2_x0                  rel_l2 2.909e-1  cosine 0.957562  max_abs 3.724e0  n 299520
+compare-dumps sf_c6_s3_flow                rel_l2 2.152e-1  cosine 0.976794  max_abs 4.438e0  n 299520
+compare-dumps sf_c6_s3_x0                  rel_l2 2.987e-1  cosine 0.955255  max_abs 4.016e0  n 299520
+compare-dumps sf_latents_in: missing in candidate
+compare-dumps sf_latents_out               rel_l2 2.294e-1  cosine 0.973644  max_abs 4.047e0  n 2096640
+compare-dumps sf_noise_000: missing in candidate
+compare-dumps sf_noise_001: missing in candidate
+compare-dumps sf_noise_002: missing in candidate
+compare-dumps sf_noise_003: missing in candidate
+compare-dumps sf_noise_004: missing in candidate
+compare-dumps sf_noise_005: missing in candidate
+compare-dumps sf_noise_006: missing in candidate
+compare-dumps sf_noise_007: missing in candidate
+compare-dumps sf_noise_008: missing in candidate
+compare-dumps sf_noise_009: missing in candidate
+compare-dumps sf_noise_010: missing in candidate
+compare-dumps sf_noise_011: missing in candidate
+compare-dumps sf_noise_012: missing in candidate
+compare-dumps sf_noise_013: missing in candidate
+compare-dumps sf_noise_014: missing in candidate
+compare-dumps sf_noise_015: missing in candidate
+compare-dumps sf_noise_016: missing in candidate
+compare-dumps sf_noise_017: missing in candidate
+compare-dumps sf_noise_018: missing in candidate
+compare-dumps sf_noise_019: missing in candidate
+compare-dumps sf_noise_020: missing in candidate
+compare-dumps text_hidden                  rel_l2 1.995e-2  cosine 0.999802  max_abs 8.204e-2  n 2097152
+[PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.1s)

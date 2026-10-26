@@ -2110,6 +2110,7 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ), PR #219
 - ADR: docs/adr/0019-fv-lab.md §21
 - Verification: `tests/dry_run.rs::the_oracle_r2_tier_dry_runs_as_the_oracle_family_with_sfwan13`, `tests/repeats_oracle.rs::sfwan13_decodes_compares_and_cleans_up_as_the_script`, `tests/oracle_driver.rs::the_plan_of_sfwan13_fetches_its_tree_upstream_and_runs_on_oracle_r2`, `scripts/gpu/tests/upstream-r2.test.sh`, `fv-lab-goldens.sh --check`; the 15 other families' dry runs byte-identical before and after; GPU check §21.7 pending (the coordinator's)
+- Result (2026-10-26, coordinator): §21.7's GPU check passed on `4b4980b` on every criterion (served `sfwan13`, runtime exit 0 on both runners, compare exit 0: 10 arms the same, 4 with 81 frames byte-identical, 3 `compare-clips` reports `pass` on both sides; no key or presigned URL in any fetched file; about $0.86; ADR-0019 §21.7 "Results", PR `claude/oracle-r2-check-4b4980b`); §21 accepted; `oracle` retires only after every cell family has passed its check, so it still waits for §20.7's re-run (blocked on the owner's Runpod secret `fv_hf_token`, §21.9)
 
 ### FVID · 2026-10-26 · FVID-2026-10-26-script-r2-trees
 - Trigger: ADR-0019 §21.8: the script runner of §21.7's GPU check mounts the EU volume as `$W`, which lacks `sfwan21-1.3b`, and had no R2 key, so its `sfwan13` arms would skip and the two-runner compare would compare nothing

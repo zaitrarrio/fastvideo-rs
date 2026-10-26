@@ -151,6 +151,8 @@ EOF
 cat >"$TMP/bin/apt-get" <<EOF
 #!/usr/bin/env bash
 echo "apt-get \$*" >>"$TMP/apt.log"
+echo "Selecting previously unselected package apt-noise."
+[[ -e "$TMP/fail-apt" ]] && { echo "E: Unable to locate package python3" >&2; exit 100; }
 [[ "\$*" == *install* ]] && : >"$TMP/have-python"
 exit 0
 EOF
@@ -225,6 +227,22 @@ rm -f "$TMP/have-python" "$TMP/apt.log"; rm -rf "$TMP/scratch"
 stage "no python3" "$R" "$S" "${KEY[@]}" -- "sfwan21-1.3b@$REV"
 [[ "$RC" == 0 ]] && grep -q 'install -y -qq --no-install-recommends python3' "$TMP/apt.log" && ok "no python3: apt-get, then the fetch" \
   || bad "no python3: exit $RC, $OUTPUT $(cat "$TMP/apt.log" 2>/dev/null)"
+# apt's output in r2-apt.log beside the status, not in the log.
+[[ "$OUTPUT" != *apt-noise* ]] && grep -q 'python3 installed' <<<"$OUTPUT" && grep -q 'apt-noise' "$O/r2-apt.log" \
+  && ok "no python3: apt's output in r2-apt.log, the log says python3 installed" || bad "no python3: apt output: $OUTPUT"
+# apt failing: no fetch, and apt's last lines in the log.
+rm -f "$TMP/have-python"; : >"$TMP/fail-apt"; rm -rf "$TMP/scratch"
+stage "apt fails" "$R" "$S" "${KEY[@]}" -- "sfwan21-1.3b@$REV"
+[[ "$RC" != 0 && ! -s "$TMP/calls.log" ]] && grep -qF 'FAILED: apt-get install python3 failed (exit 100; r2-apt.log)' <<<"$OUTPUT" \
+  && grep -q '  apt: E: Unable to locate package python3' <<<"$OUTPUT" && ! grep -q 'python3 unavailable after apt-get' <<<"$OUTPUT" \
+  && ok "apt fails: nothing fetched, apt's last lines in the log" || bad "apt fails: exit $RC, $OUTPUT"
+rm -f "$TMP/fail-apt"; rm -rf "$TMP/scratch"
+# A status directory not there yet: made (off the volume) before apt writes r2-apt.log into it.
+rm -rf "$TMP/served/oracle/new"
+STATUS_DIR="$TMP/served/oracle/new" stage "status made" "$R" "$S" "${KEY[@]}" -- "sfwan21-1.3b@$REV"
+[[ "$RC" == 0 && -s "$TMP/served/oracle/new/r2-apt.log" && -f "$TMP/served/oracle/new/r2-fetch.json" ]] \
+  && ok "status made: the status directory made, r2-apt.log and r2-fetch.json in it" || bad "status made: exit $RC, $OUTPUT"
+rm -rf "$TMP/served/oracle/new"; : >"$TMP/have-python"; rm -rf "$TMP/scratch"
 # Never on the volume.
 stage "root on /workspace" /workspace/x "$S" "${KEY[@]}" -- "sfwan21-1.3b@$REV"
 [[ "$RC" != 0 && ! -s "$TMP/calls.log" ]] && grep -q 'is on the volume' <<<"$OUTPUT" && ok "root on /workspace: refused" || bad "root on /workspace: $OUTPUT"

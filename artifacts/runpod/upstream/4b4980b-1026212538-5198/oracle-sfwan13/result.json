@@ -1,0 +1,90 @@
+{
+  "impl": "fastvideo",
+  "model": "SFWan2.1-T2V-1.3B-Diffusers",
+  "args": {
+    "model": "/root/upstream-weights/sfwan21-1.3b",
+    "out": "/root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13",
+    "prompts": null,
+    "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+    "seed": 1024,
+    "hf_name": "SFWan2.1-T2V-1.3B-Diffusers",
+    "repeats": 1,
+    "warmup_seed": 999,
+    "no_warmup": true,
+    "height": 480,
+    "width": 832,
+    "num_frames": 81,
+    "steps": null,
+    "guidance_scale": null,
+    "flow_shift": null,
+    "vsa_sparsity": 0.8,
+    "attention": "FLASH_ATTN",
+    "text_encoder_cpu_offload": false,
+    "image": null
+  },
+  "runs": [
+    {
+      "name": "default",
+      "seed": 1024,
+      "runs": [
+        {
+          "wall_s": 11.600830975919962,
+          "generation_time_s": 10.990133109036833,
+          "peak_memory_mb": 29856.8642578125,
+          "stages_s": {
+            "input_validation_stage": 5.5579934269189835e-05,
+            "prompt_encoding_stage": 0.2844924950040877,
+            "conditioning_stage": 1.5279976651072502e-05,
+            "latent_preparation_stage": 0.006371187977492809,
+            "first_frame_encoding_stage": 6.170012056827545e-06,
+            "denoising_stage": 7.202081333962269,
+            "decoding_stage": 3.4739657300524414,
+            "PostDecodeFrameProcessStage": 0.3412367859855294,
+            "VideoSaveStage": 0.26174600305967033,
+            "AudioMuxStage": 0.0
+          },
+          "denoise_s": 7.202081333962269,
+          "decode_s": 3.4739657300524414,
+          "postprocess_s": 0.3412367859855294,
+          "text_s": 0.2844924950040877,
+          "save_s": 0.26174600305967033,
+          "steps": 50,
+          "guidance_scale": 6.0,
+          "negative_prompt": "\u8272\u8c03\u8273\u4e3d\uff0c\u8fc7\u66dd\uff0c\u9759\u6001\uff0c\u7ec6\u8282\u6a21\u7cca\u4e0d\u6e05\uff0c\u5b57\u5e55\uff0c\u98ce\u683c\uff0c\u4f5c\u54c1\uff0c\u753b\u4f5c\uff0c\u753b\u9762\uff0c\u9759\u6b62\uff0c\u6574\u4f53\u53d1\u7070\uff0c\u6700\u5dee\u8d28\u91cf\uff0c\u4f4e\u8d28\u91cf\uff0cJPEG\u538b\u7f29\u6b8b\u7559\uff0c\u4e11\u964b\u7684\uff0c\u6b8b\u7f3a\u7684\uff0c\u591a\u4f59\u7684\u624b\u6307\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u624b\u90e8\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u8138\u90e8\uff0c\u7578\u5f62\u7684\uff0c\u6bc1\u5bb9\u7684\uff0c\u5f62\u6001\u7578\u5f62\u7684\u80a2\u4f53\uff0c\u624b\u6307\u878d\u5408\uff0c\u9759\u6b62\u4e0d\u52a8\u7684\u753b\u9762\uff0c\u6742\u4e71\u7684\u80cc\u666f\uff0c\u4e09\u6761\u817f\uff0c\u80cc\u666f\u4eba\u5f88\u591a\uff0c\u5012\u7740\u8d70",
+          "fps": 16,
+          "image_path": null
+        }
+      ]
+    }
+  ],
+  "ok": true,
+  "env": {
+    "FASTVIDEO_DUMP_OPS": "0,1,24,47",
+    "FASTVIDEO_ATTENTION_BACKEND": "FLASH_ATTN",
+    "FASTVIDEO_STAGE_LOGGING": "1",
+    "FASTVIDEO_VSA_SM100A": "0"
+  },
+  "load_s": 15.71732791105751,
+  "pipeline_flow_shift": 5.0,
+  "per_prompt": [
+    {
+      "name": "default",
+      "wall_s": 11.600830975919962,
+      "denoise_s": 7.202081333962269,
+      "decode_s": 3.4739657300524414,
+      "text_s": 0.2844924950040877,
+      "save_s": 0.26174600305967033,
+      "postprocess_s": 0.3412367859855294,
+      "peak_memory_mb": 29856.8642578125
+    }
+  ],
+  "median_wall_s": 11.600830975919962,
+  "median_denoise_s": 7.202081333962269,
+  "median_decode_s": 3.4739657300524414,
+  "median_text_s": 0.2844924950040877,
+  "median_save_s": 0.26174600305967033,
+  "median_postprocess_s": 0.3412367859855294,
+  "warm_total_s": 11.600830975919962,
+  "peak_memory_mb": 29856.8642578125,
+  "process_s": 42.220667558023706
+}

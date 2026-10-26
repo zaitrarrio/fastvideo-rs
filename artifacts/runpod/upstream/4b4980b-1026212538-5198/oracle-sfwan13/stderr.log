@@ -1,0 +1,21 @@
+[oracle_dump] patched fastvideo.pipelines.basic.minimax_h3.stages.minimax_h3_denoising
+[oracle_dump] patched fastvideo.pipelines.basic.minimax_h3.stages.minimax_h3_denoising
+[W1026 21:29:45.969626512 ProcessGroupNCCL.cpp:1001] Warning: TORCH_NCCL_AVOID_RECORD_STREAMS is the default now, this environment variable is thus deprecated. (function operator())
+[oracle_dump] patched fastvideo.pipelines.basic.wan.stages.causal_denoising
+Loading safetensors checkpoint shards:   0% Completed | 0/5 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  20% Completed | 1/5 [00:01<00:06,  1.53s/it]
+Loading safetensors checkpoint shards:  40% Completed | 2/5 [00:01<00:02,  1.12it/s]
+Loading safetensors checkpoint shards:  60% Completed | 3/5 [00:02<00:01,  1.33it/s]
+Loading safetensors checkpoint shards:  80% Completed | 4/5 [00:03<00:00,  1.38it/s]
+Loading safetensors checkpoint shards: 100% Completed | 5/5 [00:03<00:00,  1.72it/s]
+Loading safetensors checkpoint shards: 100% Completed | 5/5 [00:03<00:00,  1.40it/s]
+
+[oracle_dump] patched fastvideo.models.wan.causal_transformer
+Loading safetensors checkpoint shards:   0% Completed | 0/1 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:00<00:00,  1.86it/s]
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:00<00:00,  1.86it/s]
+
+/opt/fvrs-live/scripts/gpu/upstream/bench_fastwan.py:180: DeprecationWarning: VideoGenerator.generate_video(...) is deprecated; use VideoGenerator.generate(request=...) instead.
+  r = gen.generate_video(prompt, sampling_param=sp, output_path=str(path), save_video=True)
+[1;36m(Worker pid=1005)[0;0m   0%|          | 0/28 [00:00<?, ?it/s]  4%|▎         | 1/28 [00:00<00:20,  1.33it/s]  7%|▋         | 2/28 [00:00<00:10,  2.47it/s] 11%|█         | 3/28 [00:01<00:06,  3.69it/s] 14%|█▍        | 4/28 [00:01<00:04,  4.84it/s] 18%|█▊        | 5/28 [00:02<00:14,  1.58it/s] 21%|██▏       | 6/28 [00:02<00:10,  2.16it/s] 25%|██▌       | 7/28 [00:02<00:07,  2.83it/s] 29%|██▊       | 8/28 [00:02<00:05,  3.57it/s] 32%|███▏      | 9/28 [00:03<00:05,  3.65it/s] 36%|███▌      | 10/28 [00:03<00:04,  4.31it/s] 39%|███▉      | 11/28 [00:03<00:03,  4.93it/s] 43%|████▎     | 12/28 [00:03<00:02,  5.49it/s] 46%|████▋     | 13/28 [00:03<00:03,  4.65it/s] 50%|█████     | 14/28 [00:04<00:02,  5.09it/s] 54%|█████▎    | 15/28 [00:04<00:02,  5.46it/s] 57%|█████▋    | 16/28 [00:04<00:02,  5.80it/s] 61%|██████    | 17/28 [00:04<00:02,  4.63it/s] 64%|██████▍   | 18/28 [00:04<00:02,  4.97it/s] 68%|██████▊   | 19/28 [00:04<00:01,  5.25it/s] 71%|███████▏  | 20/28 [00:05<00:01,  5.50it/s] 75%|███████▌  | 21/28 [00:05<00:01,  4.29it/s] 79%|███████▊  | 22/28 [00:05<00:01,  4.61it/s] 82%|████████▏ | 23/28 [00:05<00:01,  4.84it/s] 86%|████████▌ | 24/28 [00:06<00:00,  5.04it/s] 89%|████████▉ | 25/28 [00:06<00:00,  3.98it/s] 93%|█████████▎| 26/28 [00:06<00:00,  4.25it/s] 96%|█████████▋| 27/28 [00:06<00:00,  4.46it/s]100%|██████████| 28/28 [00:06<00:00,  4.65it/s]100%|██████████| 28/28 [00:07<00:00,  3.90it/s]
+[1;36m(Worker pid=1005)[0;0m [oracle_dump] sf-wan denoise done: 35 transformer calls, 21 noise draws

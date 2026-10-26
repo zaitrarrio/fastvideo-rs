@@ -1,0 +1,42 @@
+{
+  "upstream": [
+    {
+      "stack": "fastvideo",
+      "id": "beelfsmgjfn15i",
+      "tag": "4b4980b-1026212538-5198",
+      "released": "the runtime side ended; the hold is lifted",
+      "fetched": {
+        "Ok": null
+      },
+      "deleted": {
+        "Ok": null
+      }
+    }
+  ],
+  "served": [
+    "sfwan13"
+  ],
+  "missing": [],
+  "runtime_cells": [
+    "oracle-sfwan13",
+    "oracle-sfwan13-diff",
+    "oracle-sfwan13-f32",
+    "oracle-sfwan13-f32-diff",
+    "oracle-sfwan13-bf16-vs-f32",
+    "oracle-sfwan13-legacy",
+    "oracle-sfwan13-legacy-diff",
+    "oracle-sfwan13-composed",
+    "oracle-sfwan13-composed-diff",
+    "oracle-sfwan13-flash-vs-composed"
+  ],
+  "runtime_started": true,
+  "runtime_tag": "4b4980b-1026212538-1552",
+  "runtime_pod": {
+    "id": "ifjs6vuy8cs5vo",
+    "url": "https://ifjs6vuy8cs5vo-8000.proxy.runpod.net",
+    "tag": "4b4980b-1026212538-1552"
+  },
+  "runtime_ok": true,
+  "runtime_exit_code": 0,
+  "problems": []
+}

@@ -1,0 +1,70 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] wan load: host peak RSS 75.3 GiB (eager dit)
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":12738,"moe":null,"seconds":22.555598377}
+[fastvideo] generate preset=sf_wan_t2v_1_3b tiny=false 832x480 frames=81 steps=4 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] inject: sf_latents_in [1, 16, 21, 60, 104] from the reference
+[fastvideo] inject: text_hidden [1, 512, 4096] from the reference
+[fastvideo] denoise=causal-dmd blocks of 3 frames, timesteps [1000.0, 937.5, 833.3333, 625.0]
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=4680 Sk=4680 D=128
+[fastvideo] inject: sf_noise_000 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 1/7 step 1/4 t=1000.0 done in 212ms
+[fastvideo] inject: sf_noise_001 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 1/7 step 2/4 t=937.5 done in 67ms
+[fastvideo] inject: sf_noise_002 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 1/7 step 3/4 t=833.3 done in 65ms
+[fastvideo] causal block 1/7 step 4/4 t=625.0 done in 64ms
+[fastvideo] inject: sf_noise_003 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 2/7 step 1/4 t=1000.0 done in 191ms
+[fastvideo] inject: sf_noise_004 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 2/7 step 2/4 t=937.5 done in 86ms
+[fastvideo] inject: sf_noise_005 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 2/7 step 3/4 t=833.3 done in 84ms
+[fastvideo] causal block 2/7 step 4/4 t=625.0 done in 83ms
+[fastvideo] inject: sf_noise_006 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 3/7 step 1/4 t=1000.0 done in 98ms
+[fastvideo] inject: sf_noise_007 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 3/7 step 2/4 t=937.5 done in 102ms
+[fastvideo] inject: sf_noise_008 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 3/7 step 3/4 t=833.3 done in 102ms
+[fastvideo] causal block 3/7 step 4/4 t=625.0 done in 101ms
+[fastvideo] inject: sf_noise_009 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 4/7 step 1/4 t=1000.0 done in 114ms
+[fastvideo] inject: sf_noise_010 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 4/7 step 2/4 t=937.5 done in 120ms
+[fastvideo] inject: sf_noise_011 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 4/7 step 3/4 t=833.3 done in 120ms
+[fastvideo] causal block 4/7 step 4/4 t=625.0 done in 120ms
+[fastvideo] inject: sf_noise_012 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 5/7 step 1/4 t=1000.0 done in 130ms
+[fastvideo] inject: sf_noise_013 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 5/7 step 2/4 t=937.5 done in 138ms
+[fastvideo] inject: sf_noise_014 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 5/7 step 3/4 t=833.3 done in 138ms
+[fastvideo] causal block 5/7 step 4/4 t=625.0 done in 138ms
+[fastvideo] inject: sf_noise_015 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 6/7 step 1/4 t=1000.0 done in 146ms
+[fastvideo] inject: sf_noise_016 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 6/7 step 2/4 t=937.5 done in 156ms
+[fastvideo] inject: sf_noise_017 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 6/7 step 3/4 t=833.3 done in 156ms
+[fastvideo] causal block 6/7 step 4/4 t=625.0 done in 156ms
+[fastvideo] inject: sf_noise_018 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 7/7 step 1/4 t=1000.0 done in 161ms
+[fastvideo] inject: sf_noise_019 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 7/7 step 2/4 t=937.5 done in 174ms
+[fastvideo] inject: sf_noise_020 [1, 3, 16, 60, 104] from the reference
+[fastvideo] causal block 7/7 step 3/4 t=833.3 done in 174ms
+[fastvideo] causal block 7/7 step 4/4 t=625.0 done in 174ms
+[fastvideo] causal dmd 4 steps done in 4500ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] vae.decode done in 2239ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.04s, 0.04 GiB, synced), ffmpeg feed blocked 0.09s, mp4 tail 0.02s, buffered peak 0.09 GiB of 41.35
+[fastvideo] wrote mp4 /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13/frames/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13/frames (text 0.42s, denoise 4.50s, decode+mp4 3.01s, png 0.04s)
+[fastvideo] generate done in 7989ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":3.006063823,"decoder":"wan-vae","denoise_s":4.502146702,"frames_sha256":"ae12e082dee4d1def42636c9d6c8e716315b927c7a238d3a96e167809cae95a8","peak_mib":27684,"step_s":[0.214164586,0.067870092,0.065289584,0.064740793,0.329302836,0.086147828,0.084073149,0.083837778,0.182075064,0.102146914,0.102133254,0.101888334,0.215748875,0.120957759,0.120979489,0.120709279,0.250384076,0.138890355,0.138895855,0.138622624,0.284066758,0.15691039,0.15672901,0.15667215,0.317616829,0.174723225,0.174747456,0.174587995],"text_cache":"miss","text_s":0.420034963,"total_s":7.949003642,"video_encode_s":0.024757533,"video_push_s":0.00004947000000000001,"video_rgb_s":0.02331595900155231,"video_vae_s":2.975074440002442,"video_wait_s":0.737835432,"write_s":0.04054708}
+wan gen default: total 7.95s (text 0.42s, denoise 4.50s, decode 3.01s) png 0.04s peak Some(27684) MiB frames ae12e082dee4d1def42636c9d6c8e716315b927c7a238d3a96e167809cae95a8
+[PASS] wan/frames {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13/frames/frame-040.png","mean":0.4633514559534332,"std":0.27425397713102323} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (31.2s)

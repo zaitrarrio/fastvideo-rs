@@ -1,0 +1,98 @@
+INFO 10-26 21:29:37.323 [__init__.py:47] CUDA is available
+INFO 10-26 21:29:39.797 [multiproc_executor.py:107] Use master port: 33075
+INFO 10-26 21:29:44.244 [__init__.py:47] CUDA is available
+INFO 10-26 21:29:45.331 [parallel_state.py:909] Initializing distributed environment with world_size=1, device=cuda:0
+INFO 10-26 21:29:45.332 [parallel_state.py:737] Using nccl backend for CUDA platform
+INFO 10-26 21:29:45.361 [__init__.py:39] Building pipeline of type: basic
+INFO 10-26 21:29:45.362 [utils.py:691] Diffusers version: 0.33.0.dev0
+INFO 10-26 21:29:45.362 [pipeline_registry.py:134] Loading pipelines for types: ['basic']
+INFO 10-26 21:29:45.512 [pipeline_registry.py:176] Loaded 54 pipeline classes across 1 types
+INFO 10-26 21:29:45.512 [utils.py:544] Model already exists locally at /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers
+INFO 10-26 21:29:45.512 [__init__.py:56] Model path: /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers
+INFO 10-26 21:29:45.513 [profiler.py:198] Torch profiler disabled; returning no-op controller
+INFO 10-26 21:29:45.513 [composed_pipeline_base.py:171] Loading pipeline modules...
+INFO 10-26 21:29:45.513 [utils.py:544] Model already exists locally at /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers
+INFO 10-26 21:29:45.513 [composed_pipeline_base.py:471] Model path: /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers
+INFO 10-26 21:29:45.513 [utils.py:691] Diffusers version: 0.33.0.dev0
+INFO 10-26 21:29:45.513 [composed_pipeline_base.py:532] Loading pipeline modules from config: {'_class_name': 'WanCausalDMDPipeline', '_diffusers_version': '0.33.0.dev0', 'scheduler': ['diffusers', 'SelfForcingFlowMatchScheduler'], 'text_encoder': ['transformers', 'UMT5EncoderModel'], 'tokenizer': ['transformers', 'T5TokenizerFast'], 'transformer': ['diffusers', 'CausalWanTransformer3DModel'], 'vae': ['diffusers', 'AutoencoderKLWan']}
+INFO 10-26 21:29:45.513 [composed_pipeline_base.py:571] Loading required modules: ['text_encoder', 'tokenizer', 'vae', 'transformer', 'scheduler']
+INFO 10-26 21:29:45.513 [component_loader.py:1380] Loading scheduler using diffusers from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/scheduler
+INFO 10-26 21:29:45.515 [composed_pipeline_base.py:626] Loaded module scheduler from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/scheduler
+INFO 10-26 21:29:45.515 [component_loader.py:1380] Loading text_encoder using transformers from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/text_encoder
+INFO 10-26 21:29:45.515 [component_loader.py:299] HF Model config: {'architectures': ['UMT5EncoderModel'], 'classifier_dropout': 0.0, 'd_ff': 10240, 'd_kv': 64, 'd_model': 4096, 'decoder_start_token_id': 0, 'dense_act_fn': 'gelu_new', 'dropout_rate': 0.1, 'eos_token_id': 1, 'feed_forward_proj': 'gated-gelu', 'initializer_factor': 1.0, 'is_encoder_decoder': True, 'is_gated_act': True, 'layer_norm_epsilon': 1e-06, 'num_decoder_layers': 24, 'num_heads': 64, 'num_layers': 24, 'output_past': True, 'pad_token_id': 0, 'relative_attention_max_distance': 128, 'relative_attention_num_buckets': 32, 'scalable_attention': True, 'tie_word_embeddings': False, 'use_cache': True, 'vocab_size': 256384}
+INFO 10-26 21:29:49.116 [component_loader.py:448] Loading weights took 3.57 seconds
+INFO 10-26 21:29:49.120 [composed_pipeline_base.py:626] Loaded module text_encoder from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/text_encoder
+INFO 10-26 21:29:49.120 [component_loader.py:1380] Loading tokenizer using transformers from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/tokenizer
+INFO 10-26 21:29:49.120 [component_loader.py:626] Loading tokenizer from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/tokenizer
+INFO 10-26 21:29:50.244 [component_loader.py:724] Loaded tokenizer: T5Tokenizer
+INFO 10-26 21:29:50.244 [composed_pipeline_base.py:626] Loaded module tokenizer from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/tokenizer
+INFO 10-26 21:29:50.244 [component_loader.py:1380] Loading transformer using diffusers from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/transformer
+INFO 10-26 21:29:50.244 [component_loader.py:1042] transformer cls_name: CausalWanTransformer3DModel
+INFO 10-26 21:29:50.256 [component_loader.py:1094] Loading model from 1 safetensors files: ['/root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/transformer/diffusion_pytorch_model.safetensors']
+INFO 10-26 21:29:50.256 [component_loader.py:1103] Loading model from CausalWanTransformer3DModel, default_dtype: torch.bfloat16
+INFO 10-26 21:29:50.256 [component_loader.py:1119] Worker 0 transformer attention backend: FLASH_ATTN
+INFO 10-26 21:29:50.256 [fsdp_load.py:228] Loading model with default_dtype: torch.bfloat16
+INFO 10-26 21:29:50.257 [cuda.py:174] Trying FASTVIDEO_ATTENTION_BACKEND=FLASH_ATTN
+INFO 10-26 21:29:50.257 [cuda.py:175] Selected backend: AttentionBackendEnum.FLASH_ATTN
+INFO 10-26 21:29:50.260 [cuda.py:332] Cannot use FlashAttention-2 backend because the flash_attn package is not found. Make sure that flash_attn was built and installed (on by default).
+INFO 10-26 21:29:50.260 [cuda.py:339] Using Torch SDPA backend.
+INFO 10-26 21:29:50.280 [fsdp_load.py:282] Loading transformer weights with to_cpu=False
+INFO 10-26 21:29:50.844 [component_loader.py:1155] Loaded model with 1.42B parameters
+INFO 10-26 21:29:55.249 [composed_pipeline_base.py:626] Loaded module transformer from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/transformer
+INFO 10-26 21:29:55.249 [component_loader.py:1380] Loading vae using diffusers from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/vae
+INFO 10-26 21:29:55.511 [composed_pipeline_base.py:626] Loaded module vae from /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/model/SFWan2.1-T2V-1.3B-Diffusers/vae
+INFO 10-26 21:29:55.511 [lora_pipeline.py:202] trainable_transformer_modules: dict_keys(['transformer'])
+INFO 10-26 21:29:55.512 [__init__.py:61] Pipelines instantiated
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.512 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 10-26 21:29:55.512 [multiproc_executor.py:707] 1 workers ready
+INFO 10-26 21:29:55.514 [video_generator.py:766] 
+INFO 10-26 21:29:55.514 [video_generator.py:766]                       height: 480
+INFO 10-26 21:29:55.514 [video_generator.py:766]                        width: 832
+INFO 10-26 21:29:55.514 [video_generator.py:766]                 video_length: 81
+INFO 10-26 21:29:55.514 [video_generator.py:766]                       prompt: A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>
+INFO 10-26 21:29:55.514 [video_generator.py:766]                       image_path: None
+INFO 10-26 21:29:55.514 [video_generator.py:766]                   neg_prompt: 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走
+INFO 10-26 21:29:55.514 [video_generator.py:766]                         seed: 1024
+INFO 10-26 21:29:55.514 [video_generator.py:766]                  infer_steps: 50
+INFO 10-26 21:29:55.514 [video_generator.py:766]        num_videos_per_prompt: 1
+INFO 10-26 21:29:55.514 [video_generator.py:766]               guidance_scale: 6.0
+INFO 10-26 21:29:55.514 [video_generator.py:766]                     n_tokens: 131040
+INFO 10-26 21:29:55.514 [video_generator.py:766]                   flow_shift: 5.0
+INFO 10-26 21:29:55.514 [video_generator.py:766]      embedded_guidance_scale: 6.0
+INFO 10-26 21:29:55.514 [video_generator.py:766]                   save_video: True
+INFO 10-26 21:29:55.514 [video_generator.py:766]                   output_path: /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/default/run_01/A man in his thirties talking to the camera in a bright living room, medium close-up, natural expres.mp4
+INFO 10-26 21:29:55.514 [video_generator.py:766]         
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.518 [composed_pipeline_base.py:388] Creating pipeline stages...
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.518 [cuda.py:174] Trying FASTVIDEO_ATTENTION_BACKEND=FLASH_ATTN
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.518 [cuda.py:175] Selected backend: AttentionBackendEnum.FLASH_ATTN
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.519 [cuda.py:332] Cannot use FlashAttention-2 backend because the flash_attn package is not found. Make sure that flash_attn was built and installed (on by default).
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.519 [cuda.py:339] Using Torch SDPA backend.
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.519 [composed_pipeline_base.py:758] Running pipeline stages: dict_keys(['input_validation_stage', 'prompt_encoding_stage', 'conditioning_stage', 'latent_preparation_stage', 'first_frame_encoding_stage', 'denoising_stage', 'decoding_stage'])
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.519 [base.py:182] [input_validation_stage|InputValidationStage] Starting execution
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.519 [base.py:190] [input_validation_stage|InputValidationStage] Execution completed in 0.055579934269189835 ms
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.520 [base.py:182] [prompt_encoding_stage|TextEncodingStage] Starting execution
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.804 [base.py:190] [prompt_encoding_stage|TextEncodingStage] Execution completed in 284.4924950040877 ms
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.810 [base.py:182] [conditioning_stage|ConditioningStage] Starting execution
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.810 [base.py:190] [conditioning_stage|ConditioningStage] Execution completed in 0.015279976651072502 ms
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.810 [base.py:182] [latent_preparation_stage|LatentPreparationStage] Starting execution
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.816 [base.py:190] [latent_preparation_stage|LatentPreparationStage] Execution completed in 6.371187977492809 ms
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.817 [base.py:182] [first_frame_encoding_stage|WanFirstFrameEncodingStage] Starting execution
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.817 [base.py:190] [first_frame_encoding_stage|WanFirstFrameEncodingStage] Execution completed in 0.006170012056827545 ms
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:29:55.817 [base.py:182] [denoising_stage|CausalDMDDenosingStage] Starting execution
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:30:03.019 [base.py:190] [denoising_stage|CausalDMDDenosingStage] Execution completed in 7202.081333962269 ms
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:30:03.019 [base.py:182] [decoding_stage|DecodingStage] Starting execution
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:30:06.493 [base.py:190] [decoding_stage|DecodingStage] Execution completed in 3473.9657300524414 ms
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:30:06.497 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 10-26 21:30:06.505 [video_generator.py:863] Generated successfully in 10.99 seconds
+INFO 10-26 21:30:06.848 [video_generator.py:919] PostDecodeFrameProcessStage completed in 0.341 s
+INFO 10-26 21:30:07.110 [video_generator.py:990] Saved video to /root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/default/run_01/A man in his thirties talking to the camera in a bright living room, medium close-up, natural expres.mp4
+INFO 10-26 21:30:07.110 [video_generator.py:992] VideoSaveStage completed in 0.262 s
+INFO 10-26 21:30:07.110 [video_generator.py:995] AudioMuxStage completed in 0.000 s
+INFO 10-26 21:30:07.110 [video_generator.py:1000] End-to-end latency: 11.60 seconds
+INFO 10-26 21:30:07.113 [multiproc_executor.py:347] Shutting down MultiprocExecutor...
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:30:07.114 [gpu_worker.py:108] Worker 0 shutting down...
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:30:07.507 [gpu_worker.py:117] Worker 0 shutdown complete
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:30:07.507 [gpu_worker.py:108] Worker 0 shutting down...
+[1;36m(Worker pid=1005)[0;0m INFO 10-26 21:30:07.764 [gpu_worker.py:117] Worker 0 shutdown complete
+INFO 10-26 21:30:10.117 [multiproc_executor.py:402] MultiprocExecutor shutdown complete
+{"ok": true, "load_s": 15.71732791105751, "warm_total_s": 11.600830975919962, "median_denoise_s": 7.202081333962269, "median_decode_s": 3.4739657300524414, "error": null}

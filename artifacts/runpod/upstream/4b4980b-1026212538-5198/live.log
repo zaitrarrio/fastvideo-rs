@@ -1,0 +1,11 @@
+[21:28:54] pod.sh start steps: info:box r2:sfwan21-1.3b oracle:sfwan13
+[21:28:54] ▶ step info:box
+[21:28:54] ok step info:box  0s
+[21:28:54] ▶ step r2:sfwan21-1.3b
+[21:29:25] ok step r2:sfwan21-1.3b  31s
+[21:29:25] ▶ step oracle:sfwan13
+[21:29:27] ▶ cell oracle-sfwan13
+[21:30:11] ok oracle-sfwan13 44s peak 35458MiB ram 12174 MiB of 269889 MiB
+170M	/root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/dump
+[21:30:11] ok step oracle:sfwan13  46s
+[21:30:12] pod.sh done

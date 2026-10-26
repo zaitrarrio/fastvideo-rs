@@ -1,0 +1,239 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "frame_counts",
+      "ok": true,
+      "values": {
+        "baseline": 81,
+        "candidate": 81,
+        "match": true,
+        "pairs": 81
+      }
+    },
+    {
+      "limits": {},
+      "name": "frame_shape",
+      "ok": true,
+      "values": {
+        "shape_mismatch": null
+      }
+    },
+    {
+      "limits": {},
+      "name": "pixel_metrics",
+      "ok": true,
+      "values": {
+        "mean_abs_pixel_diff": 52.47976286750156,
+        "mse_max": 6011.736545138889,
+        "mse_mean": 4343.795104100717,
+        "pairs": 81,
+        "patch_boundary_ratio_by_size_max": {
+          "16": 1.5335377884398562,
+          "32": 1.5696411057278863,
+          "8": 1.5456512484999663
+        },
+        "patch_boundary_ratio_by_size_mean": {
+          "16": 1.1778268642941208,
+          "32": 1.188686780027844,
+          "8": 1.2014717192733773
+        },
+        "patch_boundary_ratio_max": 1.5696411057278863,
+        "patch_boundary_ratio_mean": 1.2151472123379639,
+        "psnr_mean": 11.81597680220357,
+        "psnr_min": 10.340804208059085,
+        "sharpness_ratio_mean": 1.3082834745735958,
+        "status": "ok",
+        "temporal_delta_error_max": 19.277244424412395,
+        "temporal_delta_error_mean": 8.783902827857906,
+        "temporal_jitter_ratio_max": 14.885608234577148,
+        "temporal_jitter_ratio_mean": 4.144330297757658,
+        "temporal_jitter_ratio_min": 0.9347567411419112
+      }
+    },
+    {
+      "limits": {},
+      "name": "off_identity",
+      "ok": true,
+      "values": {
+        "max_abs_diff_uint8": 255,
+        "nonidentical_frames": 81,
+        "pairs": 81,
+        "status": "different"
+      }
+    }
+  ],
+  "context": {
+    "baseline": {
+      "dir": "/fvscratch/oracle-ref/sfwan13/frames",
+      "frames": 81,
+      "frames_dir": "/fvscratch/oracle-ref/sfwan13/frames",
+      "log": null,
+      "mp4": null,
+      "notes": [
+        "required artifacts are missing"
+      ],
+      "status": "blocked"
+    },
+    "candidate": {
+      "dir": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-legacy/frames",
+      "frames": 81,
+      "frames_dir": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-legacy/frames",
+      "log": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-legacy/stderr.log",
+      "mp4": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-legacy/frames/output.mp4",
+      "notes": [],
+      "status": "completed"
+    },
+    "cuda_feature": true,
+    "lpips": {
+      "reason": "disabled (pass --lpips <weights dir>)",
+      "status": "deferred"
+    },
+    "mode": "exact",
+    "off_identity": {
+      "max_abs_diff_uint8": 255,
+      "nonidentical_frames": 81,
+      "pairs": 81,
+      "status": "different"
+    },
+    "pixel_metrics": {
+      "mean_abs_pixel_diff": 52.47976286750156,
+      "mse_max": 6011.736545138889,
+      "mse_mean": 4343.795104100717,
+      "pairs": 81,
+      "patch_boundary_ratio_by_size_max": {
+        "16": 1.5335377884398562,
+        "32": 1.5696411057278863,
+        "8": 1.5456512484999663
+      },
+      "patch_boundary_ratio_by_size_mean": {
+        "16": 1.1778268642941208,
+        "32": 1.188686780027844,
+        "8": 1.2014717192733773
+      },
+      "patch_boundary_ratio_max": 1.5696411057278863,
+      "patch_boundary_ratio_mean": 1.2151472123379639,
+      "psnr_mean": 11.81597680220357,
+      "psnr_min": 10.340804208059085,
+      "psnr_per_frame": [
+        10.83756445217994,
+        11.423956266566194,
+        11.46301123856417,
+        11.562074492485534,
+        11.553132029829971,
+        11.978419242830881,
+        12.038517942657707,
+        12.066769691810649,
+        12.065229872509613,
+        12.559135694548898,
+        12.316115533298698,
+        12.328518386382658,
+        12.131180914106137,
+        12.335487166428896,
+        12.301330480197333,
+        12.310943965269399,
+        12.388504266284592,
+        13.078019514605321,
+        13.035051166361068,
+        12.982874258362408,
+        12.855808236363032,
+        12.957789489003675,
+        12.458635468975727,
+        12.146609964206318,
+        11.818999467030245,
+        11.940355501603408,
+        11.767612241235481,
+        11.652168448011896,
+        11.529197324317737,
+        12.242128957750328,
+        12.72847925803356,
+        12.843461787254554,
+        12.830565724808295,
+        13.049703449422484,
+        12.731418900040222,
+        12.482107488330103,
+        12.379397525735762,
+        12.577069566244036,
+        12.528259217183153,
+        12.443988322556052,
+        12.371765179148117,
+        12.618963604656546,
+        12.55283789012978,
+        12.37728510097677,
+        12.259676443126235,
+        12.388313667523537,
+        12.302972591054948,
+        12.135117161713449,
+        12.061430843138458,
+        12.063787390823697,
+        11.923831800032954,
+        11.66675954502266,
+        11.551783592083728,
+        11.655591134774008,
+        11.58028996554238,
+        11.428410158916911,
+        11.344918733920109,
+        11.573133849755642,
+        11.552662353582264,
+        11.486454746834923,
+        11.410339222348142,
+        11.260237473980922,
+        10.908799871417314,
+        10.661813366786554,
+        10.463766268415087,
+        10.57763212415586,
+        10.515749651065594,
+        10.419990409598077,
+        10.340804208059085,
+        10.60769893796419,
+        10.710889392226541,
+        10.763293576490558,
+        10.835372643257772,
+        11.007981003682856,
+        11.054277535128996,
+        11.038813613850316,
+        10.964098131571918,
+        11.011848356970946,
+        11.026030709845136,
+        10.960382589323931,
+        10.938723226205697
+      ],
+      "sharpness_ratio_mean": 1.3082834745735958,
+      "status": "ok",
+      "temporal_delta_error_max": 19.277244424412395,
+      "temporal_delta_error_mean": 8.783902827857906,
+      "temporal_jitter_ratio_max": 14.885608234577148,
+      "temporal_jitter_ratio_mean": 4.144330297757658,
+      "temporal_jitter_ratio_min": 0.9347567411419112
+    },
+    "thresholds": {
+      "gemini_absolute_threshold": "disabled_for_lossy_generative_dimensions",
+      "lpips_absolute_threshold": "disabled_for_lossy_generative_dimensions",
+      "off_identity": "not requested",
+      "pixel_metrics": "telemetry (no absolute threshold)",
+      "quality_ranking": {
+        "primary": "aligned_pairwise_gemini_max_artifact_severity",
+        "secondary": "aligned_lpips_max",
+        "tie_breaker": "higher_speedup"
+      },
+      "selection": "best_quality_at_or_above_speed_target",
+      "source": "sol-engine evals/tiers.toml",
+      "speedup_targets": {
+        "high": 3.0,
+        "low": 1.5,
+        "medium": 2.0
+      }
+    }
+  },
+  "elapsed_s": 0.124762287,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_DUMP_OPS": "0,1,24,47",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "compare-clips-oracle-sfwan13-legacy-frames-vs-ref",
+  "status": "pass"
+}

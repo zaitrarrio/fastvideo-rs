@@ -1,0 +1,16 @@
+{
+  "id": "beelfsmgjfn15i",
+  "name": "fv-lab-upstream-4b4980b-1026212538-5198",
+  "family": "upstream",
+  "tag": "4b4980b-1026212538-5198",
+  "sha": "4b4980b",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo@sha256:c766ab4c8ffd4ea2f572c1d40cfae7ebb2947e89e7947b719a117b3bef27d41a",
+  "url": "https://beelfsmgjfn15i-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793049941.5877385,
+  "cap_s": 7200,
+  "min_ram_gb": 192,
+  "memory_gb": 283.0,
+  "vcpus": 28.0
+}
