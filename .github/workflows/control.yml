@@ -23,6 +23,8 @@ on:
       - "scripts/gcp/families.tsv"
       - "scripts/gpu/volumes.sh"
       - "scripts/gpu/verify-weights.sh"
+      - "scripts/gpu/verify-safetensors.sh"
+      - "scripts/gpu/tests/verify-weights.test.sh"
       - "scripts/gpu/weights-*.tsv"
       - "scripts/gpu/r2-fetch.py"
       - "crates/fastvideo-deploy/fixtures/**"
@@ -93,6 +95,8 @@ on:
       - "scripts/gcp/families.tsv"
       - "scripts/gpu/volumes.sh"
       - "scripts/gpu/verify-weights.sh"
+      - "scripts/gpu/verify-safetensors.sh"
+      - "scripts/gpu/tests/verify-weights.test.sh"
       - "scripts/gpu/weights-*.tsv"
       - "scripts/gpu/r2-fetch.py"
       - "crates/fastvideo-deploy/fixtures/**"
@@ -183,6 +187,9 @@ jobs:
       - name: Shell lint (verify-weights.sh carries a generated region)
         working-directory: .
         run: bash scripts/gpu/lint.sh
+      - name: verify-weights.sh checks index shards, a published tree's shared shard at the copy the engine reads (docs/ops/r2-weights.md §15)
+        working-directory: .
+        run: bash scripts/gpu/tests/verify-weights.test.sh
       - name: fv-deploy goldens are what runpod-pod.sh / runpod-endpoint.sh / vast.sh / gcp/vm.sh / runpod-templates.sh / release.sh send (ADR-0018 §4, §8, §10)
         working-directory: .
         run: bash scripts/serve/tests/fv-deploy-goldens.sh --check

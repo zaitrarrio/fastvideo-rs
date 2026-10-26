@@ -27,7 +27,9 @@
 #
 # For every weight root a cell needs, this checks:
 #   1. each required component directory / file exists (dir, or file for LoRAs);
-#   2. every `*.safetensors.index.json` lists shards that all exist on disk;
+#   2. every `*.safetensors.index.json` lists shards that all exist on disk (a shard a
+#      published tree leaves out because it is byte-identical in another tree, `shared_file`
+#      below, is checked at that other tree's path instead);
 #   3. every safetensors file is its full length (header + data, via
 #      verify-safetensors.sh), following HF-cache symlinks.
 # The `aux` cell instead checks every auxiliary/ url: row of weights-manifest.tsv (TAE and
@@ -90,11 +92,11 @@ needs() {
     # Its ComfyUI NVFP4 single file (Blackwell). Plus sha:fasth3-trim-8step-nvfp4.
     fasth3-trim-8step-nvfp4)
       echo ":fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors" ;;
-    # FastH3 V2 / 4-step NVFP4 (ModelOpt layout, docs/ports/fasth3-nvfp4.md): the published transformer/ and vae/
-    # (vae shard 3, text encoder, tokenizer, audio VAE: h3-8step's / h3-base's). Plus sha:<dest>. R2 only.
-    # Its vae/ index names shard 3, which is h3-8step's: the two published shards are checked as files.
+    # FastH3 V2 / 4-step NVFP4 (ModelOpt layout, docs/ports/fasth3-nvfp4.md): the published transformer/ and vae/;
+    # the text encoder, tokenizer, audio VAE and vae shard 3 are h3-base's, which the engine reads (families/h3.toml
+    # text_weights). The vae/ index names shard 3, checked at h3-base's path (shared_file). Plus sha:<dest>. R2 only.
     fasth3-v2-nvfp4|fasth3-4step-vsa-nvfp4)
-      echo "$1:transformer $1:vae/diffusion_pytorch_model-00001-of-00003.safetensors $1:vae/diffusion_pytorch_model-00002-of-00003.safetensors h3-8step:vae h3-8step:audio_vae h3-8step:tokenizer h3-8step:text_encoder" ;;
+      echo "$1:transformer $1:vae h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder" ;;
     # VDN-H3 (docs/ports/vdn-h3.md): h3-base's transformer, VAEs and text encoder plus the stage-B linear branch and its
     # default LoRA (vdn-h3-stage-b-2000). Plus sha:vdn-h3-stage-b-2000.
     vdn-h3)
@@ -281,16 +283,62 @@ fi
 fail=0
 declare -A checked=()
 
+# shared_file <tree>/<path>: "<tree>/<path> <bytes> <sha256>" of the copy the engine reads in place of a file
+# that a published tree's index names but the tree does not carry, because it is byte-identical there; status 1
+# for any other file. Only the files listed here may be absent from a tree; the copy is checked in their place:
+# a complete safetensors file of the listed size and SHA-256 (the Hub's LFS SHA-256; 0.4 GB read).
+#   fasth3-v2-nvfp4, fasth3-4step-vsa-nvfp4: the R2 trees carry vae/ shards 1-2 (the NVFP4 decoder
+#   linears), the config and the index; shard 3 equals h3-base's @ 42ed227 and was not published
+#   (weights-manifest.tsv, docs/ops/r2-weights.md §15). The H3 loader reads it from h3-base's vae/
+#   (crates/fastvideo-cudarc/src/h3/pipeline.rs `completed_vae_files`). Size and LFS SHA-256 are the same
+#   in the three Hub repos at their pinned revisions and in h3-8step @ 3da2ddf (Hub API, 2026-10-26).
+H3_VAE_SHARD3=diffusion_pytorch_model-00003-of-00003.safetensors
+H3_VAE_SHARD3_SIZE=398539336
+H3_VAE_SHARD3_SHA256=c05d6ac4b1a33de372799d708531da6320f6a3ce6d1ce6d895e770988e004a39
+shared_file() {
+  case "$1" in
+    "fasth3-v2-nvfp4/vae/$H3_VAE_SHARD3" | "fasth3-4step-vsa-nvfp4/vae/$H3_VAE_SHARD3")
+      echo "h3-base/vae/$H3_VAE_SHARD3 $H3_VAE_SHARD3_SIZE $H3_VAE_SHARD3_SHA256" ;;
+    *) return 1 ;;
+  esac
+}
+
+# The copy of a shared_file: complete, its size and SHA-256 (once per run).
+declare -A shared_checked=()
+check_shared() {
+  local p="$1" size="$2" sha="$3" got rc=0
+  [[ -n "${shared_checked[$p]:-}" ]] && return "${shared_checked[$p]}"
+  if ! bash "$HERE/verify-safetensors.sh" "$p" >/dev/null 2>&1; then
+    echo "  shared copy $p incomplete (not a complete safetensors file)" >&2; rc=1
+  elif got="$(wc -c <"$p" | tr -d ' ')"; [[ "$got" != "$size" ]]; then
+    echo "  shared copy $p: $got bytes, expected $size" >&2; rc=1
+  else
+    got="$(sha256sum "$p" | awk '{print $1}')"
+    if [[ "$got" != "$sha" ]]; then echo "  shared copy $p: SHA-256 $got, expected $sha" >&2; rc=1; fi
+  fi
+  shared_checked[$p]=$rc
+  return $rc
+}
+
 check_index() {
-  # Every shard named in an index's weight_map must be present.
-  local idx="$1" dir shard
+  # Every shard named in an index's weight_map must be present: in its own
+  # directory, or for a shared_file at the path of the copy the engine reads.
+  local idx="$1" dir shard alt size sha
   dir="$(dirname "$idx")"
   while IFS= read -r shard; do
     [[ -n "$shard" ]] || continue
-    if [[ ! -e "$dir/$shard" ]]; then
-      echo "  MISSING shard $dir/$shard (listed in $(basename "$idx"))" >&2
-      return 1
+    [[ -e "$dir/$shard" ]] && continue
+    if read -r alt size sha < <(shared_file "${dir#"$W"/}/$shard"); then
+      if [[ ! -e "$W/$alt" ]]; then
+        echo "  MISSING shard $dir/$shard (listed in $(basename "$idx")): not published in this tree; the engine reads $W/$alt, which is missing" >&2
+        return 1
+      fi
+      check_shared "$W/$alt" "$size" "$sha" || return 1
+      echo "  shared shard $dir/$shard: $W/$alt (complete, $size bytes, SHA-256 as recorded; read from there)"
+      continue
     fi
+    echo "  MISSING shard $dir/$shard (listed in $(basename "$idx"))" >&2
+    return 1
   done < <(grep -oE '"[^"]+\.safetensors"' "$idx" | tr -d '"' | sort -u)
 }
 
