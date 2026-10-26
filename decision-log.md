@@ -2021,3 +2021,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/ops/r2-weights.md §15
 - Verification: `h3::pipeline::tests::{only_the_listed_shared_vae_shard_is_read_from_h3_base, shared_files_mirror_verify_weights_shared_file, the_nvfp4_trees_vae_is_its_default_decoder_completed_from_h3_base}`, `verify-weights.test.sh`
+
+### FVID · 2026-10-26 · FVID-2026-10-26-gen-configs-shared-file-check
+- Trigger: plan D1 follow-up 5: the NVFP4 trees leave out vae shard 3 (`verify-weights.sh` `shared_file`, #208), which the engine reads from its text weights' `vae/`; nothing checked that a variant reading such a tree names that tree as its `text_weights` and in its `trees`
+- Options: a hand list of the NVFP4 variants in gen-configs.mjs; read `verify-weights.sh`'s `shared_file` table and check every variant whose trees include a tree it names
+- Decision: (coordinator's request, executed by the agent) the second: `sharedFiles()` reads the table (plain `NAME=value` assignments, the `"<pattern>" | …)` and `echo "<copy> <bytes> <sha256>" ;;` arms; refuses a script without the function or a malformed arm), `sharedFileChecks()` requires the copy's tree in `trees` and `engine.text_weights = "${weights}/<copy tree>"`; part of `crossChecks`, so `node gen-configs.mjs --check` and `families-gen.test.ts` run it; `parseFamily` carries `text_weights` (not written to any generated file)
+- Reason: one table (the script) for the lab gate, the engine's mirror test and this check; a new tree with a shared file is checked without editing gen-configs.mjs
+- Reversibility: high (a check)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/ops/r2-weights.md §15
+- Verification: `control/test/unit/families-gen.test.ts` (the table's two rows; the four NVFP4 variants pass; another `text_weights`, none, or h3-base missing from `trees` refused naming the variant and the copy; a script without the table or with a bad arm throws), `node gen-configs.mjs --check`, vitest unit, tsc
