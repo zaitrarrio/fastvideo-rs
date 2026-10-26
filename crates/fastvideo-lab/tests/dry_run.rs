@@ -733,7 +733,10 @@ fn the_hd_tiers_are_the_hd_family_without_its_derived_step() {
         }
     }
     let raw = fixture("hd5-dry-run.txt");
-    let dropped: Vec<&str> = raw.lines().filter(|l| l.contains("] prompt set: ")).collect();
+    let dropped: Vec<&str> = raw
+        .lines()
+        .filter(|l| l.contains("] prompt set: "))
+        .collect();
     assert_eq!(
         dropped,
         ["[hd] prompt set: /opt/fastvideo-rs/scripts/gpu/prompts-hd5.json"]

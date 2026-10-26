@@ -129,10 +129,7 @@ pub const START_SET: [&str; 8] = [
 /// Every key `fv-lab pod up --extra-env` refuses: `runpod-http.sh`'s
 /// `FV_LAB_NOT_READ`, in its order.
 pub fn not_read() -> impl Iterator<Item = &'static str> {
-    MODE_KNOBS
-        .into_iter()
-        .chain(DROPPED_KNOBS)
-        .chain(START_SET)
+    MODE_KNOBS.into_iter().chain(DROPPED_KNOBS).chain(START_SET)
 }
 
 /// The restored mode `key=value` selects, if any.
@@ -449,7 +446,9 @@ mod tests {
             )
             .unwrap_err();
             assert!(
-                e.contains("--extra-env FV_HD_POST_URL: the hd family's post-script hook was dropped"),
+                e.contains(
+                    "--extra-env FV_HD_POST_URL: the hd family's post-script hook was dropped"
+                ),
                 "{e}"
             );
         }
@@ -459,7 +458,10 @@ mod tests {
         assert!(e.contains("ADR-0019 §22"), "{e}");
         for k in DROPPED_KNOBS {
             assert!(not_read().any(|n| n == k), "{k}");
-            assert!(!MODE_KNOBS.contains(&k) && !SCRIPT_KNOBS.contains(&k), "{k}");
+            assert!(
+                !MODE_KNOBS.contains(&k) && !SCRIPT_KNOBS.contains(&k),
+                "{k}"
+            );
         }
     }
 
