@@ -54,6 +54,7 @@ GPU runs that prove a port (timing, byte identity, quality against another
 arm) are fv-lab cells and a tier (`lab/cells/`, `lab/tiers.toml`,
 `docs/dev/fv-lab.md`), not a new one-off pod script: D1e
 (`docs/adr/0019-fv-lab.md` §14) deleted the one-offs under
-`scripts/gpu/experiments/` but the one waiting for its tier's GPU check.
+`scripts/gpu/experiments/`, the last (`h3-graphs`) once its tier's GPU check
+passed (§14.4).
 Parity against the upstream implementation is the oracle's
 (`scripts/gpu/upstream/`, `docs/oracle.md`).

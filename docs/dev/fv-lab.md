@@ -2,13 +2,15 @@
 
 `fv-lab` runs the lab's run plan (`lab/tiers.toml`, `lab/cells/*.toml`) on a GPU box and makes that box: a Runpod pod
 on fv-deploy's guards (price cap, $8 floor, EU volume, detached backstop, ready within 600 s in at most 3 cycles).
-Design: [ADR-0019](../adr/0019-fv-lab.md). Today it carries eleven tiers that were `runpod-matrix.sh` families. Each
+Design: [ADR-0019](../adr/0019-fv-lab.md). Today it carries thirteen tiers that were `runpod-matrix.sh` families. Each
 passed its GPU gate (fv-lab's run and the script's of one commit, frames byte-identical), so its script branch is
 deleted and the tier is fv-lab only ([The families](#the-families), [ADR-0019 §10](../adr/0019-fv-lab.md)). Each is
 held to the script's last dry run by a frozen golden ([below](#keeping-it-equal-to-the-scripts)). The other families
-stay in the script and move in later slices. The last of the eleven, `b4a` (D1d), is the first whose cells carry a
-verdict step ([Verdicts and `fv-lab gate`](#verdicts-and-fv-lab-gate); its GPU gate passed on `e82b6b7`, ADR-0019
-§11.6). A twelfth tier, `gold`, is fv-lab's own: every gold variant's canonical cell (ADR-0023).
+stay in the script and move in later slices. `b4a` (D1d) is the first whose cells carry a verdict step ([Verdicts
+and `fv-lab gate`](#verdicts-and-fv-lab-gate); its GPU gate passed on `e82b6b7`, ADR-0019 §11.6); `det-short` and
+`determinism` (D1d) the last, with their `[repeats]` frame hashes (GPU checks passed on `f93a961`, §15.10). `oracle`
+is a tier whose script branch stays whole ([below](#determinism-and-the-oracle-d1d-second-slice)). `gold` is fv-lab's
+own: every gold variant's canonical cell (ADR-0023).
 `precision-nvfp4` and `ltxvae-gen` are two modes of retired families, restored as tiers ([ADR-0019 §12](../adr/0019-fv-lab.md)).
 
 ## Build
@@ -57,14 +59,14 @@ dry run show what will run.
 | `b4a` | `b4a-h3-*` (3) | 6 | the H3 TeaCache step cache, baseline binary vs this build: byte identity and equal cache decisions, a verdict per cell | D1d; needs `--baseline-sha`; retired after its GPU gate (§11.6) |
 | `precision-nvfp4` | `precision-nvfp4-ltx25-{4k5s,1080p20s}` | 4 | NVFP4 video FFN against bf16, LTX-2.5 Sol, compare + lossy gate | was `precision`'s `FV_PRECISION_ARM=ltx-nvfp4` mode; restored (§12) |
 | `ltxvae-gen` | `ltxvae`'s 4 + `ltxvae-gen-{4k5s,1080p20s}` | 16 | `ltxvae`, plus per workload a cold gen saving its latents and the streaming decoder on them | was `ltxvae`'s `FV_VAE_GEN=1`; restored (§12); shares `ltxvae`'s cells |
-| `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | byte identity across fresh processes at short configs, three runs per group and the timed-pick control; `determinism.txt` | D1d (§15); its script branch stays until its GPU check; `wan` skips on the EU volume |
-| `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | byte identity of 1080p runs within one process and across two; prompt sets as files, hashes per run, stage digests | D1d (§15); branch stays until its GPU check |
-| `oracle` | `oracle-<target>` (9) | 32 | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; the clip-metric targets stay in the script |
+| `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | byte identity across fresh processes at short configs, three runs per group and the timed-pick control; `determinism.txt` | D1d (§15); retired after its GPU check (§15.10); `wan` skips on the EU volume |
+| `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | byte identity of 1080p runs within one process and across two; prompt sets as files, hashes per run, stage digests | D1d (§15); retired after its GPU check (§15.10) |
+| `oracle` | `oracle-<target>` (9) | 32 | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; GPU check passed (`f93a961`), but **not retired**: the script branch stays whole for the clip-metric targets, `sfwan13` and `oracle.sh` (§15.10) |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)); weights `volume+r2` ([below](#weights-from-the-volume-and-r2-volumer2)) |
-| `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`), [below](#port-one-offs-the-experiment-tiers) |
+| `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`, deleted after the GPU check, §14.4), [below](#port-one-offs-the-experiment-tiers) |
 
-All eleven above `precision-nvfp4` are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10; `b4a`
-§11.6): their `runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps the other families.
+All eleven above `precision-nvfp4`, and `det-short` and `determinism`, are **retired from the script**
+(`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10; `b4a` §11.6; `det-short`, `determinism` §15.10): their `runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps the other families.
 ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is not on the EU volume (`h3-8step`)
 is recorded as skipped (`weights incomplete`), as the script recorded it.
 
@@ -105,7 +107,7 @@ sm_100 / sm_120: the tier is the PRO 6000, as the mode was.
 D1e ([ADR-0019 §14](../adr/0019-fv-lab.md)) decided the ten port experiments F1 moved to `scripts/gpu/experiments/`:
 nine are deleted (finished; results in `docs/ports/*.md`, `docs/perf/*.md`, evidence in `artifacts/`, scripts in git at
 `22a5fd7b`), and `h3-graphs` is the tier above, for the open item of `docs/perf/h3-denoise-graphs.md` §5 (h3-turbo
-was never measured). Such a tier is listed in `FV_LAB_EXPERIMENTS` (`scripts/gpu/fv-lab-retired.sh`): never a
+was never measured; measured on `f93a961`, ADR-0019 §14.4, and recorded there). Such a tier is listed in `FV_LAB_EXPERIMENTS` (`scripts/gpu/fv-lab-retired.sh`): never a
 `runpod-matrix.sh` family, so `runpod-http.sh run` / `all` refuse it as they refuse `gold`. Its commands are the
 experiment pod script's own:
 
@@ -118,7 +120,9 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family h3-graphs --wall-cap-s 360
 
 `tests/experiment_tiers.rs` holds each arm to the script's command word for word after the path mapping of §14.3
 (the run directory for `/srv/…`, `frames/` for `clip/`, the tier's cache paths for `/fvw/…`, the committed prompt sets,
-the runner's cap for `timeout 2400`). The experiment's own scripts stay until that GPU check passes.
+the runner's cap for `timeout 2400`). The experiment's own scripts were deleted once that GPU check passed (with
+`scripts/gpu/experiments/`); the goldens script reads `h3-graphs-pod.sh` from the parent of the deleting commit, and
+in a shallow clone keeps the fixtures as they are.
 
 ### `runpod-http.sh` for a retired tier
 
@@ -133,7 +137,7 @@ that fv-lab would not honour is refused, not dropped, unless fv-lab does the sam
 - no equivalent, refused when set: `FV_POD_FILES`, `FV_POD_SCRIPT`, `FV_POD_FILE`, `FV_PROMPTS`, `FV_PROMPT`,
   `FV_SEED`, `FV_AVOID_MACHINES`, `FV_CREATE_WAIT_S`, `RUNPOD_ALLOWED_CUDA`,
   `FV_KEEP_POD=1`, `RUNPOD_NO_VOLUME=1`, `FV_FETCH_SKIP` / `FV_FETCH_MAX_MB` without `FV_FETCH_TREE=1`, and the retired pair selectors `FV_TECH_CELLS`,
-  `FV_B6_CELLS`, `FV_B4A_CELLS` (select by arm with `FV_CELLS`);
+  `FV_B6_CELLS`, `FV_B4A_CELLS`, `FV_DET_CELLS` (select by arm with `FV_CELLS`);
 - refused unless equal to the tier's value in `lab/tiers.toml`: `FV_GEN_TIMEOUT_S` (`cell_timeout_s`),
   `FV_CONTAINER_DISK_GB`, `RUNPOD_CLOUD_TYPE`, `RUNPOD_GPU_TYPE`, `FV_SKIP_TAE=1` on a `tae = true` tier, and
   `RUNPOD_GPU_MAX_DPH` below the tier's `max_usd_per_hr` (above it is moot: fv-deploy holds the tier's);
@@ -292,14 +296,20 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family oracle \
 
 `FV_ORACLE_TARGETS=<t…>` is `--cells` with the arms of `oracle-<t>` (each target's main arm, its `-diff`, and for the
 H3 targets `-f32`, `-f32-diff`, `-bf16-vs-f32`; for Ref2VA `-cond`, `-cond-diff`). Refused by `fv-lab run` and `pod
-up --extra-env` (the script still reads them): `FV_DET_CELLS`, `FV_DET_REPEATS`, `FV_DET_PROMPT`,
-`FV_DET_T2V_PROMPT`, `FV_DET_I2V_PROMPT`, `FV_ORACLE_TARGETS`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`,
-`FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT`, and for `oracle` a `FASTVIDEO_DUMP_OPS` other than `0,1,24,47`. `pod fetch`
+up --extra-env`: `FV_DET_CELLS`, `FV_DET_REPEATS`, `FV_DET_PROMPT`, `FV_DET_T2V_PROMPT`, `FV_DET_I2V_PROMPT` (also by
+`runpod-http.sh`'s `FV_EXTRA_ENV` since the two families retired, ADR-0019 §15.10), `FV_ORACLE_TARGETS`,
+`FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`, `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT` (the script's `oracle` branch still
+reads them), for `oracle` a `FASTVIDEO_DUMP_OPS` other than `0,1,24,47`, and for `determinism` an `FV_ORACLE_URL` (the
+script ran the oracle first with it; the tier does not). `pod fetch`
 takes `determinism.txt`, `hashes.txt` and each arm's `hashes.txt` / `digests.txt`; `fv-lab-compare-runs.sh` compares
 the hashes files byte for byte and each arm's `compare-dumps` lines, except a `[repeats] controls` arm's (read from
 `lab/cells`), which are reported, not judged (ADR-0019 §15.7). Still in the script (§15.6): the oracle's ffmpeg
-clip-metric targets (`ltx25-{i2v,kf,ref2v,a2v*,retake*,extend}`, `sfwan13`), `FV_ORACLE_OWN_TEXT=1`, det-short's
-`ltx-sol`, and `runpod-http.sh upstream` (the reference pods; it moves with an `fv-lab oracle` driver).
+clip-metric targets (`ltx25-{i2v,kf,ref2v,a2v*,retake*,extend}`, `sfwan13`), `FV_ORACLE_OWN_TEXT=1`, and
+`runpod-http.sh upstream` (the reference pods; it moves with an `fv-lab oracle` driver). So the `oracle` branch stays
+whole and `oracle.sh` keeps driving it (`FV_ORACLE_TARGETS`, `FV_POD_FILE`, `FV_CREATE_WAIT_S`, which `fv-lab pod up`
+lacks); it retires once the driver and the clip-metric cells exist (ADR-0019 §15.10). det-short's opt-in `ltx-sol`
+group and other `FV_DET_REPEATS` went with its branch (a tier when wanted). The two retired families' script side is
+frozen for `tests/repeats_oracle.rs` at `0f63c56b` (`crates/fastvideo-lab/fixtures/det-script/`).
 
 ## On a GPU box: `fv-lab run`
 
@@ -484,8 +494,8 @@ before the branch went and are fv-lab's own goldens from then on: the goldens sc
 checks that they exist, that the tier is in `lab/tiers.toml` and that its branch is gone (and that every other script
 tier still has one); `tests/dry_run.rs` checks the same. The Rust tests still compare fv-lab's dry run, gates and pod
 body with them, so a change to a frozen tier's commands or pod is deliberate: edit the cell (or `pod-start.sh.in`)
-and the fixture in the same PR, and say why in the PR. The eleven retired tiers are frozen (`b4a`'s since its GPU
-gate, ADR-0019 §11.6), and so are the two
+and the fixture in the same PR, and say why in the PR. The thirteen retired tiers are frozen (`b4a`'s since its GPU
+gate, ADR-0019 §11.6; `det-short`'s and `determinism`'s since theirs, §15.10), and so are the two
 restored modes (`precision-nvfp4`, `ltxvae-gen`), whose fixtures come from the script at `5987e6a4` in that mode
 (`FV_LAB_RESTORED` in `fv-lab-retired.sh`; `fv-lab-restored-goldens.sh --check` reproduces them); `gold` was never a
 script family (only its pod body comes from `runpod-http.sh plan`). The `gold` tier is no script family: only its pod body is written there, and its dry run is fv-lab's own golden

@@ -1,0 +1,327 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "resident-fp8",
+        "device_gib": 22.72038459777832,
+        "free_gib_before_load": 94.28277587890625,
+        "load_seconds": 62.129288124,
+        "requested": "Auto"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 0.219790784,
+        "dit_residency": "resident",
+        "dit_s": 70.778936094,
+        "refiner_s": 2.375966007,
+        "seconds": 176.319348915,
+        "text_encoder_s": 62.129288124,
+        "video_vae_s": 25.471528041
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/run1",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.135068256,
+        "decode_s": 10.336575137,
+        "denoise_s": 43.555093425,
+        "load_s": 176.319348915,
+        "peak_mib": 58820,
+        "refine_s": 0.005074731,
+        "step_s": [
+          10.8327900390625,
+          10.8836708984375,
+          10.898841796875,
+          10.9394658203125
+        ],
+        "text_cache": "disabled",
+        "text_encoder": "resident-fp8",
+        "text_s": 0.427062553,
+        "total_s": 54.889192826,
+        "video_decode_s": 10.201506881,
+        "video_encode_s": 0.162912905,
+        "video_push_s": 0.00005612999999999999,
+        "video_rgb_s": 0.1904159280104914,
+        "video_vae_s": 10.005558338999748,
+        "video_wait_s": 0.049176086,
+        "warm": false,
+        "write_s": 0.270863171
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/run1",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/run1",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-timed/frames/run1/frame-062.png",
+        "mean": 0.4236249574890718,
+        "std": 0.2890842971992653
+      }
+    },
+    {
+      "limits": {
+        "expected": "output.mp4 with an audio track"
+      },
+      "name": "mp4_written/run1",
+      "ok": true,
+      "values": {
+        "mp4": "/fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-timed/frames/run1/output.mp4"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/run2",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.053816706,
+        "decode_s": 10.149009119999999,
+        "denoise_s": 43.514962584,
+        "load_s": 176.319348915,
+        "peak_mib": 56588,
+        "refine_s": 0.00047759,
+        "step_s": [
+          10.8285732421875,
+          10.854001953125,
+          10.9043955078125,
+          10.927689453125
+        ],
+        "text_cache": "disabled",
+        "text_encoder": "streamed-fp8",
+        "text_s": 101.063607139,
+        "total_s": 155.178241299,
+        "video_decode_s": 10.095192414,
+        "video_encode_s": 0.191752034,
+        "video_push_s": 0.00004042,
+        "video_rgb_s": 0.19967402401777362,
+        "video_vae_s": 9.863716474413872,
+        "video_wait_s": 0.055872536,
+        "warm": false,
+        "write_s": 0.258915083
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/run2",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/run2",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-timed/frames/run2/frame-062.png",
+        "mean": 0.4236249574890718,
+        "std": 0.2890842971992653
+      }
+    },
+    {
+      "limits": {
+        "expected": "output.mp4 with an audio track"
+      },
+      "name": "mp4_written/run2",
+      "ok": true,
+      "values": {
+        "mp4": "/fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-timed/frames/run2/output.mp4"
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-timed/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 76.42567130923271,
+        "stages": [
+          {
+            "gib": 51.905614107847214,
+            "stage": "text"
+          },
+          {
+            "gib": 48.275975435972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 76.42567130923271,
+            "stage": "denoise"
+          },
+          {
+            "gib": 46.56845685839653,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 51.5221321284771,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 33.458852767944336,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 33.458852767944336,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.40737247467041,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 13.95655032992363,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": "/fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-timed/frames/run2/output.mp4",
+      "sequence_length": 75935,
+      "text_tokens": 41,
+      "wav": "/fvscratch/runs/determinism/f93a961-1026043809-9e04/h3-timed/frames/run2/audio.wav"
+    },
+    "request": {
+      "attention": "vsa-h3 + to_gate_compress",
+      "height": 1088,
+      "num_frames": 124,
+      "prompt": "A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field",
+      "prompt_set": [
+        {
+          "name": "run1",
+          "seed": 7
+        },
+        {
+          "name": "run2",
+          "seed": 7
+        }
+      ],
+      "seconds": 5,
+      "seed": 7,
+      "techniques": {
+        "plan": [
+          "bf16_activations (transform/Load)",
+          "mxfp8 (transform/Load)",
+          "vsa (sparsity recipe, group default)"
+        ],
+        "profile": "h3/fasth3_4step_vsa",
+        "settings": [
+          {
+            "env_overrides": false,
+            "name": "FASTVIDEO_BF16_ACT",
+            "source": "bf16_activations",
+            "value": "1"
+          },
+          {
+            "env_overrides": false,
+            "name": "FASTVIDEO_H3_QUANT",
+            "source": "mxfp8",
+            "value": "mxfp8"
+          }
+        ],
+        "sources": [
+          {
+            "from": "profile",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": null,
+      "text_weights": "/workspace/weights/h3-base",
+      "video_vae": "official",
+      "warm": false,
+      "width": 1920
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 33.63654258009046,
+          "peak_reserved_gib": 34.65625,
+          "peak_used_gib": 34.348117674700916,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 33.636953136883676,
+          "peak_reserved_gib": 34.65625,
+          "peak_used_gib": 33.64146926160902,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 33.663585684262216,
+          "peak_reserved_gib": 54.5625,
+          "peak_used_gib": 52.05340621154755,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 33.663585684262216,
+          "peak_reserved_gib": 33.875,
+          "peak_used_gib": 33.79523803945631,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 33.690579435788095,
+          "peak_reserved_gib": 37.46875,
+          "peak_used_gib": 36.472394964657724,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 386.871567535,
+  "env": {
+    "FASTVIDEO_DIGEST": "1",
+    "FASTVIDEO_SDPA_AUTO": "timed"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

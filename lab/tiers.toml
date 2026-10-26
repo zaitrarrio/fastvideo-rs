@@ -354,7 +354,8 @@ cells = ["ltxvae-4k5s", "ltxvae-4k5s-untraced", "ltxvae-gen-4k5s", "ltxvae-1080p
 # word for word by scripts/gpu/tests/fv-lab-experiment-goldens.sh and
 # tests/experiment_tiers.rs. The rtx6000 tier's pod.
 
-# Was scripts/gpu/experiments/h3-graphs-{validate,pod}.sh, its h3-turbo
+# Was scripts/gpu/experiments/h3-graphs-{validate,pod}.sh (deleted after this
+# tier's GPU check on f93a961, ADR-0019 §14.4), its h3-turbo
 # checkpoint (FV_CKS=turbo), the open item of docs/perf/h3-denoise-graphs.md §5:
 # the lazy step clock (the default) and the opt-in CUDA graphs of the denoise
 # steps on the default H3 tier, timed and byte-compared with the per-step sync.
@@ -381,11 +382,13 @@ cells = ["h3-graphs-turbo-trace", "h3-graphs-turbo"]
 
 # ---- D1d, second slice (docs/adr/0019-fv-lab.md §15): the determinism families
 # and the oracle as tiers, each held equal to the script's dry run by a golden
-# (fv-lab-goldens.sh). Their runpod-matrix.sh branches stay until each one's GPU
-# check through both runners (§15.7). Every tier is the rtx6000 tier's pod, as
-# runpod-http.sh gives every FV_FAMILY the same pod.
+# (fv-lab-goldens.sh). All three passed their GPU check through both runners
+# (§15.7, f93a961): det-short and determinism are retired (branches deleted,
+# goldens frozen, FV_DET_* dropped: select by arm), and oracle's branch stays
+# whole for its clip-metric targets and oracle.sh (§15.10). Every tier is the
+# rtx6000 tier's pod, as runpod-http.sh gives every FV_FAMILY the same pod.
 
-# runpod-matrix.sh `det-short`: one cell per arm group of its default
+# Was runpod-matrix.sh `det-short`: one cell per arm group of its default
 # FV_DET_CELLS ("h3 wan ltx ltx-sage"), FV_DET_REPEATS=3; the frame hashes and
 # determinism.txt are each cell's [repeats] (FV_DET_CELLS -> --cells by arm).
 [[tier]]
@@ -406,7 +409,7 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["det-short-h3", "det-short-wan", "det-short-ltx", "det-short-ltx-sage"]
 
-# runpod-matrix.sh `determinism` (without FV_ORACLE_URL: its oracle prelude is
+# Was runpod-matrix.sh `determinism` (without FV_ORACLE_URL: its oracle prelude is
 # the `oracle` tier): one cell per model, its three arms (two runs in one
 # process, one in another, the timed control), the prompt sets as files.
 [[tier]]

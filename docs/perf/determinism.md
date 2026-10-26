@@ -131,7 +131,11 @@ rule stays a pure function of the shape.
   SDPA under `auto` (a cuDNN shape and a fwd2 shape), both cache distances,
   a transposed conv and FP8 attention three times each; every repeat must
   equal the first bit for bit.
-- GPU, end to end: `runpod-matrix.sh determinism` (below).
+- GPU, end to end: `runpod-matrix.sh determinism` (below); since 2026-10-26 the
+  fv-lab tiers `determinism` and `det-short` (docs/adr/0019-fv-lab.md §15,
+  their script branches retired after the GPU checks on `f93a961`, §15.10:
+  `fv-lab pod up --family det-short --cells h3-r1,h3-r2,h3-r3,h3-timed`, the
+  same files).
 
 ## Results
 

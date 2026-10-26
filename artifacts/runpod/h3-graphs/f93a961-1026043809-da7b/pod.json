@@ -1,0 +1,13 @@
+{
+  "id": "8zx5w6h0766g35",
+  "name": "fv-lab-h3-graphs-f93a961-1026043809-da7b",
+  "family": "h3-graphs",
+  "tag": "f93a961-1026043809-da7b",
+  "sha": "f93a961",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:4349dd58c313b0bff42039501b1e326fb532b8ad46ea1189a35cdde9be6fbe91",
+  "url": "https://8zx5w6h0766g35-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792989492.589543,
+  "cap_s": 3600
+}

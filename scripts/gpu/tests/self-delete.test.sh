@@ -57,7 +57,6 @@ LOCAL=(
   scripts/dev/test_build_pod_server.py
   # local launchers: create, delete and back-stop their pods from the caller's machine
   scripts/gpu/family-pool-validate.sh
-  scripts/gpu/experiments/h3-graphs-validate.sh
   scripts/gpu/fetch-h3-ref2va.sh
   scripts/gpu/fetch-hub-tree.sh
   scripts/gpu/fetch-ltx-iclora.sh
@@ -225,7 +224,7 @@ for f in "${FILES[@]}"; do
     LAUNCHERS+=("$f")
   fi
 done
-(( copies >= 34 )) || bad "only $copies inline copies of fv_self_delete found (expected the pod scripts, pod-start.sh.in and the fixtures; nine experiment pod scripts deleted in D1e, ADR-0019 §14)"
+(( copies >= 34 )) || bad "only $copies inline copies of fv_self_delete found (expected the pod scripts, pod-start.sh.in and the fixtures; the ten experiment pod scripts deleted in D1e, ADR-0019 §14)"
 
 # Stand-ins: curl (records each call, answers $FAKE_CODE / $FAKE_BODY), and for
 # the rendered commands a shell `sleep` that ends the run once $MAXCALLS calls
@@ -300,7 +299,7 @@ for f in "${LAUNCHERS[@]+"${LAUNCHERS[@]}"}"; do
   run_rendered "$f" "$TMP/r" 403 3; n=$RUNCALLS
   [[ "$n" == 3 ]] || bad "$f: the rendered self-delete made $n GraphQL calls on HTTP 403 (retries), want 3"
 done
-(( ${#LAUNCHERS[@]} >= 3 )) || bad "only ${#LAUNCHERS[@]} launchers found (expected family-pool-validate.sh, experiments/h3-graphs-validate.sh and ltx-pod.sh; the other nine *-validate.sh deleted in D1e, ADR-0019 §14)"
+(( ${#LAUNCHERS[@]} >= 2 )) || bad "only ${#LAUNCHERS[@]} launchers found (expected family-pool-validate.sh and ltx-pod.sh; the ten experiments' *-validate.sh deleted in D1e, ADR-0019 §14, h3-graphs' after its tier's GPU check, §14.4)"
 
 # 4. The function against the stand-in curl.
 # $1 code, $2 body (unset when "-"), $3 curl's exit; the function's status.

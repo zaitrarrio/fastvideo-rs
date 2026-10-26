@@ -6,7 +6,8 @@
 #   fv-lab-experiment-goldens.sh           regenerate the fixtures below
 #   fv-lab-experiment-goldens.sh --check   fail when the script's output differs
 #
-# h3-graphs (scripts/gpu/experiments/h3-graphs-pod.sh; docs/perf/h3-denoise-graphs.md):
+# h3-graphs (scripts/gpu/experiments/h3-graphs-pod.sh, deleted after the tier's GPU
+# check, ADR-0019 §14.4, so read from the history; docs/perf/h3-denoise-graphs.md):
 #   crates/fastvideo-lab/fixtures/experiments/h3-graphs-script.txt
 #       every fv-gpucheck command line the pod script's `trace` and `cells`
 #       steps start, in its order, for every checkpoint it knows (v2, 4s,

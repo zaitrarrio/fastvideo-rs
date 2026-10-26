@@ -1,0 +1,4 @@
+uv 0.13.1 (x86_64-unknown-linux-gnu)
+[06:01:31] ▶ cell oracle-fasth3-4step-vsa
+[06:09:38] ok oracle-fasth3-4step-vsa 487s peak 86171MiB ram 269885/269889MiB
+1.3G	/root/runs/upstream/55fa19a-10260558/oracle-fasth3-4step-vsa/dump

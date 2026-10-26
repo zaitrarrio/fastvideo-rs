@@ -1,0 +1,6 @@
+same oracle-fasth3-4step-vsa: {"exit":0,"skipped":null}, 124 frames byte-identical
+same oracle-fasth3-4step-vsa-bf16-vs-f32: {"exit":0,"skipped":null}, no frames
+same oracle-fasth3-4step-vsa-diff: {"exit":0,"skipped":null}, no frames
+same oracle-fasth3-4step-vsa-f32: {"exit":0,"skipped":null}, 124 frames byte-identical
+same oracle-fasth3-4step-vsa-f32-diff: {"exit":0,"skipped":null}, no frames
+5 arm(s) the same (2 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 3 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 difference(s)

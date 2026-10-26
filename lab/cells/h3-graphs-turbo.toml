@@ -1,4 +1,4 @@
-# The h3-graphs experiment's h3-turbo cells (scripts/gpu/experiments/h3-graphs-pod.sh, step `cells`, checkpoint
+# The h3-graphs experiment's h3-turbo cells (was scripts/gpu/experiments/h3-graphs-pod.sh, deleted after the GPU check of docs/adr/0019-fv-lab.md §14.4; step `cells`, checkpoint
 # `turbo`; docs/perf/h3-denoise-graphs.md §5: "h3-turbo (MXFP8, 768p) was not measured"; docs/adr/0019-fv-lab.md
 # §14): one warm process per arm over the script's 768p prompt set (h3-demo and spark-mountain-lake, three requests
 # each, seed 1024, 124 frames), the arms

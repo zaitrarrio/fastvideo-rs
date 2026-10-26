@@ -1,0 +1,13 @@
+{
+  "id": "s9zflnm1e3nszd",
+  "name": "fv-lab-det-short-f93a961-1026045808-a9a4",
+  "family": "det-short",
+  "tag": "f93a961-1026045808-a9a4",
+  "sha": "f93a961",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:4349dd58c313b0bff42039501b1e326fb532b8ad46ea1189a35cdde9be6fbe91",
+  "url": "https://s9zflnm1e3nszd-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1792990691.1235445,
+  "cap_s": 3600
+}

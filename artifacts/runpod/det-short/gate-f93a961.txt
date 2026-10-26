@@ -1,0 +1,19 @@
+$ fv-lab gate artifacts/runpod/det-short/f93a961-1026045808-a9a4 --check --out regate-ds-lab
+h3-r1 IDENTICAL frames 4cfba8bed9d10f9f50c06881f6574b09e77f750c050316c47728c651b5aeccc6 audio cd01c4e4e74e236ccf93ad4daf07031eb1ff510bfcd80b4685556f482e3789ab
+h3-r2 IDENTICAL frames 4cfba8bed9d10f9f50c06881f6574b09e77f750c050316c47728c651b5aeccc6 audio cd01c4e4e74e236ccf93ad4daf07031eb1ff510bfcd80b4685556f482e3789ab
+h3-r3 IDENTICAL frames 4cfba8bed9d10f9f50c06881f6574b09e77f750c050316c47728c651b5aeccc6 audio cd01c4e4e74e236ccf93ad4daf07031eb1ff510bfcd80b4685556f482e3789ab
+h3-timed IDENTICAL frames 4cfba8bed9d10f9f50c06881f6574b09e77f750c050316c47728c651b5aeccc6 audio cd01c4e4e74e236ccf93ad4daf07031eb1ff510bfcd80b4685556f482e3789ab
+[06:39:09] [det-short] repeats det-short-h3: pass
+fv-lab gate det-short: 1 evaluated, 0 failed, 0 skipped (a gate whose arms did not both run); written to regate-ds-lab
+fv-lab gate --check: 0 difference(s) between regate-ds-lab and the run
+exit=0
+
+$ fv-lab gate artifacts/runpod/det-short/f93a961-10260508 --check --out regate-ds-script --cells h3-r1,h3-r2,h3-r3,h3-timed
+h3-r1 IDENTICAL frames 4cfba8bed9d10f9f50c06881f6574b09e77f750c050316c47728c651b5aeccc6 audio cd01c4e4e74e236ccf93ad4daf07031eb1ff510bfcd80b4685556f482e3789ab
+h3-r2 IDENTICAL frames 4cfba8bed9d10f9f50c06881f6574b09e77f750c050316c47728c651b5aeccc6 audio cd01c4e4e74e236ccf93ad4daf07031eb1ff510bfcd80b4685556f482e3789ab
+h3-r3 IDENTICAL frames 4cfba8bed9d10f9f50c06881f6574b09e77f750c050316c47728c651b5aeccc6 audio cd01c4e4e74e236ccf93ad4daf07031eb1ff510bfcd80b4685556f482e3789ab
+h3-timed DIFFERENT frames 83266888b76e46123ad1516d91988689664440bf1332b1ae2526b620c5f6d083 audio cd01c4e4e74e236ccf93ad4daf07031eb1ff510bfcd80b4685556f482e3789ab
+[06:39:09] [det-short] repeats det-short-h3: pass
+fv-lab gate det-short: 1 evaluated, 0 failed, 0 skipped (a gate whose arms did not both run); written to regate-ds-script
+fv-lab gate --check: 0 difference(s) between regate-ds-script and the run
+exit=0
