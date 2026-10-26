@@ -159,12 +159,22 @@ fn run_plan_schemas_are_strict_and_name_their_fields() {
                     "min_ram_gb",
                     "cell_timeout_s",
                     "env",
+                    "hub_token",
                     "target",
                 ],
             ),
             ("StackTarget", vec!["name", "steps"]),
         ],
     );
+    // Additive: a stack without it parses (its default, false), and it is
+    // not required.
+    assert_eq!(
+        u["$defs"]["Stack"]["properties"]["hub_token"]["type"],
+        serde_json::json!("boolean")
+    );
+    assert!(!u["$defs"]["Stack"]["required"]
+        .as_array()
+        .is_some_and(|r| r.contains(&serde_json::json!("hub_token"))));
     assert_eq!(
         u["$defs"]["Stack"]["properties"]["min_ram_gb"]["minimum"],
         serde_json::json!(1)

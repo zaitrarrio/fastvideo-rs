@@ -3,7 +3,7 @@
 //! plan-upstream` (the payload golden), the plan's refusals, the money
 //! guard, and the driver on a fake world: its order, the release of the
 //! upstream pods on `ORACLE_REFS_DONE`, on the stock wait, on a timeout and
-//! on every error.
+//! on every error; a reference served only with its dump.
 //!
 //! The payload golden's intended differences (`fixtures/runpod-http-upstream-<stack>.json`,
 //! `scripts/gpu/tests/fv-lab-goldens.sh`):
@@ -12,7 +12,10 @@
 //!    `set -u`, the block every fv-lab pod has (`src/pod-start.sh.in`,
 //!    docs/adr/0023-lab-report-and-ci-bridge.md §4); `runpod-http.sh
 //!    upstream`'s pod has none (only the driver's `nohup sleep; curl`);
-//! 2. the body carries `env: {}` (fv-deploy's `create_body` always sends it);
+//! 2. the body carries `env: {}` where the script sends no `env` (fv-deploy's
+//!    `create_body` always sends it); a `hub_token` stack's `env` is the
+//!    script's, `HF_TOKEN` as the Runpod secret reference
+//!    `{{ RUNPOD_SECRET_fv_hf_token }}` (ADR-0019 §20.7 "First attempt");
 //! 3. (`up` only, not in a plan) the image is pinned to its digest.
 
 use std::collections::BTreeMap;
@@ -24,9 +27,9 @@ use serde_json::{json, Value};
 use fastvideo_deploy::provider::runpod::pod_create_body;
 use fastvideo_deploy::provider::{Account, ProviderKind};
 use fastvideo_lab::oracle::{
-    check_balance, check_image_tag, drive, plan_oracle, runtime_args, up_steps, upstream_launch,
-    upstream_start_command, OracleOps, OraclePlan, OracleRequest, RuntimePod, Stacks, UpPod,
-    UpState, UpstreamPlan, UpstreamStart, STOCK_WAIT_S,
+    check_balance, check_image_tag, drive, hub_token_ref, plan_oracle, runtime_args, up_steps,
+    upstream_launch, upstream_start_command, OracleOps, OraclePlan, OracleRequest, RefState,
+    RuntimePod, Stacks, UpPod, UpState, UpstreamPlan, UpstreamStart, STOCK_WAIT_S,
 };
 use fastvideo_lab::plan::Lab;
 
@@ -88,12 +91,24 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
         let start = UpstreamStart::for_stack(stack, TAG, UP_SHA, &up_steps(stack, &targets));
         let l = upstream_launch(stack, "latest", &start).expect("launch");
         let mut ours = pod_create_body(&l);
-        // Difference 2.
+        let mut theirs = fixture(&format!("runpod-http-upstream-{name}.json"));
+        // The Hub token: a secret reference on both sides for a hub_token
+        // stack (the script: its weights:ltx25 step), on neither otherwise;
+        // never a value.
+        let want_env = if stack.hub_token {
+            json!({ "HF_TOKEN": hub_token_ref() })
+        } else {
+            json!({})
+        };
+        assert_eq!(ours["env"], want_env, "{name}");
         assert_eq!(
-            ours.as_object_mut().and_then(|m| m.remove("env")),
-            Some(json!({})),
+            theirs.get("env").cloned().unwrap_or_else(|| json!({})),
+            want_env,
             "{name}"
         );
+        // Difference 2: fv-deploy sends `env` always, the script only with an entry.
+        ours.as_object_mut().and_then(|m| m.remove("env"));
+        theirs.as_object_mut().and_then(|m| m.remove("env"));
         // Difference 1.
         let cmd = ours["dockerStartCmd"][2]
             .as_str()
@@ -104,7 +119,6 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
         assert_eq!(cmd.matches(&block).count(), 1, "{name}: one cap watchdog");
         assert!(cmd.contains(&format!("set -u\n{block}OUT=/root/runs/upstream/{TAG}\n")));
         ours["dockerStartCmd"][2] = Value::String(cmd.replace(&block, ""));
-        let theirs = fixture(&format!("runpod-http-upstream-{name}.json"));
         if ours != theirs {
             let a = ours["dockerStartCmd"][2].as_str().unwrap_or("");
             let b = theirs["dockerStartCmd"][2].as_str().unwrap_or("");
@@ -121,6 +135,15 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
     }
     // Every stack has a golden.
     assert_eq!(stacks.stacks.len(), cases.len());
+    // Only the LTX stack reads gated Hub files.
+    let hub: Vec<&str> = stacks
+        .stacks
+        .iter()
+        .filter(|s| s.hub_token)
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(hub, ["sol-ltx25"]);
+    assert_eq!(hub_token_ref(), "{{ RUNPOD_SECRET_fv_hf_token }}");
 }
 
 #[test]
@@ -259,6 +282,12 @@ fn the_stacks_file_refuses_what_it_cannot_run() {
             "cell_timeout_s = 7200",
             "cell_timeout_s = 7200\nunknown = 1",
         ),
+        // The Hub token: typed, and never a value in the file.
+        ("hub_token = true", "hub_token = \"yes\""),
+        (
+            "env = [\"FASTVIDEO_DUMP_OPS=0,1,24,47\"]",
+            "env = [\"FASTVIDEO_DUMP_OPS=0,1,24,47\", \"HF_TOKEN=hf_x\"]",
+        ),
     ] {
         assert!(text.contains(from), "{from}");
         let bad = text.replacen(from, to, 1);
@@ -334,6 +363,8 @@ fn the_plan_brings_up_one_pod_per_stack_of_the_selected_targets() {
         "ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo:latest"
     );
     assert_eq!(u.launch.gpu.min_ram_gb, Some(192));
+    // No Hub token for the FastVideo stack: its pod env stays empty.
+    assert!(u.launch.env.is_empty(), "{:?}", u.launch.env);
     assert_eq!(p.cells, VSA);
     assert_eq!(
         p.arms_by_target,
@@ -431,6 +462,17 @@ fn the_plan_takes_the_extra_cells_by_arm() {
     assert_eq!(
         p.upstream[0].start.up_steps,
         "info:box weights:ltx25 oracle:ltx25-a2v-i2v,ltx25-retake"
+    );
+    // weights:ltx25 reads the gated Lightricks/LTX-2.5: the pod's HF_TOKEN is
+    // the owner's Runpod secret, by reference (ADR-0019 §20.7 "First attempt").
+    assert_eq!(
+        p.upstream[0]
+            .launch
+            .env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect::<Vec<_>>(),
+        [("HF_TOKEN", "{{ RUNPOD_SECRET_fv_hf_token }}")]
     );
     // The tier's order (extra cells in theirs), whatever --cells' order.
     let mut want = arms("oracle-ltx25-a2v-i2v");
@@ -546,6 +588,9 @@ struct Fake {
     up_fails: Option<&'static str>,
     /// When each target's reference is served (absent: never).
     served_at: BTreeMap<&'static str, f64>,
+    /// When a target's cell ends without a dump (`ORACLE_DONE` alone), and
+    /// its exit (absent: never).
+    no_dump_at: BTreeMap<&'static str, (f64, i32)>,
     /// When a stack's upstream run writes DONE / its pod is gone.
     finished_at: BTreeMap<&'static str, f64>,
     gone_at: BTreeMap<&'static str, f64>,
@@ -609,8 +654,16 @@ impl OracleOps for Fake {
             targets: p.targets.clone(),
         })
     }
-    fn reference_served(&mut self, _pod: &UpPod, target: &str) -> bool {
-        self.served_at.get(target).is_some_and(|t| self.t >= *t)
+    fn reference(&mut self, _pod: &UpPod, target: &str) -> RefState {
+        if self.served_at.get(target).is_some_and(|t| self.t >= *t) {
+            RefState::Served
+        } else if let Some((_, e)) = self.no_dump_at.get(target).filter(|(t, _)| self.t >= *t) {
+            RefState::NoDump(format!(
+                "ORACLE_DONE without oracle-dump.tar; cell exit {e}"
+            ))
+        } else {
+            RefState::Pending
+        }
     }
     fn upstream_state(&mut self, pod: &UpPod) -> UpState {
         let s = pod.stack.as_str();
@@ -862,6 +915,82 @@ fn an_upstream_run_that_ends_without_its_reference_is_not_waited_for() {
     all_released(&f);
     // Waited until the H3 run ended (300 s), not the refs wait.
     assert!(f.t < 300.0 + 120.0 + 600.0 + 120.0);
+}
+
+/// The §20.7 check's arms (ADR-0019 §20.7): one sol-ltx25 pod, two targets.
+fn metrics_plan() -> OraclePlan {
+    let (lab, stacks) = lab();
+    let mut cells: Vec<String> = Vec::new();
+    for c in ["oracle-ltx25-a2v-i2v", "oracle-ltx25-retake"] {
+        cells.extend(lab.cells[c].arms.iter().map(|a| a.name.clone()));
+    }
+    let names: Vec<&str> = cells.iter().map(String::as_str).collect();
+    plan_oracle(&lab, &stacks, &request(&names)).expect("plan")
+}
+
+/// The 2026-10-26 §20.7 run: the upstream weights step failed (a gated Hub
+/// repository without a token), both cells exited 2 and wrote `ORACLE_DONE`
+/// without a dump. Served means a dump exists: both targets are missing with
+/// the reason, no runtime pod is made, the upstream pod is released at once
+/// (not at the references' deadline) and the run fails.
+#[test]
+fn oracle_done_without_a_dump_is_missing_and_no_runtime_pod_starts() {
+    let p = metrics_plan();
+    let mut f = Fake {
+        no_dump_at: [("ltx25-a2v-i2v", (120.0, 2)), ("ltx25-retake", (180.0, 2))].into(),
+        pod_after: Some(0.0),
+        refs_after: Some(0.0),
+        exit_after: Some((0.0, true)),
+        ..Fake::default()
+    };
+    let r = drive(&mut f, &p);
+    assert!(!r.ok());
+    assert!(r.served.is_empty(), "{:?}", r.served);
+    assert_eq!(r.missing, ["ltx25-a2v-i2v", "ltx25-retake"]);
+    assert_eq!(
+        r.problems,
+        ["references not served: ltx25-a2v-i2v (ORACLE_DONE without oracle-dump.tar; cell exit 2), ltx25-retake (ORACLE_DONE without oracle-dump.tar; cell exit 2)"]
+    );
+    assert!(!r.runtime_started);
+    assert_eq!(f.count("start "), 0);
+    assert_eq!(f.count("urls "), 0);
+    assert_eq!(r.upstream.len(), 1);
+    assert_eq!(r.upstream[0].released, "no reference was served");
+    all_released(&f);
+    // Released at the poll after the second cell ended, not at the deadline.
+    assert!(f.t >= 180.0 && f.t < 180.0 + 61.0, "{}", f.t);
+}
+
+/// One reference with its dump, one without: the runtime side runs the
+/// served target's arms only, and the run still fails, naming why.
+#[test]
+fn a_reference_without_its_dump_drops_its_arms_and_fails_the_run() {
+    let p = metrics_plan();
+    let mut f = Fake {
+        served_at: [("ltx25-a2v-i2v", 120.0)].into(),
+        no_dump_at: [("ltx25-retake", (60.0, 2))].into(),
+        pod_after: Some(60.0),
+        refs_after: Some(120.0),
+        exit_after: Some((600.0, true)),
+        ..Fake::default()
+    };
+    let r = drive(&mut f, &p);
+    assert_eq!(r.served, ["ltx25-a2v-i2v"]);
+    assert_eq!(r.missing, ["ltx25-retake"]);
+    assert_eq!(
+        r.problems,
+        ["references not served: ltx25-retake (ORACLE_DONE without oracle-dump.tar; cell exit 2)"]
+    );
+    assert!(!r.ok());
+    let start = f
+        .events
+        .iter()
+        .find(|e| e.starts_with("start "))
+        .expect("started");
+    assert!(start.contains("--cells oracle-ltx25-a2v-i2v,"), "{start}");
+    assert!(!start.contains("retake"), "{start}");
+    assert_eq!(r.runtime_ok, Some(true));
+    all_released(&f);
 }
 
 #[test]

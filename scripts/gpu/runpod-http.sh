@@ -23,7 +23,10 @@
 #                                UP_IMAGE_TARGET picks the baked image
 #                                ghcr.io/…/fastvideo-rs-upstream-<target>:sha-<sha>;
 #                                UP_STEPS / UP_CELLS select work. All writes stay on
-#                                the container disk (UP_LOCAL=1).
+#                                the container disk (UP_LOCAL=1). With a weights:ltx25*
+#                                step (or UP_HUB_TOKEN=1) the pod gets HF_TOKEN as the
+#                                Runpod secret reference {{ RUNPOD_SECRET_fv_hf_token }}
+#                                (docs/ops/runpod-secrets.md)
 #   runpod-http.sh attach <pod> <tag>  re-attach to a running pod (wait, collect, delete)
 #   runpod-http.sh status <pod>  print live.log from a running pod
 #   runpod-http.sh down <pod>    destroy a pod
@@ -345,8 +348,23 @@ EOF
 
 # $1 = image, $2 = run tag, $3 = mode, $4 = volume id, $5 = its datacentre:
 # the PodCreateInput `create_pod` sends (and `plan` prints).
+# upstream_hub_token: whether an upstream pod gets HF_TOKEN as the Runpod
+# secret reference {{ RUNPOD_SECRET_fv_hf_token }} (the owner's secret, never
+# its value; docs/ops/runpod-secrets.md). UP_HUB_TOKEN=1 / 0 forces it;
+# unset, it is on when UP_STEPS or UP_STEPS_BG has a weights:ltx25* step
+# (they read the gated Hub repository Lightricks/LTX-2.5), as fv-lab
+# oracle's `hub_token = true` stack (lab/upstream.toml sol-ltx25).
+upstream_hub_token() {
+  case "${UP_HUB_TOKEN:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [[ " ${UP_STEPS:-} ${UP_STEPS_BG:-} " == *" weights:ltx25"* ]]
+}
+
 pod_payload() {
-  local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" files="" f
+  local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" files="" f hub=false
+  [[ "$mode" == upstream ]] && upstream_hub_token && hub=true
   if [[ -n "${FV_POD_FILES:-}" ]]; then
     local ft
     ft="$(mktemp -d)"
@@ -357,13 +375,16 @@ pod_payload() {
   jq -n --arg files "$files" --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
     --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" \
-    --arg ram "${FV_MIN_RAM_GB:-}" '{
+    --arg ram "${FV_MIN_RAM_GB:-}" --argjson hub "$hub" '
+    ((if $files == "" then {} else {FV_POD_FILES_TGZ: $files} end)
+      + (if $hub then {HF_TOKEN: "{{ RUNPOD_SECRET_fv_hf_token }}"} else {} end)) as $env
+    | {
       name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
     } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)
       + (if $ram == "" then {} else {minRAMPerGPU: ($ram|tonumber)} end)
-      + (if $files == "" then {} else {env: {FV_POD_FILES_TGZ: $files}} end)
+      + (if $env == {} then {} else {env: $env} end)
       + (if $vol == "" then {} else
       {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)'
 }

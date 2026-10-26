@@ -60,6 +60,10 @@ steps = []
 # RECON_ACCEPT_MISMATCH=1: two of the single-file packs rebuilt from the
 # Diffusers copy carry the Diffusers numbers (upstream/pod.sh weights_ltx25).
 # No host-RAM floor: none measured for these references yet.
+# hub_token: weights:ltx25 / weights:ltx25-dev read the gated Hub repository
+# Lightricks/LTX-2.5 (reconstruct.py's range reads), so the pod gets HF_TOKEN
+# as the Runpod secret reference {{ RUNPOD_SECRET_fv_hf_token }} (the owner's
+# secret, docs/ops/runpod-secrets.md; ADR-0019 §20.7 "First attempt").
 [[stack]]
 name = "sol-ltx25"
 description = "sol-engine LTX-2.5 references: the distilled two-stage at 512p and 4k, Sol and dense stage 2; image and keyframe conditioning, IC-LoRA reference-to-video, audio-to-video (guided too), retake and extend"
@@ -73,6 +77,7 @@ wall_cap_s = 14400
 container_disk_gb = 250
 cell_timeout_s = 7200
 env = ["FASTVIDEO_DUMP_OPS=0,1,24,47", "RECON_ACCEPT_MISMATCH=1"]
+hub_token = true
 
 [[stack.target]]
 name = "ltx25-512p"

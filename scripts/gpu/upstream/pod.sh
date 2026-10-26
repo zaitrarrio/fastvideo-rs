@@ -40,7 +40,21 @@ TI2V_PROMPT="Aerial drone shot of a tropical beach: turquoise sea waves roll in 
 H3_REV=bfc8ed0353f5a9733be73e6b2c98ec0948195b86        # sol-engine H3 configs' H3_MODEL_REVISION
 F8_REV=3da2ddfe1954d9cda4c05b643dc0f26007a655c5        # FastVideo/FastVideo-FastH3-8-Step-V2
 export HF_HOME="$UP/hf"   # the image presets HF_HOME under /workspace
-[[ -z "${HF_TOKEN:-}" && -f /workspace/hf/token ]] && HF_TOKEN="$(tr -d '[:space:]' </workspace/hf/token)" && export HF_TOKEN
+# HF_TOKEN: from the pod's env (fv-lab oracle's hub_token stacks and
+# runpod-http.sh upstream's LTX steps pass the Runpod secret reference
+# {{ RUNPOD_SECRET_fv_hf_token }}), else the volume's /workspace/hf/token. A
+# reference Runpod did not fill in (no such secret on the account,
+# docs/ops/runpod-secrets.md) or a blank value counts as none.
+HF_TOKEN_SRC=none
+if [[ -n "${HF_TOKEN:-}" && "$HF_TOKEN" != *'{{'* && -n "${HF_TOKEN//[[:space:]]/}" ]]; then
+  HF_TOKEN_SRC=env
+else
+  [[ -n "${HF_TOKEN:-}" && "$HF_TOKEN" == *'{{'* ]] && HF_TOKEN_SRC="none (unfilled secret reference)"
+  unset HF_TOKEN
+  if [[ -f /workspace/hf/token ]]; then
+    HF_TOKEN="$(tr -d '[:space:]' </workspace/hf/token)" && export HF_TOKEN && HF_TOKEN_SRC=/workspace/hf/token
+  fi
+fi
 export HF_HUB_DISABLE_TELEMETRY=1
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LIVE" >&2; }
@@ -99,6 +113,8 @@ info_box() {
     done
     [[ -f "$UP/sol-ltx25/.stamp" ]] && echo "sol-ltx25: $(cat "$UP/sol-ltx25/.stamp")"
     env | grep -E '^(HOME|UV_|XDG_|HF_HOME)=' | sort
+    # Where the Hub token came from, never its value.
+    echo "hf_token=$HF_TOKEN_SRC"
   } >"$OUT/box.txt" 2>&1
   return 0
 }

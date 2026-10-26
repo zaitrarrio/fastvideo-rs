@@ -70,6 +70,16 @@ pub const REF_FETCH_RESERVE_S: u64 = 1800;
 /// The driver's poll period (s): `oracle.sh`'s keepalive and release loop.
 pub const POLL_S: u64 = 60;
 const UPSTREAM_START_TEMPLATE: &str = include_str!("upstream-start.sh.in");
+/// A `hub_token` stack's pod env: `HF_TOKEN` (what `scripts/gpu/upstream/pod.sh`
+/// and `reconstruct.py` read) filled by Runpod from the owner's secret
+/// `fv_hf_token` (docs/ops/runpod-secrets.md), as `runpod-http.sh upstream`
+/// passes it for the LTX weight steps.
+pub const HUB_TOKEN_ENV: (&str, &str) = ("HF_TOKEN", "fv_hf_token");
+
+/// `{{ RUNPOD_SECRET_fv_hf_token }}`: the reference, never the token.
+pub fn hub_token_ref() -> String {
+    format!("{{{{ RUNPOD_SECRET_{} }}}}", HUB_TOKEN_ENV.1)
+}
 
 // ------------------------------------------------------------------ stacks
 
@@ -112,6 +122,12 @@ pub struct Stack {
     /// `FV_EXTRA_ENV` of the pod: `K=V` for every reference.
     #[serde(default)]
     pub env: Vec<String>,
+    /// The pod's `HF_TOKEN` as the Runpod secret reference
+    /// `{{ RUNPOD_SECRET_fv_hf_token }}` (the owner's secret), never a value:
+    /// for a stack whose weight steps read gated Hub repositories (sol-ltx25:
+    /// `Lightricks/LTX-2.5`). Default false: the pod env has no entry.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hub_token: bool,
     /// The oracle targets this stack makes.
     #[serde(rename = "target")]
     pub targets: Vec<StackTarget>,
@@ -246,6 +262,19 @@ impl Stacks {
                     file,
                     at("env"),
                     format!("`{e}` is not K=V with a plain value"),
+                ));
+            }
+            if s.env
+                .iter()
+                .any(|e| e.split_once('=').is_some_and(|(k, _)| k == HUB_TOKEN_ENV.0))
+            {
+                return Err(sfield(
+                    file,
+                    at("env"),
+                    format!(
+                        "`{}` is a secret: `hub_token = true` passes it as a Runpod secret reference, never a value",
+                        HUB_TOKEN_ENV.0
+                    ),
                 ));
             }
             if s.targets.is_empty() {
@@ -455,7 +484,8 @@ pub fn up_steps(stack: &Stack, targets: &[String]) -> String {
 
 /// The `Launch` of an upstream pod: the stack's image at `image_tag`, the EU
 /// volume at `/workspace` (the references read `/workspace/weights`), the
-/// stack's GPU, disk, RAM floor and caps under fv-deploy's guards.
+/// stack's GPU, disk, RAM floor and caps under fv-deploy's guards; with
+/// `hub_token`, `HF_TOKEN` as a Runpod secret reference.
 pub fn upstream_launch(
     stack: &Stack,
     image_tag: &str,
@@ -471,7 +501,11 @@ pub fn upstream_launch(
         image: format!("{UPSTREAM_IMAGE_REPO}-{}:{image_tag}", stack.image),
         entrypoint: Vec::new(),
         args: vec!["/bin/bash".into(), "-c".into(), cmd],
-        env: std::collections::BTreeMap::new(),
+        env: if stack.hub_token {
+            [(HUB_TOKEN_ENV.0.to_owned(), hub_token_ref())].into()
+        } else {
+            std::collections::BTreeMap::new()
+        },
         ports: vec!["8000/http".into()],
         gpu: GpuSpec {
             types: vec![stack.gpu.clone()],
@@ -839,6 +873,23 @@ pub enum UpState {
     Gone,
 }
 
+/// One reference as the driver sees it (`<base>/oracle-<target>/`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefState {
+    /// No `ORACLE_DONE` yet (or the pod could not be asked: polled again).
+    Pending,
+    /// `ORACLE_DONE` and `oracle-dump.tar`: a dump the runtime side can fetch.
+    Served,
+    /// `ORACLE_DONE` without `oracle-dump.tar`: the reference's cell ended
+    /// without a dump (`scripts/gpu/upstream/oracle.sh` writes `ORACLE_DONE`
+    /// either way); why, with its `cell.json` exit when the pod serves it.
+    NoDump(String),
+}
+
+/// What a reference's directory holds once it is served
+/// (`scripts/gpu/upstream/oracle.sh`: written whole, then renamed).
+pub const ORACLE_DUMP_TAR: &str = "oracle-dump.tar";
+
 /// How long a stopped runtime side gets to delete what it made (s): past it,
 /// it is killed and its pod deleted by the driver.
 pub const ABORT_WAIT_S: u64 = 600;
@@ -854,8 +905,10 @@ pub trait OracleOps {
     /// kept), recorded. An `Err` leaves no pod behind: one created before a
     /// later step failed is deleted first.
     fn upstream_up(&mut self, p: &UpstreamPlan) -> Result<UpPod, String>;
-    /// `<base>/oracle-<target>/ORACLE_DONE` answers 200.
-    fn reference_served(&mut self, pod: &UpPod, target: &str) -> bool;
+    /// The reference's state: `<base>/oracle-<target>/ORACLE_DONE` answers
+    /// 200 and the directory lists [`ORACLE_DUMP_TAR`] ([`RefState::Served`]);
+    /// `ORACLE_DONE` without the tar is [`RefState::NoDump`].
+    fn reference(&mut self, pod: &UpPod, target: &str) -> RefState;
     fn upstream_state(&mut self, pod: &UpPod) -> UpState;
     /// One fetch of the pod's `keepalive.bin`: its idle watchdog counts the
     /// traffic as busy.
@@ -987,9 +1040,11 @@ fn release<O: OracleOps>(
 /// 1. The upstream pods up, one per stack, in order (a failure releases
 ///    those already up).
 /// 2. The references waited for (every [`POLL_S`], keepalive meanwhile):
-///    until each selected target's `ORACLE_DONE` is served, its pod finished
-///    without it or is gone, or `refs_wait_s` passed since the first create.
-///    No reference: release, fail. A pod none of whose targets was served is
+///    until each selected target is served (`ORACLE_DONE` and its
+///    `oracle-dump.tar`), ended without a dump (`ORACLE_DONE` alone: missing,
+///    with the reason), its pod finished without it or is gone, or
+///    `refs_wait_s` passed since the first create. No reference: release
+///    without a runtime pod, fail. A pod none of whose targets was served is
 ///    released at once.
 /// 3. The runtime side started on the served targets' arms with their pods'
 ///    bases as `FV_ORACLE_URL`.
@@ -1061,6 +1116,9 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
     // 2.
     let mut served: Vec<String> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
+    // Why a failed target was not served (a target without an entry: the
+    // general reasons, logged where they happen).
+    let mut why: Vec<(String, String)> = Vec::new();
     loop {
         if ops.interrupted() {
             report.problems.push("interrupted".into());
@@ -1069,12 +1127,26 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
         }
         for l in &live {
             for t in &l.pod.targets {
-                if !served.contains(t) && !failed.contains(t) && ops.reference_served(&l.pod, t) {
-                    ops.log(&format!(
-                        "[fv-lab oracle] reference {t} served by {}",
-                        l.pod.id
-                    ));
-                    served.push(t.clone());
+                if served.contains(t) || failed.contains(t) {
+                    continue;
+                }
+                match ops.reference(&l.pod, t) {
+                    RefState::Pending => {}
+                    RefState::Served => {
+                        ops.log(&format!(
+                            "[fv-lab oracle] reference {t} served by {}",
+                            l.pod.id
+                        ));
+                        served.push(t.clone());
+                    }
+                    RefState::NoDump(w) => {
+                        ops.log(&format!(
+                            "[fv-lab oracle] reference {t} not served by {}: {w}",
+                            l.pod.id
+                        ));
+                        failed.push(t.clone());
+                        why.push((t.clone(), w));
+                    }
                 }
             }
         }
@@ -1133,10 +1205,17 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
         .filter(|t| !served.contains(t))
         .collect();
     if !report.missing.is_empty() {
-        report.problems.push(format!(
-            "references not served: {}",
-            report.missing.join(", ")
-        ));
+        let named: Vec<String> = report
+            .missing
+            .iter()
+            .map(|t| match why.iter().find(|(x, _)| x == t) {
+                Some((_, w)) => format!("{t} ({w})"),
+                None => t.clone(),
+            })
+            .collect();
+        report
+            .problems
+            .push(format!("references not served: {}", named.join(", ")));
     }
     if report.served.is_empty() {
         release(ops, &mut live, "no reference was served", true, &mut report);
