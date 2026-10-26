@@ -85,6 +85,74 @@ with depth, no block where it jumps. A jump is bisected with the block's op
 dumps (`FASTVIDEO_DUMP_OPS=<i>`): the first op whose rel-L2 leaves the bf16
 floor is the divergent one.
 
+## Upstream cells: host RAM
+
+On 2026-10-26 the `fasth3-4step-vsa` reference (same image, FastVideo
+e90be598, same argv as 2026-09-29) failed on an RTX PRO 6000 in EU-RO-1 at
+402 s with only "WorkerMultiprocProc initialization failed ... See stack
+trace for root cause." The parent raises that text, with no worker error, when the
+worker's ready pipe closes and the worker sent nothing (`wait_for_ready`'s
+`EOFError` branch). A worker that raises sends its traceback up that pipe.
+A fatal native signal makes `faulthandler` print a stack dump. Neither
+happened, so the worker was killed with SIGKILL. The worker logged
+"Converting transformer to LoRA Transformer" and never "Converted N layers",
+so it died in `_convert_one_transformer`. There, every wrapped linear keeps a
+host copy of its base weight (`BaseLayerWithLoRA.cpu_weight =
+weight.to("cpu")`, about 70 GB for the 35B DiT). That copy comes on top of the
+pinned, CPU-offloaded text encoder (about 66 GB). The leading suspect is the pod's
+cgroup OOM killer. The 2026-09 runs' host (EUR-IS-1) had 1511 GB, and this one had
+755 GB with the same GPU and driver (595.91.07). Our pod body never set
+`minRAMPerGPU`, so it got Runpod's default floor (8 GB per GPU). The RAM a pod
+actually gets is then whatever share Runpod gives it on that host.
+
+What records it now. All memory figures come from the pod's own memory
+cgroup, resolved from `/proc/self/cgroup`. `box.txt` records the version and
+path used (`cgroup=v2 /sys/fs/cgroup ...`), so a null field can be traced, and
+`pod_ram_limit_mib`, the cgroup limit rather than `free`'s host total. Each
+cell's `cell.json` has:
+
+- `peak_ram_mib`: the cell's peak process memory, sampled each second into
+  `mem.log`. It is anon + shmem on v2 and total_rss + total_shmem on v1, so
+  pinned memory is included. Page cache is left out: a cell that reads 140 GB
+  of weights fills the cache up to the limit with no risk of an OOM kill.
+- `ram_limit_mib`.
+- `pod_peak_mib_cumulative`: the cgroup's exact peak (v2 `memory.peak`, v1
+  `memory.max_usage_in_bytes`). It covers the whole pod life so far, not this
+  cell, and includes page cache.
+- `oom_kills`: the processes the kernel OOM-killed during the cell, from
+  `memory.events`.
+
+On a start failure, `bench_fastvideo.py` writes each worker's exit code to
+`result.json` `worker_exits` and to stderr (-9 = SIGKILL).
+`FV_MIN_RAM_GB=<n>` (a whole number) makes `runpod-http.sh` ask for
+`minRAMPerGPU: n`, and the driver log prints the RAM the pod was given
+(`memoryInGb`). None of this changes the reference's arguments or numerics.
+
+**The rerun (2026-10-26, run `55fa19a-10260558`).** It used the same image, the
+same steps and `FV_MIN_RAM_GB=192`, in EU-RO-1 on `bz0ofkfx45`. Runpod gave the
+pod 283 GB and 28 vCPUs on a 2267 GB host, and `box.txt` recorded
+`pod_ram_limit_mib=269889`. The `oracle-fasth3-4step-vsa` cell passed:
+
+- exit 0 in 487 s;
+- `oom_kills` 0;
+- `peak_smi_mib` 86171;
+- `generation_time_s` 59.35 and `peak_memory_mb` 84160.95, the same as the
+  2026-09-29 reference;
+- a 1.3 GB dump.
+
+This run predates the page-cache fix (head `55fa19a`). Its `peak_ram_mib`
+(269885) was then `memory.current`, page cache included, which is why it
+equals the limit. It is not a measure of what the processes used.
+
+The failed run (`f93a961-10260534`) had no RAM floor and ran on a 755 GB host.
+Its pod limit was not recorded. So the evidence strongly supports host-RAM
+starvation (an OOM kill during the LoRA conversion), but does not prove it.
+
+**The setting:** run upstream H3 LoRA cells (`oracle:fasth3-4step-*`,
+`cells:fv-fasth3-4step-*`) with `FV_MIN_RAM_GB=192`. `scripts/gpu/oracle.sh`
+passes the caller's environment to `runpod-http.sh upstream`, so set it there
+too. The command in ADR-0019 §15.7 does.
+
 ## Results: H3 turbo on H100 with the datacenter VSA kernel (2026-09-29)
 
 Target `fasth3-4step-vsa`, runtime f9be674 (WP-D). The reference was run

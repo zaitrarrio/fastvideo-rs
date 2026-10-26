@@ -57,6 +57,10 @@
 # runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells),
 # FV_POD_FILES (space-separated local files, at most a few hundred KB in all,
 # unpacked on the pod into /fvscratch/files/<basename>; run mode only),
+# FV_MIN_RAM_GB (PodCreateInput minRAMPerGPU, whole GB: the pod's host RAM floor;
+# unset = Runpod's default floor of 8 GB per GPU, above which the host's share
+# decides; too small a share is the suspected cause of the 2026-10-26 upstream
+# H3 LoRA failure, docs/oracle.md "Upstream cells: host RAM"),
 # FV_AVOID_MACHINES (space-separated Runpod machine ids: a pod placed on one
 # is deleted at once and created again),
 # FV_POD_SCRIPT (the basename of one of FV_POD_FILES, run instead of the
@@ -97,6 +101,9 @@ OUT_ROOT="$ROOT/artifacts/runpod/$FAMILY"
 [[ "${FV_DRY_RUN:-0}" == 1 ]] || : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 
 die() { echo "runpod-http: $*" >&2; exit 1; }
+# Checked before anything else runs, so a bad value never reaches jq or the API.
+[[ -z "${FV_MIN_RAM_GB:-}" || "$FV_MIN_RAM_GB" =~ ^[1-9][0-9]*$ ]] \
+  || die "FV_MIN_RAM_GB is the pod's minRAMPerGPU in whole GB (e.g. 192), not '$FV_MIN_RAM_GB'"
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 rest() {
   local method="$1" path="$2" body="${3:-}"
@@ -323,11 +330,13 @@ pod_payload() {
   fi
   jq -n --arg files "$files" --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
-    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
+    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" \
+    --arg ram "${FV_MIN_RAM_GB:-}" '{
       name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
     } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)
+      + (if $ram == "" then {} else {minRAMPerGPU: ($ram|tonumber)} end)
       + (if $files == "" then {} else {env: {FV_POD_FILES_TGZ: $files}} end)
       + (if $vol == "" then {} else
       {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)'
@@ -342,7 +351,7 @@ create_pod() {
     read -r vol dc < <(volume) || true
     [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
   fi
-  payload="$(pod_payload "$image" "$tag" "$mode" "$vol" "$dc")"
+  payload="$(pod_payload "$image" "$tag" "$mode" "$vol" "$dc")" || die "could not build the pod body (pod_payload)"
   # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
   fv_runpod_price_ok "$GPU" "$MAX_DPH" "${RUNPOD_CLOUD_TYPE:-SECURE}" "$dc" || die "not creating a pod on \"$GPU\" over the \$$MAX_DPH/hr cap"
   log "create pod gpu=\"$GPU\" image=$image volume=${vol:-none} dc=${dc:-any} cloud=${RUNPOD_CLOUD_TYPE:-SECURE} quoted=\$$FV_QUOTED_DPH/hr"
@@ -379,7 +388,7 @@ create_pod() {
     rest DELETE "/pods/$id" >/dev/null || true
     die "pod $id at \$$dph/hr exceeds cap \$$MAX_DPH"
   fi
-  log "pod $id  \$$dph/hr  (hard cap ${CAP_S}s)"
+  log "pod $id  \$$dph/hr  (hard cap ${CAP_S}s)  ram=$(jq -r '.memoryInGb // "?"' <<<"$resp")GB vcpu=$(jq -r '.vcpuCount // "?"' <<<"$resp")"
   # Wall-clock backstop independent of this shell's lifetime.
   nohup bash -c "sleep $CAP_S; curl -sS -X DELETE -H 'Authorization: Bearer $RUNPOD_API_KEY' '$API/pods/$id' >/dev/null" >/dev/null 2>&1 &
   echo "$id"
@@ -561,7 +570,7 @@ fv_lab_route() {
     || die "$FAMILY: no complete [[tier]] in lab/tiers.toml"
   # No equivalent at all.
   for v in FV_POD_FILES FV_POD_SCRIPT FV_POD_FILE FV_PROMPTS FV_PROMPT FV_SEED FV_AVOID_MACHINES \
-    FV_CREATE_WAIT_S RUNPOD_ALLOWED_CUDA; do
+    FV_CREATE_WAIT_S RUNPOD_ALLOWED_CUDA FV_MIN_RAM_GB; do
     [[ -z "${!v:-}" ]] || refuse "has no $v"
   done
   # The tree fetch's settings act only with it (fetch_tree), as here.
