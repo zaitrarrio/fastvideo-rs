@@ -78,8 +78,17 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -z "${FV_HTTP_COPY:-}" ]]; then
   copy="$(mktemp "${TMPDIR:-/tmp}/runpod-http.XXXXXX")"
   cp "${BASH_SOURCE[0]}" "$copy"
-  FV_HTTP_COPY=1 FV_HTTP_HERE="$HERE" exec bash "$copy" "$@"
+  FV_HTTP_COPY="$copy" FV_HTTP_HERE="$HERE" exec bash "$copy" "$@"
 fi
+# The private copy is removed when this run ends: at exit (the trap; bash
+# reads nothing more of the script then) or just before `exec fv-lab`. Only
+# the copy this run was started as: when this file is not FV_HTTP_COPY (the
+# repository's script, run with FV_HTTP_COPY already set), nothing is removed.
+# No background process of this run reads the script (the pod's start
+# commands are heredocs sent to the pod; the backstop is its own bash -c).
+OWN_COPY=""
+[[ "${BASH_SOURCE[0]}" == "${FV_HTTP_COPY:-}" ]] && OWN_COPY="$FV_HTTP_COPY"
+trap '[[ -z "$OWN_COPY" ]] || rm -f -- "$OWN_COPY"' EXIT
 HERE="${FV_HTTP_HERE:-$HERE}"
 # shellcheck source-path=SCRIPTDIR source=runpod-price.sh
 source "$HERE/runpod-price.sh"
@@ -717,6 +726,9 @@ fv_lab_route() {
   fi
   lab="$(fv_lab_bin)" || die "$FAMILY runs through fv-lab, and no fv-lab was found (FV_LAB_BIN, PATH, $ROOT/fv-lab). Build it on the build pod: bash scripts/dev/build-pod.sh run . -- cargo build --release --locked -p fastvideo-lab --features cli --bin fv-lab, then bash scripts/dev/build-pod.sh fetch . release/fv-lab ./fv-lab (docs/dev/fv-lab.md)"
   log "$FAMILY is fv-lab only (fv-lab-retired.sh): $(printf '%q ' "$lab" "${args[@]}")"
+  # exec runs no EXIT trap: remove the private copy first (this function is
+  # already read; nothing more of the script is).
+  [[ -z "$OWN_COPY" ]] || rm -f -- "$OWN_COPY"
   exec "$lab" "${args[@]}"
 }
 

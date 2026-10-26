@@ -358,12 +358,12 @@ replaces each (`fv_script_retired_why`):
 
 | family | what replaces it |
 |---|---|
-| `h3` | the `rtx6000` tier (every arm but the refiner-less Spark fallback, which nothing serves) |
+| `h3` | the `rtx6000` tier runs every arm but the refiner-less Spark fallback and the cold streamed-encoder runs, which nothing serves; the `h3` commands: `git show b019ccb2:scripts/gpu/runpod-matrix.sh` |
 | `b4b`, `b4c`, `b4c2` | nothing: finished experiments, their GPU gates passed when their changes merged (#179, #177, #178; `artifacts/runpod/{b4b,b4c,b4c2}/`); a later change to the fusions or the prompt cache gets its own byte-identity run (the `b4a` / `techniques` shape) and the CPU fixtures (`rt/prompt_cache/equality.rs`, `rt/fuse/equality.rs`) |
-| `hunyuan`, `sana-video` | nothing: trees not on the EU volume, no served variant; the gold files decide what runs |
+| `hunyuan`, `sana-video` | nothing runs them: trees not on the EU volume, no variant or gold file serves them; their arms by hand: `docs/ports/sana-video.md` (`sana-video`), or `git show b019ccb2:scripts/gpu/runpod-matrix.sh` |
 | `b200` | nothing: the US volume is gone (`runpod.sh b200` is refused too) |
 | `writer` | nothing: a one-time measurement (commit `a8ecfec6`) |
-| `precision-debug` | the `precision` tiers |
+| `precision-debug` | the `precision` tiers run the same precision variants, but not its per-step CUPTI trace (`FASTVIDEO_GPU_TRACE_STEP`) or its `FASTVIDEO_DUMP_DIR` + `compare-dumps` diffs; those by hand: `git show b019ccb2:scripts/gpu/runpod-matrix.sh` |
 | `identity` | the `det-short` / `determinism` tiers |
 | `h3attn` | nothing: its arms are recorded in `docs/techniques.md` "H3 attention arms", none open |
 

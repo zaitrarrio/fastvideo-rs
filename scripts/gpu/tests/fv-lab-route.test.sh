@@ -293,7 +293,8 @@ for fam in $FV_SCRIPT_RETIRED; do
   msg="runpod-http: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): $why"
   dry "$fam: dry run refused, no tier" 2 "$msg" FV_FAMILY="$fam"
   expect "$fam: run refused without a key" 2 "$msg" -- FV_FAMILY="$fam" bash "$HTTP" run abc1234
-  expect "$fam: all refused" 2 "$msg" -- RUNPOD_API_KEY=x FV_FAMILY="$fam" bash "$HTTP" all abc1234
+  # No key: a regression past the refusal stops at the key check, never at the API.
+  expect "$fam: all refused" 2 "$msg" -- FV_FAMILY="$fam" bash "$HTTP" all abc1234
   expect "$fam: plan refused" 2 "$msg" -- FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
   mx "matrix: $fam is retired with no tier" "FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED): $why" "$fam"
 done
@@ -320,9 +321,29 @@ fi
 expect "no fv-lab: says how to build it" 1 "cargo build --release --locked -p fastvideo-lab --features cli" -- \
   RUNPOD_API_KEY=x FV_LAB_BIN="$TMP/none" FV_FAMILY=trace bash "$HTTP" run abc1234
 # A family retired with no tier never reaches fv-lab (ADR-0019 §18).
-expect "h3: refused, the fake FV_LAB_BIN not called" 2 "the rtx6000 tier runs its arms" -- RUNPOD_API_KEY=x \
+expect "h3: refused, the fake FV_LAB_BIN not called" 2 "the rtx6000 tier runs every arm but" -- RUNPOD_API_KEY=x \
   FV_LAB_BIN="$TMP/fake-fv-lab" FAKE_LOG="$TMP/never.log" FV_FAMILY=h3 bash "$HTTP" run abc1234
 [[ ! -e "$TMP/never.log" ]] && ok "h3: fv-lab not run" || bad "h3: fv-lab ran: $(cat "$TMP/never.log")"
+
+# runpod-http.sh's private copy (TMPDIR/runpod-http.XXXXXX) is removed when the
+# run ends: a refusal, a die, a dry run, the usage text, and the exec of fv-lab.
+# With FV_HTTP_COPY set the script runs in place and removes nothing.
+mkdir -p "$TMP/copies"
+ok_copies=1
+for args in "FV_FAMILY=h3 run abc1234" "FV_FAMILY=trace FV_AVOID_MACHINES=m1 FV_DRY_RUN=1 run abc1234" \
+  "FV_FAMILY=trace FV_DRY_RUN=1 run abc1234" "usage" \
+  "RUNPOD_API_KEY=x FV_LAB_BIN=$TMP/fake-fv-lab FAKE_LOG=$TMP/copies.log FV_FAMILY=trace run abc1234"; do
+  read -r -a a <<<"$args"
+  envs=() rest=()
+  for w in "${a[@]}"; do if [[ "$w" == *=* ]]; then envs+=("$w"); elif [[ "$w" != usage ]]; then rest+=("$w"); fi; done
+  (cd "$TMP" && clean TMPDIR="$TMP/copies" "${envs[@]}" bash "$HTTP" ${rest[@]+"${rest[@]}"} >/dev/null 2>&1) || true
+  if [[ -n "$(ls -A "$TMP/copies")" ]]; then ok_copies=0; bad "private copy left after: $args ($(ls "$TMP/copies"))"; rm -f "$TMP/copies"/*; fi
+done
+[[ "$ok_copies" == 1 ]] && ok "runpod-http.sh: the private copy is removed after a refusal, a die, a dry run, the usage and fv-lab's exec"
+cp "$HTTP" "$TMP/http-in-place.sh"
+(cd "$TMP" && clean FV_HTTP_COPY=1 FV_FAMILY=h3 bash "$TMP/http-in-place.sh" run abc1234 >/dev/null 2>&1) || true
+[[ -f "$TMP/http-in-place.sh" ]] && ok "runpod-http.sh with FV_HTTP_COPY set runs in place and removes nothing" \
+  || bad "runpod-http.sh removed the script it ran in place"
 
 # 4. headline on a fake box (no GPU): fv-gpucheck, nvidia-smi and the CUDA
 # library links faked, the cells through the fake fv-lab.

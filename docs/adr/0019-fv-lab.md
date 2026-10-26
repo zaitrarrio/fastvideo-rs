@@ -346,14 +346,14 @@ wrote. ADR-0019 open decision 3 covers compares and gates placed between arms.
 | `sfwan` | many | no | recurses into `oracle` and `wan` | no | stays | D1d / a Wan volume |
 | `wan` | ~35 | no (Wan trees R2-only) | oracle fetches, ungated kernels, `rm` | no | stays | D1d / a Wan volume |
 | `b200` | 8 | partly | TAE and Spark file probes at run time; ungated | no | no tier | **retired, no tier** (§18): the US volume is gone; `runpod.sh b200` refused too |
-| `h3` | 3 | `h3-8step` no | Spark file probes; ungated | no | no tier | **retired, no tier** (§18): §17.4's proposal accepted: `rtx6000` covers every arm but the refiner-less Spark fallback (`FASTVIDEO_LTX2_WEIGHTS` unset), which nothing serves; no `sol-h3-spark-no-refiner` arm |
+| `h3` | 3 | `h3-8step` no | Spark file probes; ungated | no | no tier | **retired, no tier** (§18): §17.4's proposal accepted: `rtx6000` runs every arm but the refiner-less Spark fallback (`FASTVIDEO_LTX2_WEIGHTS` unset), which nothing serves, and the cold streamed-encoder runs; no `sol-h3-spark-no-refiner` arm |
 | `headline` | the others' | partly | runs other families with `FV_CELLS` subsets; since §10 its four sources (`fastvideo`, `rtx6000`, `rtx5090`, `precision`) through `fv-lab run <tier> --cells … ` into its run directory (`FV_RUNS_DIR`) | no: a tier of other tiers' arms | stays | a tier with an arm filter |
 | `mmaudio`, `speechtest` | 10+ | no | Python venvs, upstream clones, Whisper | no | stay | D1e |
 | `sfstream`, `sfquality` | 2 to 4 | no (sfwan R2-only) | TAEHV fetch, run lists from env | no | stay | D1e |
-| `precision-debug` | 7 to 10 | partly | compare-dumps only when dump dirs exist; dump deletion | no | no tier | **retired, no tier** (§18): the `precision` tiers cover it |
+| `precision-debug` | 7 to 10 | partly | compare-dumps only when dump dirs exist; dump deletion | no | no tier | **retired, no tier** (§18): the `precision` tiers run the same variants, not its per-step CUPTI trace or its dump diffs |
 | `identity` | from `FV_ID_CASES` | partly | cases from the environment, hashing, frame deletion | no | no tier | **retired, no tier** (§18): the `det-short` / `determinism` tiers cover it |
 | `solbench`, `sol-lingbot`, `sol-cosmos3` | 3 to 9 | no | per-arm timeouts, exported settings, ungated routers, prompts read from files | no | stay | D1e |
-| `hunyuan`, `sana-video` | 1 to 2 | no | a `--help` probe that ends the family | no | no tier | **retired, no tier** (§18): the gold files and served variants decide what runs |
+| `hunyuan`, `sana-video` | 1 to 2 | no | a `--help` probe that ends the family | no | no tier | **retired, no tier** (§18): nothing runs them (no variant or gold file serves them) |
 
 `kernels` is not a family. It is a `runpod-http.sh` mode (`kernels`, `all`) that runs `fv-gpucheck kernels` before or
 instead of the family (ADR-0019 §7: not in fv-lab). Its in-family uses (`kernels-wan`, `kernels-fuse`,
@@ -1467,10 +1467,11 @@ last row above has moved; the tests that cut it then freeze their copy, as `test
 
 #### 14.7 The `runpod-matrix.sh` families §9.1 marks "D1e or retired"
 
-They are script families, not port one-offs, and stay in `runpod-matrix.sh` for now: D1d edits that file in
-parallel, and a branch is deleted only with the remaining families' dry runs compared before and after (§10 item 1).
-Proposed, for the slice that retires the script (not decided here; §18 decided `hunyuan`, `sana-video`, `b200`,
-`h3attn`, `writer`, `precision-debug` and `identity`: all retired with no tier):
+They are script families, not port one-offs. D1e left them in `runpod-matrix.sh` (D1d edited that file in
+parallel, and a branch is deleted only with the remaining families' dry runs compared before and after, §10 item 1)
+and proposed, for the slice that retires the script, what follows. §18 (D1g) decided `hunyuan`, `sana-video`, `b200`,
+`h3attn`, `writer`, `precision-debug` and `identity`: all retired with no tier, their branches deleted; the other rows
+are still proposals:
 
 | family | what keeps it from a tier today | proposal |
 |---|---|---|
@@ -2554,11 +2555,11 @@ recorded, another tier covers them, or what they ran on is gone. Nothing runs th
 | family | decision | why, and what replaces it |
 |---|---|---|
 | `b4b`, `b4c`, `b4c2` | §17.3 option (b): retired as finished experiments | Their GPU gates passed when their changes merged (`b4b` #179, `b4c` #177, `b4c2` #178; `artifacts/runpod/{b4b,b4c,b4c2}/`). A later change to the fusions or the prompt cache gets its own byte-identity run (the `b4a` / `techniques` tiers' baseline-vs-this-build shape) plus the CPU fixtures (`rt/prompt_cache/equality.rs`, `rt/fuse/equality.rs`). No `[[verdict.check]]` slice (option (a)). |
-| `h3` | §17.4's proposal: retired with no tier | `rtx6000` covers every arm but the refiner-less Spark fallback, a warning path of a recipe nothing serves. **No** `sol-h3-spark-no-refiner` arm, so `rtx6000`'s frozen fixtures are unchanged. The refusal points at the `rtx6000` tier. |
-| `hunyuan`, `sana-video` | §14.7: retired with no tier | Their trees are not on the EU volume and no variant or gold file serves them; the gold files and served variants decide what runs. `docs/ports/sana-video.md` keeps the `fv-gpucheck` command per arm. |
+| `h3` | §17.4's proposal: retired with no tier | `rtx6000` runs every arm but the refiner-less Spark fallback (a warning path of a recipe nothing serves) and the cold streamed-encoder runs (§17.4's table). **No** `sol-h3-spark-no-refiner` arm, so `rtx6000`'s frozen fixtures are unchanged. The refusal points at the `rtx6000` tier and names those gaps; the `h3` commands are in `git show b019ccb2:scripts/gpu/runpod-matrix.sh`. |
+| `hunyuan`, `sana-video` | §14.7: retired with no tier | Nothing runs them: their trees are not on the EU volume and no variant or gold file serves them. Their arms by hand: `docs/ports/sana-video.md` keeps the `fv-gpucheck` command per arm, and both branches are in `git show b019ccb2:scripts/gpu/runpod-matrix.sh`. |
 | `b200` | §14.7: retired with no tier | The US volume it ran on is gone (CLAUDE.md, owner decision 2026-10-06). `runpod.sh b200`, which created a US volume and ran `runpod-matrix.sh b200` on a B200 pod, is refused too (exit 2) and `cmd_b200` is deleted with the three helpers only it used (`rp_pick_us_b200_dc`, `rp_create_us_volume`, `rp_log_box_image`) and its two settings (`RP_B200_VOL_NAME`, `RP_B200_DESTS`); `runpod.sh offers` keeps `RP_B200_TYPE` / `RP_US_DCS`. |
 | `writer` | §14.7: retired with no tier | A one-time measurement (the frame writer behind a timed decode, commit `a8ecfec6`). Checked: `docs/perf` records no result of it and no run directory is committed (no `artifacts/runpod/writer/`), so there is no line to point at; the change it measured is described in `a8ecfec6`'s message, and the family's commands are in `git show b019ccb2:scripts/gpu/runpod-matrix.sh`. |
-| `precision-debug` | §14.7: retired with no tier | The `precision` tiers cover it (§14.7); its commands are in `git show b019ccb2:scripts/gpu/runpod-matrix.sh`. |
+| `precision-debug` | §14.7: retired with no tier | The `precision` tiers run the same precision variants (§14.7), but not its per-step CUPTI trace (`FASTVIDEO_GPU_TRACE_STEP`) or its `FASTVIDEO_DUMP_DIR` + `compare-dumps` diffs; those by hand from `git show b019ccb2:scripts/gpu/runpod-matrix.sh`, which the refusal names. |
 | `identity` | §14.7: retired with no tier | The `det-short` / `determinism` tiers cover byte identity; its E12 results stay in `artifacts/runpod/identity/` (`docs/gaps/2026-09-27-cold-start.md`). |
 | `h3attn` | §14.7's rule: "retire unless an attention arm is an open item (`docs/techniques.md`)": **retired** | `docs/techniques.md` "H3 attention arms" records every arm's numbers and verdict (the served variants' in their gold files) and lists no open arm. Its one forward item, "the next step is INT8 `Q K^T` … and then the end-to-end gate" after the FP8 arms were dropped, is closed in the same section: SageAttention2 was ported (`wan::attn_sage`), merged default-off, and its calibrated H3 gate failed both H3 recipes, so H3 stays bf16 (Phase 4, `docs/perf/sage-attention.md` §8). Neither the execution plan nor this ADR lists an `h3attn` arm as open. The `profiles/h3/*` arms stay (built-in profiles, `crates/fastvideo-models/src/techniques/builtin.rs`); `attn-fp8-kernels` (`fv-gpucheck kernels --groups attn_fp8`) is a kernels group anyone can run. |
 
@@ -2613,6 +2614,12 @@ As §15.10 and §17.6, with one difference: these families have no tier to route
   checks the list too (no tier, no branch, in no other list). `tests/dry_run.rs`
   (`families_retired_with_no_tier_have_no_branch_and_no_tier`) holds the same from Rust: the list, no branch, no
   tier, no fixture, in neither `FV_LAB_RETIRED` nor `FV_LAB_EXPERIMENTS`.
+- **Review of #215** (independent, nothing blocking): the pointers of `h3` and `precision-debug` name what `rtx6000`
+  and the `precision` tiers do not run (the refiner-less Spark fallback and the cold streamed-encoder runs; the
+  per-step CUPTI trace and the dump diffs), and `hunyuan` / `sana-video`'s say nothing runs them and how to run their
+  arms by hand; the `all` refusal test runs without a key. `runpod-http.sh` now removes its private copy
+  (`$TMPDIR/runpod-http.XXXXXX`, which every run left behind) at exit and before `exec fv-lab`, only the copy it was
+  started as (`FV_HTTP_COPY` holds its path; run in place, it removes nothing); `fv-lab-route.test.sh` checks both.
 
 #### 18.3 What is left in the script
 

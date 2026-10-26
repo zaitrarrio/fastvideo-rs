@@ -246,9 +246,10 @@ inside a forward reads the process value: the same value.
   cells set it to list every kernel. The baseline (main `17e4a1dc`)
   predates the setting and keeps its 25, so the checks that need a
   complete table rest on the PR arm, and the base arm must agree with it
-  wherever it can be compared: `b4b_verdict` (`scripts/gpu/b4-verdict.sh`,
-  held to stub trees by `scripts/gpu/tests/b4-verdict.test.sh`) passes only
-  when
+  wherever it can be compared: `b4b_verdict` (it was in
+  `scripts/gpu/b4-verdict.sh`, held to stub trees by
+  `scripts/gpu/tests/b4-verdict.test.sh`, both deleted with the family,
+  ADR-0019 §18) passed only when
   - both arms exited 0 and the compare passed `off_identity` and
     `off_identity_frame_count` (not skipped);
   - both arms logged a trace with a kernel table, `dropped_records` 0 and

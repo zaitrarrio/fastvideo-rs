@@ -282,7 +282,8 @@ easycache: ...`, `wan a14b easycache: ...`, `wan sol taylorseer: ...`,
   `h3 teacache step` decision, the load plan's `fuse step cache`) differ.
   Since the B4c review (PR #177) the verdict also needs both arms' exit 0
   and the `--off-identity` compare passed and not skipped
-  (`scripts/gpu/b4-verdict.sh`), and `b4a.verdict.json` fails when a cell
+  (`b4-verdict.sh`, frozen in `crates/fastvideo-lab/fixtures/b4a-script/b4-verdict.sh`
+  since ADR-0019 §11.6 / §18), and `b4a.verdict.json` fails when a cell
   named in `FV_B4A_CELLS` has no passing verdict. The family is an fv-lab
   tier since ADR-0019 §11 (its GPU gate passed on `e82b6b7`, §11.6, and
   the script branch is deleted): `fv-lab pod up --family b4a --cells

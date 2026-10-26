@@ -259,8 +259,9 @@ shared `Outcome`, `off`) keep their strings.
   and unless both base-vs-PR compares passed `--off-identity` (not skipped),
   every pass exited 0 and no temporary file is left. A cell named in
   `FV_B4C_CELLS` without a passing verdict fails the family
-  (`b4c.verdict.json`). The verdict is `scripts/gpu/b4-verdict.sh`, held to
-  stub run trees by `scripts/gpu/tests/b4-verdict.test.sh`.
+  (`b4c.verdict.json`). The verdict was `scripts/gpu/b4-verdict.sh`, held to
+  stub run trees by `scripts/gpu/tests/b4-verdict.test.sh` (both deleted
+  with the family, ADR-0019 §18).
   Cells: `b4c-h3-4stepvsa` (FastH3 4-step
   VSA, 480p / 5 s, auto encoder: resident FP8 on an RTX PRO 6000) and
   `b4c-ltx25-512p` (LTX-2.5 two-stage, 512p / 49 frames, streamed Gemma).

@@ -71,12 +71,13 @@ fv_script_retired() {
 # (ADR-0019 §18), for the refusals; empty for any other name.
 fv_script_retired_why() {
   case "${1:-}" in
-    h3) echo "the rtx6000 tier runs its arms (ADR-0019 §17.4, §18): fv-lab pod up --family rtx6000, or FV_FAMILY=rtx6000 runpod-http.sh run" ;;
+    h3) echo "the rtx6000 tier runs every arm but the refiner-less Spark fallback and the cold streamed-encoder runs, which nothing serves (ADR-0019 §17.4, §18): fv-lab pod up --family rtx6000, or FV_FAMILY=rtx6000 runpod-http.sh run; the h3 commands: git show b019ccb2:scripts/gpu/runpod-matrix.sh" ;;
     b4b | b4c | b4c2) echo "a finished experiment: its GPU gate passed when its change merged (b4b #179, b4c #177, b4c2 #178; artifacts/runpod/$1/); a later change to the fusions or the prompt cache gets its own byte-identity run (the b4a / techniques tiers' baseline-vs-this-build shape) and the CPU fixtures (rt/prompt_cache/equality.rs, rt/fuse/equality.rs) (ADR-0019 §17.3, §18)" ;;
-    hunyuan | sana-video) echo "its trees are not on the EU volume and nothing serves it; the gold files and served variants decide what runs (fv-lab pod up --family gold) (ADR-0019 §14.7, §18)" ;;
+    hunyuan) echo "nothing runs it: its tree is not on the EU volume and no variant or gold file serves it; its arm by hand: git show b019ccb2:scripts/gpu/runpod-matrix.sh (ADR-0019 §14.7, §18)" ;;
+    sana-video) echo "nothing runs it: its tree is not on the EU volume and no variant or gold file serves it; its arms by hand: docs/ports/sana-video.md, or git show b019ccb2:scripts/gpu/runpod-matrix.sh (ADR-0019 §14.7, §18)" ;;
     b200) echo "the US volume it ran on is gone (CLAUDE.md, owner decision 2026-10-06) (ADR-0019 §14.7, §18)" ;;
     writer) echo "a one-time measurement of the frame writer (commit a8ecfec6); its commands: git show b019ccb2:scripts/gpu/runpod-matrix.sh (ADR-0019 §14.7, §18)" ;;
-    precision-debug) echo "the precision and precision-nvfp4 tiers cover it (ADR-0019 §14.7, §18)" ;;
+    precision-debug) echo "the precision tiers run the same precision variants, but not its per-step CUPTI trace (FASTVIDEO_GPU_TRACE_STEP) or its FASTVIDEO_DUMP_DIR + compare-dumps diffs; those by hand: git show b019ccb2:scripts/gpu/runpod-matrix.sh (ADR-0019 §14.7, §18)" ;;
     identity) echo "the det-short and determinism tiers cover it (ADR-0019 §14.7, §18)" ;;
     h3attn) echo "its arms are measured and recorded (docs/techniques.md \"H3 attention arms\"; the served variants' gold files); no attention arm of it is open (ADR-0019 §14.7, §18)" ;;
   esac
