@@ -188,6 +188,7 @@ pub fn serve_template_launch(
             count: u32::from(!cpu),
             allowed_cuda: Vec::new(),
             min_cuda: None,
+            min_ram_gb: None,
         },
         placement: Placement {
             region: None,

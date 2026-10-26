@@ -179,6 +179,11 @@ pub struct Tier {
     /// Per-arm cap (s), `timeout --kill-after=15` around each command; 0 = none.
     pub cell_timeout_s: u64,
     pub container_disk_gb: u32,
+    /// The pod's host-RAM floor, whole GB per GPU (Runpod `minRAMPerGPU`,
+    /// ADR-0019 §16.10): a positive integer. Absent: none is asked for, and
+    /// Runpod's default floor (8 GB per GPU) leaves the host's share to decide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_ram_gb: Option<u32>,
     /// Where the arms' weight trees come from: `volume` (the EU volume,
     /// mounted at `/workspace`, trees under `/workspace/weights`) or
     /// `volume+r2` (the volume's trees, and the rest fetched from the R2
@@ -257,6 +262,13 @@ impl Tiers {
             }
             if t.container_disk_gb == 0 {
                 return Err(field(file, at("container_disk_gb"), "positive"));
+            }
+            if t.min_ram_gb == Some(0) {
+                return Err(field(
+                    file,
+                    at("min_ram_gb"),
+                    "a positive whole number of GB per GPU (Runpod minRAMPerGPU), or leave it out",
+                ));
             }
             if let Some(p) = t.preflight.iter().find(|p| !is_token(p)) {
                 return Err(field(
@@ -2137,6 +2149,38 @@ cells = ["c1"]
                 .unwrap_err()
                 .to_string();
             assert!(e.contains(want), "{e} lacks {want}");
+        }
+    }
+
+    /// `min_ram_gb`: optional (absent: no floor, and the serialized tier
+    /// leaves it out), a positive whole number of GB per GPU; anything else
+    /// is refused at parse time.
+    #[test]
+    fn tiers_take_an_optional_positive_host_ram_floor() {
+        let t = Tiers::parse(TIERS, "tiers.toml").unwrap();
+        assert_eq!(t.tiers[0].min_ram_gb, None);
+        let toml_out = toml::to_string(&t).unwrap();
+        assert!(!toml_out.contains("min_ram_gb"), "{toml_out}");
+        let with = |v: &str| {
+            Tiers::parse(
+                &TIERS.replace(
+                    "container_disk_gb = 120\n",
+                    &format!("container_disk_gb = 120\nmin_ram_gb = {v}\n"),
+                ),
+                "tiers.toml",
+            )
+        };
+        let t = with("192").unwrap();
+        assert_eq!(t.tiers[0].min_ram_gb, Some(192));
+        assert!(toml::to_string(&t).unwrap().contains("min_ram_gb = 192"));
+        let e = with("0").unwrap_err().to_string();
+        assert!(
+            e.contains("tier[0].min_ram_gb") && e.contains("positive"),
+            "{e}"
+        );
+        for v in ["-8", "12.5", "\"192\"", "true", "4294967296"] {
+            let e = with(v).unwrap_err().to_string();
+            assert!(e.contains("min_ram_gb"), "{v}: {e}");
         }
     }
 

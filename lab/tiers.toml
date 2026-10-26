@@ -3,7 +3,10 @@
 # GPU class: what scripts/gpu/runpod-matrix.sh calls a family. `fv-lab run
 # <name>` runs its cells on a GPU box; `fv-lab pod up --family <name>` makes
 # the box (fv-deploy's guards: price cap, $8 floor, EU volume, backstop at
-# wall_cap_s, ready within 600 s in at most 3 cycles).
+# wall_cap_s, ready within 600 s in at most 3 cycles). `min_ram_gb`
+# (optional, whole GB per GPU) is the pod's host-RAM floor, Runpod's
+# minRAMPerGPU; absent, Runpod's default (8 GB per GPU) leaves the host's
+# share to decide (ADR-0019 §16.10).
 schema = 1
 
 # The RTX PRO 6000 parity baseline (runpod-matrix.sh `rtx6000`, the family
@@ -246,6 +249,21 @@ cells = ["b4a-h3-fullopt-env", "b4a-h3-fullopt-prof", "b4a-h3-4step-tea"]
 # variant runs; a tree in neither is still recorded as skipped (weights
 # incomplete). The container disk: the largest arm's R2 trees (h3-8step,
 # 147.86 GB) plus the 120 GB every volume tier has, rounded up to 300 GB.
+# The host-RAM floor (min_ram_gb, Runpod minRAMPerGPU; ADR-0019 §16.10): the
+# largest host load of a gold arm is wan14b-plug-4step's, SIGKILLed (exit 137,
+# nothing printed) 18 s into its load at e9b9435, on a pod with no floor. Its
+# loader (wan::plug::load_merged_transformer) copies the whole DiT out of the
+# mmapped shards into owned host tensors in the on-disk dtype, f32: about
+# 57 GB of the 80.41 GB wan21-t2v-14b tree. It merges the two LoRA trees
+# (3.68 GB) into that copy and keeps it while the pipeline loads the f32 text
+# encoder (about 23 GB) beside it: about 80 GB of process memory at the peak.
+# The page cache comes on top: the 84 GB the arm just fetched and the shards
+# the copy reads, charged to the pod's cgroup and reclaimable only once
+# written back. 192 GB per GPU is the 80 GB with the arm's 84 GB of trees
+# cached and about 28 GB to spare, and the floor the upstream cells use
+# (docs/oracle.md "Upstream cells: host RAM"). The runner records the pod's
+# RAM limit in box.txt and each arm's peak and OOM kills in its summary.json:
+# the evidence to lower it from.
 [[tier]]
 name = "gold"
 description = "The gold runs (fv-lab run gold --all): every gold variant's canonical cell, the served variant through the serve engine at its gold canvas"
@@ -259,6 +277,7 @@ max_usd_per_hr = 2.5
 wall_cap_s = 14400
 cell_timeout_s = 3600
 container_disk_gb = 300
+min_ram_gb = 192
 weights = "volume+r2"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true

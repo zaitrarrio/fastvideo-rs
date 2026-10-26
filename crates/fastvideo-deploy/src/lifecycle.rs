@@ -410,6 +410,7 @@ impl Deployer<'_> {
         guard::check_guards(&launch.guards)?;
         guard::check_region(launch)?;
         guard::check_serverless(launch)?;
+        guard::check_min_ram(launch)?;
         guard::check_env(launch, self.leaks)?;
         if launch.provider != self.provider.kind() {
             return Err(GuardError::Invalid(format!(
@@ -596,12 +597,16 @@ impl Deployer<'_> {
                         self.recorded(&inst.id.to_string(), r.created(&l, &inst));
                     }
                     self.say(&format!(
-                        "{} {} on {label}{}",
+                        "{} {} on {label}{}{}{}",
                         inst.provider,
                         inst.id,
                         inst.usd_per_hr
                             .map(|p| format!(" at ${p:.3}/hr"))
-                            .unwrap_or_default()
+                            .unwrap_or_default(),
+                        inst.memory_gb
+                            .map(|g| format!(" ram={g}GB"))
+                            .unwrap_or_default(),
+                        inst.vcpus.map(|n| format!(" vcpu={n}")).unwrap_or_default()
                     ));
                     return Ok(inst);
                 }

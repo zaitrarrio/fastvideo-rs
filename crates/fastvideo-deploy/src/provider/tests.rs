@@ -92,6 +92,8 @@ pub(crate) struct FakeRunpod {
     pub no_stock: RefCell<Vec<String>>,
     /// The `costPerHr` the create answers (default: the quote as a number).
     pub billed: RefCell<Option<Value>>,
+    /// More fields of the create's answer (`memoryInGb`, `vcpuCount`).
+    pub answer_extra: RefCell<Option<Value>>,
     /// `currentSpendPerHr` of the account.
     pub spend: Cell<f64>,
     /// The create is carried out but its answer is lost (a transport error).
@@ -120,6 +122,7 @@ impl FakeRunpod {
             prices: RefCell::new(prices),
             no_stock: RefCell::new(Vec::new()),
             billed: RefCell::new(None),
+            answer_extra: RefCell::new(None),
             spend: Cell::new(0.5),
             lose_create_answer: Cell::new(false),
             delete_fails: Cell::new(false),
@@ -262,9 +265,14 @@ impl FakeRunpod {
                         pinged: 0,
                     },
                 );
-                Self::ok(
-                    json!({"id": id, "costPerHr": price, "machine": {"dataCenterId": "EU-RO-1"}}),
-                )
+                let mut answer =
+                    json!({"id": id, "costPerHr": price, "machine": {"dataCenterId": "EU-RO-1"}});
+                if let (Some(Value::Object(extra)), Some(a)) =
+                    (self.answer_extra.borrow().clone(), answer.as_object_mut())
+                {
+                    a.extend(extra);
+                }
+                Self::ok(answer)
             }
             ("GET", "/pods") => Self::ok(Value::Array(
                 self.pods
@@ -596,6 +604,108 @@ fn pod_create_status_logs_destroy() {
     let sent: Value =
         serde_json::from_slice(post[0].body.as_deref().unwrap_or_default()).unwrap_or_default();
     assert_eq!(sent, runpod::pod_create_body(&eu_pod_launch()));
+}
+
+/// `GpuSpec::min_ram_gb` is the body's `minRAMPerGPU` (whole GB per GPU)
+/// and nothing else changes; unset, the body has no such field (the
+/// payload goldens hold it to the scripts' byte for byte).
+#[test]
+fn a_host_ram_floor_is_min_ram_per_gpu_and_only_when_set() {
+    let plain = runpod::pod_create_body(&eu_pod_launch());
+    assert!(plain.get("minRAMPerGPU").is_none(), "{plain}");
+    let mut l = eu_pod_launch();
+    l.gpu.min_ram_gb = Some(192);
+    let mut floor = runpod::pod_create_body(&l);
+    assert_eq!(floor["minRAMPerGPU"], json!(192));
+    assert!(floor["minRAMPerGPU"].is_u64(), "an integer, not 192.0");
+    floor.as_object_mut().map(|m| m.remove("minRAMPerGPU"));
+    assert_eq!(floor, plain);
+    // The launch's JSON leaves the unset field out (launch.v1.json).
+    let j = serde_json::to_value(eu_pod_launch()).unwrap_or_default();
+    assert!(j["gpu"].get("min_ram_gb").is_none(), "{j}");
+    assert_eq!(
+        serde_json::to_value(&l).unwrap_or_default()["gpu"]["min_ram_gb"],
+        192
+    );
+}
+
+/// A floor of 0, or one on a launch whose create body has no such field, is
+/// refused before anything is created.
+#[test]
+fn a_host_ram_floor_of_zero_or_off_a_runpod_pod_is_refused() {
+    let mut l = eu_pod_launch();
+    assert_eq!(guard::check_min_ram(&l), Ok(()));
+    l.gpu.min_ram_gb = Some(192);
+    assert_eq!(guard::check_min_ram(&l), Ok(()));
+    l.gpu.min_ram_gb = Some(0);
+    let e = guard::check_min_ram(&l).map_err(|e| e.to_string());
+    assert!(matches!(&e, Err(m) if m.contains("positive")), "{e:?}");
+    let mut sls = script_endpoint(&ScriptEndpoint {
+        name: "fv-deploy-q1",
+        image: IMAGE,
+        gpus: &[GPU],
+        config: "/etc/fv/runpod.toml",
+        inline: None,
+        volume: "bz0ofkfx45",
+        data_center: "EU-RO-1",
+        guards: guards(),
+    });
+    assert_eq!(guard::check_min_ram(&sls), Ok(()));
+    sls.gpu.min_ram_gb = Some(192);
+    let e = guard::check_min_ram(&sls).map_err(|e| e.to_string());
+    assert!(matches!(&e, Err(m) if m.contains("minRAMPerGPU")), "{e:?}");
+    // `up` refuses it before any request that creates.
+    let rp = FakeRunpod::new();
+    let clock = FakeClock::at(0.0);
+    let pod = Pod::new(api(&rp, &clock));
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let r = deployer(&pod, &clock, &log, &bs).up(&l, &up_opts());
+    assert!(
+        matches!(r, Err(DeployError::Guard(GuardError::Invalid(_)))),
+        "{r:?}"
+    );
+    assert!(rp.calls(Method::Post, "/pods").is_empty());
+}
+
+/// The RAM and vCPUs the host gave the pod are read from the create answer
+/// (numbers or numeric strings) and logged with the price; absent or 0 is
+/// unknown and logs nothing.
+#[test]
+fn the_pods_ram_and_vcpus_are_read_from_the_create_answer_and_logged() {
+    let rp = FakeRunpod::new();
+    let clock = FakeClock::at(0.0);
+    let pod = Pod::new(api(&rp, &clock));
+    let inst = pod.create(&eu_pod_launch()).expect("create");
+    assert_eq!((inst.memory_gb, inst.vcpus), (None, None));
+    *rp.answer_extra.borrow_mut() = Some(json!({"memoryInGb": 0, "vcpuCount": "x"}));
+    let inst = pod.create(&eu_pod_launch()).expect("create");
+    assert_eq!((inst.memory_gb, inst.vcpus), (None, None));
+    *rp.answer_extra.borrow_mut() = Some(json!({"memoryInGb": 188, "vcpuCount": "24"}));
+    let inst = pod.create(&eu_pod_launch()).expect("create");
+    assert_eq!((inst.memory_gb, inst.vcpus), (Some(188.0), Some(24.0)));
+    let j = serde_json::to_value(&inst).unwrap_or_default();
+    assert_eq!(
+        (j["memory_gb"].clone(), j["vcpus"].clone()),
+        (json!(188.0), json!(24.0))
+    );
+    let (log, bs) = (Lines::default(), RecBackstop::default());
+    let mut l = eu_pod_launch();
+    l.gpu.min_ram_gb = Some(192);
+    deployer(&pod, &clock, &log, &bs)
+        .up(&l, &up_opts())
+        .expect("up");
+    let lines = log.0.borrow();
+    assert!(
+        lines
+            .iter()
+            .any(|x| x.contains("at $1.840/hr ram=188GB vcpu=24")),
+        "{lines:?}"
+    );
+    let posts = rp.calls(Method::Post, "/pods");
+    let sent: Value =
+        serde_json::from_slice(posts[posts.len() - 1].body.as_deref().unwrap_or_default())
+            .unwrap_or_default();
+    assert_eq!(sent["minRAMPerGPU"], json!(192));
 }
 
 #[test]

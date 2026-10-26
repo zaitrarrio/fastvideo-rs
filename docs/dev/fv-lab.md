@@ -140,8 +140,9 @@ that fv-lab would not honour is refused, not dropped, unless fv-lab does the sam
   `FV_B6_CELLS`, `FV_B4A_CELLS`, `FV_DET_CELLS` (select by arm with `FV_CELLS`), and an `FV_EXTRA_ENV` holding a
   newline (it is read as one line; later entries would be dropped);
 - refused unless equal to the tier's value in `lab/tiers.toml`: `FV_GEN_TIMEOUT_S` (`cell_timeout_s`),
-  `FV_CONTAINER_DISK_GB`, `RUNPOD_CLOUD_TYPE`, `RUNPOD_GPU_TYPE`, `FV_SKIP_TAE=1` on a `tae = true` tier, and
-  `RUNPOD_GPU_MAX_DPH` below the tier's `max_usd_per_hr` (above it is moot: fv-deploy holds the tier's);
+  `FV_CONTAINER_DISK_GB`, `RUNPOD_CLOUD_TYPE`, `RUNPOD_GPU_TYPE`, `FV_MIN_RAM_GB` (`min_ram_gb`; refused on a
+  tier without one), `FV_SKIP_TAE=1` on a `tae = true` tier, and `RUNPOD_GPU_MAX_DPH` below the tier's
+  `max_usd_per_hr` (above it is moot: fv-deploy holds the tier's);
 - refused unless equal to fv-lab's fixed value: `FV_IDLE_GPU_MIN` 10, `FV_IDLE_GPU_GRACE_MIN` 30,
   `FV_IDLE_NET_BYTES` 262144, `FV_MIN_DRIVER` 580, `FV_BOOT_WAIT_S` 600, `RUNPOD_VOLUME_ID` / `RUNPOD_VOLUME_NAME` /
   `FV_PLAN_VOLUME` the EU volume, `RUNPOD_IMAGE` the commit's runtime image, `FV_POD_PREFIX` `fv-lab`;
@@ -322,7 +323,13 @@ fv-lab run rtx6000-ltx25                                                        
 
 The pod's start command does this. It writes `runpod-matrix.sh`'s run directory (`<scratch>/runs/<tier>/<tag>/`:
 `live.log`, per arm `summary.json`, `stdout.log`, `stderr.log`, `nvidia-smi-{start,end}.txt`, frames,
-`benchmark.json`, `compare/`, `gate/`, `done.json`). Settings, as flags or the script's variables: `--work`
+`benchmark.json`, `compare/`, `gate/`, `done.json`). It also records the pod's memory, from its memory cgroup
+([ADR-0019 §16.10](../adr/0019-fv-lab.md#1610-the-host-ram-floor-min_ram_gb-2026-10-26)): at start it appends
+`cpus=… mem=…G` and `cgroup=v2 <dir> pod_ram_limit_mib=… oom_kills=…` to `box.txt` (the pod's RAM limit, not the
+host's `free`); each arm's `summary.json` gains `peak_ram_mib` (sampled each second: anon + shmem, no page cache),
+`ram_limit_mib`, `pod_peak_mib_cumulative` and `oom_kills` (during the arm), and `live.log` a `ram <arm>: …` line.
+An arm the kernel OOM-killed (exit 137, often nothing printed) gets `OOM <arm>: the kernel OOM-killed <n>
+process(es) in this pod during the arm (host RAM, not GPU …)`. Without a memory cgroup the fields are left out. Settings, as flags or the script's variables: `--work`
 (`FV_WORK`), `--scratch` (`FV_SCRATCH`), `--tag` (`FV_RUN_TAG`), `--runs-dir` (`FV_RUNS_DIR`, the run directory
 itself instead of `<scratch>/runs/<tier>/<tag>`), `--cells` (`FV_CELLS`), `--gpucheck`
 (`FV_GPUCHECK`), `--cell-timeout-s` (`FV_GEN_TIMEOUT_S`, default the tier's), `FV_LPIPS=1`, `FV_GATE_POLICY`. Exit 2
@@ -469,6 +476,10 @@ tree from the R2 weights store onto the container disk, right before the first a
   `fv-lab run gold --all --work /workspace --scratch /fvscratch`; without it (the scratch disk is then the work
   directory), or with a scratch under `/workspace`, the run is refused (exit 2).
 - The idle watchdog of a `volume+r2` pod waits 85 minutes at 0 % GPU (a fetch uses none), not 10.
+- The gold tier's pod asks for at least 192 GB of host RAM (`min_ram_gb = 192`, Runpod `minRAMPerGPU`): its 14B arm
+  copies the f32 DiT and text encoder onto the host (about 80 GB) right after fetching 84 GB of trees. A tier
+  without `min_ram_gb` gets Runpod's default floor (8 GB per GPU) and the host's share. `pod up` logs the floor, the
+  pod's `ram=…GB vcpu=…` from Runpod's answer, and records them in `pod.json` (ADR-0019 §16.10).
 - Any pod's run gets `FV_RUN_DEADLINE` from `pod up` (the cap less 20 min): arms that could not finish by then are
   skipped as `wall cap near`, so `DONE` is written, and `pod up --wait` stops waiting 15 min before the cap and
   fetches what is there.

@@ -195,6 +195,10 @@ describe("a Launch's Runpod bodies are the Rust provider's (the C3a payload gold
     expect(b).not.toHaveProperty("networkVolumeId");
     expect(b).not.toHaveProperty("dataCenterIds");
     expect(b).toMatchObject({ dockerStartCmd: ["--config", "/etc/fv/x.toml"], cloudType: "COMMUNITY", gpuCount: 2, allowedCudaVersions: ["13.0"] });
+    expect(b).not.toHaveProperty("minRAMPerGPU");
+    // A host-RAM floor (fv-lab's tier min_ram_gb) is minRAMPerGPU, as pod.rs create_body sends it.
+    const floor = wire(runpodPodBody(checkLaunch({ ...scriptPod(), gpu: { ...scriptPod().gpu, min_ram_gb: 192 } })));
+    expect(floor).toStrictEqual({ ...fixture("runpod-pod.json"), minRAMPerGPU: 192 });
     const e = wire(runpodEndpointBody({ ...scriptEndpoint(), gpu: { types: [GPU], count: 1 }, placement: {} }, "t"));
     expect(e).not.toHaveProperty("minCudaVersion");
     expect(e).not.toHaveProperty("networkVolumeId");

@@ -94,6 +94,7 @@ serde with `deny_unknown_fields` everywhere, schemars JSON Schemas committed as 
 | `wall_cap_s` | the backstop's deadline (≤ 4 h, fv-deploy's bound) | 14400 (`FV_POD_CAP_S`) |
 | `cell_timeout_s` | `timeout --kill-after=15` per arm; 0 none | 3600 (`FV_GEN_TIMEOUT_S` as runpod-http passes it) |
 | `container_disk_gb` | | 120 (`FV_CONTAINER_DISK_GB`) |
+| `min_ram_gb` | optional: the pod's host-RAM floor, whole GB per GPU (Runpod `minRAMPerGPU`, positive); absent, none is asked for (§16.10) | absent (`FV_MIN_RAM_GB` unset); the gold tier's is 192 |
 | `weights` | `volume` today, `registry` later (§4) | `volume` |
 | `preflight` | `verify-weights.sh` cells for `weights.log` at pod start | the six cells runpod-http.sh checks |
 | `tae` | `fetch-tae.sh` at pod start | true (`FV_SKIP_TAE` unset) |
@@ -1968,9 +1969,9 @@ is unchanged (a heartbeat would change every tier's start command, which the scr
 back to back with no GPU arm between (a fetching arm whose gate then fails) at the cap each could still reach it; at
 the measured rates the largest fetch is about 4 min.
 
-The pod body golden (`runpod-http-gold.json`) is `runpod-http.sh plan` with `FV_CONTAINER_DISK_GB=300` and
-`FV_IDLE_GPU_MIN` = `FV_IDLE_GPU_GRACE_MIN` = 85 (`fv-lab-goldens.sh`), and its env (the R2 references) is the one
-allowed difference (`tests/payload_golden.rs`).
+The pod body golden (`runpod-http-gold.json`) is `runpod-http.sh plan` with `FV_CONTAINER_DISK_GB=300`,
+`FV_IDLE_GPU_MIN` = `FV_IDLE_GPU_GRACE_MIN` = 85 and `FV_MIN_RAM_GB=192` (the tier's `min_ram_gb`, §16.10;
+`fv-lab-goldens.sh`), and its env (the R2 references) is the one allowed difference (`tests/payload_golden.rs`).
 
 #### 16.7 The GPU check (the coordinator's)
 
@@ -2041,3 +2042,57 @@ what it completed and removes the rest (§16.4); python3 by a capped apt install
 design and its CI check fails on it); the TAE directory read from the volume's marker when the command lines are rendered (`RunConfig::tae`);
 `FV_EU_VOLUME_TREES` names checked; the nested-tree classification pinned by a test; `--skip-trees ''`; `plan.json`
 removed at the run's start; the schema wording (§16.2).
+
+#### 16.10 The host-RAM floor: `min_ram_gb` (2026-10-26)
+
+**Why.** In the full gold run at e9b9435 (RTX PRO 6000, EU-RO-1) the arm `wan14b-plug-4step` died 18 s into its load
+with exit 137, right after its 84.09 GB of R2 trees were fetched, and printed nothing after the device line
+(`artifacts/runpod/gold/e9b9435-1026062720-e2e4/`, gitignored). A SIGKILL during a load with no stack dump is what the
+pod's cgroup OOM killer leaves, as with the upstream oracle cell (docs/oracle.md "Upstream cells: host RAM"). fv-lab's
+pods asked for no RAM floor, so they got Runpod's default (`minRAMPerGPU` 8 GB per GPU) and whatever share the host
+gave; and `box.txt` did not record that share, so the OOM kill could not be proved.
+
+**Decision.**
+
+1. *Schema.* A tier may set `min_ram_gb` (tiers v1, additive: optional, `deny_unknown_fields` kept): the pod's
+   host-RAM floor in whole GB per GPU. Validation refuses 0 (`Tiers::validate`); serde refuses a negative, fractional,
+   string or out-of-range value. Absent, nothing changes: no tier's pod body changes but the gold tier's.
+2. *fv-deploy.* `GpuSpec::min_ram_gb` (`launch.v1.json`, additive, omitted when unset) is Runpod's `PodCreateInput`
+   `minRAMPerGPU` in `pod::create_body`, sent only when set, so every existing payload golden is byte-identical.
+   `guard::check_min_ram` (in `Deployer::preflight`) refuses 0 and a floor on any launch but a Runpod pod (no other
+   create body carries one). fv-control's `runpodPodBody` mirrors it; `launch-gen.ts` is regenerated.
+   `Instance::memory_gb` / `vcpus` (`instance.v1.json`, additive) are the create answer's `memoryInGb` / `vcpuCount`;
+   `up` logs them with the price (`runpod-pod <id> on <gpu> at $x/hr ram=<n>GB vcpu=<n>`), as `runpod-http.sh` does,
+   and `pod up` records them, with the floor asked for, in `pod.json`.
+3. *fv-lab pod.* `pod::launch` copies the tier's floor into the launch. The pod body golden passes it to the script as
+   `FV_MIN_RAM_GB` (§16.6), so both bodies carry `minRAMPerGPU` and `tests/payload_golden.rs` pins it to the tier's
+   value (and that only the gold tier has one). On the script route of a retired family, `FV_MIN_RAM_GB` equal to the
+   tier's floor passes and any other value, or one for a tier without a floor, is refused naming `min_ram_gb`.
+4. *The runner records the pod's memory* (`podmem`, the method of `scripts/gpu/upstream/pod.sh` `cg_dir` / `cg_mem`):
+   the memory cgroup from `/proc/self/cgroup` (v2 `0::<path>`, else v1's `memory` controller) under `/sys/fs/cgroup`,
+   else the mount's root. At start it appends to `box.txt` `cpus=<n> mem=<host GiB>G` and `cgroup=<v2|v1> <dir>
+   pod_ram_limit_mib=<n|null> oom_kills=<n>` and logs `pod memory: …`. Each arm that runs is sampled every second
+   (anon + shmem on v2, total_rss + total_shmem on v1: process memory without the page cache), and its `summary.json`
+   gains, before `ended`, `peak_ram_mib`, `ram_limit_mib`, `pod_peak_mib_cumulative` (v2 `memory.peak`, v1
+   `memory.max_usage_in_bytes`: since the pod started, page cache included) and `oom_kills` (during the arm); `null`
+   when unreadable, and none of the four without a memory cgroup. New fields only: every reader reads by key
+   (`report tiers`, `fv-lab-compare-runs.sh`), by `"exit":…` (`summary_exit_ok`) or carries the object whole (`report
+   table`'s rows). `live.log` gets `ram <arm>: ram <peak>
+   MiB of <limit> MiB, oom_kills <n>` per arm, and `OOM <arm>: the kernel OOM-killed <n> process(es) in this pod
+   during the arm (host RAM, not GPU …)` when the count rose, after the arm's `FAIL` line.
+5. *The gold tier's floor: 192 GB.* The largest host load of a gold arm is `wan14b-plug-4step`'s:
+   `wan::plug::load_merged_transformer` maps the DiT shards but copies every tensor into an owned host buffer in its
+   on-disk dtype (`load_raw_tensors_native`; the 14B DiT is f32 on disk, about 57 GB of the 80.41 GB tree), merges
+   the two LoRA trees (3.68 GB) into it, and holds it while `WanPipeline` loads the f32 UMT5 encoder the same way
+   (`WeightMap::from_dir`, about 23 GB): about 80 GB of process memory at the peak. The page cache comes on top and
+   is charged to the same cgroup: the 84 GB the arm just fetched (reclaimable only once written back) and the shards
+   the copy reads. 192 GB holds the 80 GB with the arm's trees cached and about 28 GB to spare, and is the floor the
+   upstream cells use. Every other gold arm reads smaller trees, or `h3-8step` (147.86 GB) through a loader whose host
+   footprint the H3 tiers run without a floor today; no other tier gets one without evidence.
+
+**Consequences.** A pod with a floor can only land on a host with that much RAM to give: fewer offers, and a create
+with none is fv-deploy's `no capacity` (nothing created, nothing billed). The floor is a guess from the loader, not a
+measurement; the first gold run with this change records each arm's peak and the pod's limit, from which the floor can
+be lowered (or the 14B loader made to stream instead of copying). UNVERIFIED: that the 137 at e9b9435 was the cgroup
+OOM killer (that run recorded no cgroup), and that Runpod honours `minRAMPerGPU` on PRO 6000 hosts in EU-RO-1 as on
+the upstream pods.

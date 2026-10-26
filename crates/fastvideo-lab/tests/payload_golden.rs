@@ -14,6 +14,9 @@
 //! 3. (`up` only, not in a plan) the image is pinned to its digest.
 //!
 //! The name is equal because the golden is made with `FV_POD_PREFIX=fv-lab`.
+//! A tier's host-RAM floor (`min_ram_gb`, ADR-0019 §16.10) is no difference:
+//! the golden passes it as the script's `FV_MIN_RAM_GB`, and both bodies
+//! carry `minRAMPerGPU`; a tier without one has the field in neither.
 //!
 //! For the tiers of `scripts/gpu/fv-lab-retired.sh` the fixture is frozen
 //! (ADR-0019 §10): `runpod-http.sh run` hands them to `fv-lab pod up`, so the
@@ -57,6 +60,7 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     assert!(lab.tiers.tiers.len() >= 10);
     let mut restored = 0;
     let mut r2_tiers = 0;
+    let mut floors = 0;
     for tier in &lab.tiers.tiers {
         let family = tier.name.as_str();
         let l = launch(tier, SHA, &StartOptions::for_tier(tier, TAG)).expect("launch");
@@ -76,6 +80,12 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
             "{family}"
         );
         r2_tiers += usize::from(tier.weights == TierWeights::VolumeR2);
+        assert_eq!(
+            ours.get("minRAMPerGPU").and_then(Value::as_u64),
+            tier.min_ram_gb.map(u64::from),
+            "{family}: minRAMPerGPU is the tier's min_ram_gb"
+        );
+        floors += usize::from(tier.min_ram_gb.is_some());
         // Difference 1.
         let mut theirs = fixture(family);
         let mut cmd = theirs["dockerStartCmd"][2]
@@ -120,4 +130,8 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         lab.tier("gold").map(|t| t.weights),
         Some(TierWeights::VolumeR2)
     );
+    // Only the gold tier asks for a host-RAM floor (its 14B arm's host load,
+    // lab/tiers.toml); every other tier's pod has Runpod's default.
+    assert_eq!(floors, 1, "one tier with min_ram_gb (gold)");
+    assert_eq!(lab.tier("gold").and_then(|t| t.min_ram_gb), Some(192));
 }

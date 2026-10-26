@@ -1011,8 +1011,13 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let tag_image = l.image.clone();
     l.image = ghcr_resolve(&http, &tag_image).map_err(|e| e.to_string())?;
     log.line(&format!(
-        "[fv-lab] {} on {}: image {} ({tag_image})",
-        l.name, t.gpu, l.image
+        "[fv-lab] {} on {}: image {} ({tag_image}){}",
+        l.name,
+        t.gpu,
+        l.image,
+        t.min_ram_gb
+            .map(|g| format!(", host RAM floor {g} GB per GPU (minRAMPerGPU)"))
+            .unwrap_or_default()
     ));
     let api_key = env.get(API_KEY_VAR).unwrap_or("").to_owned();
     let leaks = |s: &str| !api_key.is_empty() && s.contains(api_key.as_str());
@@ -1072,6 +1077,9 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         usd_per_hr: inst.usd_per_hr,
         created_at: inst.created_at,
         cap_s: t.wall_cap_s,
+        min_ram_gb: t.min_ram_gb,
+        memory_gb: inst.memory_gb,
+        vcpus: inst.vcpus,
     };
     write_record(&state.join("pods").join(format!("{}.json", rec.id)), &rec)?;
     let out = run_dir(&root, &t.name, &tag);
@@ -1272,6 +1280,8 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
                 data_center: None,
                 usd_per_hr: rec.usd_per_hr,
                 created_at: rec.created_at,
+                memory_gb: rec.memory_gb,
+                vcpus: rec.vcpus,
             };
             let ping = p
                 .reach(&inst, &ReachOptions::default())

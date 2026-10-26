@@ -12,7 +12,11 @@
 //!   live.log                    every log line ([HH:MM:SS] [<family>] …)
 //!   done.json                   {"family":…,"ended":…}
 //!   <arm>.weights.log           verify-weights.sh <gate>
-//!   <arm>/summary.json          {"cell","family","exit","seconds","ended"} or {…,"skipped":…}
+//!   box.txt                     (the start command's) + the pod's CPUs, host RAM, memory
+//!                               cgroup, RAM limit and OOM kills at start (ADR-0019 §16.10)
+//!   <arm>/summary.json          {"cell","family","exit","seconds",["peak_ram_mib",
+//!                               "ram_limit_mib","pod_peak_mib_cumulative","oom_kills",]"ended"}
+//!                               (the memory fields with a memory cgroup) or {…,"skipped":…}
 //!   <arm>/stdout.log, stderr.log, nvidia-smi-{start,end}.txt
 //!   <arm>/frames/…, benchmark.json, gpucheck-out/   (fv-gpucheck's own)
 //!   compare/compare-clips-<b>--<c>[-<prompt>].json, <tag>.{stdout,stderr}.log
@@ -54,6 +58,7 @@ use fastvideo_deploy::launch::utc_iso;
 use crate::plan::{
     line_matches, log_lines, GateKind, Paths, RepeatHash, RepeatsCell, Step, Verdict,
 };
+use crate::podmem::{self, MemCgroup, Sampler};
 use crate::quote::printf_q_line;
 use crate::repeats;
 use crate::weights::{self, gb, R2Setup, R2Tree, WeightsPlan, R2_KEY_ENV, R2_STATE_DIR};
@@ -144,6 +149,13 @@ pub struct RunConfig {
     /// Also take `file://` reference URLs (tests only: no flag or variable of
     /// the binary sets it; a run reads `http(s)://` only, [`oracle_url_ok`]).
     pub allow_file_urls: bool,
+    /// Where the pod's memory cgroup is read ([`podmem`]): this process's
+    /// `/proc/self/cgroup`, the cgroup mount and `/proc/meminfo` (a test
+    /// points them at fakes), and the pause between an arm's samples (1 s).
+    pub proc_cgroup: PathBuf,
+    pub cgroup_root: PathBuf,
+    pub meminfo: PathBuf,
+    pub mem_poll: Duration,
 }
 
 /// Whether `url` is a base URL a reference may come from: `http://` or
@@ -202,6 +214,10 @@ impl RunConfig {
             oracle_retry: Duration::from_secs(10),
             curl: "curl".into(),
             allow_file_urls: false,
+            proc_cgroup: PathBuf::from(podmem::PROC_SELF_CGROUP),
+            cgroup_root: PathBuf::from(podmem::CGROUP_ROOT),
+            meminfo: PathBuf::from("/proc/meminfo"),
+            mem_poll: Duration::from_secs(1),
         }
     }
 
@@ -707,11 +723,15 @@ pub struct Runner {
     python_ok: bool,
     /// The references being fetched in the background, by target.
     prefetch: BTreeMap<String, JoinHandle<bool>>,
+    /// The pod's memory cgroup ([`podmem`]); `None`: none found (each
+    /// arm's memory is then unknown and its fields left out).
+    mem: Option<MemCgroup>,
 }
 
 impl Runner {
     pub fn new(cfg: RunConfig) -> Self {
         let runs = cfg.runs();
+        let mem = MemCgroup::detect(&cfg.proc_cgroup, &cfg.cgroup_root);
         Self {
             cfg,
             out: runs.clone(),
@@ -725,6 +745,7 @@ impl Runner {
             held: BTreeSet::new(),
             python_ok: false,
             prefetch: BTreeMap::new(),
+            mem,
         }
     }
 
@@ -819,6 +840,9 @@ impl Runner {
         ] {
             fs::create_dir_all(&d).map_err(io(&d))?;
         }
+        // The pod's share of the host's RAM, beside the start command's GPU
+        // line (ADR-0019 §16.10): what an arm may use before an OOM kill.
+        self.record_box();
         // Before anything reads `<weights>/auxiliary` (FV_AUX_DIR, LPIPS).
         if self.cfg.r2.is_some() {
             self.link_volume()?;
@@ -967,7 +991,41 @@ impl Runner {
                 }
             }
         }
+        self.log(&match &self.mem {
+            Some(c) => format!(
+                "pod memory: cgroup {} {}, {}, oom_kills {}",
+                c.version(),
+                c.dir.display(),
+                match podmem::mib(c.limit_bytes()) {
+                    Some(l) => format!("limit {l} MiB"),
+                    None => "no limit read".to_owned(),
+                },
+                c.oom_kills()
+                    .map_or_else(|| "?".to_owned(), |n| n.to_string())
+            ),
+            None => {
+                "pod memory: no memory cgroup found (arms' RAM and OOM kills unknown)".to_owned()
+            }
+        });
         Ok(())
+    }
+
+    /// Appends the pod's CPUs, host RAM, memory cgroup, RAM limit and OOM
+    /// kills so far to `box.txt` (`podmem::box_lines`; the start command
+    /// wrote the file's first lines). A write error never stops the run.
+    fn record_box(&self) {
+        let cpus = std::thread::available_parallelism()
+            .ok()
+            .map(std::num::NonZeroUsize::get);
+        let meminfo = fs::read_to_string(&self.cfg.meminfo).unwrap_or_default();
+        let text = podmem::box_lines(self.mem.as_ref(), cpus, &meminfo);
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.runs.join("box.txt"))
+        {
+            let _ = f.write_all(text.as_bytes());
+        }
     }
 
     /// The merged root is off the volume ([`weights::check_off_volume`]).
@@ -2064,11 +2122,17 @@ impl Runner {
             command.join(" ")
         ));
         self.smi_snap(&cell.join("nvidia-smi-start.txt"));
+        let sampler = self
+            .mem
+            .as_ref()
+            .map(|c| Sampler::start(c, self.cfg.mem_poll));
         let rc = self.exec(&cell, command, cap);
+        let mem = sampler.map(Sampler::finish);
         let secs = t0.elapsed().as_secs();
         self.smi_snap(&cell.join("nvidia-smi-end.txt"));
         if rc != 0 {
             self.log(&format!("FAIL {name}  {secs}s  exit={rc}"));
+            self.log_arm_mem(name, mem.as_ref());
             let err = fs::read_to_string(cell.join("stderr.log")).unwrap_or_default();
             for l in fail_tail(&err) {
                 self.raw(l);
@@ -2076,17 +2140,42 @@ impl Runner {
         } else {
             let peak = peak_line(&cell);
             self.log(&format!("ok {name}  {secs}s  {peak}"));
+            self.log_arm_mem(name, mem.as_ref());
         }
+        // The memory fields (new and optional: only with a memory cgroup)
+        // before `ended`, so a summary still starts and ends as before.
         self.write_json(
             &cell.join("summary.json"),
             &format!(
-                "{{\"cell\":\"{name}\",\"family\":\"{}\",\"exit\":{rc},\"seconds\":{secs},\"ended\":\"{}\"}}",
+                "{{\"cell\":\"{name}\",\"family\":\"{}\",\"exit\":{rc},\"seconds\":{secs},{}\"ended\":\"{}\"}}",
                 self.cfg.family,
+                mem.as_ref().map(podmem::ArmMem::json_fields).unwrap_or_default(),
                 Self::now_iso()
             ),
         );
         if let Some(d) = frames_digest(&cell, name) {
             let _ = fs::write(cell.join(FRAMES_DIGEST), d);
+        }
+    }
+
+    /// An arm's memory in `live.log` (with a memory cgroup): its peak
+    /// process memory against the pod's limit, and the OOM kills during it,
+    /// which a failed arm names as its cause: a SIGKILL'd loader prints
+    /// nothing (ADR-0019 §16.10).
+    fn log_arm_mem(&self, name: &str, mem: Option<&podmem::ArmMem>) {
+        let Some(m) = mem else {
+            return;
+        };
+        self.log(&format!(
+            "ram {name}: {}, oom_kills {}",
+            podmem::ram_text(m.peak_ram_mib, m.ram_limit_mib),
+            m.oom_kills
+                .map_or_else(|| "?".to_owned(), |n| n.to_string())
+        ));
+        if let Some(n) = m.oom_kills.filter(|n| *n > 0) {
+            self.log(&format!(
+                "OOM {name}: the kernel OOM-killed {n} process(es) in this pod during the arm (host RAM, not GPU: the tier's min_ram_gb, docs/adr/0019-fv-lab.md §16.10)"
+            ));
         }
     }
 

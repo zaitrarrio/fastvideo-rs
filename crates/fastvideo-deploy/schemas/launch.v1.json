@@ -153,6 +153,15 @@
             "null"
           ]
         },
+        "min_ram_gb": {
+          "description": "A Runpod pod's host-RAM floor (`PodCreateInput.minRAMPerGPU`): whole\nGB per GPU, positive. `None` sends nothing: Runpod's default floor\n(8 GB per GPU), above which the host's share decides\n(docs/adr/0019-fv-lab.md §16.10).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
         "types": {
           "description": "Provider GPU type ids in fallback order (one is tried at a time for a\npod; a serverless endpoint gets the whole list).",
           "type": "array",

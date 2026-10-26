@@ -89,6 +89,15 @@
           "type": "number",
           "format": "double"
         },
+        "min_ram_gb": {
+          "description": "The pod's host-RAM floor, whole GB per GPU (Runpod `minRAMPerGPU`,\nADR-0019 §16.10): a positive integer. Absent: none is asked for, and\nRunpod's default floor (8 GB per GPU) leaves the host's share to decide.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
         "name": {
           "description": "The family name (`fv-lab run <name>`; the run directory\n`runs/<name>/<tag>` and `artifacts/runpod/<name>/<tag>`).",
           "type": "string"

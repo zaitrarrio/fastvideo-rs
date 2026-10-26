@@ -270,6 +270,25 @@ pub fn check_serverless(l: &Launch) -> Result<(), GuardError> {
     Ok(())
 }
 
+/// A host-RAM floor (`GpuSpec::min_ram_gb`, Runpod `minRAMPerGPU`) is a
+/// positive number of GB per GPU, on a Runpod pod only: no other create body
+/// carries it, so elsewhere it would be dropped unsaid (docs/adr/0019-fv-lab.md
+/// §16.10).
+pub fn check_min_ram(l: &Launch) -> Result<(), GuardError> {
+    match l.gpu.min_ram_gb {
+        None => Ok(()),
+        Some(0) => Err(GuardError::Invalid(
+            "min_ram_gb 0: the host-RAM floor is a positive number of GB per GPU (Runpod minRAMPerGPU)"
+                .into(),
+        )),
+        Some(gb) if l.provider != ProviderKind::RunpodPod => Err(GuardError::Invalid(format!(
+            "min_ram_gb {gb}: a host-RAM floor is a Runpod pod's minRAMPerGPU; a {} launch has none",
+            l.provider
+        ))),
+        Some(_) => Ok(()),
+    }
+}
+
 /// The floor over the whole cap (CLAUDE.md: stop before the balance *would*
 /// drop below $8): `balance − (usd_per_hr + current spend) × cap_s / 3600 ≥ floor`.
 pub fn check_projection(

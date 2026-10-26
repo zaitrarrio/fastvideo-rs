@@ -46,6 +46,11 @@ export interface GpuSpec {
   count: number;
   /** Runpod serverless `minCudaVersion`. */
   min_cuda?: string | null;
+  /** A Runpod pod's host-RAM floor (`PodCreateInput.minRAMPerGPU`): whole
+   * GB per GPU, positive. `None` sends nothing: Runpod's default floor
+   * (8 GB per GPU), above which the host's share decides
+   * (docs/adr/0019-fv-lab.md §16.10). */
+  min_ram_gb?: number | null;
   /** Provider GPU type ids in fallback order (one is tried at a time for a
    * pod; a serverless endpoint gets the whole list). */
   types: string[];
@@ -54,6 +59,7 @@ export const GpuSpecZ: z.ZodType<GpuSpec> = z.strictObject({
   allowed_cuda: z.array(z.string()).optional(),
   count: z.number().int().min(0).max(4294967295),
   min_cuda: z.string().nullable().optional(),
+  min_ram_gb: z.number().int().min(0).max(4294967295).nullable().optional(),
   types: z.array(z.string()),
 });
 
@@ -119,6 +125,9 @@ export interface Instance {
   data_center?: string | null;
   gpu?: string | null;
   id: InstanceId;
+  /** The host RAM the provider gave the instance (GB; a Runpod pod's
+   * `memoryInGb`), when its create answer says. */
+  memory_gb?: number | null;
   name: string;
   provider: ProviderKind;
   state: InstanceState;
@@ -127,17 +136,21 @@ export interface Instance {
   url?: string | null;
   /** Billed $/hr when the provider says. */
   usd_per_hr?: number | null;
+  /** Its vCPUs (a Runpod pod's `vcpuCount`), when the create answer says. */
+  vcpus?: number | null;
 }
 export const InstanceZ: z.ZodType<Instance> = z.strictObject({
   created_at: z.number().nullable().optional(),
   data_center: z.string().nullable().optional(),
   gpu: z.string().nullable().optional(),
   id: InstanceIdZ,
+  memory_gb: z.number().nullable().optional(),
   name: z.string(),
   provider: ProviderKindZ,
   state: InstanceStateZ,
   url: z.string().nullable().optional(),
   usd_per_hr: z.number().nullable().optional(),
+  vcpus: z.number().nullable().optional(),
 });
 
 /** A network volume and where it is mounted. */

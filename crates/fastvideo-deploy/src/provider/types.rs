@@ -155,6 +155,12 @@ pub struct GpuSpec {
     /// Runpod serverless `minCudaVersion`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_cuda: Option<String>,
+    /// A Runpod pod's host-RAM floor (`PodCreateInput.minRAMPerGPU`): whole
+    /// GB per GPU, positive. `None` sends nothing: Runpod's default floor
+    /// (8 GB per GPU), above which the host's share decides
+    /// (docs/adr/0019-fv-lab.md §16.10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_ram_gb: Option<u32>,
 }
 
 /// A network volume and where it is mounted.
@@ -503,6 +509,13 @@ pub struct Instance {
     /// Unix seconds (fv-deploy's clock when it created it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<f64>,
+    /// The host RAM the provider gave the instance (GB; a Runpod pod's
+    /// `memoryInGb`), when its create answer says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_gb: Option<f64>,
+    /// Its vCPUs (a Runpod pod's `vcpuCount`), when the create answer says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vcpus: Option<f64>,
 }
 
 /// What [`Offer`]s to quote.
