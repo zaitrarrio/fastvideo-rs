@@ -4,12 +4,14 @@
 //!   serve-engine arm, a CLI arm at another canvas, a skipped arm, a failed
 //!   arm, an arm of no gold variant, and a variant with no arm) and fixture
 //!   gold files render to `fixtures/tiers/tiers.md` byte for byte;
+//! - the same run set split in two runs of one tier and commit (ADR-0019
+//!   §16.7, `--runs a,b`) renders the same rows, each from its own run;
 //! - the committed `docs/perf/tiers.md` is what the gold files and the run
 //!   set its header names render to (`fv-lab report tiers --check`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use fastvideo_lab::report::{first_difference, render, run_set_of, RunSet, TIERS_MD};
+use fastvideo_lab::report::{first_difference, render, run_set_of, RunSet, Runs, TIERS_MD};
 use fastvideo_lab::{load_dir, Gold};
 
 fn repo_root() -> PathBuf {
@@ -36,21 +38,21 @@ fn fixture_run_set_renders_its_golden() {
         ("gold", "1234567-1024120000-abcd")
     );
     assert_eq!(set.arms.len(), 5);
-    let text = render(&fixture_golds(), Some(&set));
+    let text = render(&fixture_golds(), Some(&Runs::from(set.clone())));
     let golden =
         std::fs::read_to_string(repo_root().join("crates/fastvideo-lab/fixtures/tiers/tiers.md"))
             .expect("fixtures/tiers/tiers.md");
     assert_same(&golden, &text, "fixtures/tiers/tiers.md");
     // The rendering names its run set, so --check can find it again.
-    assert_eq!(run_set_of(&text).unwrap().as_deref(), Some(FIXTURE_RUNS));
+    assert_eq!(run_set_of(&text).unwrap(), vec![FIXTURE_RUNS.to_owned()]);
     // Deterministic.
-    assert_eq!(text, render(&fixture_golds(), Some(&set)));
+    assert_eq!(text, render(&fixture_golds(), Some(&Runs::from(set))));
 }
 
 #[test]
 fn fixture_rows_say_what_was_and_was_not_measured() {
     let set = RunSet::load(&repo_root(), FIXTURE_RUNS).expect("fixture run set");
-    let text = render(&fixture_golds(), Some(&set));
+    let text = render(&fixture_golds(), Some(&Runs::from(set)));
     let row = |v: &str| {
         text.lines()
             .find(|l| l.starts_with(&format!("| `{v}` |")))
@@ -86,7 +88,7 @@ fn a_same_named_arm_of_another_tier_is_not_the_variant() {
     // ran the variant (`context.model.id`) still counts; the CLI arm does not.
     let mut set = RunSet::load(&repo_root(), FIXTURE_RUNS).expect("fixture run set");
     set.tier = "rtx6000".into();
-    let text = render(&fixture_golds(), Some(&set));
+    let text = render(&fixture_golds(), Some(&Runs::from(set)));
     let row = |v: &str| {
         text.lines()
             .find(|l| l.starts_with(&format!("| `{v}` |")))
@@ -103,7 +105,7 @@ fn a_same_named_arm_of_another_tier_is_not_the_variant() {
 #[test]
 fn without_a_run_set_nothing_is_measured() {
     let text = render(&fixture_golds(), None);
-    assert_eq!(run_set_of(&text).unwrap(), None);
+    assert!(run_set_of(&text).unwrap().is_empty());
     let rows: Vec<&str> = text.lines().filter(|l| l.starts_with("| `")).collect();
     assert_eq!(rows.len(), 5);
     assert!(rows.iter().all(|r| r.contains("not measured (no run set)")));
@@ -113,14 +115,188 @@ fn without_a_run_set_nothing_is_measured() {
 fn committed_tiers_md_is_current() {
     let root = repo_root();
     let committed = std::fs::read_to_string(root.join(TIERS_MD)).expect("docs/perf/tiers.md");
-    let label = run_set_of(&committed).expect("a Run set line");
-    let set = label
-        .as_deref()
-        .map(|l| RunSet::load(&root, l).expect("the run set the table names"));
+    let labels = run_set_of(&committed).expect("a Run set line");
+    let set = (!labels.is_empty()).then(|| {
+        Runs::new(
+            labels
+                .iter()
+                .map(|l| RunSet::load(&root, l).expect("a run the table names"))
+                .collect(),
+        )
+        .expect("the runs the table names are one run set")
+    });
     let golds = load_dir(&root.join("lab/gold")).expect("gold files");
     assert_same(
         &committed,
         &render(&golds, set.as_ref()),
         "docs/perf/tiers.md (fv-lab report tiers)",
     );
+}
+
+/// Copies the fixture run's arms `arms` into `<root>/<label>`, with its
+/// `pod.json` at `usd_per_hr` (the fixture's is 2.49).
+fn split_run(root: &Path, label: &str, arms: &[&str], usd_per_hr: f64) {
+    let from = repo_root().join(FIXTURE_RUNS);
+    let to = root.join(label);
+    for arm in arms {
+        copy_dir(&from.join(arm), &to.join(arm));
+    }
+    let pod = std::fs::read_to_string(from.join("pod.json")).expect("pod.json");
+    let pod = pod.replace(
+        "\"usd_per_hr\": 2.49",
+        &format!("\"usd_per_hr\": {usd_per_hr}"),
+    );
+    std::fs::write(to.join("pod.json"), pod).expect("write pod.json");
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("mkdir");
+    for e in std::fs::read_dir(from).expect("read_dir") {
+        let e = e.expect("entry");
+        let p = e.path();
+        if p.is_dir() {
+            copy_dir(&p, &to.join(e.file_name()));
+        } else {
+            std::fs::copy(&p, to.join(e.file_name())).expect("copy");
+        }
+    }
+}
+
+const SPLIT_A: &str = "artifacts/runpod/gold/1234567-1026080000-aaaa";
+const SPLIT_B: &str = "artifacts/runpod/gold/1234567-1026200000-bbbb";
+
+#[test]
+fn a_split_run_set_renders_as_one() {
+    let root = std::env::temp_dir().join(format!("fv-lab-tiers-split-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    // The fixture's arms in two runs at the same price: the rows are the
+    // single run's, byte for byte; `demo-h3-max` is skipped in both.
+    split_run(&root, SPLIT_A, &["demo-h3-turbo", "demo-h3-max"], 2.49);
+    split_run(
+        &root,
+        SPLIT_B,
+        &["demo-ltx-turbo", "demo-ltx-max", "demo-h3-max", "extra-arm"],
+        2.49,
+    );
+    let load = |l: &str| RunSet::load(&root, l).expect("split run");
+    let single = render(
+        &fixture_golds(),
+        Some(&Runs::from(
+            RunSet::load(&repo_root(), FIXTURE_RUNS).expect("fixture run set"),
+        )),
+    );
+    let split = Runs::new(vec![load(SPLIT_A), load(SPLIT_B)]).expect("one run set");
+    let text = render(&fixture_golds(), Some(&split));
+    let tail = |t: &str| -> Vec<String> {
+        t.lines()
+            .skip_while(|l| !l.starts_with("## "))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(tail(&text), tail(&single));
+    assert_eq!(
+        run_set_of(&text).unwrap(),
+        vec![SPLIT_A.to_owned(), SPLIT_B.to_owned()]
+    );
+    // `demo-h3-max`, skipped in both, is shown from the last run and listed
+    // under the first.
+    assert!(text.contains(&format!(
+        "- `{SPLIT_A}`: tag `1234567-1026080000-aaaa`, 1 arm shown from it, ended 2026-10-24; pod GPU NVIDIA RTX PRO 6000 Blackwell Server Edition, $2.49/hr. Also here, shown from another run: `demo-h3-max` (skipped here: weights incomplete; shown from `{SPLIT_B}`).\n"
+    )), "{text}");
+    assert!(text.contains(&format!(
+        "- `{SPLIT_B}`: tag `1234567-1026200000-bbbb`, 4 arms shown from it, ended 2026-10-24; pod GPU NVIDIA RTX PRO 6000 Blackwell Server Edition, $2.49/hr.\n"
+    )), "{text}");
+
+    // Each row reads its own run's pod: the second run at another price.
+    let _ = std::fs::remove_dir_all(root.join(SPLIT_B));
+    split_run(
+        &root,
+        SPLIT_B,
+        &["demo-ltx-turbo", "demo-ltx-max", "demo-h3-max", "extra-arm"],
+        3.6,
+    );
+    let split = Runs::new(vec![load(SPLIT_A), load(SPLIT_B)]).expect("one run set");
+    let text = render(&fixture_golds(), Some(&split));
+    let row = |v: &str| {
+        text.lines()
+            .find(|l| l.starts_with(&format!("| `{v}` |")))
+            .unwrap_or_else(|| panic!("no row {v}"))
+            .to_owned()
+    };
+    let h3 = row("demo-h3-turbo");
+    assert!(
+        h3.contains(&format!("{:.5}", 2.49 * 9.876 / 3600.0)),
+        "{h3}"
+    );
+    let ltx = row("demo-ltx-turbo");
+    let ltx_single = single
+        .lines()
+        .find(|l| l.starts_with("| `demo-ltx-turbo` |"))
+        .expect("single ltx row");
+    assert_ne!(ltx, ltx_single, "the second run's price is its own");
+    assert!(text.contains("$3.60/hr.\n"), "{text}");
+
+    // Validation ages count to the end of the row's own run: the second run
+    // ends later, the first run's `demo-h3-turbo` keeps its 10 days, and a
+    // variant without an arm counts to the last end of all.
+    let summary = root.join(SPLIT_B).join("extra-arm/summary.json");
+    let late = std::fs::read_to_string(&summary)
+        .expect("summary.json")
+        .replace("2026-10-24T12:13:00Z", "2026-10-30T01:00:00Z");
+    std::fs::write(&summary, late).expect("write summary.json");
+    let mut golds = fixture_golds();
+    let wan = golds
+        .iter_mut()
+        .find(|g| g.model.variant.as_str() == "demo-wan-stream")
+        .expect("demo-wan-stream");
+    wan.last_validated.commit = Some("abcdef1".into());
+    wan.last_validated.date = Some("2026-10-14".into());
+    let split = Runs::new(vec![load(SPLIT_A), load(SPLIT_B)]).expect("one run set");
+    let text = render(&golds, Some(&split));
+    let row = |v: &str| {
+        text.lines()
+            .find(|l| l.starts_with(&format!("| `{v}` |")))
+            .unwrap_or_else(|| panic!("no row {v}"))
+            .to_owned()
+    };
+    assert!(
+        row("demo-h3-turbo").contains("2026-10-14 `abcdef1`, 10 d before the run set"),
+        "{text}"
+    );
+    assert!(
+        row("demo-wan-stream").contains("2026-10-14 `abcdef1`, 16 d before the run set"),
+        "{text}"
+    );
+
+    // A failed arm rerun in a later run: the pass is shown.
+    let ltx_a = root.join(SPLIT_A).join("demo-ltx-turbo");
+    std::fs::create_dir_all(&ltx_a).expect("mkdir");
+    std::fs::write(
+        ltx_a.join("summary.json"),
+        r#"{"cell":"demo-ltx-turbo","family":"gold","exit":101,"seconds":30,"ended":"2026-10-24T12:00:00Z"}"#,
+    )
+    .expect("write summary.json");
+    let split = Runs::new(vec![load(SPLIT_A), load(SPLIT_B)]).expect("one run set");
+    let text = render(&fixture_golds(), Some(&split));
+    let ltx = text
+        .lines()
+        .find(|l| l.starts_with("| `demo-ltx-turbo` |"))
+        .expect("ltx row");
+    assert!(ltx.contains("| measured |"), "{ltx}");
+    assert!(
+        text.contains("`demo-ltx-turbo` (failed here: exit 101; shown from"),
+        "{text}"
+    );
+
+    // An arm that passed in both runs is refused.
+    copy_dir(
+        &repo_root().join(FIXTURE_RUNS).join("demo-h3-turbo"),
+        &root.join(SPLIT_B).join("demo-h3-turbo"),
+    );
+    let e = Runs::new(vec![load(SPLIT_A), load(SPLIT_B)]).expect_err("refused");
+    assert!(
+        e.contains("arm `demo-h3-turbo` passed in more than one run"),
+        "{e}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }
