@@ -56,7 +56,7 @@ pub enum DeployError {
 
 /// The append-only local ledger (`artifacts/fv-deploy/ledger.tsv`, the
 /// scripts' `ledger.tsv` format: `<UTC time>\t<event> <id> k=v …`). The D1
-/// `deployments` ledger is plan C3d.
+/// `deployments` ledger is a [`Recorder`] (C3d, docs/adr/0018-fv-deploy.md §10.3).
 #[derive(Clone, Debug)]
 pub struct Ledger {
     pub path: PathBuf,
@@ -75,6 +75,18 @@ impl Ledger {
             let _ = writeln!(f, "{}\t{line}", utc_iso(now));
         }
     }
+}
+
+/// Where `up`, `down` and the sweeps record what they create, find ready and
+/// delete, besides the local [`Ledger`]: the D1 `deployments` table that
+/// fv-control and `release.sh` read (`crate::release::registry::D1Recorder`,
+/// docs/adr/0018-fv-deploy.md §10.3). Best effort, as the scripts'
+/// `registry.sh`: a failure is logged and never fails the deploy.
+pub trait Recorder {
+    fn created(&self, launch: &Launch, instance: &Instance) -> Result<(), String>;
+    fn ready(&self, instance: &Instance) -> Result<(), String>;
+    /// `status`: `deleted` (or `gone` for a reconcile).
+    fn deleted(&self, kind: ProviderKind, id: &InstanceId, status: &str) -> Result<(), String>;
 }
 
 /// What the smoke does.
@@ -355,6 +367,8 @@ pub struct Deployer<'a> {
     pub log: &'a dyn LogSink,
     pub backstop: &'a dyn Backstop,
     pub ledger: Option<&'a Ledger>,
+    /// The D1 `deployments` ledger (C3d), when configured.
+    pub recorder: Option<&'a dyn Recorder>,
     /// Polled in every wait; true stops `up` (the instance is deleted).
     pub interrupted: &'a dyn Fn() -> bool,
     /// Whether a text contains the provider's API key (the env guard).
@@ -371,6 +385,23 @@ impl Deployer<'_> {
     fn record(&self, s: &str) {
         if let Some(l) = self.ledger {
             l.record(self.clock.now(), s);
+        }
+    }
+
+    fn recorded(&self, what: &str, r: Result<(), String>) {
+        if let Err(e) = r {
+            self.say(&format!(
+                "WARNING: the deployments ledger (D1) could not record {what}: {e}"
+            ));
+        }
+    }
+
+    fn record_deleted(&self, id: &InstanceId) {
+        if let Some(r) = self.recorder {
+            self.recorded(
+                &format!("the delete of {id}"),
+                r.deleted(self.provider.kind(), id, "deleted"),
+            );
         }
     }
 
@@ -411,6 +442,7 @@ impl Deployer<'_> {
                 Ok(()) => {
                     self.say(&format!("deleted {id} ({why})"));
                     self.record(&format!("{}-deleted {id} {why}", self.provider.kind()));
+                    self.record_deleted(id);
                     return Ok(());
                 }
                 Err(e) => {
@@ -469,7 +501,7 @@ impl Deployer<'_> {
         account: &Account,
         budget: &mut u32,
     ) -> Result<Instance, DeployError> {
-        let g = &launch.guards;
+        let g = guard::check_guards(&launch.guards)?;
         let cap = g.max_usd_per_hr;
         let offers = self.provider.offers(&OfferQuery {
             gpu_types: launch.gpu.types.clone(),
@@ -533,9 +565,16 @@ impl Deployer<'_> {
                 Ok(inst) => {
                     *budget -= 1;
                     self.record(&format!(
-                        "{}-created {} {} gpu={label} image={}",
-                        inst.provider, inst.id, inst.name, l.image
+                        "{}-created {} {} gpu={label} image={} {}",
+                        inst.provider,
+                        inst.id,
+                        inst.name,
+                        l.image,
+                        l.guards.ledger_line()
                     ));
+                    if let Some(r) = self.recorder {
+                        self.recorded(&inst.id.to_string(), r.created(&l, &inst));
+                    }
                     // The backstop first: nothing below may leave it unguarded.
                     self.arm_or_delete(&inst, g.cap_s)?;
                     if self.provider.bills_at_create() {
@@ -613,6 +652,7 @@ impl Deployer<'_> {
                 for id in &ids {
                     self.say(&format!("swept {id} (named {name})"));
                     self.record(&format!("{}-deleted {id} sweep", self.provider.kind()));
+                    self.record_deleted(id);
                 }
                 ids.iter()
                     .map(ToString::to_string)
@@ -701,7 +741,7 @@ impl Deployer<'_> {
     }
 
     fn up_inner(&self, launch: &Launch, opts: &UpOptions) -> Result<UpReport, DeployError> {
-        let g = launch.guards;
+        let g = guard::check_guards(&launch.guards)?;
         let mut cycles = Vec::new();
         let mut ready: Option<Instance> = None;
         let mut budget = g.ready_cycles;
@@ -729,6 +769,9 @@ impl Deployer<'_> {
                         "{}-ready {} after_s={t:.1}",
                         inst.provider, inst.id
                     ));
+                    if let Some(r) = self.recorder {
+                        self.recorded(&format!("{} ready", inst.id), r.ready(&inst));
+                    }
                     cycle.ready_after_s = Some(t);
                     cycle.outcome = "ready".into();
                     cycles.push(cycle);
@@ -826,6 +869,7 @@ impl Deployer<'_> {
         }
         self.provider.destroy(id)?;
         self.record(&format!("{}-deleted {id} down", self.provider.kind()));
+        self.record_deleted(id);
         Ok(())
     }
 }

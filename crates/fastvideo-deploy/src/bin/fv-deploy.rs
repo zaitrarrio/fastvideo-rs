@@ -10,6 +10,14 @@
 //!                 without --yes it is `plan`
 //! fv-deploy status <id> | logs <id> [--follow] | smoke <id> | down <id>  [--kind …]
 //! fv-deploy schema launch|instance|offer|account
+//! fv-deploy templates sync <image> <ref> | sync-all <file> | list | id <image> <sls|pod> | plan <image> <ref>
+//!                 the Runpod serve templates (scripts/serve/runpod-templates.sh)
+//! fv-deploy release promote <sha|digest|tag> [channel] | rollback [channel] [--to ID] | resolve <target>
+//!                 release channels (scripts/serve/release.sh): GHCR channel
+//!                 tags, the templates, the D1 history; dispatches release.yml
+//!                 unless --local (or in GitHub Actions); --dry-run plans
+//! fv-deploy reconcile [--dry-run] [--adopt] [--fix]
+//!                 the account against the D1 deployments ledger
 //! fv-deploy backstop --kind K --id ID --deadline T --armed-file F
 //!                 (started by `up`, detached; writes F once armed)
 //! ```
@@ -18,7 +26,9 @@
 //! (Vast) or a GCP access token (`GCP_ACCESS_TOKEN`, else minted by
 //! `scripts/gcp/auth.sh` from `GCP_SA_KEY_JSON` / `GCP_SA_KEY_FILE`), and is
 //! never printed. GCP has no balance: `FV_GCP_BUDGET_USD` (or
-//! `--budget-usd`) is the run's budget the floor is checked on.
+//! `--budget-usd`) is the run's budget the floor is checked on. `up` and
+//! `down` record Runpod pods and endpoints in D1's `deployments` when a
+//! Cloudflare token is set (`FV_CF_API_TOKEN`, as the scripts; C3d).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -31,18 +41,22 @@ use serde_json::{json, Value};
 
 use fastvideo_deploy::boot::env::BootEnv;
 use fastvideo_deploy::boot::http::ReqwestHttp;
-use fastvideo_deploy::boot::sys::{Clock, Http, LogSink, RealClock, StderrLog};
+use fastvideo_deploy::boot::sys::{Clock, Http, LogSink, RealClock, RealSpawner, StderrLog};
 use fastvideo_deploy::guard::{self, run_backstop, DetachedBackstop};
 use fastvideo_deploy::launch::{self, PresetRequest, Repo, KEY_HASH_PLACEHOLDER};
-use fastvideo_deploy::lifecycle::{smoke, Deployer, Ledger, SmokeOptions, UpOptions};
+use fastvideo_deploy::lifecycle::{smoke, Deployer, Ledger, Recorder, SmokeOptions, UpOptions};
 use fastvideo_deploy::provider::gcp::{
     self, GcpApi, GcpAssets, GcpOptions, GcpPrices, GcpVm, ScriptToken, StaticToken, TokenSource,
 };
+use fastvideo_deploy::provider::runpod::Flavour;
 use fastvideo_deploy::provider::runpod::{Pod, RunpodApi, RunpodUrls, Serverless};
 use fastvideo_deploy::provider::vast::{Vast, VastApi};
 use fastvideo_deploy::provider::{
     schema, Cursor, Guards, Instance, InstanceId, Launch, Provider, ProviderKind, ReachOptions,
 };
+use fastvideo_deploy::release::d1::D1;
+use fastvideo_deploy::release::registry::{D1Recorder, Registry};
+use fastvideo_deploy::release::{self, promote, reconcile, templates, ReleaseError};
 
 #[derive(Parser)]
 #[command(
@@ -82,6 +96,35 @@ enum Cmd {
     Down(IdArgs),
     /// Print a JSON Schema (launch, instance, offer, account).
     Schema { name: String },
+    /// The Runpod serve templates (fv-serve-<image>-sls / -pod).
+    Templates {
+        #[command(subcommand)]
+        cmd: TemplatesCmd,
+        /// The repository root (default: the nearest parent with deploy/deploy.toml).
+        #[arg(long, global = true)]
+        root: Option<PathBuf>,
+    },
+    /// Release channels: promote a build, roll a channel back, resolve a build.
+    Release {
+        #[command(subcommand)]
+        cmd: ReleaseCmd,
+        #[arg(long, global = true)]
+        root: Option<PathBuf>,
+    },
+    /// Match the account's pods / endpoints / templates to the D1 deployments ledger.
+    Reconcile {
+        /// Show, change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Record unknown fv-serve resources.
+        #[arg(long)]
+        adopt: bool,
+        /// Record the live image of drifted ones.
+        #[arg(long)]
+        fix: bool,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// The detached backstop `up` starts (not for direct use).
     Backstop {
         #[arg(long)]
@@ -95,6 +138,87 @@ enum Cmd {
         #[arg(long)]
         armed_file: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum TemplatesCmd {
+    /// Create or update the image's templates to boot <reference> (a digest).
+    Sync {
+        image: String,
+        reference: String,
+        /// The release channel the templates name (default FV_RELEASE_CHANNEL).
+        #[arg(long)]
+        channel: Option<String>,
+    },
+    /// `sync` for every "<image> <reference>" line of a file.
+    SyncAll {
+        file: PathBuf,
+        #[arg(long)]
+        channel: Option<String>,
+    },
+    /// The fv-serve-* templates: id, name, image.
+    List,
+    /// One template's id.
+    Id { image: String, flavour: String },
+    /// The create bodies (no request).
+    Plan {
+        image: String,
+        reference: String,
+        #[arg(long)]
+        channel: Option<String>,
+    },
+}
+
+#[derive(Args, Clone, Default)]
+struct ReleaseFlags {
+    /// Print the plan; change nothing anywhere.
+    #[arg(long)]
+    dry_run: bool,
+    /// Run here (retag, templates, D1) instead of dispatching release.yml.
+    #[arg(long, conflicts_with = "dispatch")]
+    local: bool,
+    /// Dispatch release.yml (the default outside GitHub Actions).
+    #[arg(long)]
+    dispatch: bool,
+    /// A note for the release history.
+    #[arg(long)]
+    notes: Option<String>,
+    /// Leave the Runpod templates as they are.
+    #[arg(long)]
+    no_templates: bool,
+    /// Promote a build missing some serve images (they keep their tags).
+    #[arg(long)]
+    allow_partial: bool,
+    /// Re-apply a release the channel already has.
+    #[arg(long)]
+    force: bool,
+    /// The channel (when not given as the positional argument; default stable).
+    #[arg(long = "channel")]
+    channel_flag: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum ReleaseCmd {
+    /// Point the channel's tags at a build (no rebuild), its templates when
+    /// the channel is theirs, and record the release.
+    Promote {
+        /// A git sha (7+ hex), an image digest (sha256:…) or a tag.
+        target: String,
+        channel: Option<String>,
+        #[command(flatten)]
+        flags: ReleaseFlags,
+    },
+    /// Re-promote the channel's previous release (or --to ID).
+    Rollback {
+        channel: Option<String>,
+        /// A release id instead of the previous one.
+        #[arg(long)]
+        to: Option<i64>,
+        #[command(flatten)]
+        flags: ReleaseFlags,
+    },
+    /// The image set of one build (JSON; no change).
+    Resolve { target: String },
 }
 
 #[derive(Args, Clone)]
@@ -283,14 +407,15 @@ fn request(a: &LaunchArgs, key_hash: &str) -> Result<PresetRequest, String> {
         gpu_types: a.gpus.clone(),
         volume: a.volume.clone(),
         guards: Guards {
-            max_usd_per_hr: a
-                .max_usd_per_hr
-                .unwrap_or_else(|| guard::default_max_usd_per_hr(kind)),
-            min_balance_usd: a.min_balance,
-            cap_s: a.cap_s,
-            ready_timeout_s: a.ready_timeout_s,
-            ready_cycles: a.ready_cycles,
             force: a.force_guards,
+            ..Guards::all(
+                a.max_usd_per_hr
+                    .unwrap_or_else(|| guard::default_max_usd_per_hr(kind)),
+                a.min_balance,
+                a.cap_s,
+                a.ready_timeout_s,
+                a.ready_cycles,
+            )
         },
         key_hash: key_hash.to_owned(),
     })
@@ -633,11 +758,11 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let mut l = launch::from_preset(&repo, &req, &stamp).map_err(|e| e.to_string())?;
     if l.provider == ProviderKind::Gcp
         && ctx.env.get(gcp::TOKEN_VAR).is_some()
-        && l.guards.cap_s > STATIC_TOKEN_MAX_CAP_S
+        && l.guards.cap_s.unwrap_or(0) > STATIC_TOKEN_MAX_CAP_S
     {
         return Err(format!(
             "--cap-s {}: with a fixed {} the backstop's delete at the cap would outlive the token (about an hour); at most {STATIC_TOKEN_MAX_CAP_S} s, or let scripts/gcp/auth.sh mint tokens (GCP_SA_KEY_JSON / GCP_SA_KEY_FILE, {} unset)",
-            l.guards.cap_s,
+            l.guards.cap_s.unwrap_or(0),
             gcp::TOKEN_VAR,
             gcp::TOKEN_VAR
         ));
@@ -672,6 +797,9 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let ledger = Ledger {
         path: state.join("ledger.tsv"),
     };
+    let d1 = deployments_d1(&ctx, &root, l.provider, &log);
+    let reg = d1.as_ref().map(|d| Registry::new(d, clock, &ctx.env));
+    let rec = reg.as_ref().map(|r| D1Recorder { registry: r });
     let flag = interrupt_flag();
     let interrupted = || flag.load(Ordering::SeqCst);
     let d = Deployer {
@@ -680,6 +808,7 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         log: &log,
         backstop: &backstop,
         ledger: Some(&ledger),
+        recorder: rec.as_ref().map(|r| r as &dyn Recorder),
         interrupted: &interrupted,
         leaks: &leaks,
         poll: Duration::from_secs(5),
@@ -716,6 +845,25 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     );
     print_json(&report);
     Ok(report.ok)
+}
+
+/// The D1 client of the `deployments` ledger, for a Runpod kind with a
+/// Cloudflare token set (else `None`, with a note: `registry.sh` does the same).
+fn deployments_d1<'a>(
+    ctx: &'a Ctx,
+    root: &Path,
+    kind: ProviderKind,
+    log: &dyn LogSink,
+) -> Option<D1<'a>> {
+    if !kind.is_runpod() || ctx.env.raw("FV_REGISTRY") == Some("0") {
+        return None;
+    }
+    let sql = std::fs::read_to_string(root.join("deploy/d1/registry.sql")).ok();
+    let d = D1::from_env(ctx.http.as_ref(), &ctx.env, sql);
+    if d.is_none() {
+        log.line("[fv-deploy] no D1 token (FV_CF_API_TOKEN): the deployments ledger is not written (docs/serve/releases.md)");
+    }
+    d
 }
 
 fn recorded(state: &Path, id: &str) -> Option<Instance> {
@@ -870,12 +1018,18 @@ fn run() -> Result<bool, String> {
             let never = || false;
             let leaks = |_: &str| false;
             let none = DetachedBackstop::new(PathBuf::new(), None, state.join("armed"));
+            let ctx = Ctx::new(a.root.clone(), false)?;
+            let root = ctx.root.clone().unwrap_or_else(|| PathBuf::from("."));
+            let d1 = deployments_d1(&ctx, &root, p.kind(), &StderrLog);
+            let reg = d1.as_ref().map(|d| Registry::new(d, clock, &ctx.env));
+            let rec = reg.as_ref().map(|r| D1Recorder { registry: r });
             let d = Deployer {
                 provider: p,
                 clock,
                 log: &StderrLog,
                 backstop: &none,
                 ledger: Some(&ledger),
+                recorder: rec.as_ref().map(|r| r as &dyn Recorder),
                 interrupted: &never,
                 leaks: &leaks,
                 poll: Duration::from_secs(5),
@@ -883,6 +1037,24 @@ fn run() -> Result<bool, String> {
             d.down(&inst.id).map_err(|e| e.to_string())?;
             println!("deleted {}", inst.id);
             Ok(true)
+        }),
+        Cmd::Templates { cmd, root } => cmd_templates(cmd, root.as_ref()),
+        Cmd::Release { cmd, root } => cmd_release(cmd, root.as_ref()),
+        Cmd::Reconcile {
+            dry_run,
+            adopt,
+            fix,
+            root,
+        } => with_release(root.as_ref(), false, |ctx| {
+            reconcile::reconcile(
+                ctx,
+                &reconcile::Options {
+                    dry_run,
+                    adopt,
+                    fix,
+                },
+            )
+            .map(|_| true)
         }),
         Cmd::Schema { name } => {
             let s = schema::by_name(&name)
@@ -939,6 +1111,155 @@ fn run() -> Result<bool, String> {
             .map_err(|e| e.to_string())
         }
     }
+}
+
+/// The result lines (the scripts' stdout).
+struct StdoutLog;
+
+impl LogSink for StdoutLog {
+    fn line(&self, s: &str) {
+        println!("{s}");
+    }
+}
+
+/// Runs a templates / release / reconcile command on the real seams
+/// (`offline`: no request is made).
+fn with_release(
+    root: Option<&PathBuf>,
+    offline: bool,
+    f: impl FnOnce(&release::Ctx<'_>) -> Result<bool, ReleaseError>,
+) -> Result<bool, String> {
+    let root = root_of(root)?;
+    let repo = Repo::load(&root).map_err(|e| e.to_string())?;
+    let env = BootEnv::from_process();
+    let http: Box<dyn Http> = if offline {
+        Box::new(NoHttp)
+    } else {
+        Box::new(ReqwestHttp::new().map_err(|e| e.to_string())?)
+    };
+    let clock = RealClock;
+    let ctx = release::Ctx::new(
+        &repo,
+        http.as_ref(),
+        &RealSpawner,
+        &clock,
+        &env,
+        &StderrLog,
+        &StdoutLog,
+    );
+    f(&ctx).map_err(|e| e.to_string())
+}
+
+/// The channel a template sync names: `--channel`, else `FV_RELEASE_CHANNEL`.
+fn template_channel(flag: Option<String>, ctx: &release::Ctx<'_>) -> Option<String> {
+    flag.or_else(|| ctx.env.get("FV_RELEASE_CHANNEL").map(str::to_owned))
+        .filter(|c| !c.is_empty())
+}
+
+fn cmd_templates(cmd: TemplatesCmd, root: Option<&PathBuf>) -> Result<bool, String> {
+    let offline = matches!(cmd, TemplatesCmd::Plan { .. });
+    with_release(root, offline, |ctx| match cmd {
+        TemplatesCmd::Sync {
+            image,
+            reference,
+            channel,
+        } => {
+            let api = ctx.runpod()?;
+            let ch = template_channel(channel, ctx);
+            templates::sync(ctx, &api, &image, &reference, ch.as_deref()).map(|()| true)
+        }
+        TemplatesCmd::SyncAll { file, channel } => {
+            let text = std::fs::read_to_string(&file)
+                .map_err(|e| ReleaseError::Refused(format!("{}: {e}", file.display())))?;
+            let api = ctx.runpod()?;
+            let ch = template_channel(channel, ctx);
+            templates::sync_all(ctx, &api, &text, ch.as_deref()).map(|()| true)
+        }
+        TemplatesCmd::List => {
+            for l in templates::list(&ctx.runpod()?)? {
+                println!("{l}");
+            }
+            Ok(true)
+        }
+        TemplatesCmd::Id { image, flavour } => {
+            let f = Flavour::parse(&flavour)
+                .ok_or_else(|| ReleaseError::Refused(format!("flavour {flavour}: sls or pod")))?;
+            let api = ctx.runpod()?;
+            let t = templates::by_name(
+                &api,
+                &fastvideo_deploy::provider::runpod::serve_template_name(&image, f),
+            )?;
+            if let Some(id) = t.as_ref().and_then(|t| t.get("id")).and_then(Value::as_str) {
+                println!("{id}");
+            }
+            Ok(true)
+        }
+        TemplatesCmd::Plan {
+            image,
+            reference,
+            channel,
+        } => {
+            let img = ctx
+                .image(&image)
+                .cloned()
+                .ok_or_else(|| ReleaseError::Refused(format!("unknown serve image {image}")))?;
+            let ch = template_channel(channel, ctx);
+            for &f in img.flavours() {
+                print_json(&templates::body(
+                    ctx,
+                    &image,
+                    f,
+                    &reference,
+                    ch.as_deref(),
+                    true,
+                )?);
+            }
+            Ok(true)
+        }
+    })
+}
+
+fn release_options(f: &ReleaseFlags, to: Option<i64>) -> promote::Options {
+    promote::Options {
+        dry_run: f.dry_run,
+        mode: if f.local {
+            Some(promote::Mode::Local)
+        } else if f.dispatch {
+            Some(promote::Mode::Dispatch)
+        } else {
+            None
+        },
+        notes: f.notes.clone(),
+        templates: !f.no_templates,
+        allow_partial: f.allow_partial,
+        force: f.force,
+        to,
+    }
+}
+
+fn cmd_release(cmd: ReleaseCmd, root: Option<&PathBuf>) -> Result<bool, String> {
+    with_release(root, false, |ctx| match cmd {
+        ReleaseCmd::Promote {
+            target,
+            channel,
+            flags,
+        } => {
+            let ch = channel
+                .or_else(|| flags.channel_flag.clone())
+                .unwrap_or_else(|| "stable".into());
+            promote::promote(ctx, &target, &ch, &release_options(&flags, None)).map(|()| true)
+        }
+        ReleaseCmd::Rollback { channel, to, flags } => {
+            let ch = channel
+                .or_else(|| flags.channel_flag.clone())
+                .unwrap_or_else(|| "stable".into());
+            promote::rollback(ctx, &ch, &release_options(&flags, to)).map(|()| true)
+        }
+        ReleaseCmd::Resolve { target } => {
+            print_json(&promote::resolve(ctx, &target)?.to_json());
+            Ok(true)
+        }
+    })
 }
 
 fn main() -> ExitCode {

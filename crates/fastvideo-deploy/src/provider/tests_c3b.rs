@@ -122,6 +122,7 @@ fn deployer<'a>(
         log,
         backstop: bs,
         ledger: None,
+        recorder: None,
         interrupted: &never,
         leaks,
         poll: Duration::from_secs(5),
@@ -322,7 +323,7 @@ impl Http for FakeVast {
 
 fn vast_launch() -> Launch {
     let mut g = guard::default_guards();
-    g.max_usd_per_hr = guard::default_max_usd_per_hr(ProviderKind::Vast);
+    g.max_usd_per_hr = Some(guard::default_max_usd_per_hr(ProviderKind::Vast));
     let mut l = script_vast(&ScriptVast {
         name: "fv-deploy-fake-1025120000",
         image: IMAGE,
@@ -745,7 +746,7 @@ fn gcp_leaks(s: &str) -> bool {
 
 fn gcp_guards() -> Guards {
     let mut g = guard::default_guards();
-    g.max_usd_per_hr = guard::default_max_usd_per_hr(ProviderKind::Gcp);
+    g.max_usd_per_hr = Some(guard::default_max_usd_per_hr(ProviderKind::Gcp));
     g
 }
 
@@ -850,7 +851,7 @@ fn gcp_budget_floor_and_price_cap_hold() {
     );
     // A machine over the cap, and one the table does not list, are never created.
     let vm = gcp_vm(&fg, &clock, &tok, Some(100.0));
-    l.guards.max_usd_per_hr = 4.0;
+    l.guards.max_usd_per_hr = Some(4.0);
     let e = deployer(&vm, &clock, &log, &bs, &gcp_leaks)
         .up(&l, &up_opts())
         .err()
@@ -1134,10 +1135,10 @@ fn gcp_budget_shrinks_with_each_create() {
     let vm = gcp_vm(&fg, &clock, &tok, Some(28.0));
     let mut l = gcp_launch(true);
     l.guards = gcp_guards();
-    l.guards.cap_s = 14_400;
+    l.guards.cap_s = Some(14_400);
     let a0 = vm.account().unwrap_or_else(|e| panic!("{e}"));
     assert_eq!((a0.balance_usd, a0.spend_per_hr_usd), (28.0, Some(0.0)));
-    assert!(guard::check_projection(&a0, 4.9499, l.guards.cap_s, 8.0).is_ok());
+    assert!(guard::check_projection(&a0, 4.9499, 14_400, 8.0).is_ok());
     vm.create(&l).unwrap_or_else(|e| panic!("{e}"));
     let a1 = vm.account().unwrap_or_else(|e| panic!("{e}"));
     assert!(
@@ -1146,7 +1147,7 @@ fn gcp_budget_shrinks_with_each_create() {
     );
     // The live VM is the account's current spend.
     assert_eq!(a1.spend_per_hr_usd, Some(4.9499));
-    assert!(guard::check_projection(&a1, 4.9499, l.guards.cap_s, 8.0).is_err());
+    assert!(guard::check_projection(&a1, 4.9499, 14_400, 8.0).is_err());
 }
 
 /// Review 1: `down` of an instance the provider does not know (a wrong

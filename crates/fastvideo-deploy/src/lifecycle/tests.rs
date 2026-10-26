@@ -242,6 +242,7 @@ fn run(
         log: &log,
         backstop: &bs,
         ledger: None,
+        recorder: None,
         interrupted: &never,
         leaks: &no_leak,
         poll: Duration::from_secs(5),
@@ -515,17 +516,17 @@ fn ledger_appends_tsv_lines() {
 #[test]
 fn guard_upper_bounds_unless_forced() {
     let mut g = crate::guard::default_guards();
-    assert_eq!(crate::guard::check_guards(&g), Ok(()));
+    assert!(crate::guard::check_guards(&g).is_ok());
     for (cap, cycles, timeout) in [(14_401, 3, 600), (1800, 4, 600), (1800, 3, 601)] {
-        g.cap_s = cap;
-        g.ready_cycles = cycles;
-        g.ready_timeout_s = timeout;
+        g.cap_s = Some(cap);
+        g.ready_cycles = Some(cycles);
+        g.ready_timeout_s = Some(timeout);
         assert!(
             matches!(crate::guard::check_guards(&g), Err(GuardError::Invalid(_))),
             "{cap} {cycles} {timeout}"
         );
         g.force = true;
-        assert_eq!(crate::guard::check_guards(&g), Ok(()));
+        assert!(crate::guard::check_guards(&g).is_ok());
         g.force = false;
     }
     // Never the floor.
@@ -544,7 +545,7 @@ fn every_create_counts_against_the_cycles() {
     p.billed.set(Some(Some(9.0)));
     let mut l = eu_pod_launch();
     l.gpu.types = vec!["A".into(), "B".into(), "C".into(), "D".into()];
-    l.guards.ready_cycles = 2;
+    l.guards.ready_cycles = Some(2);
     let (r, armed) = run(&p, &clock, &l, &smoke_up());
     assert!(r.is_err());
     assert_eq!(p.created.borrow().len(), 2);
@@ -591,6 +592,7 @@ fn an_interrupt_during_the_smoke_deletes_the_instance() {
         log: &log,
         backstop: &bs,
         ledger: None,
+        recorder: None,
         interrupted: &stop,
         leaks: &no_leak,
         poll: Duration::from_secs(5),
@@ -600,4 +602,103 @@ fn an_interrupt_during_the_smoke_deletes_the_instance() {
     assert_eq!(p.live(), 0);
     // Stopped within a poll of the signal, not at the 600 s job wait.
     assert!(clock.now() < 110.0, "{}", clock.now());
+}
+
+/// C3d (ADR-0018 §10.4): a guard `null` ("not checked by the launcher that
+/// wrote this launch") is refused before anything is created, and a ledger
+/// shows it as "not checked"; launches written before (every number) read
+/// the same.
+#[test]
+fn not_checked_guards_are_refused_and_shown() {
+    let clock = FakeClock::at(0.0);
+    let p = FakeProvider::new(&clock);
+    let mut l = eu_pod_launch();
+    l.guards.max_usd_per_hr = None;
+    l.guards.ready_timeout_s = None;
+    let (r, armed) = run(&p, &clock, &l, &smoke_up());
+    match r {
+        Err(DeployError::Guard(GuardError::NotChecked(f))) => {
+            assert_eq!(f, ["max_usd_per_hr", "ready_timeout_s"]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(p.created.borrow().is_empty() && armed.is_empty());
+    assert_eq!(
+        l.guards.ledger_view(),
+        json!({"max_usd_per_hr": "not checked", "min_balance_usd": 8.0, "cap_s": 1800,
+               "ready_timeout_s": "not checked", "ready_cycles": 3})
+    );
+    assert_eq!(
+        l.guards.ledger_line(),
+        "max_usd_per_hr=not-checked min_balance_usd=8 cap_s=1800 ready_timeout_s=not-checked ready_cycles=3"
+    );
+    let v = serde_json::to_value(l.guards).unwrap_or(Value::Null);
+    assert_eq!(v["max_usd_per_hr"], Value::Null);
+    let old: crate::provider::Guards = serde_json::from_value(json!({
+        "max_usd_per_hr": 2.5, "min_balance_usd": 8, "cap_s": 1800, "ready_timeout_s": 600, "ready_cycles": 3
+    }))
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(old, crate::guard::default_guards());
+    assert!(crate::guard::check_guards(&old).is_ok());
+}
+
+/// Records what the D1 ledger would be told.
+#[derive(Default)]
+struct RecRecorder(RefCell<Vec<String>>);
+
+impl Recorder for RecRecorder {
+    fn created(&self, _l: &Launch, i: &Instance) -> Result<(), String> {
+        self.0.borrow_mut().push(format!("created {}", i.id));
+        Ok(())
+    }
+    fn ready(&self, i: &Instance) -> Result<(), String> {
+        self.0.borrow_mut().push(format!("ready {}", i.id));
+        Err("D1 down".into())
+    }
+    fn deleted(&self, _k: ProviderKind, id: &InstanceId, status: &str) -> Result<(), String> {
+        self.0.borrow_mut().push(format!("{status} {id}"));
+        Ok(())
+    }
+}
+
+/// C3d (§10.3): `up` tells the deployments ledger of every create, ready and
+/// delete; a ledger failure is a warning, never a failed deploy.
+#[test]
+fn the_recorder_sees_create_ready_and_delete() {
+    let clock = FakeClock::at(100.0);
+    let p = FakeProvider::new(&clock);
+    let (log, bs, rec) = (
+        Lines::default(),
+        RecBackstop::default(),
+        RecRecorder::default(),
+    );
+    let d = Deployer {
+        provider: &p,
+        clock: &clock,
+        log: &log,
+        backstop: &bs,
+        ledger: None,
+        recorder: Some(&rec),
+        interrupted: &never,
+        leaks: &no_leak,
+        poll: Duration::from_secs(5),
+    };
+    let r = d
+        .up(&eu_pod_launch(), &smoke_up())
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(r.ok && r.deleted);
+    let id = r.instance.map(|i| i.id.to_string()).unwrap_or_default();
+    assert_eq!(
+        *rec.0.borrow(),
+        [
+            format!("created {id}"),
+            format!("ready {id}"),
+            format!("deleted {id}")
+        ]
+    );
+    assert!(log
+        .0
+        .borrow()
+        .iter()
+        .any(|l| l.contains("could not record") && l.contains("D1 down")));
 }

@@ -5,7 +5,15 @@
 //! place that builds a Runpod pod create; the autoscaler sends it on its
 //! async client.
 
+use std::collections::BTreeMap;
+
 use serde_json::{json, Map, Value};
+
+use super::template_body;
+use crate::launch::{image_ident_env, secret_env_refs, POD_VOLUME_MOUNT};
+use crate::provider::{
+    Disk, GpuSpec, Guards, Launch, Placement, ProviderKind, WeightsSource, LAUNCH_SCHEMA,
+};
 
 /// One pod of a pool: a template on one GPU type in one placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +75,186 @@ pub fn with_worker_config(template_env: &Map<String, Value>, b64: &str) -> Map<S
     let mut env = template_env.clone();
     env.insert("FV_WORKER_TOML_B64".into(), Value::String(b64.to_owned()));
     env
+}
+
+// ------------------------------------------------------------- serve templates
+
+/// A serve image's Runpod template kind: the serverless queue worker or the
+/// HTTP pod (`runpod-templates.sh` `fv_image_flavours`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flavour {
+    Sls,
+    Pod,
+}
+
+impl Flavour {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Flavour::Sls => "sls",
+            Flavour::Pod => "pod",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Flavour> {
+        match s {
+            "sls" => Some(Flavour::Sls),
+            "pod" => Some(Flavour::Pod),
+            _ => None,
+        }
+    }
+
+    /// A GPU image has both; the CPU image a pod template only.
+    pub fn of(cpu: bool) -> &'static [Flavour] {
+        if cpu {
+            &[Flavour::Pod]
+        } else {
+            &[Flavour::Sls, Flavour::Pod]
+        }
+    }
+}
+
+/// `fv-serve-<image>-<flavour>` (`fv_template_name`).
+pub fn serve_template_name(image_id: &str, f: Flavour) -> String {
+    format!("fv-serve-{image_id}-{}", f.as_str())
+}
+
+/// The serve template of one image as a [`Launch`] (what
+/// `runpod-templates.sh` publishes): the image (a digest), the secret
+/// references, its identity env (`FV_IMAGE_REF`, `FV_IMAGE_DIGEST`, the
+/// channel when given) and the flavour's serve env; the queue worker's disk
+/// 20 GB, the pod's 30 GB with port 8000 (and 70000/tcp on a GPU image). No
+/// entrypoint (the image's: fv-boot) and no worker config (a launch from the
+/// template sends one, ADR-0011). A template creates nothing, so its guards
+/// are "not checked" (`null`) but the floor; a CPU image is a launch with no
+/// GPU (`count` 0), never sent as a create (§7.3: CPU is outside Launch v1).
+pub fn serve_template_launch(
+    image_id: &str,
+    f: Flavour,
+    cpu: bool,
+    image: &str,
+    channel: Option<&str>,
+) -> Launch {
+    let mut env: BTreeMap<String, String> = secret_env_refs();
+    env.extend(image_ident_env(image, channel));
+    let kv = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    };
+    match f {
+        Flavour::Sls => env.extend(kv(&[
+            ("FV_SERVE_MODE", "runpod-queue"),
+            ("FV_AUTH_MODE", "trust-gateway"),
+            ("FV_STATE_DIR", "/fvstate"),
+            ("FV_WEIGHTS", "/runpod-volume/weights"),
+            ("FV_CACHE_DIR", "/fvstate/cache"),
+            ("RUST_LOG", "info"),
+        ])),
+        Flavour::Pod => {
+            env.extend(kv(&[
+                ("FV_SERVE_MODE", "http"),
+                ("FV_STATE_DIR", "/fvstate"),
+                ("RUST_LOG", "info"),
+            ]));
+            if !cpu {
+                env.extend(kv(&[
+                    ("FV_WEIGHTS", "/workspace/weights"),
+                    ("FV_SERVE_FORWARD", "1"),
+                ]));
+            }
+        }
+    }
+    let ports = match (f, cpu) {
+        (Flavour::Sls, _) => vec![],
+        (Flavour::Pod, true) => vec!["8000/http".to_owned()],
+        (Flavour::Pod, false) => vec!["8000/http".to_owned(), "70000/tcp".to_owned()],
+    };
+    Launch {
+        schema: LAUNCH_SCHEMA,
+        name: serve_template_name(image_id, f),
+        provider: match f {
+            Flavour::Sls => ProviderKind::RunpodServerless,
+            Flavour::Pod => ProviderKind::RunpodPod,
+        },
+        source: None,
+        image: image.to_owned(),
+        entrypoint: Vec::new(),
+        args: Vec::new(),
+        env,
+        ports,
+        gpu: GpuSpec {
+            types: Vec::new(),
+            count: u32::from(!cpu),
+            allowed_cuda: Vec::new(),
+            min_cuda: None,
+        },
+        placement: Placement {
+            region: None,
+            data_centers: Vec::new(),
+            volume: None,
+            cloud: Default::default(),
+        },
+        disk: Disk {
+            container_gb: match f {
+                Flavour::Sls => 20,
+                Flavour::Pod => 30,
+            },
+            volume_gb: 0,
+        },
+        weights: if cpu {
+            WeightsSource::None
+        } else {
+            WeightsSource::Volume
+        },
+        guards: Guards {
+            max_usd_per_hr: None,
+            min_balance_usd: crate::guard::MIN_BALANCE_USD,
+            cap_s: None,
+            ready_timeout_s: None,
+            ready_cycles: None,
+            force: false,
+        },
+        serverless: None,
+    }
+}
+
+/// The REST v1 body of a serve template (`runpod-templates.sh payload`): the
+/// serverless template body of its launch ([`template_body`]) with the
+/// template's own fields: the readme, a pod's volume mount and ports, the
+/// registry auth when set; `create` adds what the update API does not take
+/// (`isServerless`, `category`).
+pub fn serve_template_body(
+    l: &Launch,
+    image_id: &str,
+    f: Flavour,
+    cpu: bool,
+    registry_auth: Option<&str>,
+    create: bool,
+) -> Value {
+    let mut b = template_body(l);
+    if let Value::Object(m) = &mut b {
+        m.remove("isServerless");
+        m.insert(
+            "readme".into(),
+            json!(format!(
+                "fv-serve {image_id} ({}), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+                f.as_str()
+            )),
+        );
+        if f == Flavour::Pod {
+            m.insert("volumeMountPath".into(), json!(POD_VOLUME_MOUNT));
+            m.insert("ports".into(), json!(l.ports));
+        }
+        if let Some(a) = registry_auth.filter(|a| !a.is_empty()) {
+            m.insert("containerRegistryAuthId".into(), json!(a));
+        }
+        if create {
+            m.insert("isServerless".into(), json!(f == Flavour::Sls));
+            m.insert("category".into(), json!(if cpu { "CPU" } else { "NVIDIA" }));
+        }
+    }
+    b
 }
 
 #[cfg(test)]
