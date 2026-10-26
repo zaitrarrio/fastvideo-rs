@@ -22,7 +22,7 @@
   `b4b` / `b4c` / `b4c2` stay, each needing a new kind of verdict (§17.3's decision), and `h3`'s retirement is
   still a proposal (§17.4). §19 (D1h: `fv-lab oracle`, the driver of §15.6: the upstream reference pods of
   `lab/upstream.toml` on fv-deploy's guards, the `oracle` tier's runtime pod with `FV_ORACLE_URL`, their release on
-  `ORACLE_REFS_DONE`, a stock wait or any failure; payload goldens from `runpod-http.sh plan-upstream`) is proposed,
+  `ORACLE_REFS_DONE`, a bounded wait for it, a stock wait or any failure; payload goldens from `runpod-http.sh plan-upstream`) is proposed,
   CPU-tested; its GPU check is §19.7. The clip-metric targets and `sfwan13` wait for a derived-clip step (§19.9), so
   `oracle`'s branch stays whole
 - Date: 2026-10-24
@@ -39,9 +39,9 @@
 - Usage: `docs/dev/fv-lab.md`
 - §16: `crates/fastvideo-lab/src/weights.rs`, `run.rs` (`stage_r2`), `pod.rs` (`launch` env); tests
   `tests/r2_runner.rs`, `tests/gold_tier.rs`
-- §19: `crates/fastvideo-lab/src/oracle.rs`, `src/upstream-start.sh.in`, `src/bin/fv-lab.rs` (`oracle`),
+- §19: `crates/fastvideo-lab/src/oracle.rs`, `src/oracle_live.rs`, `src/upstream-start.sh.in`, `src/bin/fv-lab.rs` (`oracle`),
   `lab/upstream.toml`, `schemas/upstream.v1.json`, `scripts/gpu/runpod-http.sh plan-upstream`; tests
-  `tests/oracle_driver.rs`, fixtures `runpod-http-upstream-*.json`
+  `tests/oracle_driver.rs`, `tests/oracle_live.rs`, fixtures `runpod-http-upstream-*.json`
 - Plan: D1 (`docs/plan/2026-10-23-execution-plan.md`); review `docs/gaps/2026-10-22-architecture-review.md` §7.5
 
 ## Context
@@ -2555,51 +2555,69 @@ this slice: it needs a derived-clip / metric step the ADR has not designed (§19
 #### 19.1 What it does
 
 `fv-lab oracle --sha <7> --cells <arms…> [--yes]` is what `scripts/gpu/oracle.sh` and §15.7's hand-run commands do,
-on fv-deploy's guards:
+on fv-deploy's guards (`oracle::drive` on the `OracleOps` trait; the binary's world is `oracle_live::LiveOps`):
 
 1. **The upstream pods up**, one per stack of `lab/upstream.toml` (§19.2) that makes a selected target, in the
-   file's order, each with fv-deploy's `Deployer::up` (kept), as `fv-lab pod up` does: the price cap on the quote and
-   the billed price, the $8 floor projected over the cap, the EU volume `bz0ofkfx45` in EU-RO-1 only, the detached
-   backstop at the stack's wall cap, ready (its file server answering `GET /upstream/`) within 600 s in at most 3
-   cycles, the stack's host-RAM floor (`minRAMPerGPU`; 192 GB for the FastVideo stack, docs/oracle.md "Upstream
-   cells: host RAM"), a live pod of the same name refused, the image pinned to its digest. Each is recorded
-   (`artifacts/fv-lab/pods/<id>.json`, `artifacts/runpod/upstream/<tag>/pod.json`) and written to fv-deploy's ledger.
-   A pod that does not come up releases those already up.
+   file's order and one after the other, each with fv-deploy's `Deployer::up` (kept), as `fv-lab pod up` does: the
+   price cap on the quote and the billed price, the $8 floor projected over the cap, the EU volume `bz0ofkfx45` in
+   EU-RO-1 only, the detached backstop at the stack's wall cap, ready (its file server answering `GET /upstream/`)
+   within 600 s in at most 3 cycles, the stack's host-RAM floor (`minRAMPerGPU`; 192 GB for the FastVideo stack,
+   docs/oracle.md "Upstream cells: host RAM"), a live pod of the same name refused, the image pinned to its digest.
+   Each is recorded (`artifacts/fv-lab/pods/<id>.json`, `artifacts/runpod/upstream/<tag>/pod.json`) and written to
+   fv-deploy's ledger; a record that cannot be written deletes the pod just created before the error
+   (`pod::or_delete`, `fv-lab pod up` too). A pod that does not come up releases those already up and fails the
+   run.
 2. **The references waited for**, polling every 60 s each selected target's `<pod>/upstream/<tag>/oracle-<target>/ORACLE_DONE`
    (the hand-run check's step 2) and fetching each pod's `keepalive.bin` meanwhile (its idle watchdog counts that
    traffic as busy, `runpod-http.sh idle_watchdog net`), until every target is served, or its pod's run wrote `DONE`
-   without it, or the pod is gone, or `--refs-wait-s` passed (default: what the upstream cap leaves after the stock
-   wait and a 30-minute fetch reserve, 10,800 s at the 4 h cap). No reference served: every pod released, the run
-   fails, no runtime pod is made. A pod none of whose targets was served is released at once; the runtime side runs
-   the served targets' arms only (a missing reference still fails the run).
+   without it, or the pod is gone, or `--refs-wait-s` passed **since the first create** (default: what the upstream
+   cap leaves after the stock wait and the 30-minute fetch reserve, 10,500 s at the 4 h cap; counted from before
+   the first create, so no pod's cap, counted from its own later create, can pass first). No reference served:
+   every pod released, the run fails, no runtime pod is made. A pod none of whose targets was served is released at
+   once; the runtime side runs the served targets' arms only (a missing reference still fails the run).
 3. **The runtime side**: `fv-lab pod up --sha <sha> --family oracle --tag <tag> --cells <the served targets' arms>
    --extra-env FV_ORACLE_URL=<the serving pods' bases, comma separated> [--extra-env …] --wall-cap-s <cap> --yes
-   --wait` as a child process: the tier's pod, run, fetch, verdict and delete are `pod up`'s, unchanged (and
-   gated in §15.7). `--url-file` writes the bases first.
-4. **The release**, polling every 60 s with the keepalive: once the runtime pod (its `pod.json`, written when it is
-   ready) serves `ORACLE_REFS_DONE` (every reference fetched, §15.2 item 8), the upstream pods are released; no
-   runtime pod within `--stock-wait-s` (default 1,800 s): the child is stopped with SIGTERM (it deletes what it
-   created) and the upstream pods are released; an interrupt (SIGINT / SIGTERM) does both. When the child ends, the
-   pods still up are released.
+   --wait` as a child process in its own process group (its stdout to stderr): the tier's pod, run, fetch, verdict
+   and delete are `pod up`'s, unchanged (and gated in §15.7). `--url-file` writes the bases first. A tag whose run
+   directory exists is refused (another run's `pod.json` would be read as this one's).
+4. **The release**, polling every 60 s with the keepalive. The upstream pods are released (fetched, then deleted):
+   - once the runtime pod (its `pod.json`, written when it is ready) serves `ORACLE_REFS_DONE` (every reference
+     fetched, §15.2 item 8);
+   - 1,800 s after the runtime pod was ready without it (`REF_FETCH_RESERVE_S`: the runner's ~5-minute preflight,
+     then the downloads; §15.7's 1.3 GB H3 reference took under a minute), so a run that never publishes it does not
+     keep them;
+   - when no runtime pod is ready within `--stock-wait-s` (default 2,100 s: fv-deploy's 3 × 600 s readiness and 5
+     minutes): the child is sent SIGTERM (it deletes what it made), the upstream pods are released, then the child
+     is waited for (at most `ABORT_WAIT_S`, 600 s; past it, SIGKILL and its pod deleted by the driver);
+   - when the child ends.
+   An interrupt (SIGINT / SIGTERM) sends the child SIGTERM, **deletes** the upstream pods without fetching them (a
+   fetch may take 900 s a file), then waits for the child as above. A child that ends in failure while its pod (its
+   `pod.json`) is still live, killed say, has that pod deleted by the driver.
 5. **Release** is: fetch the upstream run (`pod fetch --fetch-tree`'s tree fetch with `oracle.sh`'s skip
    `oracle-dump\.tar|/dump/|\.mp4$`) into `artifacts/runpod/upstream/<tag>/`, then delete the pod with fv-deploy's
    retries and ledger. A failed fetch is reported and does not stop the delete; a failed delete fails the run (the
-   backstop still deletes at the cap). Every path through the driver ends with every upstream pod it created fetched
-   and deleted (`tests/oracle_driver.rs`).
+   backstop still deletes at the cap). Every path through the driver ends with every upstream pod it created deleted
+   (`tests/oracle_driver.rs`, `tests/oracle_live.rs`).
 
-`--hold-upstream FILE` keeps the upstream pods, after either release trigger of step 4, until FILE exists (at most
-until their cap less 15 minutes), for another reader of the same references: the GPU check's script side (§19.7). The
-stock wait, a failed start and an interrupt still release at once.
+`--hold-upstream FILE` keeps the upstream pods, after the first two release triggers of step 4 or after a
+**successful** runtime side, until FILE exists (at most until their cap less 15 minutes after the first create), for
+another reader of the same references: the GPU check's script side (§19.7). The stock wait, a failed start, a failed
+runtime side and an interrupt release at once.
+
+The report (stdout, JSON) names the served and missing targets, each upstream pod (stack, id, tag, why released,
+fetch and delete), the runtime run's tag, its pod once ready, its result and exit code; `fv-lab oracle` exits 0 on a
+clean run, the runtime side's own exit code when it failed with one, else 1.
 
 Before anything is created the driver refuses (`oracle::plan_oracle`, then `pod up`'s own checks of the runtime
 launch): a tier with no `[reference]` cell, no `--cells`, an arm not of the tier, a selected cell without a reference,
 a target no stack makes, `FV_ORACLE_URL` (or any knob `pod up --extra-env` refuses) in `--extra-env`, a cap raised
 above the tier's or the stack's, a stock wait of 0 or not below the runtime cap, a refs wait that does not fit the
 upstream cap, a `--sha` that is not 7 hex, an upstream commit that does not resolve to 40 hex, an image tag other
-than `latest` / `sha-<7>`, a launch fv-deploy's guards or region check refuse. With `--yes`, before the first create,
-the account's balance less what its pods already spend over the run's longest cap less every pod of the run at its
-price cap over its wall cap must stay at $8 or above (`oracle::check_balance`; fv-deploy's per-create projection
-counts the upstream pods' spend when the runtime pod is created too).
+than `latest` / `sha-<7>`, a reused tag, a launch fv-deploy's guards or region check refuse. With `--yes`, before the
+first create, the account's balance less what its pods already spend over the run's longest cap less every pod of the
+run at its price cap over its wall cap and two replaced readiness cycles (2 × 600 s) must stay at $8 or above
+(`oracle::check_balance`; fv-deploy's per-create projection counts the upstream pods' spend when the runtime pod is
+created too).
 
 Without `--yes` it prints the plan and needs no key: each upstream pod's `Launch` and `POST /pods` body, the runtime
 pod's (with `upstream-pod` standing for the upstream pods' ids, known once they exist) and its `pod up` command, the
@@ -2641,8 +2659,9 @@ would take a stack's `name =` for a tier's (`fv-lab-goldens.sh`'s tier list, `ru
 `schemas/upstream.v1.json` (drift test `tests/schema.rs`), `fv-lab check` and `fv-lab schema upstream`; validation as a
 tier's (EU only, one GPU, a cap within 4 h, a positive floor), plain `K=V` env values, `weights:<view>` steps, a
 target in one stack only, and against the cells (`Stacks::check_against`): every stack target is some cell's
-`[reference] target` and every cell's reference has a stack. No existing file changes; the tiers and cell schemas
-are untouched.
+`[reference] target` and every cell's reference has a stack. No tier may be named `upstream` (the upstream pods'
+family: their pod names, run directories and `pod reap --account`'s pattern; `Tiers::validate`). No existing file
+changes; the tiers and cell schemas are untouched.
 
 #### 19.3 The upstream pod: `runpod-http.sh upstream`'s, and its payload golden
 
@@ -2683,7 +2702,12 @@ The name is equal (`fv-lab-upstream-<tag>`, the golden made with `FV_POD_PREFIX=
 | weight steps | `weights:fasth3-8step weights:h3-diffusers` for any `fasth3-*` target | per target (the LoRA targets: `h3-diffusers` only) | the 8-step view reads `h3-8step`, which the EU volume lacks; §15.7 ran without it |
 | runtime pod start | at once (or `ORACLE_WAIT_FIRST=1`: after the first target) | after every selected reference is served (or failed) | §15.7's order: the runtime pod never idles while references are made |
 | a reference not served | its target's cell waits `FV_ORACLE_WAIT_S` on the runtime pod, then skips | its arms are not run; the run fails | no GPU pod waits for a reference that will not come |
-| stock wait | `FV_RUNTIME_STOCK_WAIT_S` 900 s: the upstream pods go, the runtime driver goes on | `--stock-wait-s` 1,800 s (fv-deploy's 3 × 600 s readiness): the runtime side is stopped too | fv-deploy fails a create without stock at once, so the wait bounds readiness only |
+| stock wait | `FV_RUNTIME_STOCK_WAIT_S` 900 s: the upstream pods go, the runtime driver goes on | `--stock-wait-s` 2,100 s (fv-deploy's 3 × 600 s readiness and 5 min): the runtime side is stopped too | fv-deploy fails a create without stock at once, so the wait bounds readiness only |
+| bring-up | the stacks' pods in parallel (background drivers, 3 create attempts each) | one after the other (up to 3 × 600 s each), the references' deadline counted from the first create | fv-deploy's lifecycle is one blocking `up` per pod; the deadline keeps every pod inside its cap |
+| a stack's pod does not come up | that stack's targets dropped, the others run | every pod already up released, the run fails | a partial oracle run is a failed one; a rerun with fewer `--cells` is explicit |
+| readiness of a cold image pull | 1,200 s × 3 | 600 s × 3 (the owner's rule) | **risk:** a host pulling the upstream image cold (tens of GB; §15.7's estimate said up to 15 min) may not be ready in 600 s; fv-deploy then replaces the pod (a few cents each) and, after 3 cycles, fails the run. §15.7's pod was ready 3.5 min after create (the image cached on the host); kept, not raised |
+| `ORACLE_REFS_DONE` never published | the upstream pods kept (keepalive) until the runtime pod ends | released 1,800 s after the runtime pod was ready | a money bound |
+| interrupt | the trap deletes the upstream pods; the runtime driver is left to its own | SIGTERM to the runtime side, the upstream pods deleted without a fetch, the runtime side waited for (600 s, then killed and its pod deleted) | nothing outlives the driver but what a backstop deletes |
 | upstream fetch | when the upstream run wrote `DONE` (before the release) | at the release | the dumps are served until then; the same tree and skip |
 | `UP_AFTER`, `FV_ORACLE_RUN_MODE=all`, `FV_ORACLE_FAMILY`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`, `FV_ORACLE_EXTRA_ENV` | yes | no (`--extra-env` for the runtime run, its refusals `pod up`'s) | not used by the tier's cells; `FV_ORACLE_F32` / `OWN_TEXT` are the tier's defaults (§15.5) |
 | clip-metric targets, `sfwan13` | yes (`runpod-matrix.sh oracle`) | not yet (§19.9) | |
@@ -2691,26 +2715,41 @@ The name is equal (`fv-lab-upstream-<tag>`, the golden made with `FV_POD_PREFIX=
 #### 19.5 Code and tests
 
 `src/oracle.rs` (stacks, the upstream launch and start command, `plan_oracle`, `check_balance`, `drive` on the
-`OracleOps` trait), `src/upstream-start.sh.in`, `src/bin/fv-lab.rs` (`fv-lab oracle`, its `RealOps`: Runpod through
-fv-deploy, the pods through their proxy, the runtime side as a child `pod up`; `check` and `schema upstream`; `reap
---account`), `lab/upstream.toml`, `schemas/upstream.v1.json`; `scripts/gpu/runpod-http.sh plan-upstream`,
+`OracleOps` trait), `src/oracle_live.rs` (`LiveOps`: fv-deploy's `Deployer` on a `Provider`, the pods through an
+`Http`, the runtime side as a child `pod up`, every seam a parameter), `src/upstream-start.sh.in`,
+`src/bin/fv-lab.rs` (`fv-lab oracle` on Runpod and reqwest; `check` and `schema upstream`; `reap --account`, which
+fails on an unreadable `lab/upstream.toml`), `pod.rs` (`write_record`, `or_delete`), `lab/upstream.toml`, `schemas/upstream.v1.json`; `scripts/gpu/runpod-http.sh plan-upstream`,
 `scripts/gpu/tests/fv-lab-goldens.sh` (the two upstream goldens). The runtime image ships `lab/upstream.toml` beside
 `lab/tiers.toml` and `lab/cells` (`docker/gpucheck.Dockerfile`; its smoke step's `fv-lab check` reads it, and the
 image and `control.yml` workflows' path filters name it); `tests/fv_lab_bin.rs::the_runtime_images_lab_subset_passes_check`
 copies exactly what that stage of the Dockerfile copies into a root of its own and runs `check` and a dry run there.
 
-`tests/oracle_driver.rs` (18): the payload golden and the start command; the stacks file against the cells and its
-refusals; the plan (one pod per stack, the tier's order, the caps, the waits, the projection) and its 15 refusals; the
-balance guard; and the driver on a fake world whose clock is its sleeps: the order (up, keepalive while the reference
-is made, the bases published, the runtime side with them, keepalive, fetch then delete, nothing after), the release on
-`ORACLE_REFS_DONE` before the runtime side ends, at the runtime side's end without it, on the stock wait (the child
-stopped first), on the refs wait, on an upstream run that ends without its reference (that pod released before the
-runtime side, which runs the other stack's arms against the other pod only), on a gone pod, on a second stack that
-does not come up (the first released; the first failing creates nothing more), on a start failure, on an interrupt
-(during the wait and during the run), with a failed fetch (the delete still runs) and a failed delete (the run
-fails), and the hold (lifted after `ORACLE_REFS_DONE`, after the runtime side's end, never: its limit; not on the
-stock wait). `tests/fv_lab_bin.rs`: the plan through the binary without a key, five refusals, `--yes` without a key,
-`check`'s stack lines.
+`tests/oracle_driver.rs` (21): the payload golden and the start command; the stacks file against the cells, its
+refusals and no tier named `upstream`; the plan (one pod per stack, the tier's order, the caps, the waits, the
+projection) and its 14 refusals; the balance guard; and the driver on a fake world whose clock is its sleeps: the
+order (up, keepalive while the reference is made, the bases published, the runtime side with them, keepalive, fetch
+then delete, nothing after), the release on `ORACLE_REFS_DONE` before the runtime side ends, at the runtime side's
+end without it, 1,800 s after the runtime pod was ready without it, on the stock wait (stop, release, then wait), on
+the refs deadline counted from the first create (two stacks of 1,500 s bring-up each), on an upstream run that ends
+without its reference (that pod released before the runtime side, which runs the other stack's arms against the
+other pod only), on a gone pod, on a second stack that does not come up (the first released; the first failing
+creates nothing more), on a start failure, on an interrupt (stop, delete without fetch, wait; during the wait and
+during the run), with a failed fetch (the delete still runs) and a failed delete (the run fails), and the hold
+(lifted after `ORACLE_REFS_DONE`, after the runtime side's end, never: its limit; not on the stock wait; not after a
+failed runtime side). `tests/oracle_live.rs` (7): `LiveOps` against a fake provider (fv-deploy's `Deployer` creates
+and deletes through it), a fake HTTP and a fake `fv-lab` script: an upstream pod recorded (ledger, records, digest);
+one whose record cannot be written deleted; a runtime side stopped with SIGTERM and waited for, its still-live pod
+deleted after its failure, its arguments carrying the run's root and state; one that ends well left alone, one that
+fails (exit 3) with its pod deleted; a reused tag refused; the URL and hold files; the reference and run state
+through the proxy. `pod.rs`: `or_delete`. `tests/fv_lab_bin.rs`: the plan through the binary without a key, five
+refusals, `--yes` without a key, `check`'s stack lines, and the runtime image's `lab/` subset (the Dockerfile's
+`COPY` lines of the stage that ships fv-lab, in a root of their own) passing `check` and the smoke's dry run.
+
+Mutations each caught by a test (applied one at a time, run, reverted; review of #216): no SIGTERM in
+`runtime_stop` (the fake child never sees it, is killed, the test fails); the record error returned without the
+delete; the stock wait waiting for the runtime side before the release; a hold kept after a failed runtime side;
+the references' deadline counted after the bring-up; a failed runtime side's pod not deleted; `or_delete`
+deleting nothing; an interrupt fetching before the delete.
 
 #### 19.6 What does not change
 
@@ -2747,7 +2786,7 @@ fi
 touch $D/hold; wait $LAB; echo "fv-lab oracle rc=$?"
 L=artifacts/runpod/oracle/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/oracle/$SHA-<MMDDHHMM>
 bash scripts/gpu/fv-lab-compare-runs.sh $L $S
-jq '{served, missing, runtime_ok, problems, upstream: [.upstream[] | {id, tag, released, deleted}]}' $D/report.json
+jq '{served, missing, runtime_ok, runtime_exit_code, runtime_pod, problems, upstream: [.upstream[] | {id, tag, released, deleted}]}' $D/report.json
 U=artifacts/runpod/upstream/<the upstream tag in report.json>
 jq '{exit, oom_kills, peak_ram_mib}' $U/oracle-fasth3-4step-vsa/cell.json; grep pod_ram_limit_mib $U/box.txt; jq .min_ram_gb $U/pod.json
 grep -E 'runpod-pod-(created|deleted)' artifacts/fv-lab/ledger.tsv | tail -4   # both fv-lab pods created and deleted
@@ -2756,9 +2795,9 @@ grep -E 'runpod-pod-(created|deleted)' artifacts/fv-lab/ledger.tsv | tail -4   #
 **Pass:**
 
 - `fv-lab oracle rc=0`; the report: `"served": ["fasth3-4step-vsa"]`, `"missing": []`, `"runtime_ok": true`,
-  `"problems": []`, one upstream entry whose `released` is `"the runtime side ended; the hold is lifted"` (or
-  `"the runtime pod has every reference; the hold is lifted"` if the script side finished first) with `"deleted":
-  {"Ok": null}`; `lab.log` has `reference fasth3-4step-vsa served by <id>` and `FV_ORACLE_URL=https://<id>-8000…`.
+  `"runtime_exit_code": 0`, `"runtime_pod": {"id": …}`, `"problems": []`, one upstream entry whose `released` is
+  `"the runtime side ended; the hold is lifted"` (or `"the runtime pod has every reference; the hold is lifted"` if
+  the script side finished first) with `"deleted": {"Ok": null}`; `lab.log` has `reference fasth3-4step-vsa served by <id>` and `FV_ORACLE_URL=https://<id>-8000…`.
 - `fv-lab-compare-runs.sh` exit 0 with §15.7's line: "5 arm(s) the same (2 ran with byte-identical frames, …; 3 with
   the same compare-dumps lines), … 0 difference(s)"; both runtime pods `matrix_exit=0`, both `live.log`s
   `oracle: fasth3-4step-vsa reference 1.3G`.
@@ -2767,12 +2806,15 @@ grep -E 'runpod-pod-(created|deleted)' artifacts/fv-lab/ledger.tsv | tail -4   #
 - The ledger shows the upstream and the fv-lab runtime pod created and deleted; `fv-lab pod reap --account` lists
   nothing.
 
-**Estimate** ($2.49/hr; the timings of §15.7's run): the upstream pod ~45 min (image pull up to 15 min, the
-`h3-diffusers` view and the reference ~10 min, then held while both runtime sides fetch and run, ~20 min), ~$1.90;
-each runtime pod ~20 min (5 min boot and preflight, two H3 runs with dumps, three `compare-dumps`), ~$0.85 each;
-**about $3.60** in all. fv-lab's balance guard needs the balance at $16.75 or more for its two pods at these caps
-($5.00 + $3.75 + the $8 floor); with the script side's pod, start at $25 or more. Stop before the balance would fall
-below $8 (CLAUDE.md).
+**Estimate** ($2.49/hr; the timings of §15.7's run): the upstream pod ~30-45 min (ready 3.5 min after create in
+§15.7's run; the `h3-diffusers` view and the reference ~10 min; then held while both runtime sides fetch and run,
+~20 min), ~$1.90 at most; each runtime pod ~20 min (5 min boot and preflight, two H3 runs with dumps, three
+`compare-dumps`), ~$0.85 each; **about $3.60** in all. Readiness is fv-deploy's 600 s per cycle: a host that pulls
+the upstream image cold may need longer, and fv-deploy then replaces the pod (each replaced cycle up to 600 s, about
+$0.40) and fails after 3 (§19.4); rerun then. fv-lab's balance guard needs the balance at $18.42 or more for its two
+pods at these caps with their replaced cycles ($5.83 + $4.58 + the $8 floor), plus what the account already spends
+over the 2 h cap (a running build pod at $0.96/hr adds $1.92); with the script side's pod, start at $25 or more. Stop
+before the balance would fall below $8 (CLAUDE.md).
 
 #### 19.8 Then: `oracle.sh` on the driver, and the retirement of `oracle`
 

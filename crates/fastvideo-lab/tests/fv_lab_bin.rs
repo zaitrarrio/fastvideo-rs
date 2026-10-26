@@ -1115,8 +1115,8 @@ fn oracle_without_yes_is_the_plan_and_needs_no_key() {
     assert!(argv.iter().any(|a| a.starts_with(
         "FV_ORACLE_URL=https://upstream-pod-8000.proxy.runpod.net/upstream/1234567-"
     )));
-    assert_eq!(v["stock_wait_s"], 1800);
-    assert_eq!(v["refs_wait_s"], 10800);
+    assert_eq!(v["stock_wait_s"], 2100);
+    assert_eq!(v["refs_wait_s"], 10500);
     for bad in [
         vec!["--cells", "nope"],
         vec!["--cells", cells, "--extra-env", "FV_ORACLE_URL=https://x"],

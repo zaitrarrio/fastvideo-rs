@@ -326,7 +326,7 @@ frozen for `tests/repeats_oracle.rs` at `0f63c56b` (`crates/fastvideo-lab/fixtur
 fv-deploy's guards: the upstream reference pods of `lab/upstream.toml` (one per stack: `fastvideo` for the H3
 targets, with its 192 GB host-RAM floor; `sol-ltx25` for the LTX ones), the wait for their references, the `oracle`
 tier's runtime pod with `FV_ORACLE_URL`, and the release (fetch, then delete) of the upstream pods once the runtime
-pod has every reference (`ORACLE_REFS_DONE`), when no runtime pod is ready within `--stock-wait-s`, or on any
+pod has every reference (`ORACLE_REFS_DONE`), when no runtime pod is ready within `--stock-wait-s` (2,100 s), or on any
 failure or interrupt.
 
 ```sh
@@ -342,11 +342,17 @@ RUNPOD_API_KEY=… ./fv-lab oracle --sha <7> \
   driver's (refused in `--extra-env`); the runtime side is `fv-lab pod up --wait`, so its refusals apply.
 - The upstream pods clone `--up-sha` (default `--sha`; it must be on GitHub) for `scripts/gpu/upstream` and boot
   `ghcr.io/zaitrarrio/fastvideo-rs-upstream-<image>:<--upstream-image-tag>` (default `latest`, pinned to its digest).
-- `--refs-wait-s` (default what the upstream cap leaves after the stock wait and 30 minutes) bounds the wait for the
-  references; a target not served by then (or whose upstream run ended without it) is not run, and fails the run.
-- Before the first create, the balance less every pod of the run at its price cap over its wall cap must stay at $8.
+- `--refs-wait-s` (default what the upstream cap leaves after the stock wait and 30 minutes, counted from the first
+  upstream create) bounds the wait for the references; a target not served by then (or whose upstream run ended without it) is not run, and fails the run.
+- Before the first create, the balance less what the account already spends over the run's longest cap, less every
+  pod of the run at its price cap over its wall cap and two replaced readiness cycles, must stay at $8.
 - `--url-file F` writes the served bases; `--hold-upstream F` keeps the upstream pods until `F` exists (at most their
-  cap less 15 min), for a second reader of the same references (§19.7's script side).
+  cap less 15 min), for a second reader of the same references (§19.7's script side); a failed runtime side, the
+  stock wait or an interrupt release them at once.
+- Without `ORACLE_REFS_DONE` 1,800 s after the runtime pod is ready the upstream pods go all the same. An interrupt
+  stops the runtime side (SIGTERM), deletes the upstream pods without fetching them, then waits for it (600 s, then
+  it is killed and its pod deleted). A reused `--tag` is refused. The exit status is the runtime side's when it
+  failed with one.
 - Results: the runtime run in `artifacts/runpod/oracle/<tag>/` (`pod up`'s fetch), each upstream run in
   `artifacts/runpod/upstream/<tag>/` (without dumps or clips), the JSON report on stdout. `pod reap --account`
   covers `fv-lab-upstream-…` pods.

@@ -243,6 +243,17 @@ fn the_stacks_file_refuses_what_it_cannot_run() {
         let bad = text.replacen(from, to, 1);
         assert!(Stacks::parse(&bad, "u").is_err(), "{from} -> {to}");
     }
+    // No tier may take the upstream pods' family name (their pod names and
+    // run directories, `pod reap --account`).
+    let tiers = std::fs::read_to_string(repo_root().join("lab/tiers.toml")).unwrap();
+    assert!(fastvideo_lab::plan::Tiers::parse(&tiers, "t").is_ok());
+    let e = fastvideo_lab::plan::Tiers::parse(
+        &tiers.replacen("name = \"rtx6000\"", "name = \"upstream\"", 1),
+        "t",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("upstream pods' family"), "{e}");
     // A target no cell reads, or a cell reference no stack makes.
     let (lab, _) = lab();
     let extra = Stacks::parse(
@@ -310,11 +321,12 @@ fn the_plan_brings_up_one_pod_per_stack_of_the_selected_targets() {
             VSA.map(String::from).to_vec()
         )]
     );
-    // The refs wait is what the upstream cap leaves: 14400 - 1800 - 1800.
-    assert_eq!((p.stock_wait_s, p.refs_wait_s), (1800, 10800));
-    // Two pods at $2.50/hr for 4 h each.
+    // The refs wait is what the upstream cap leaves: 14400 - 2100 - 1800.
+    assert_eq!((p.stock_wait_s, p.refs_wait_s), (2100, 10500));
+    // Two pods at $2.50/hr for 4 h each, and two replaced readiness cycles
+    // (2 × 600 s) each.
     assert!(
-        (p.projection_usd - 20.0).abs() < 1e-9,
+        (p.projection_usd - 2.5 * (4.0 + 4.0 + 1.0 / 3.0 + 1.0 / 3.0)).abs() < 1e-9,
         "{}",
         p.projection_usd
     );
@@ -344,8 +356,8 @@ fn the_plan_brings_up_one_pod_per_stack_of_the_selected_targets() {
         .upstream
         .iter()
         .all(|u| u.start.cap_s == 7200 && u.launch.guards.cap_s == Some(7200)));
-    assert_eq!(p.refs_wait_s, 7200 - 1800 - 1800);
-    assert!((p.projection_usd - 2.5 * (1.5 + 2.0 + 2.0)).abs() < 1e-9);
+    assert_eq!(p.refs_wait_s, 7200 - 2100 - 1800);
+    assert!((p.projection_usd - 2.5 * (1.5 + 2.0 + 2.0 + 1.0)).abs() < 1e-9);
     // The tier's order, whatever --cells' order.
     assert_eq!(
         p.cells,
@@ -417,8 +429,8 @@ fn the_plan_refuses_before_anything_exists() {
     r.stock_wait_s = 0;
     refused(r, "--stock-wait-s 0");
     let mut r = request(&VSA);
-    r.refs_wait_s = Some(10_801);
-    refused(r, "at most 10800 s");
+    r.refs_wait_s = Some(10_501);
+    refused(r, "at most 10500 s");
     let mut r = request(&VSA);
     r.upstream_cap_s = Some(3600);
     refused(r, "at most 0 s");
@@ -436,12 +448,13 @@ fn the_balance_must_cover_every_pod_of_the_run() {
         balance_usd: b,
         spend_per_hr_usd: s,
     };
-    // $20 for the two pods at their caps, $8 floor.
-    assert!(check_balance(&acct(28.0, None), &p).is_ok());
-    assert!(check_balance(&acct(27.99, None), &p).is_err());
+    // $21.67 for the two pods at their caps with two replaced readiness
+    // cycles each, $8 floor.
+    assert!(check_balance(&acct(29.67, None), &p).is_ok());
+    assert!(check_balance(&acct(29.66, None), &p).is_err());
     // What the account already spends counts over the run's longest cap.
-    assert!(check_balance(&acct(32.0, Some(1.0)), &p).is_ok());
-    assert!(check_balance(&acct(31.99, Some(1.0)), &p).is_err());
+    assert!(check_balance(&acct(33.67, Some(1.0)), &p).is_ok());
+    assert!(check_balance(&acct(33.66, Some(1.0)), &p).is_err());
 }
 
 // ------------------------------------------------------------------ the driver
@@ -467,6 +480,8 @@ struct Fake {
     exit_after: Option<(f64, bool)>,
     aborted: bool,
     interrupt_at: Option<f64>,
+    /// How long each upstream pod takes to come up (s).
+    up_takes: f64,
     fetch_fails: bool,
     down_fails: bool,
     ups: usize,
@@ -503,6 +518,7 @@ impl OracleOps for Fake {
     }
     fn upstream_up(&mut self, p: &UpstreamPlan) -> Result<UpPod, String> {
         self.events.push(format!("up {}", p.stack));
+        self.t += self.up_takes;
         if self.up_fails == Some(p.stack.as_str()) {
             return Err("no capacity".into());
         }
@@ -557,9 +573,14 @@ impl OracleOps for Fake {
         let (after, ok) = self.exit_after?;
         self.rt(Some(after)).then_some(ok)
     }
-    fn runtime_abort(&mut self) {
-        self.events.push("abort".into());
+    fn runtime_stop(&mut self) {
+        self.events.push("stop".into());
         self.aborted = true;
+    }
+    fn runtime_wait(&mut self, limit: Duration) -> Option<bool> {
+        assert_eq!(limit, Duration::from_secs(600));
+        self.events.push("wait".into());
+        self.runtime_exit()
     }
     fn publish_urls(&mut self, urls: &[String]) {
         self.events.push(format!("urls {}", urls.join(",")));
@@ -589,6 +610,14 @@ impl OracleOps for Fake {
 fn plan(cells: &[&str]) -> OraclePlan {
     let (lab, stacks) = lab();
     plan_oracle(&lab, &stacks, &request(cells)).expect("plan")
+}
+
+/// Every pod that came up was deleted exactly once.
+fn all_deleted(f: &Fake) {
+    for i in 1..=f.ups {
+        let id = format!("pod{i}");
+        assert_eq!(f.count(&format!("down {id}")), 1, "{id}: {:?}", f.events);
+    }
 }
 
 /// Every pod that came up was fetched and deleted exactly once, fetch first.
@@ -689,19 +718,16 @@ fn no_runtime_pod_within_the_stock_wait_stops_it_and_releases() {
     assert!(
         r.problems
             .iter()
-            .any(|x| x == "no runtime pod after 1800 s"),
+            .any(|x| x == "no runtime pod after 2100 s"),
         "{:?}",
         r.problems
     );
-    assert_eq!(r.upstream[0].released, "no runtime pod after 1800 s");
-    assert!(f.index("abort") < f.index("fetch pod1"));
+    assert_eq!(r.upstream[0].released, "no runtime pod after 2100 s");
+    // Asked to stop, the upstream pods released, then waited for.
+    assert!(f.index("stop") < f.index("fetch pod1"));
+    assert!(f.index("down pod1") < f.index("wait"));
     all_released(&f);
-    let start_t = 0.0;
-    assert!(
-        f.t >= start_t + 1800.0 && f.t < start_t + 1800.0 + 61.0,
-        "{}",
-        f.t
-    );
+    assert!(f.t >= 2100.0 && f.t < 2100.0 + 61.0, "{}", f.t);
 }
 
 #[test]
@@ -830,9 +856,17 @@ fn an_interrupt_stops_the_runtime_side_and_releases() {
     };
     let r = drive(&mut f, &p);
     assert!(!r.ok());
-    assert!(f.index("abort") < f.index("fetch pod1"));
+    // Stop, delete the upstream pods without a fetch (it may take 900 s a
+    // file), then wait for the runtime side.
+    assert!(f.index("stop") < f.index("down pod1"));
+    assert!(f.index("down pod1") < f.index("wait"));
+    assert_eq!(f.count("fetch "), 0, "{:?}", f.events);
     assert_eq!(r.upstream[0].released, "interrupted");
-    all_released(&f);
+    assert_eq!(
+        r.upstream[0].fetched,
+        Err("not fetched (interrupted)".into())
+    );
+    all_deleted(&f);
     // Interrupted while the reference is made: no runtime side at all.
     let mut f = Fake {
         interrupt_at: Some(120.0),
@@ -840,7 +874,8 @@ fn an_interrupt_stops_the_runtime_side_and_releases() {
     };
     let r = drive(&mut f, &p);
     assert!(!r.ok() && !r.runtime_started);
-    all_released(&f);
+    assert_eq!(f.count("fetch "), 0);
+    all_deleted(&f);
 }
 
 #[test]
@@ -945,6 +980,63 @@ fn a_hold_keeps_the_upstream_pods_for_another_reader_until_lifted() {
         ..Fake::default()
     };
     let rep = drive(&mut f, &p);
-    assert_eq!(rep.upstream[0].released, "no runtime pod after 1800 s");
+    assert_eq!(rep.upstream[0].released, "no runtime pod after 2100 s");
+    all_released(&f);
+}
+
+#[test]
+fn the_references_deadline_counts_from_the_first_create() {
+    // Two stacks, each 1500 s to come up: the deadline (the upstream cap less
+    // the stock wait and the fetch reserve) counts from before the first
+    // create, so the first pod's cap is never passed while waiting.
+    let mut p = plan(&[VSA[0], "oracle-ltx25-512p"]);
+    p.refs_wait_s = 3600;
+    let mut f = Fake {
+        up_takes: 1500.0,
+        ..Fake::default()
+    };
+    let r = drive(&mut f, &p);
+    assert_eq!(r.missing.len(), 2);
+    assert!(f.t >= 3600.0 && f.t < 3661.0, "{}", f.t);
+    all_released(&f);
+}
+
+#[test]
+fn without_refs_done_the_upstream_pods_go_a_fetch_reserve_after_the_runtime_pod_is_ready() {
+    let p = plan(&VSA);
+    let mut f = Fake {
+        served_at: [("fasth3-4step-vsa", 0.0)].into(),
+        pod_after: Some(300.0),
+        exit_after: Some((5000.0, true)),
+        ..Fake::default()
+    };
+    let r = drive(&mut f, &p);
+    assert_eq!(
+        r.upstream[0].released,
+        "no ORACLE_REFS_DONE 1800 s after the runtime pod was ready"
+    );
+    // Released at 300 + 1800 s, not when the runtime side ended (5000 s).
+    let keepalives = f.count("keepalive pod1");
+    assert_eq!(keepalives, (300 + 1800) / 60 + 1, "{:?}", f.events);
+    assert_eq!(r.runtime_pod.as_ref().map(|p| p.id.as_str()), Some("rt"));
+    all_released(&f);
+}
+
+#[test]
+fn a_hold_does_not_keep_the_pods_after_a_failed_runtime_side() {
+    let (lab, stacks) = lab();
+    let mut r = request(&VSA);
+    r.hold = true;
+    let p = plan_oracle(&lab, &stacks, &r).expect("plan");
+    let mut f = Fake {
+        served_at: [("fasth3-4step-vsa", 0.0)].into(),
+        pod_after: Some(60.0),
+        exit_after: Some((600.0, false)),
+        hold_at: Some(5000.0),
+        ..Fake::default()
+    };
+    let rep = drive(&mut f, &p);
+    assert_eq!(rep.upstream[0].released, "the runtime side ended");
+    assert!(f.t < 700.0, "{}", f.t);
     all_released(&f);
 }

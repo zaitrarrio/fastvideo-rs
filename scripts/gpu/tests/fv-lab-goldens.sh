@@ -192,10 +192,14 @@ for FAMILY in $FAMILIES; do
 done
 
 # 3b. The upstream pods of `fv-lab oracle` (ADR-0019 §19): runpod-http.sh
-#     plan-upstream with the settings scripts/gpu/oracle.sh's start_up passes,
-#     for one selection per stack of lab/upstream.toml (UP_STEPS in §15.7's
-#     form; the clone commit UP_SHA fixed). tests/oracle_driver.rs holds fv-lab's
-#     upstream pod body to them (the cap watchdog and `env {}` excepted).
+#     plan-upstream with the settings scripts/gpu/oracle.sh's start_up passes
+#     (image, disk, FV_EXTRA_ENV, UP_CELL_TIMEOUT_S), for one selection per
+#     stack of lab/upstream.toml (UP_STEPS in §15.7's form; the clone commit
+#     UP_SHA fixed), and for the fastvideo stack FV_MIN_RAM_GB=192, which
+#     oracle.sh does not set but takes from its caller's environment (§15.7's
+#     command and docs/oracle.md "Upstream cells: host RAM" set it; fv-lab
+#     takes it from the stack's min_ram_gb). tests/oracle_driver.rs holds
+#     fv-lab's upstream pod body to them (the cap watchdog and `env {}` excepted).
 UP_SHA_GOLDEN=1234567890abcdef1234567890abcdef12345678
 upstream_golden() { # <stack> [K=V …]
   local stack="$1"

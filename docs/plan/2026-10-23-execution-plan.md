@@ -1451,7 +1451,7 @@ ran (pod id, $/hr), result, cost.
   the upstream pods on fv-deploy's guards (price cap, $8 floor, EU volume, backstop and own cap watchdog, 600 s
   readiness, `minRAMPerGPU` 192 for the FastVideo stack), the wait for each reference's `ORACLE_DONE` with the
   keepalive, the runtime side as `fv-lab pod up --wait` with `FV_ORACLE_URL`, the release (tree fetch, then delete)
-  on the runtime pod's `ORACLE_REFS_DONE`, on a 1,800 s stock wait, on any failure or interrupt; a combined balance
+  on the runtime pod's `ORACLE_REFS_DONE` (or 1,800 s after it is ready without it), on a 2,100 s stock wait, on any failure or interrupt; a combined balance
   guard over every pod of the run; `--url-file` / `--hold-upstream` so the GPU check's script side reads the same
   reference. Payload goldens from the new `runpod-http.sh plan-upstream` (`fixtures/runpod-http-upstream-*.json`;
   intended differences: the cap watchdog, `env {}`, the digest at create). `tests/oracle_driver.rs` (18 on fakes),

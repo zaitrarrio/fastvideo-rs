@@ -99,7 +99,9 @@ below), waits for every selected reference's `ORACLE_DONE` (keeping the
 pods alive with `keepalive.bin`), then runs the tier's runtime pod (`fv-lab
 pod up --wait` with `FV_ORACLE_URL` set to the serving pods) and fetches and
 deletes the upstream pods when the runtime pod has every reference, when no
-runtime pod is ready within `--stock-wait-s` (1,800 s), or on any failure.
+runtime pod is ready within `--stock-wait-s` (2,100 s), 1,800 s after the runtime
+pod is ready without `ORACLE_REFS_DONE`, or on any failure (an interrupt deletes
+them without the fetch).
 Results: `artifacts/runpod/oracle/<tag>/` as above and
 `artifacts/runpod/upstream/<tag>/` (the reference run, without dumps or
 clips). `--url-file` / `--hold-upstream` let another reader (the GPU check's

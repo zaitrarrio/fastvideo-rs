@@ -54,13 +54,18 @@ pub const UPSTREAM_FETCH_SKIP: &str = r"oracle-dump\.tar|/dump/|\.mp4$";
 /// The tier `fv-lab oracle` runs by default.
 pub const ORACLE_TIER: &str = "oracle";
 /// `scripts/gpu/oracle.sh`'s `FV_RUNTIME_STOCK_WAIT_S` is 900 s; fv-lab's is
-/// fv-deploy's whole readiness budget (3 cycles of 600 s), since a create
+/// fv-deploy's whole readiness budget (3 cycles of 600 s) and 5 minutes more
+/// (a pod ready late in its third cycle, then recorded), since a create
 /// without stock fails at once (`no capacity`) and the wait only bounds the
 /// runtime pod's readiness.
-pub const STOCK_WAIT_S: u64 = guard::READY_TIMEOUT_S * guard::READY_CYCLES as u64;
+pub const STOCK_WAIT_S: u64 = guard::READY_TIMEOUT_S * guard::READY_CYCLES as u64 + 300;
 /// What the upstream pods keep for the runtime pod's reference fetch after
 /// its readiness (s): the wait for the references leaves this and the stock
-/// wait before the upstream pods' cap.
+/// wait before the upstream pods' cap; and how long after the runtime pod is
+/// ready the driver waits for its `ORACLE_REFS_DONE` before it releases the
+/// upstream pods all the same (the runner's preflight, about 5 min, then the
+/// downloads: a 1.3 GB H3 reference took under a minute in §15.7's run;
+/// the rest is margin for the larger LTX dumps and a slow proxy).
 pub const REF_FETCH_RESERVE_S: u64 = 1800;
 /// The driver's poll period (s): `oracle.sh`'s keepalive and release loop.
 pub const POLL_S: u64 = 60;
@@ -525,13 +530,15 @@ pub struct OracleRequest {
     pub upstream_cap_s: Option<u64>,
     /// How long the runtime pod may take to be ready (s).
     pub stock_wait_s: u64,
-    /// How long the references may take once their pods are up (s); `None`:
-    /// what the upstream cap leaves ([`REF_FETCH_RESERVE_S`], the stock wait).
+    /// How long the references may take, counted from the first upstream
+    /// create (s); `None`: what the upstream cap leaves
+    /// ([`REF_FETCH_RESERVE_S`], the stock wait).
     pub refs_wait_s: Option<u64>,
     /// `--hold-upstream`: the upstream pods stay (after the runtime pod has
-    /// every reference, or after the runtime side ended) until the caller
+    /// every reference, or after the runtime side succeeded) until the caller
     /// lifts the hold, for another reader of the same references (the GPU
-    /// check's script side, §19.7); failures still release at once.
+    /// check's script side, §19.7); the stock wait, a failed start, a failed
+    /// runtime side and an interrupt release at once.
     pub hold: bool,
 }
 
@@ -563,8 +570,10 @@ pub struct OraclePlan {
     /// a hold may keep them (s): their cap less the fetch's reserve.
     pub hold: bool,
     pub hold_limit_s: u64,
-    /// The money every pod may cost at its price cap over its wall cap ($):
-    /// the balance must stay above fv-deploy's floor after all of them.
+    /// The money every pod may cost at its price cap over its wall cap, plus
+    /// the two readiness cycles fv-deploy may replace per pod (2 × 600 s at
+    /// the same price) ($): the balance must stay above fv-deploy's floor
+    /// after all of them.
     pub projection_usd: f64,
 }
 
@@ -668,7 +677,10 @@ pub fn plan_oracle(lab: &Lab, stacks: &Stacks, r: &OracleRequest) -> Result<Orac
     }
     // One pod per stack that makes a selected target, in the stacks' order.
     let mut upstream = Vec::new();
-    let mut projection = tier.max_usd_per_hr * runtime_cap_s as f64 / 3600.0;
+    // Each pod at its price cap over its wall cap, and the readiness cycles
+    // fv-deploy may replace (up to 2 more pods of 600 s each).
+    let replaced = u64::from(guard::READY_CYCLES - 1) * guard::READY_TIMEOUT_S;
+    let mut projection = tier.max_usd_per_hr * (runtime_cap_s + replaced) as f64 / 3600.0;
     let mut tags = r.upstream_tags.iter();
     let mut min_cap = u64::MAX;
     for s in &stacks.stacks {
@@ -701,7 +713,7 @@ pub fn plan_oracle(lab: &Lab, stacks: &Stacks, r: &OracleRequest) -> Result<Orac
         guard::check_guards(&l.guards).map_err(|e| e.to_string())?;
         guard::check_region(&l).map_err(|e| e.to_string())?;
         guard::check_min_ram(&l).map_err(|e| e.to_string())?;
-        projection += s.max_usd_per_hr * cap as f64 / 3600.0;
+        projection += s.max_usd_per_hr * (cap + replaced) as f64 / 3600.0;
         upstream.push(UpstreamPlan {
             stack: s.name.clone(),
             targets,
@@ -800,7 +812,7 @@ impl UpPod {
 }
 
 /// The runtime pod, once `pod up` recorded it (`pod.json`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RuntimePod {
     pub id: String,
     pub url: String,
@@ -818,15 +830,20 @@ pub enum UpState {
     Gone,
 }
 
-/// What the driver does to the world; the binary's talks to Runpod and the
-/// pods, the tests' records calls. Errors are messages.
+/// How long a stopped runtime side gets to delete what it made (s): past it,
+/// it is killed and its pod deleted by the driver.
+pub const ABORT_WAIT_S: u64 = 600;
+
+/// What the driver does to the world; [`crate::oracle_live::LiveOps`] talks
+/// to Runpod and the pods, the tests' fake records calls. Errors are messages.
 pub trait OracleOps {
     fn now(&self) -> f64;
     fn sleep(&mut self, d: Duration);
     fn log(&mut self, line: &str);
     fn interrupted(&self) -> bool;
     /// The upstream pod up and serving its run directory (fv-deploy's `up`,
-    /// kept), recorded.
+    /// kept), recorded. An `Err` leaves no pod behind: one created before a
+    /// later step failed is deleted first.
     fn upstream_up(&mut self, p: &UpstreamPlan) -> Result<UpPod, String>;
     /// `<base>/oracle-<target>/ORACLE_DONE` answers 200.
     fn reference_served(&mut self, pod: &UpPod, target: &str) -> bool;
@@ -841,10 +858,19 @@ pub trait OracleOps {
     fn runtime_pod(&mut self) -> Option<RuntimePod>;
     /// `<runtime run>/ORACLE_REFS_DONE` answers 200.
     fn runtime_refs_done(&mut self, rt: &RuntimePod) -> bool;
-    /// The runtime side ended: `Some(success)`.
+    /// The runtime side ended: `Some(success)`. A failed one whose pod is
+    /// still up has that pod deleted.
     fn runtime_exit(&mut self) -> Option<bool>;
-    /// Stop the runtime side (it deletes what it created) and wait for it.
-    fn runtime_abort(&mut self);
+    /// The runtime side's exit code, once it ended with one.
+    fn runtime_exit_code(&self) -> Option<i32> {
+        None
+    }
+    /// Ask the runtime side to stop (SIGTERM: it deletes what it made); does
+    /// not wait.
+    fn runtime_stop(&mut self);
+    /// Wait up to `limit` for the runtime side to end; past it, kill it and
+    /// delete its pod. Its exit, as [`OracleOps::runtime_exit`].
+    fn runtime_wait(&mut self, limit: Duration) -> Option<bool>;
     /// The served pods' bases (`FV_ORACLE_URL`), once known (`--url-file`).
     fn publish_urls(&mut self, urls: &[String]);
     /// Whether the caller lifted `--hold-upstream` (true without a hold).
@@ -863,6 +889,7 @@ pub struct UpstreamOutcome {
     pub tag: String,
     /// Why it was released.
     pub released: String,
+    /// `Err("not fetched (…)")` when the release skipped the fetch.
     pub fetched: Result<(), String>,
     pub deleted: Result<(), String>,
 }
@@ -877,8 +904,12 @@ pub struct DriveReport {
     /// The arms the runtime side ran (the served targets' selected arms).
     pub runtime_cells: Vec<String>,
     pub runtime_started: bool,
+    /// The runtime run's tag, and its pod once it was ready.
+    pub runtime_tag: String,
+    pub runtime_pod: Option<RuntimePod>,
     /// The runtime side's exit: `Some(true)` a fetched, judged success.
     pub runtime_ok: Option<bool>,
+    pub runtime_exit_code: Option<i32>,
     /// Why the run failed (empty: it succeeded).
     pub problems: Vec<String>,
 }
@@ -894,15 +925,27 @@ struct Live {
     released: bool,
 }
 
-fn release<O: OracleOps>(ops: &mut O, live: &mut [Live], why: &str, report: &mut DriveReport) {
+/// Fetch (unless `fetch` is false: an interrupt deletes at once, a fetch may
+/// take 900 s a file), then delete, every pod not yet released.
+fn release<O: OracleOps>(
+    ops: &mut O,
+    live: &mut [Live],
+    why: &str,
+    fetch: bool,
+    report: &mut DriveReport,
+) {
     for l in live.iter_mut().filter(|l| !l.released) {
         l.released = true;
         ops.log(&format!(
             "[fv-lab oracle] release upstream pod {} ({}): {why}",
             l.pod.id, l.pod.stack
         ));
-        let fetched = ops.upstream_fetch(&l.pod);
-        if let Err(e) = &fetched {
+        let fetched = if fetch {
+            ops.upstream_fetch(&l.pod)
+        } else {
+            Err(format!("not fetched ({why})"))
+        };
+        if let (true, Err(e)) = (fetch, &fetched) {
             ops.log(&format!(
                 "[fv-lab oracle] fetch of upstream {}: {e}",
                 l.pod.id
@@ -930,37 +973,46 @@ fn release<O: OracleOps>(ops: &mut O, live: &mut [Live], why: &str, report: &mut
 }
 
 /// The oracle run (ADR-0019 §19): every path ends with every upstream pod
-/// this run created fetched and deleted.
+/// this run created deleted (fetched first, but on an interrupt).
 ///
 /// 1. The upstream pods up, one per stack, in order (a failure releases
 ///    those already up).
 /// 2. The references waited for (every [`POLL_S`], keepalive meanwhile):
 ///    until each selected target's `ORACLE_DONE` is served, its pod finished
-///    without it or is gone, or `refs_wait_s` passed. No reference: release,
-///    fail. A pod none of whose targets was served is released at once.
+///    without it or is gone, or `refs_wait_s` passed since the first create.
+///    No reference: release, fail. A pod none of whose targets was served is
+///    released at once.
 /// 3. The runtime side started on the served targets' arms with their pods'
 ///    bases as `FV_ORACLE_URL`.
-/// 4. Until it ends: keepalive; once its pod published `ORACLE_REFS_DONE`,
-///    the upstream pods are released; no runtime pod within `stock_wait_s`:
-///    the runtime side is stopped and the upstream pods released.
-/// 5. The upstream pods still up are released when the runtime side ends
-///    (or the run is interrupted).
+/// 4. Until it ends, keepalive; the upstream pods are released once its pod
+///    published `ORACLE_REFS_DONE`, or [`REF_FETCH_RESERVE_S`] after its pod
+///    was ready without it; no runtime pod within `stock_wait_s`: the runtime
+///    side is asked to stop, the upstream pods are released, then it is
+///    waited for ([`ABORT_WAIT_S`]).
+/// 5. The upstream pods still up are released when the runtime side ends.
 ///
-/// With [`OraclePlan::hold`] the releases of 4 and 5 also wait for the
-/// caller to lift the hold (keepalive meanwhile), at most until
-/// `hold_limit_s` after the upstream pods came up; the stock wait, a
-/// failed start and an interrupt release at once.
+/// An interrupt stops the runtime side, deletes the upstream pods without
+/// fetching them, then waits for the runtime side. With [`OraclePlan::hold`]
+/// the releases of 4 and of 5 after a successful runtime side also wait for
+/// the caller to lift the hold (keepalive meanwhile), at most until
+/// `hold_limit_s` after the first create; the stock wait, a failed start, a
+/// failed runtime side and an interrupt release at once.
 pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
-    let mut report = DriveReport::default();
+    let mut report = DriveReport {
+        runtime_tag: plan.runtime_tag.clone(),
+        ..DriveReport::default()
+    };
     let mut live: Vec<Live> = Vec::new();
     let tick = Duration::from_secs(POLL_S);
-    // Before the first create: what a hold's limit counts from.
+    let abort = Duration::from_secs(ABORT_WAIT_S);
+    // Before the first create: what the references' deadline and a hold's
+    // limit count from (the pods' caps count from their creates, later).
     let t_up = ops.now();
     // 1.
     for p in &plan.upstream {
         if ops.interrupted() {
             report.problems.push("interrupted".into());
-            release(ops, &mut live, "interrupted", &mut report);
+            release(ops, &mut live, "interrupted", false, &mut report);
             return report;
         }
         ops.log(&format!(
@@ -989,6 +1041,7 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
                     ops,
                     &mut live,
                     "another upstream pod did not come up",
+                    true,
                     &mut report,
                 );
                 report.missing = plan.arms_by_target.iter().map(|(t, _)| t.clone()).collect();
@@ -997,13 +1050,12 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
         }
     }
     // 2.
-    let t0 = ops.now();
     let mut served: Vec<String> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
     loop {
         if ops.interrupted() {
             report.problems.push("interrupted".into());
-            release(ops, &mut live, "interrupted", &mut report);
+            release(ops, &mut live, "interrupted", false, &mut report);
             return report;
         }
         for l in &live {
@@ -1038,15 +1090,14 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
                 failed.extend(pending);
             }
         }
-        let all = plan.arms_by_target.len();
-        if served.len() + failed.len() >= all {
+        if served.len() + failed.len() >= plan.arms_by_target.len() {
             break;
         }
-        if ops.now() - t0 >= plan.refs_wait_s as f64 {
+        if ops.now() - t_up >= plan.refs_wait_s as f64 {
             for (t, _) in &plan.arms_by_target {
                 if !served.contains(t) && !failed.contains(t) {
                     ops.log(&format!(
-                        "[fv-lab oracle] reference {t} not served after {} s",
+                        "[fv-lab oracle] reference {t} not served {} s after the first upstream create",
                         plan.refs_wait_s
                     ));
                     failed.push(t.clone());
@@ -1079,7 +1130,7 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
         ));
     }
     if report.served.is_empty() {
-        release(ops, &mut live, "no reference was served", &mut report);
+        release(ops, &mut live, "no reference was served", true, &mut report);
         return report;
     }
     // A pod that serves nothing is no use to the runtime side.
@@ -1091,6 +1142,7 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
         ops,
         &mut idle,
         "none of its references was served",
+        true,
         &mut report,
     );
     // 3.
@@ -1107,6 +1159,7 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
             ops,
             &mut busy,
             "the runtime side did not start",
+            true,
             &mut report,
         );
         return report;
@@ -1115,7 +1168,9 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
     // 4.
     let t1 = ops.now();
     let mut released = false;
-    let mut refs = false;
+    // Why the upstream pods may go (once the hold, if any, is lifted).
+    let mut trigger: Option<String> = None;
+    let mut ready_at: Option<f64> = None;
     // The hold lifted (or none), or its limit passed.
     let lifted = |ops: &mut O| -> Option<&'static str> {
         if !plan.hold || ops.hold_released() {
@@ -1133,9 +1188,9 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
     let ok = loop {
         if ops.interrupted() {
             report.problems.push("interrupted".into());
-            ops.runtime_abort();
-            release(ops, &mut busy, "interrupted", &mut report);
-            break None;
+            ops.runtime_stop();
+            release(ops, &mut busy, "interrupted", false, &mut report);
+            break ops.runtime_wait(abort);
         }
         if let Some(ok) = ops.runtime_exit() {
             break Some(ok);
@@ -1144,23 +1199,36 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
             for l in &busy {
                 ops.keepalive(&l.pod);
             }
-            if !refs {
+            if trigger.is_none() {
                 match ops.runtime_pod() {
                     None if ops.now() - t1 >= plan.stock_wait_s as f64 => {
                         let why = format!("no runtime pod after {} s", plan.stock_wait_s);
                         report.problems.push(why.clone());
-                        ops.runtime_abort();
-                        release(ops, &mut busy, &why, &mut report);
-                        break ops.runtime_exit();
+                        ops.runtime_stop();
+                        release(ops, &mut busy, &why, true, &mut report);
+                        break ops.runtime_wait(abort);
                     }
-                    Some(rt) if ops.runtime_refs_done(&rt) => refs = true,
-                    _ => {}
+                    None => {}
+                    Some(rt) => {
+                        let at = *ready_at.get_or_insert(ops.now());
+                        let done = ops.runtime_refs_done(&rt);
+                        report.runtime_pod = Some(rt);
+                        if done {
+                            trigger = Some("the runtime pod has every reference".into());
+                        } else if ops.now() - at >= REF_FETCH_RESERVE_S as f64 {
+                            let why = format!(
+                                "no ORACLE_REFS_DONE {REF_FETCH_RESERVE_S} s after the runtime pod was ready"
+                            );
+                            ops.log(&format!("[fv-lab oracle] {why}"));
+                            trigger = Some(why);
+                        }
+                    }
                 }
             }
-            if refs {
+            if let Some(t) = &trigger {
                 if let Some(how) = lifted(ops) {
-                    let why = format!("the runtime pod has every reference{how}");
-                    release(ops, &mut busy, &why, &mut report);
+                    let why = format!("{t}{how}");
+                    release(ops, &mut busy, &why, true, &mut report);
                     released = true;
                 }
             }
@@ -1168,19 +1236,25 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
         ops.sleep(tick);
     };
     report.runtime_ok = ok;
-    if ok == Some(false) {
-        report
+    report.runtime_exit_code = ops.runtime_exit_code();
+    match ok {
+        Some(true) => {}
+        Some(false) => report
             .problems
-            .push("the runtime side failed (fv-lab pod up --wait)".into());
+            .push("the runtime side failed (fv-lab pod up --wait)".into()),
+        None => report.problems.push(format!(
+            "the runtime side did not end {ABORT_WAIT_S} s after it was stopped (killed, its pod deleted)"
+        )),
     }
-    // 5.
-    let how = if busy.iter().any(|l| !l.released) && ok.is_some() {
+    // 5. After a success a hold is waited for; after a failure, not.
+    let (how, fetch) = if ok == Some(true) && busy.iter().any(|l| !l.released) {
         loop {
             if ops.interrupted() {
-                break "; interrupted while held";
+                report.problems.push("interrupted".into());
+                break ("; interrupted while held", false);
             }
             if let Some(how) = lifted(ops) {
-                break how;
+                break (how, true);
             }
             for l in &busy {
                 ops.keepalive(&l.pod);
@@ -1188,12 +1262,13 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
             ops.sleep(tick);
         }
     } else {
-        ""
+        ("", true)
     };
     release(
         ops,
         &mut busy,
         &format!("the runtime side ended{how}"),
+        fetch,
         &mut report,
     );
     report
