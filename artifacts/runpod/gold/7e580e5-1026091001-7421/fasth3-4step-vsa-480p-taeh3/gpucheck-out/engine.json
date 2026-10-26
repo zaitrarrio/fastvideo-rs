@@ -1,0 +1,338 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"fasth3-4step-vsa-480p-taeh3\")): PoolEntry { executor: 0, model: ModelId(\"fasth3-4step-vsa-480p-taeh3\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 165.964873733
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "first_step_s": 2.088491105,
+        "load_s": 165.964873733,
+        "metrics": {
+          "build_rtf": 1.1970459443225807,
+          "inference_s": 6.184737379,
+          "peak_memory_mb": 54756.526679992676,
+          "stage_durations": {
+            "audio_decode": 0.128129463,
+            "denoise": 6.184737379,
+            "encode": 0.099397437,
+            "refine": 0.005039477,
+            "text": 0.410207054,
+            "video_decode": 0.405532196
+          }
+        },
+        "stages": [
+          {
+            "at_s": 0.000356359,
+            "stage": "text"
+          },
+          {
+            "at_s": 0.516811303,
+            "stage": "denoise"
+          },
+          {
+            "at_s": 6.719196577,
+            "stage": "audio_decode"
+          },
+          {
+            "at_s": 6.8485677769999995,
+            "stage": "video_decode"
+          }
+        ],
+        "submit_to_mp4_s": 7.411381951
+      }
+    },
+    {
+      "limits": {
+        "events": 4,
+        "steps": 4
+      },
+      "name": "progress",
+      "ok": true,
+      "values": {
+        "events": 4,
+        "last": [
+          4,
+          4
+        ]
+      }
+    },
+    {
+      "limits": {
+        "audio": true,
+        "frames": 124,
+        "height": 480,
+        "width": 832
+      },
+      "name": "mp4",
+      "ok": true,
+      "values": {
+        "audio_rate": 32000,
+        "bytes": 2085381,
+        "duration_s": 5.175,
+        "fps": 24.0,
+        "frames": 124,
+        "height": 480,
+        "path": "/fvscratch/runs/gold/7e580e5-1026091001-7421/fasth3-4step-vsa-480p-taeh3/out/5bd5d86f-c744-41d3-8b64-594922e06164/output.mp4",
+        "width": 832
+      }
+    },
+    {
+      "limits": {
+        "frames": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "frames_sha256": "713c02691677cbd4ef378e6f90b8a61044cf009d720842e101fd37571277192e",
+        "pngs": 124
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": {
+        "channels": 2,
+        "native_rate": 32000,
+        "via_sidecar": false
+      },
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 403200,
+        "multiple": 32,
+        "pad_and_crop": false,
+        "short_edges": [
+          480
+        ]
+      },
+      "family": "h3",
+      "fps": {
+        "allowed": [
+          24
+        ],
+        "container_only": false,
+        "default": 24
+      },
+      "frames": {
+        "default": 124,
+        "max": 362,
+        "min": 107,
+        "offset": 5,
+        "step": 17
+      },
+      "id": "fasth3-4step-vsa-480p-taeh3",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "fasth3-4step-vsa-480p-taeh3",
+      "refs": {
+        "audio": 3,
+        "images": 9,
+        "total": 12,
+        "videos": 3
+      },
+      "resident": true,
+      "served_names": [
+        "fasth3-4step-vsa-480p-taeh3"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 15.083333015441895,
+          "min_s": 4.458333492279053
+        }
+      },
+      "tasks": [
+        "t2v",
+        "i2v",
+        "keyframes"
+      ],
+      "tier": "draft"
+    },
+    "cuda_feature": true,
+    "job": {
+      "audio": {
+        "channels": 2,
+        "plan": "native",
+        "rate": 32000
+      },
+      "audio_in": null,
+      "fps": 24,
+      "height": 480,
+      "keyframes": [],
+      "model": "fasth3-4step-vsa-480p-taeh3",
+      "negative_prompt": "",
+      "num_frames": 124,
+      "post": {
+        "crop": null,
+        "drop_audio": false
+      },
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "recipe": "fasth3-4step-vsa-480p-taeh3",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 7,
+      "task": "t2v",
+      "tier": "draft",
+      "width": 832
+    },
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": {
+          "channels": 2,
+          "native_rate": 32000,
+          "via_sidecar": false
+        },
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 403200,
+          "multiple": 32,
+          "pad_and_crop": false,
+          "short_edges": [
+            480
+          ]
+        },
+        "family": "h3",
+        "fps": {
+          "allowed": [
+            24
+          ],
+          "container_only": false,
+          "default": 24
+        },
+        "frames": {
+          "default": 124,
+          "max": 362,
+          "min": 107,
+          "offset": 5,
+          "step": 17
+        },
+        "id": "fasth3-4step-vsa-480p-taeh3",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 3,
+          "images": 9,
+          "total": 12,
+          "videos": 3
+        },
+        "resident": true,
+        "served_names": [
+          "fasth3-4step-vsa-480p-taeh3"
+        ],
+        "stream": null,
+        "tasks": [
+          "t2v",
+          "i2v",
+          "keyframes"
+        ]
+      },
+      "gpu": {
+        "min_sm": 89,
+        "min_vram_gib": 80,
+        "needs": [
+          "fp8"
+        ]
+      },
+      "id": "fasth3-4step-vsa-480p-taeh3",
+      "public_names": [],
+      "recipe": {
+        "adaln_cache": null,
+        "dense": false,
+        "dit_offload": null,
+        "family": "h3",
+        "hd_1080p": false,
+        "i2v_encoder": "auto",
+        "lora_strength": null,
+        "profile": "h3/fasth3_4step_vsa",
+        "recipe": "4step-vsa",
+        "ref2va": false,
+        "ref_weights": null,
+        "short_edge": 480,
+        "steps": 4,
+        "taeh3": "/fvscratch/weights/auxiliary/tae/taeh3.safetensors",
+        "text_encoder": "auto",
+        "text_weights": "/fvscratch/weights/h3-base",
+        "vdn_shared": null,
+        "vdn_weights": null,
+        "warmup": false,
+        "warmup_blocking": false,
+        "weights": "/fvscratch/weights/h3-base"
+      },
+      "recipe_name": "fasth3-4step-vsa-480p-taeh3",
+      "resident": true,
+      "served_names": [
+        "fasth3-4step-vsa-480p-taeh3"
+      ],
+      "tier": "draft",
+      "variant": "fasth3-4step-vsa-480p-taeh3"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {},
+      "profile": "h3/fasth3_4step_vsa",
+      "settings": {
+        "FASTVIDEO_BF16_ACT": "1",
+        "FASTVIDEO_H3_QUANT": "mxfp8"
+      }
+    },
+    "recipe": {
+      "attention": "vsa",
+      "name": "fasth3-4step-vsa-480p-taeh3",
+      "profile": "h3/fasth3_4step_vsa",
+      "steps": 4,
+      "summary": "H3 draft: FastH3 4-step VSA at 480p with the TAEH3 decoder (fails the quality gate)",
+      "vae": "taeh3"
+    }
+  },
+  "elapsed_s": 174.134479041,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "engine",
+  "status": "pass"
+}

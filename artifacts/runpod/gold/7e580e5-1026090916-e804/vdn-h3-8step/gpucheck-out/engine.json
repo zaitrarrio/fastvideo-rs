@@ -1,0 +1,329 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"vdn-h3-8step\")): PoolEntry { executor: 0, model: ModelId(\"vdn-h3-8step\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 221.174516653
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "first_step_s": 114.914656168,
+        "load_s": 221.174516653,
+        "metrics": {
+          "build_rtf": 13.916260118903224,
+          "inference_s": 71.900677281,
+          "peak_memory_mb": 54764.91055679321,
+          "stage_durations": {
+            "audio_decode": 0.149850227,
+            "denoise": 71.900677281,
+            "encode": 0.116882158,
+            "refine": 0.005357068,
+            "text": 105.846604414,
+            "video_decode": 4.73386855
+          }
+        },
+        "stages": [
+          {
+            "at_s": 0.000371829,
+            "stage": "text"
+          },
+          {
+            "at_s": 105.907682397,
+            "stage": "denoise"
+          },
+          {
+            "at_s": 177.833324354,
+            "stage": "audio_decode"
+          },
+          {
+            "at_s": 177.985017967,
+            "stage": "video_decode"
+          }
+        ],
+        "submit_to_mp4_s": 183.021547515
+      }
+    },
+    {
+      "limits": {
+        "events": 8,
+        "steps": 8
+      },
+      "name": "progress",
+      "ok": true,
+      "values": {
+        "events": 8,
+        "last": [
+          8,
+          8
+        ]
+      }
+    },
+    {
+      "limits": {
+        "audio": true,
+        "frames": 124,
+        "height": 768,
+        "width": 1344
+      },
+      "name": "mp4",
+      "ok": true,
+      "values": {
+        "audio_rate": 32000,
+        "bytes": 4305845,
+        "duration_s": 5.175,
+        "fps": 24.0,
+        "frames": 124,
+        "height": 768,
+        "path": "/fvscratch/runs/gold/7e580e5-1026090916-e804/vdn-h3-8step/out/3887ee5f-6b57-472b-8abf-63eb35c4ef6f/output.mp4",
+        "width": 1344
+      }
+    },
+    {
+      "limits": {
+        "frames": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "frames_sha256": "4a44250e3b91a22f5c5a4d76a2c9a2187c305253b96188fcebfa2f15660a89ac",
+        "pngs": 124
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": {
+        "channels": 2,
+        "native_rate": 32000,
+        "via_sidecar": false
+      },
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 1032192,
+        "multiple": 32,
+        "pad_and_crop": false,
+        "short_edges": [
+          768,
+          480
+        ]
+      },
+      "family": "h3",
+      "fps": {
+        "allowed": [
+          24
+        ],
+        "container_only": false,
+        "default": 24
+      },
+      "frames": {
+        "default": 124,
+        "max": 362,
+        "min": 107,
+        "offset": 5,
+        "step": 17
+      },
+      "id": "vdn-h3-8step",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "vdn-h3-8step",
+      "refs": {
+        "audio": 3,
+        "images": 9,
+        "total": 12,
+        "videos": 3
+      },
+      "resident": true,
+      "served_names": [
+        "vdn-h3-8step"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 15.083333015441895,
+          "min_s": 4.458333492279053
+        }
+      },
+      "tasks": [
+        "t2v"
+      ]
+    },
+    "cuda_feature": true,
+    "job": {
+      "audio": {
+        "channels": 2,
+        "plan": "native",
+        "rate": 32000
+      },
+      "audio_in": null,
+      "fps": 24,
+      "height": 768,
+      "keyframes": [],
+      "model": "vdn-h3-8step",
+      "negative_prompt": "",
+      "num_frames": 124,
+      "post": {
+        "crop": null,
+        "drop_audio": false
+      },
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "recipe": "vdn-h3-8step",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 1024,
+      "task": "t2v",
+      "width": 1344
+    },
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": {
+          "channels": 2,
+          "native_rate": 32000,
+          "via_sidecar": false
+        },
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 1032192,
+          "multiple": 32,
+          "pad_and_crop": false,
+          "short_edges": [
+            768,
+            480
+          ]
+        },
+        "family": "h3",
+        "fps": {
+          "allowed": [
+            24
+          ],
+          "container_only": false,
+          "default": 24
+        },
+        "frames": {
+          "default": 124,
+          "max": 362,
+          "min": 107,
+          "offset": 5,
+          "step": 17
+        },
+        "id": "vdn-h3-8step",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 3,
+          "images": 9,
+          "total": 12,
+          "videos": 3
+        },
+        "resident": true,
+        "served_names": [
+          "vdn-h3-8step"
+        ],
+        "stream": null,
+        "tasks": [
+          "t2v"
+        ]
+      },
+      "gpu": {
+        "min_sm": 80,
+        "min_vram_gib": 96
+      },
+      "id": "vdn-h3-8step",
+      "public_names": [
+        "VDN-H3-8step"
+      ],
+      "recipe": {
+        "adaln_cache": null,
+        "dense": true,
+        "dit_offload": "resident",
+        "family": "h3",
+        "hd_1080p": false,
+        "i2v_encoder": "auto",
+        "lora_strength": null,
+        "profile": null,
+        "recipe": "vdn-h3-8step",
+        "ref2va": false,
+        "ref_weights": null,
+        "short_edge": 768,
+        "steps": 8,
+        "taeh3": null,
+        "text_encoder": "auto",
+        "text_weights": "/fvscratch/weights/h3-base",
+        "vdn_shared": "/fvscratch/weights/vdn-h3-stage-b-2000/stage-b-step-2000",
+        "vdn_weights": "/fvscratch/weights/vdn-h3-dmd-250-turbo/stage-dmd-step-250",
+        "warmup": false,
+        "warmup_blocking": false,
+        "weights": "/fvscratch/weights/h3-base"
+      },
+      "recipe_name": "vdn-h3-8step",
+      "resident": true,
+      "served_names": [
+        "vdn-h3-8step"
+      ],
+      "tier": null,
+      "variant": "vdn-h3-8step"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {},
+      "profile": null,
+      "settings": {}
+    },
+    "recipe": {
+      "attention": "dense",
+      "name": "vdn-h3-8step",
+      "steps": 8,
+      "summary": "VDN-H3 (Video DeltaNet on MiniMax-H3): hybrid attention, a chunk-aligned window softmax plus a frame-wise delta-rule linear branch in every block, stage-B + DMD turbo LoRA; 8 forwards, bf16 linears, official VAE",
+      "vae": "full"
+    }
+  },
+  "elapsed_s": 405.129537703,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "engine",
+  "status": "pass"
+}

@@ -1,0 +1,21 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] taehv available for the distilled presets (/fvscratch/weights/auxiliary/tae)
+[fastvideo] wan load: host peak RSS 36.0 GiB (eager dit)
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"fastwan22-ti2v-5b-taehv\")): PoolEntry { executor: 0, model: ModelId(\"fastwan22-ti2v-5b-taehv\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":40.197756373}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 832x480 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x30x52 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=12090 Sk=12090 D=128
+[fastvideo] dmd step 1/3 t=1000 done in 608ms
+[fastvideo] dmd step 2/3 t=757 done in 516ms
+[fastvideo] dmd step 3/3 t=522 done in 515ms
+[fastvideo] dmd 3 steps done in 1641ms
+[fastvideo] taehv.decode done in 79ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.10s, 0.05 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.14 GiB of 129.41
+[fastvideo] wrote 121 png frames → /fvscratch/runs/gold/7e580e5-1026090916-e804/fastwan22-ti2v-5b-taehv/out/65a50584-6d65-427c-b7e7-e3841f9a46b2/frames (text 0.43s, denoise 1.64s, decode+mp4 0.32s, png 0.10s)
+[fastvideo] generate done in 2500ms
+[INFO] engine/timings {"first_step_s":1.052718372,"load_s":40.197756373,"metrics":{"build_rtf":0.32563797282644624,"inference_s":1.6417581129999999,"peak_memory_mb":null,"stage_durations":{"denoise":1.6417581129999999,"encode":0.096536164,"text":0.428812758,"video_decode":0.31824637}},"stages":[{"at_s":0.014576502,"stage":"text"},{"at_s":0.44342408,"stage":"denoise"},{"at_s":2.0863010810000002,"stage":"video_decode"}],"submit_to_mp4_s":2.597300531}
+[PASS] engine/progress {"events":3,"last":[3,3]} (limits {"events":3,"steps":3})
+[PASS] engine/mp4 {"audio_rate":null,"bytes":1836229,"duration_s":5.042,"fps":24.0,"frames":121,"height":480,"path":"/fvscratch/runs/gold/7e580e5-1026090916-e804/fastwan22-ti2v-5b-taehv/out/65a50584-6d65-427c-b7e7-e3841f9a46b2/output.mp4","width":832} (limits {"audio":false,"frames":121,"height":480,"width":832})
+[PASS] engine/frames {"frames_sha256":"773c3189483b4d75d677b5673b00e62f50e300b7ff007219380b85512a694714","pngs":121} (limits {"frames":121})
+[PASS] stage engine → gpucheck-out/engine.json (43.8s)

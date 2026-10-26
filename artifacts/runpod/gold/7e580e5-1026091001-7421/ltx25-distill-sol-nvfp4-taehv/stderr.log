@@ -1,0 +1,96 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] ltx2 technique profile: ltx2/ltx25_distill_sol_nvfp4
+[fastvideo] ltx2 technique setting FASTVIDEO_NVFP4=static_6 (nvfp4)
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+[fastvideo] ltx2 nvfp4: video FFN on NVFP4 tensor cores (cuBLASLt VEC16_UE4M3, TE static_6 rule, RHT / SR off; 72.0 MiB per block vs 256.0 MiB bf16)
+[fastvideo] ltx2 dit: loaded block 8/48 (89.9 GiB free)
+[fastvideo] ltx2 dit: loaded block 16/48 (85.6 GiB free)
+[fastvideo] ltx2 dit: loaded block 24/48 (81.2 GiB free)
+[fastvideo] ltx2 dit: loaded block 32/48 (76.8 GiB free)
+[fastvideo] ltx2 dit: loaded block 40/48 (72.5 GiB free)
+[fastvideo] ltx2 dit: loaded block 48/48 (68.2 GiB free)
+[fastvideo] ltx2 dit: 48 blocks resident
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] ltx2 vae=taehv (/fvscratch/weights/auxiliary/tae/taeltx2_3_wide.safetensors)
+[fastvideo] load/io ltx2 load {"wall_s":65.50,"viewed_gb":39.17,"prefetch_read_gb":39.11,"prefetch_skipped_gb":0.00,"prefetch_busy_s":961.8,"viewed_gbps":0.60,"window_wait_s":0.0,"fill_s":0.9,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":57.4,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"ltx25-distill-sol-nvfp4-taehv\")): PoolEntry { executor: 0, model: ModelId(\"ltx25-distill-sol-nvfp4-taehv\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":66.03641124}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 0.25s, upload wait 0.17s, compute starved 0.40s
+[fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+[fastvideo] ltx2 memory text: peak 35.04 GiB used, 35.09 GiB reserved; 29.04 GiB live after; ledger: dit_nonlinear 26.75 | vae 2.12 | activations 6.17 | pool_reserved 0.05 | non_pool 0.69 | total 35.73 GiB
+[fastvideo] ltx2 ancestral step 1/8 sigma 1.000000 (0.35s)
+[fastvideo] ltx2 ancestral step 2/8 sigma 0.993750 (0.31s)
+[fastvideo] ltx2 ancestral step 3/8 sigma 0.987500 (0.31s)
+[fastvideo] ltx2 ancestral step 4/8 sigma 0.981250 (0.31s)
+[fastvideo] ltx2 ancestral step 5/8 sigma 0.975000 (0.31s)
+[fastvideo] ltx2 ancestral step 6/8 sigma 0.909375 (0.31s)
+[fastvideo] ltx2 ancestral step 7/8 sigma 0.725000 (0.31s)
+[fastvideo] ltx2 ancestral step 8/8 sigma 0.421875 (0.31s)
+[fastvideo] ltx2 memory stage1: peak 29.46 GiB used, 29.62 GiB reserved; 29.04 GiB live after; ledger: dit_nonlinear 26.75 | vae 2.12 | activations 0.59 | pool_reserved 0.17 | non_pool 0.69 | total 30.15 GiB
+[fastvideo] ltx2 memory upsample: peak 32.22 GiB used, 32.38 GiB reserved; 29.77 GiB live after; ledger: dit_nonlinear 26.75 | vae 2.12 | upsampler 0.00 (max 1.85) | activations 1.50 | pool_reserved 0.15 | non_pool 0.69 | total 32.91 GiB
+[fastvideo] ltx2 upsample 0.49s → latent grid [16, 24, 40]
+[fastvideo] ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), distilled lora not beside weights
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=15360 sk=15360 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=15360 sk=1024 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=15360 sk=126 d=64 -> flash_mma_fwd2
+[fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=15360 blocks=240 sink=0
+[fastvideo] ltx2 step transfers: d2h 0 MiB in 0 copies, h2d 1909 MiB in 86 copies
+[fastvideo] ltx2 step 1/3 sigma 0.909375 (1.15s)
+[fastvideo] ltx2 step 2/3 sigma 0.725000 (1.11s)
+[fastvideo] ltx2 step 3/3 sigma 0.421875 (1.10s)
+[fastvideo] ltx2 memory stage2: peak 31.43 GiB used, 31.91 GiB reserved; 29.77 GiB live after; ledger: dit_nonlinear 26.75 | vae 2.12 | activations 2.56 | pool_reserved 0.47 | non_pool 0.69 | total 32.13 GiB
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.07s, 0.09 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.33 GiB of 131.37
+[fastvideo] ltx2 memory decode: peak 33.82 GiB used, 34.16 GiB reserved; 29.74 GiB live after; ledger: dit_nonlinear 26.75 | vae 2.12 | activations 4.95 | pool_reserved 0.34 | non_pool 1.27 | total 35.09 GiB
+[INFO] engine/timings {"first_step_s":6.954703338,"load_s":66.03641124,"metrics":{"build_rtf":1.260664774413223,"inference_s":6.3558515710000005,"peak_memory_mb":35883.79790496826,"stage_durations":{"audio_decode":0.188135851,"denoise":6.3558515710000005,"encode":0.102215925,"stage1":2.498288264,"stage2":3.365550253,"text":6.573946497,"upsample":0.492013054,"video_decode":0.48974741}},"stages":[{"at_s":0.000277389,"stage":"text"},{"at_s":6.609273619,"stage":"denoise"},{"at_s":9.098484565,"stage":"upsample"},{"at_s":9.605240202,"stage":"refine"},{"at_s":12.978326226,"stage":"video_decode"}],"submit_to_mp4_s":13.854103564}
+[PASS] engine/progress {"events":11,"last":[11,11]} (limits {"events":11,"steps":11})
+[PASS] engine/mp4 {"audio_rate":48000,"bytes":3414826,"duration_s":5.042,"fps":24.0,"frames":121,"height":768,"path":"/fvscratch/runs/gold/7e580e5-1026091001-7421/ltx25-distill-sol-nvfp4-taehv/out/ba9af0a0-9e70-4ba9-b153-8f1dfd368e40/output.mp4","width":1280} (limits {"audio":true,"frames":121,"height":768,"width":1280})
+[PASS] engine/frames {"frames_sha256":"45cdf6e7781459e76d5f3e07b82c5f2e0011f0be7747d094c908584a70e67294","pngs":121} (limits {"frames":121})
+[PASS] stage engine → gpucheck-out/engine.json (80.6s)

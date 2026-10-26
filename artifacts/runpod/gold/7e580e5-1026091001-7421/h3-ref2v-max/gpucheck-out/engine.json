@@ -1,0 +1,219 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"h3-ref2v-max\")): PoolEntry { executor: 0, model: ModelId(\"h3-ref2v-max\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 198.785982641
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": {
+        "channels": 2,
+        "native_rate": 32000,
+        "via_sidecar": false
+      },
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 1032192,
+        "multiple": 32,
+        "pad_and_crop": false,
+        "short_edges": [
+          768,
+          480
+        ]
+      },
+      "family": "h3",
+      "fps": {
+        "allowed": [
+          24
+        ],
+        "container_only": false,
+        "default": 24
+      },
+      "frames": {
+        "default": 124,
+        "max": 362,
+        "min": 107,
+        "offset": 5,
+        "step": 17
+      },
+      "id": "h3-ref2v-max",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "h3-ref2va-base-49step",
+      "refs": {
+        "audio": 3,
+        "images": 9,
+        "total": 12,
+        "videos": 3
+      },
+      "resident": true,
+      "served_names": [
+        "h3-ref2v-max"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 15.083333015441895,
+          "min_s": 4.458333492279053
+        }
+      },
+      "tasks": [
+        "ref2v"
+      ],
+      "tier": "max"
+    },
+    "cuda_feature": true,
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": {
+          "channels": 2,
+          "native_rate": 32000,
+          "via_sidecar": false
+        },
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 1032192,
+          "multiple": 32,
+          "pad_and_crop": false,
+          "short_edges": [
+            768,
+            480
+          ]
+        },
+        "family": "h3",
+        "fps": {
+          "allowed": [
+            24
+          ],
+          "container_only": false,
+          "default": 24
+        },
+        "frames": {
+          "default": 124,
+          "max": 362,
+          "min": 107,
+          "offset": 5,
+          "step": 17
+        },
+        "id": "h3-ref2v-max",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 3,
+          "images": 9,
+          "total": 12,
+          "videos": 3
+        },
+        "resident": true,
+        "served_names": [
+          "h3-ref2v-max"
+        ],
+        "stream": null,
+        "tasks": [
+          "ref2v"
+        ]
+      },
+      "gpu": {
+        "min_sm": 89,
+        "min_vram_gib": 80,
+        "needs": [
+          "fp8"
+        ]
+      },
+      "id": "h3-ref2v-max",
+      "public_names": [
+        "MiniMax-H3-Max"
+      ],
+      "recipe": {
+        "adaln_cache": null,
+        "dense": true,
+        "dit_offload": null,
+        "family": "h3",
+        "hd_1080p": false,
+        "i2v_encoder": "auto",
+        "lora_strength": null,
+        "profile": "h3/h3_ref2va_base",
+        "recipe": "base",
+        "ref2va": true,
+        "ref_weights": "/fvscratch/weights/h3-ref2va",
+        "short_edge": 768,
+        "steps": 49,
+        "taeh3": null,
+        "text_encoder": "auto",
+        "text_weights": "/fvscratch/weights/h3-base",
+        "vdn_shared": null,
+        "vdn_weights": null,
+        "warmup": false,
+        "warmup_blocking": false,
+        "weights": "/fvscratch/weights/h3-base"
+      },
+      "recipe_name": "h3-ref2va-base-49step",
+      "resident": true,
+      "served_names": [
+        "h3-ref2v-max"
+      ],
+      "tier": "max",
+      "variant": "h3-ref2v-max"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {},
+      "profile": "h3/h3_ref2va_base",
+      "settings": {
+        "FASTVIDEO_BF16_ACT": "1",
+        "FASTVIDEO_H3_QUANT": "mxfp8"
+      }
+    },
+    "recipe": {
+      "attention": "dense",
+      "name": "h3-ref2va-base-49step",
+      "profile": "h3/h3_ref2va_base",
+      "steps": 49,
+      "summary": "H3 reference-to-video, highest quality: the base Ref2VA DiT (transformer_ref), 49 forwards on the 50-point grid, dense attention, official VAE (the upstream default)",
+      "vae": "full"
+    }
+  },
+  "elapsed_s": 199.193397232,
+  "env": {},
+  "error": "error: negotiate: ApiError { kind: InvalidRequest, message: \"model `h3-ref2v-max` does not support task t2v\", param: Some(\"task\"), retry_after_s: None }",
+  "git_sha": null,
+  "stage": "engine",
+  "status": "error"
+}

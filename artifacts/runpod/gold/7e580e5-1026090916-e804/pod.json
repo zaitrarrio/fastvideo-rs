@@ -1,0 +1,16 @@
+{
+  "id": "4s5wqhitndx3hi",
+  "name": "fv-lab-gold-7e580e5-1026090916-e804",
+  "family": "gold",
+  "tag": "7e580e5-1026090916-e804",
+  "sha": "7e580e5",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:76a74c1b716f20146fe3a965e3bd480161d7e9604b8cbfff24da97679ce86415",
+  "url": "https://4s5wqhitndx3hi-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793005759.8921623,
+  "cap_s": 7200,
+  "min_ram_gb": 192,
+  "memory_gb": 283.0,
+  "vcpus": 28.0
+}

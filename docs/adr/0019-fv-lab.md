@@ -2023,7 +2023,89 @@ the last skipped copy (in `--runs` order), so a failed or `wall cap near` arm re
 the run it was not shown from lists it. Each row reads its arm's own run (its `pod.json` GPU and price, and the end
 its validation age counts to); the header names every run, and a single run renders as before. `report tiers` writes
 no gold file: `[last_validated]` is written by hand (ADR-0023 "What a gold run then does"), and its `run` is the
-directory that variant's arm came from.
+arm's `summary.json` in the directory that variant's arm came from (`tests/gold_files.rs` requires the run record to
+be a file).
+
+**Result (2026-10-26): pass, split in two.** `SHA=7e580e5` (image `fastvideo-rs-runtime:sha-7e580e5`, digest
+`sha256:76a74c1b…`, build id `a968fe04b59a01ab`), the two `--cells` commands above, both pods an RTX PRO 6000
+Blackwell Server Edition in EU-RO-1 at $2.49/hr, created with the tier's host-RAM floor (`min_ram_gb = 192`,
+§16.10); Runpod gave each 283 GB (`pod.json` `memory_gb`; cgroup v2 limit 269,889 MiB in `box.txt`).
+
+- *The 21 arms that read R2 trees*: pod `4s5wqhitndx3hi` (wall cap 7200 s) →
+  `artifacts/runpod/gold/7e580e5-1026090916-e804` (`DONE`, `matrix_exit=0`; `matrix start` 09:09:50 to `matrix
+  done` 10:15:45, about 66 min of arms and 68 min of pod). `live.log` has `weights /fvscratch/weights: 10 volume
+  trees linked from /workspace/weights; 18 R2 trees (530.74 GB) fetched before the arms that read them, at most
+  147.86 GB on the container disk at once` and 14 `r2 <arm>: weights ready` lines (0.52-0.96 GB/s for the trees
+  over 10 GB; `h3-8step`, 147.86 GB, in 162 s; no retry); no arm skipped for `weights incomplete` or `r2 fetch
+  failed`. All 21 arms exit 0.
+- *The 11 volume-only arms*: pod `68yj5g2i9dczyd` (wall cap 3600 s) →
+  `artifacts/runpod/gold/7e580e5-1026091001-7421` (`DONE`, `matrix_exit=0`; 09:10:34 to 09:30:09, about 20 min of
+  arms and 22 min of pod). 7 arms exit 0; 4 exit 2 with `negotiate: … model `<id>` does not support task t2v`
+  (`h3-ref2v-max`, `h3-ref2v-turbo`, `ltx25-a2v-guided`, `ltx25-ref2v`): the recorded engine failure ADR-0023 §3
+  expects of a reference- or audio-to-video variant, a finding and not a number. The two H3 ones loaded for 199 s and
+  132 s first (`load/io h3 total`), the LTX ones for 5 s and 34 s (`load/io ltx2 load`; plan D1, follow-up 4: negotiate before load).
+
+Pass: every criterion above holds on both pods. Cost: about 68 + 22 min at $2.49/hr, **about $3.74** (estimate
+$3.70-$7.70). `fv-lab report tiers --runs artifacts/runpod/gold/7e580e5-1026090916-e804,artifacts/runpod/gold/7e580e5-1026091001-7421`
+renders `docs/perf/tiers.md` from the two (committed, as the run set): 28 variants measured, every one `same` as its
+gold file's canvas, frames and steps; the 4 above `not measured (failed: exit 2)`.
+
+*The gold files* (ADR-0023 "What a gold run then does", ADR-0009). Each of the 28 measured variants has
+`[last_validated]` `commit = "7e580e5"`, `run = "<its run directory>/<arm>/summary.json"`, `date = "2026-10-26"`, and
+its arm's `gpucheck-out/engine.json` as a `[[source]]` (heading `checks`: the `timings` check, with the host-RAM
+record in the note). Gaps are closed only for fields the run measured, and one `[latency]` table holds one kind of
+measurement, from one process:
+
+- the 10 files with no latency measurement before (`fasth3-4step-vsa-nvfp4{,-taeh3}`, `fasth3-8step-dense`,
+  `h3-larry-turbo`, `h3-lightx2v-turbo{,-v01}`, `longlive-1.3b`, `vdn-h3{,-8step}`, `wan14b-plug-4step`) take the
+  run's job: `measures = "serve_job"`, `p50_s` = `submit_to_mp4_s` (the text encode of the uncached prompt included),
+  `denoise_s`, `decode_s` = `video_decode` + `encode` (as the table), `peak_gib` where the engine reports one (not for
+  the two Wan pipelines), `usd_per_clip` derived; `min_s` / `max_s` stay gaps (one request). `load_s` is closed only
+  where no earlier arm of the same pod had read the arm's model trees (auxiliary TAE files, a few MB, aside):
+  `fasth3-4step-vsa-nvfp4-taeh3` (88.1 s), `longlive-1.3b` (35.9 s) and `wan14b-plug-4step` (155.5 s). In the other
+  7 it stays a gap whose reason says the load was page-cache warm and names the cold sibling where there is one
+  (`fasth3-4step-vsa-nvfp4` 11.7 s right after `fasth3-4step-vsa-nvfp4-taeh3` read the same trees in 88.1 s; every
+  other H3 arm of that pod after the first had `h3-base` warm); the measured value stays in the source's note. Their
+  `prompt_set` loses "no run of this variant yet", so their cells are regenerated (the note only);
+- the 18 files with a measurement of another kind (`gen`, `end_to_end`, `stream`: CLI medians, a cached prompt, often
+  an older setting in `workload.env`) are unchanged in their numbers: a serve job is not that quantity, and `load_s`
+  and `peak_gib` are of "the process that measured" (`gold.rs`), so no gap closes; the run's numbers are in its
+  source's note (`fields = []`), and the gap reasons for `load_s` / `peak_gib` (and `fasth3-trim-8step`'s `p50_s`)
+  point to it;
+- the 4 refusals are not validated and their gold files are unchanged.
+
+`[last_validated]` here means the variant ran to exit 0 at this commit on its gold cell; it does not mean every number
+already in the file was re-confirmed, and files whose recorded `peak_gib` differs from the run's (for example
+`fasth3-trim-nvfp4`, 20.3 GiB against 43.6) measure another setting or process: see their notes.
+
+A `load_s` of the gold run is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's
+own R2 fetch had just written, can load from the page cache (`fasth3-4step-vsa-taeh3` 7.0 s after
+`fasth3-4step-vsa-480p-taeh3`'s 166.0 s); each source's note says so.
+
+*Host RAM.* Every arm that ran recorded `peak_ram_mib`, `ram_limit_mib`, `pod_peak_mib_cumulative` and `oom_kills`;
+`oom_kills` is 0 for every arm. `wan14b-plug-4step` peaked at 156,004 MiB of process memory (152.3 GiB, 163.6 GB),
+about twice the ~80 GB of §16.10's estimate; its cumulative peak reached the 269,889 MiB limit (the page cache of
+its 84.09 GB fetch, reclaimable) with no OOM kill. The next are `h3-ref2v-turbo` 79,933 MiB, `fasth3-8step-dense`
+78,470 MiB and `h3-ref2v-max` 71,543 MiB; every other arm stays under 70,000 MiB. Runpod's GB are 10^9 bytes (283 GB
+is the 269,889 MiB limit), so the 192 GB floor is 183,105 MiB and a pod given exactly the floor would leave the
+14B plug load about 27,100 MiB (26.5 GiB) by this sample. That does not show such a pod survives: the peak is a
+once-a-second sample, and pages not yet written back (up to the 84 GB the arm had just fetched) are charged to the
+same cgroup (§16.10), so the floor **may not hold**. Raising the gold tier's `min_ram_gb` (or cutting the loader's host
+copies) is a prerequisite of the next gold run (plan D3, follow-up a). The peak supports host-RAM starvation as the cause of `e9b9435`'s exit 137 (below), which
+that pod, with no floor, could not record.
+
+*Before the fixes: the run at `e9b9435`* (the same split; RTX PRO 6000, EU-RO-1, no host-RAM floor; not committed,
+as no failed attempt of an earlier gate was, §15.7). Smoke `e9b9435-1026053846-0a25`: `h3-larry-turbo`, `vdn-h3`,
+`sol-h3` exit 0 (after #203; the smoke `f93a961-1026044005-eb60` had failed the first two on the technique profile,
+ADR-0023 §3). Volume half `e9b9435-1026060611-28c6` (pod `v284zu5hlj0omr`): 7 exit 0, the same 4 t2v refusals. R2
+half `e9b9435-1026062720-e2e4` (pod `v2umu0dbeazjfb`): 14 exit 0 and three findings, each fixed before `7e580e5`:
+
+- the 4 NVFP4 arms skipped `weights incomplete` (their R2 trees leave out vae shard 3, byte-identical to h3-base's):
+  #208 (`verify-weights.sh` `shared_file`, size and SHA-256 checked); at `7e580e5` all four exit 0;
+- `longlive-1.3b` and `sfwan21-1.3b` failed `engine/progress` alone (28 events against 4 steps): #209 (the check
+  expects every causal block's steps, ADR-0023 §3); at `7e580e5` both exit 0;
+- `wan14b-plug-4step` exit 137 18 s into its load, right after its 84.09 GB fetch: #210 (the 192 GB floor and the
+  pod's memory on record, §16.10); at `7e580e5` it exits 0 at the 156,004 MiB peak above.
 
 #### 16.8 Differences, and what stays
 

@@ -1,0 +1,9 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] ltx2 technique profile: ltx2/ltx25_distill_dense
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":5.00,"viewed_gb":1.14,"prefetch_read_gb":1.14,"prefetch_skipped_gb":0.00,"prefetch_busy_s":50.2,"viewed_gbps":0.23,"window_wait_s":0.0,"fill_s":0.0,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":3.5,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"ltx25-a2v-guided\")): PoolEntry { executor: 0, model: ModelId(\"ltx25-a2v-guided\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":24.888431205}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[ERROR] stage engine → gpucheck-out/engine.json (25.3s)
+error: negotiate: ApiError { kind: InvalidRequest, message: "model `ltx25-a2v-guided` does not support task t2v", param: Some("task"), retry_after_s: None }

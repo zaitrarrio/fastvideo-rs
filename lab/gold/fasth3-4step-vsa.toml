@@ -54,7 +54,9 @@ usd_per_hr = 2.49
 usd_per_clip = 0.00681
 
 [last_validated]
-# empty: never validated by fv-lab (plan D1); commit, run and date land here.
+commit = "7e580e5"
+run = "artifacts/runpod/gold/7e580e5-1026091001-7421/fasth3-4step-vsa/summary.json"
+date = "2026-10-26"
 
 [[source]]
 fields = ["workload"]
@@ -132,6 +134,13 @@ path = "docs/perf/h3-nvfp4-tier-options.md"
 heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
 date = "2026-10-14"
 note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
+
+[[source]]
+fields = []
+path = "artifacts/runpod/gold/7e580e5-1026091001-7421/fasth3-4step-vsa/gpucheck-out/engine.json"
+heading = "checks"
+date = "2026-10-26"
+note = "The gold run at 7e580e5 (2026-10-26, ADR-0019 §16.7; run artifacts/runpod/gold/7e580e5-1026091001-7421, arm `fasth3-4step-vsa`, exit 0, 44 s): one serve-engine job of the gold cell (lab/cells/gold-fasth3-4step-vsa.toml: runpod-matrix.sh's default prompt, seed 7, 832x480, 124 frames, 4 steps, the served default) on an RTX PRO 6000 Blackwell Server Edition at $2.49/hr (the run's pod.json). Check `timings`: submit_to_mp4_s 9.09 (text 0.45, denoise 6.21, video_decode 2.00, encode 0.11), load_s 34.0, peak_memory_mb 61442 (60.0 GiB). Host RAM (summary.json): peak 41097 MiB of the pod's 269889 MiB, oom_kills 0. decode_s = video_decode + encode, as docs/perf/tiers.md. load_s is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's own R2 fetch had just written, can load from the page cache (live.log). None of its numbers is copied into this file: the file's [latency] is one measurement of another kind (latency.measures), load_s and peak_gib are of the process that measured, and a serve job includes the text encode of an uncached prompt and is one request."
 
 [[gap]]
 field = "quality.psnr_vs_upstream_min_db"

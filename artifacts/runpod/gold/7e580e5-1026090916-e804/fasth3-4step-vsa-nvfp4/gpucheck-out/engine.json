@@ -1,0 +1,335 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"fasth3-4step-vsa-nvfp4\")): PoolEntry { executor: 0, model: ModelId(\"fasth3-4step-vsa-nvfp4\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 11.686044215999999
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "first_step_s": 3.6819184590000003,
+        "load_s": 11.686044215999999,
+        "metrics": {
+          "build_rtf": 2.4082019754193547,
+          "inference_s": 12.442376873,
+          "peak_memory_mb": 53794.271560668945,
+          "stage_durations": {
+            "audio_decode": 0.135708656,
+            "denoise": 12.442376873,
+            "encode": 0.116907666,
+            "refine": 0.005410458,
+            "text": 0.403476573,
+            "video_decode": 4.250902923
+          }
+        },
+        "stages": [
+          {
+            "at_s": 0.000354679,
+            "stage": "text"
+          },
+          {
+            "at_s": 0.540669675,
+            "stage": "denoise"
+          },
+          {
+            "at_s": 13.017271623,
+            "stage": "audio_decode"
+          },
+          {
+            "at_s": 13.154097626,
+            "stage": "video_decode"
+          }
+        ],
+        "submit_to_mp4_s": 17.696538395
+      }
+    },
+    {
+      "limits": {
+        "events": 4,
+        "steps": 4
+      },
+      "name": "progress",
+      "ok": true,
+      "values": {
+        "events": 4,
+        "last": [
+          4,
+          4
+        ]
+      }
+    },
+    {
+      "limits": {
+        "audio": true,
+        "frames": 124,
+        "height": 768,
+        "width": 1344
+      },
+      "name": "mp4",
+      "ok": true,
+      "values": {
+        "audio_rate": 32000,
+        "bytes": 5372992,
+        "duration_s": 5.175,
+        "fps": 24.0,
+        "frames": 124,
+        "height": 768,
+        "path": "/fvscratch/runs/gold/7e580e5-1026090916-e804/fasth3-4step-vsa-nvfp4/out/c515f298-90ba-4c94-8a89-a774a1019fa6/output.mp4",
+        "width": 1344
+      }
+    },
+    {
+      "limits": {
+        "frames": 124
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "frames_sha256": "f9c955d554bd592793d2c88ee3f66f1101e59aa86bfc2b2f9ae0ba81e4bc4b96",
+        "pngs": 124
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": {
+        "channels": 2,
+        "native_rate": 32000,
+        "via_sidecar": false
+      },
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 1032192,
+        "multiple": 32,
+        "pad_and_crop": false,
+        "short_edges": [
+          768,
+          480
+        ]
+      },
+      "family": "h3",
+      "fps": {
+        "allowed": [
+          24
+        ],
+        "container_only": false,
+        "default": 24
+      },
+      "frames": {
+        "default": 124,
+        "max": 362,
+        "min": 107,
+        "offset": 5,
+        "step": 17
+      },
+      "id": "fasth3-4step-vsa-nvfp4",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "fasth3-4step-vsa-nvfp4",
+      "refs": {
+        "audio": 3,
+        "images": 9,
+        "total": 12,
+        "videos": 3
+      },
+      "resident": true,
+      "served_names": [
+        "fasth3-4step-vsa-nvfp4",
+        "h3-turbo-nvfp4"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 15.083333015441895,
+          "min_s": 4.458333492279053
+        }
+      },
+      "tasks": [
+        "t2v"
+      ]
+    },
+    "cuda_feature": true,
+    "job": {
+      "audio": {
+        "channels": 2,
+        "plan": "native",
+        "rate": 32000
+      },
+      "audio_in": null,
+      "fps": 24,
+      "height": 768,
+      "keyframes": [],
+      "model": "fasth3-4step-vsa-nvfp4",
+      "negative_prompt": "",
+      "num_frames": 124,
+      "post": {
+        "crop": null,
+        "drop_audio": false
+      },
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "recipe": "fasth3-4step-vsa-nvfp4",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 1024,
+      "task": "t2v",
+      "width": 1344
+    },
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": {
+          "channels": 2,
+          "native_rate": 32000,
+          "via_sidecar": false
+        },
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 1032192,
+          "multiple": 32,
+          "pad_and_crop": false,
+          "short_edges": [
+            768,
+            480
+          ]
+        },
+        "family": "h3",
+        "fps": {
+          "allowed": [
+            24
+          ],
+          "container_only": false,
+          "default": 24
+        },
+        "frames": {
+          "default": 124,
+          "max": 362,
+          "min": 107,
+          "offset": 5,
+          "step": 17
+        },
+        "id": "fasth3-4step-vsa-nvfp4",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 3,
+          "images": 9,
+          "total": 12,
+          "videos": 3
+        },
+        "resident": true,
+        "served_names": [
+          "fasth3-4step-vsa-nvfp4"
+        ],
+        "stream": null,
+        "tasks": [
+          "t2v"
+        ]
+      },
+      "gpu": {
+        "min_sm": 100,
+        "min_vram_gib": 80,
+        "needs": [
+          "fp8",
+          "nvfp4"
+        ]
+      },
+      "id": "fasth3-4step-vsa-nvfp4",
+      "public_names": [
+        "MiniMax-H3-Turbo-NVFP4"
+      ],
+      "recipe": {
+        "adaln_cache": null,
+        "dense": false,
+        "dit_offload": null,
+        "family": "h3",
+        "hd_1080p": false,
+        "i2v_encoder": "auto",
+        "lora_strength": null,
+        "profile": null,
+        "recipe": "4step-vsa-nvfp4",
+        "ref2va": false,
+        "ref_weights": null,
+        "short_edge": 768,
+        "steps": 4,
+        "taeh3": null,
+        "text_encoder": "auto",
+        "text_weights": "/fvscratch/weights/h3-base",
+        "vdn_shared": null,
+        "vdn_weights": null,
+        "warmup": false,
+        "warmup_blocking": false,
+        "weights": "/fvscratch/weights/fasth3-4step-vsa-nvfp4"
+      },
+      "recipe_name": "fasth3-4step-vsa-nvfp4",
+      "resident": true,
+      "served_names": [
+        "fasth3-4step-vsa-nvfp4",
+        "h3-turbo-nvfp4"
+      ],
+      "tier": null,
+      "variant": "fasth3-4step-vsa-nvfp4"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {},
+      "profile": null,
+      "settings": {}
+    },
+    "recipe": {
+      "attention": "vsa",
+      "name": "fasth3-4step-vsa-nvfp4",
+      "steps": 4,
+      "summary": "FastH3 4-step VSA DataFree NVFP4: the release's ModelOpt NVFP4 DiT (FFN W4A4 on NVFP4 tensor cores, sm_100 / sm_120 only), VSA-H3 with the fine stage on sparse FP4 tensor cores where the kernel exists, its published NVFP4 VAE decoder (FASTVIDEO_H3_VAE_NVFP4=0: h3-base's, MXFP8)",
+      "vae": "full"
+    }
+  },
+  "elapsed_s": 30.385797601,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "engine",
+  "status": "pass"
+}

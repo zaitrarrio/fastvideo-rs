@@ -1,0 +1,217 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"ltx25-ref2v\")): PoolEntry { executor: 0, model: ModelId(\"ltx25-ref2v\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 34.678797617
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": {
+        "channels": 2,
+        "native_rate": 48000,
+        "via_sidecar": false
+      },
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 2088960,
+        "multiple": 64,
+        "pad_and_crop": true,
+        "short_edges": [
+          896,
+          720,
+          1080
+        ]
+      },
+      "family": "ltx2",
+      "fps": {
+        "allowed": [
+          24,
+          25,
+          48,
+          50
+        ],
+        "container_only": false,
+        "default": 24
+      },
+      "frames": {
+        "default": 121,
+        "max": 241,
+        "min": 9,
+        "offset": 1,
+        "step": 8
+      },
+      "id": "ltx25-ref2v",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": true,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "ltx25-ic-lora-ingredients-dense",
+      "refs": {
+        "audio": 0,
+        "images": 1,
+        "total": 1,
+        "videos": 0
+      },
+      "resident": true,
+      "served_names": [
+        "ltx25-ref2v"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 10.041666984558105,
+          "min_s": 0.375
+        }
+      },
+      "tasks": [
+        "ref2v"
+      ],
+      "tier": "max"
+    },
+    "cuda_feature": true,
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": {
+          "channels": 2,
+          "native_rate": 48000,
+          "via_sidecar": false
+        },
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 2088960,
+          "multiple": 64,
+          "pad_and_crop": true,
+          "short_edges": [
+            896,
+            720,
+            1080
+          ]
+        },
+        "family": "ltx2",
+        "fps": {
+          "allowed": [
+            24,
+            25,
+            48,
+            50
+          ],
+          "container_only": false,
+          "default": 24
+        },
+        "frames": {
+          "default": 121,
+          "max": 241,
+          "min": 9,
+          "offset": 1,
+          "step": 8
+        },
+        "id": "ltx25-ref2v",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": true,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 0,
+          "images": 1,
+          "total": 1,
+          "videos": 0
+        },
+        "resident": true,
+        "served_names": [
+          "ltx25-ref2v"
+        ],
+        "stream": null,
+        "tasks": [
+          "ref2v"
+        ]
+      },
+      "gpu": {
+        "min_sm": 80,
+        "min_vram_gib": 80
+      },
+      "id": "ltx25-ref2v",
+      "public_names": [],
+      "recipe": {
+        "a2v": "distilled",
+        "canvas": [
+          1536,
+          896
+        ],
+        "dit": "/fvscratch/weights/ltx25",
+        "family": "ltx2",
+        "ic_lora": "/fvscratch/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors",
+        "profile": "ltx2/ltx25_distill_dense",
+        "refine_steps": 3,
+        "sage_attention": false,
+        "stage1_steps": 8,
+        "stage2": "dense",
+        "tae": null,
+        "text": "streamed",
+        "text_weights": null,
+        "two_stage": true,
+        "version": "2.5",
+        "weights": "/fvscratch/weights/ltx25"
+      },
+      "recipe_name": "ltx25-ic-lora-ingredients-dense",
+      "resident": true,
+      "served_names": [
+        "ltx25-ref2v"
+      ],
+      "tier": "max",
+      "variant": "ltx25-ref2v"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {},
+      "profile": "ltx2/ltx25_distill_dense",
+      "settings": {}
+    },
+    "recipe": {
+      "attention": "dense",
+      "name": "ltx25-ic-lora-ingredients-dense",
+      "profile": "ltx2/ltx25_distill_dense",
+      "steps": 11,
+      "summary": "Reference-to-video (Ingredients IC-LoRA at stage 1, one reference sheet): LTX-2.5 distilled two-stage, dense stage 2, conv VAE",
+      "vae": "full"
+    }
+  },
+  "elapsed_s": 35.12663737,
+  "env": {},
+  "error": "error: negotiate: ApiError { kind: InvalidRequest, message: \"model `ltx25-ref2v` does not support task t2v\", param: Some(\"task\"), retry_after_s: None }",
+  "git_sha": null,
+  "stage": "engine",
+  "status": "error"
+}
