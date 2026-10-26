@@ -4,13 +4,19 @@
 //! is named by its variant id and gates on that variant's verify-weights.sh
 //! cell with the variant's trees; and `fv-lab run gold --all --dry-run` is
 //! its golden (`fixtures/gold-dry-run.txt`, written by fv-lab itself: the
-//! gold tier has no script to be equal to).
+//! gold tier has no script to be equal to). Its weights are `volume+r2`
+//! (docs/adr/0019-fv-lab.md §14): every arm's trees are on the EU volume or
+//! published in R2, so every variant runs, and the container disk holds the
+//! largest arm's R2 trees.
 
 use std::path::{Path, PathBuf};
 
 use fastvideo_lab::goldcell::{cell_name, gold_cells, GOLD_TIER};
-use fastvideo_lab::plan::{Lab, Step};
+use fastvideo_lab::plan::{Lab, Step, TierWeights};
 use fastvideo_lab::run::{dry_run_lines, RunConfig};
+use fastvideo_lab::weights::{
+    R2Setup, Source, TreeSources, WeightsPlan, DISK_RESERVE_GB, WEIGHTS_DIR,
+};
 use fastvideo_lab::{load_dir, Gold};
 use fastvideo_manifest::FamilySet;
 
@@ -118,10 +124,20 @@ fn gold_dry_run_is_its_golden() {
     cfg.scratch = "/fvscratch".into();
     cfg.tag = Some("1234567-10241200".into());
     cfg.tae_dir = Some("/workspace/weights/auxiliary/tae".into());
+    let sources = TreeSources::load(&repo_root()).expect("volumes.sh, weights-r2.tsv");
+    cfg.r2 = Some(R2Setup::new(sources, &cfg.scratch, None));
     let (_, cells) = lab.resolve(GOLD_TIER, None).expect("tier");
     let steps = Lab::steps(&cells, &cfg.bin, &cfg.paths()).expect("render");
     assert!(steps.iter().all(|s| matches!(s, Step::Arm { .. })));
     let ours = dry_run_lines(&cfg, &steps);
+    // `FV_LAB_WRITE=<dir>`: write the golden there (as tests/schema.rs does)
+    // instead of comparing; copy it over the committed one after a review.
+    if let Some(dir) = std::env::var_os("FV_LAB_WRITE") {
+        let p = PathBuf::from(dir).join("fixtures/gold-dry-run.txt");
+        std::fs::create_dir_all(p.parent().expect("a parent")).expect("mkdir");
+        std::fs::write(&p, ours.join("\n") + "\n").expect("write");
+        return;
+    }
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/gold-dry-run.txt");
     let fixture = std::fs::read_to_string(&p).expect("fixtures/gold-dry-run.txt");
     assert_eq!(
@@ -129,4 +145,70 @@ fn gold_dry_run_is_its_golden() {
         fixture.lines().collect::<Vec<_>>(),
         "regenerate with `fv-lab run gold --all --dry-run --work /workspace --scratch /fvscratch --tag 1234567-10241200 --root .` (time stamps cut)"
     );
+}
+
+fn gold_plan(lab: &Lab) -> (TreeSources, WeightsPlan) {
+    let sources = TreeSources::load(&repo_root()).expect("volumes.sh, weights-r2.tsv");
+    let (_, cells) = lab.resolve(GOLD_TIER, None).expect("tier");
+    let arms: Vec<(&str, &[String])> = cells
+        .iter()
+        .flat_map(|c| &c.arms)
+        .map(|a| (a.name.as_str(), a.trees.as_slice()))
+        .collect();
+    let plan = WeightsPlan::new(&sources, &arms).expect("the gold arms' R2 trees");
+    (sources, plan)
+}
+
+#[test]
+fn every_gold_arm_reads_trees_on_the_volume_or_in_r2() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier(GOLD_TIER).expect("gold tier");
+    assert_eq!(tier.weights, TierWeights::VolumeR2);
+    let (sources, plan) = gold_plan(&lab);
+    let (_, cells) = lab.resolve(GOLD_TIER, None).expect("tier");
+    let mut from_r2 = 0;
+    for a in cells.iter().flat_map(|c| &c.arms) {
+        for t in &a.trees {
+            match sources.source(t) {
+                Source::Missing => panic!("{}: {t} is neither on the EU volume nor in R2", a.name),
+                Source::R2(_) => from_r2 += 1,
+                Source::Volume(_) => {}
+            }
+        }
+    }
+    assert!(from_r2 > 0);
+    assert_eq!(plan.arms.len(), 32, "every gold variant runs");
+    // The R2-only arms the volume tier skipped now fetch (ADR-0023 §3).
+    for arm in [
+        "fasth3-8step-dense",
+        "fastwan21-1.3b",
+        "longlive-1.3b",
+        "wan14b-plug-4step",
+        "vdn-h3",
+        "h3-larry-turbo",
+        "fasth3-trim-nvfp4",
+    ] {
+        assert!(
+            !plan.arm(arm).expect(arm).reads.is_empty(),
+            "{arm} reads R2 trees"
+        );
+    }
+}
+
+#[test]
+fn the_gold_container_disk_holds_its_largest_arm() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier(GOLD_TIER).expect("gold tier");
+    let (_, plan) = gold_plan(&lab);
+    // h3-8step (fasth3-8step-dense), 147.86 GB, the largest arm; every
+    // distinct tree fetched once (530.74 GB) in the tier's order.
+    assert_eq!(plan.peak_bytes, 147_857_050_891);
+    assert_eq!(plan.fetch_bytes, 530_738_800_689);
+    let peak_gb = plan.peak_bytes.div_ceil(1_000_000_000);
+    assert!(
+        u64::from(tier.container_disk_gb) >= peak_gb + DISK_RESERVE_GB,
+        "container_disk_gb {} < {peak_gb} GB of R2 trees + {DISK_RESERVE_GB} GB",
+        tier.container_disk_gb
+    );
+    assert_eq!(WEIGHTS_DIR, "weights");
 }

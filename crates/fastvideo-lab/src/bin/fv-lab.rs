@@ -62,7 +62,7 @@ use fastvideo_deploy::provider::{
     Instance, InstanceId, InstanceState, Provider, ProviderKind, ReachOptions,
 };
 
-use fastvideo_lab::plan::{Lab, Paths, Tier};
+use fastvideo_lab::plan::{Lab, Paths, Tier, TierWeights};
 use fastvideo_lab::pod::{
     baseline_for_pod, check_cells, check_sha7_named, fetch_run, fetch_tree, judge_run, launch,
     name_taken, random_suffix, reap_account, reap_recorded, run_dir, run_tag, undeleted_in_ledger,
@@ -70,6 +70,7 @@ use fastvideo_lab::pod::{
 };
 use fastvideo_lab::run::{dry_run_lines, gate_selection, Decision, RunConfig, RunError, Runner};
 use fastvideo_lab::schema;
+use fastvideo_lab::weights::{R2Key, R2Setup, TreeSources};
 use fastvideo_lab::{experiments, goldcell, goldcheck, report, summary, table};
 
 /// `-V` / `--version`: the tools release this binary was built as
@@ -567,6 +568,18 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
         return Err(format!(
             "{} runs baseline arms: pass --baseline-sha <7> (FV_BASELINE_SHA), the baseline commit",
             a.target
+        ));
+    }
+    // A `volume+r2` tier (ADR-0019 §14): `{weights}` is the merged root on
+    // the scratch disk, and the trees the volume lacks come from R2. The key
+    // is read here (the Runpod secrets fill these in on the pod), held in
+    // memory and handed to the plan step only.
+    if tier.weights == TierWeights::VolumeR2 {
+        let sources = TreeSources::load(&root)?;
+        cfg.r2 = Some(R2Setup::new(
+            sources,
+            &cfg.scratch,
+            R2Key::from_env(env_nonempty),
         ));
     }
     let paths: Paths = cfg.paths();

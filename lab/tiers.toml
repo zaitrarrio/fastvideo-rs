@@ -239,8 +239,13 @@ cells = ["b4a-h3-fullopt-env", "b4a-h3-fullopt-prof", "b4a-h3-4step-tea"]
 # `fv-lab gold cells --write` (tests/gold_tier.rs holds them equal). The arms are
 # named by variant id, which is how `fv-lab report tiers` finds them. The rtx6000
 # tier's pod: the PRO 6000 every gold file's [tier] names, the same preflight
-# cells, caps and TAE fetch. An arm whose trees are not on the EU volume (Wan,
-# LongLive, the NVFP4 and trim trees) is recorded as skipped (weights incomplete).
+# cells, caps and TAE fetch. Weights `volume+r2` (docs/adr/0019-fv-lab.md §14):
+# the trees on the EU volume are read from it, every other tree (Wan,
+# LongLive, the NVFP4, trim, VDN and turbo-LoRA trees) is fetched from the R2
+# weights store onto the container disk before the arms that read it, so every
+# variant runs; a tree in neither is still recorded as skipped (weights
+# incomplete). The container disk: the largest arm's R2 trees (h3-8step,
+# 147.86 GB) plus the 120 GB every volume tier has, rounded up to 300 GB.
 [[tier]]
 name = "gold"
 description = "The gold runs (fv-lab run gold --all): every gold variant's canonical cell, the served variant through the serve engine at its gold canvas"
@@ -253,8 +258,8 @@ image = "runtime"
 max_usd_per_hr = 2.5
 wall_cap_s = 14400
 cell_timeout_s = 3600
-container_disk_gb = 120
-weights = "volume"
+container_disk_gb = 300
+weights = "volume+r2"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = [

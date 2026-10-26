@@ -123,6 +123,36 @@ impl ImageFlavour {
     }
 }
 
+/// Where a tier's arms read their weight trees (docs/adr/0019-fv-lab.md §4, §14).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum TierWeights {
+    /// The EU volume, mounted at `/workspace`; `{weights}` is
+    /// `/workspace/weights`, and a tree it lacks skips its arm.
+    #[default]
+    #[serde(rename = "volume")]
+    Volume,
+    /// The EU volume for the trees it holds, the R2 weights store for the
+    /// rest: fetched onto the container disk before the arm that reads them;
+    /// `{weights}` is `<scratch>/weights`, the volume's trees linked in.
+    #[serde(rename = "volume+r2")]
+    VolumeR2,
+}
+
+impl TierWeights {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TierWeights::Volume => "volume",
+            TierWeights::VolumeR2 => "volume+r2",
+        }
+    }
+
+    /// The pod's own weights source: the volume is mounted either way (the
+    /// R2 trees are the runner's, not fv-boot's).
+    pub fn launch_source(self) -> WeightsSource {
+        WeightsSource::Volume
+    }
+}
+
 /// One `[[tier]]`: a run plan on one GPU class (a `runpod-matrix.sh` family).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -150,9 +180,11 @@ pub struct Tier {
     pub cell_timeout_s: u64,
     pub container_disk_gb: u32,
     /// Where the arms' weight trees come from: `volume` (the EU volume,
-    /// mounted at `/workspace`, trees under `/workspace/weights`) today;
-    /// `registry` (the registry's `hydrate`) later (ADR-0019 §4).
-    pub weights: WeightsSource,
+    /// mounted at `/workspace`, trees under `/workspace/weights`) or
+    /// `volume+r2` (the volume's trees, and the rest fetched from the R2
+    /// weights store per arm, ADR-0019 §14); the registry's `hydrate` later
+    /// (§4).
+    pub weights: TierWeights,
     /// `verify-weights.sh` cells the pod checks at start into `weights.log`
     /// (a report only: each arm gates on its own cell).
     #[serde(default)]
@@ -225,13 +257,6 @@ impl Tiers {
             }
             if t.container_disk_gb == 0 {
                 return Err(field(file, at("container_disk_gb"), "positive"));
-            }
-            if t.weights != WeightsSource::Volume {
-                return Err(field(
-                    file,
-                    at("weights"),
-                    "`volume` only until the registry's hydrate lands (ADR-0019 §4)",
-                ));
             }
             if let Some(p) = t.preflight.iter().find(|p| !is_token(p)) {
                 return Err(field(
@@ -1555,6 +1580,15 @@ cells = ["c1"]
     #[test]
     fn tiers_hold_the_guards_bounds() {
         let t = Tiers::parse(TIERS, "tiers.toml").unwrap();
+        assert_eq!(t.tiers[0].weights, TierWeights::Volume);
+        let r2 = Tiers::parse(
+            &TIERS.replace("weights = \"volume\"", "weights = \"volume+r2\""),
+            "tiers.toml",
+        )
+        .unwrap();
+        assert_eq!(r2.tiers[0].weights, TierWeights::VolumeR2);
+        assert_eq!(r2.tiers[0].weights.as_str(), "volume+r2");
+        assert_eq!(r2.tiers[0].weights.launch_source(), WeightsSource::Volume);
         assert_eq!(t.tiers[0].cloud, CloudType::Secure);
         assert_eq!(
             t.tiers[0].image.image("abcdef1"),
@@ -1564,7 +1598,16 @@ cells = ["c1"]
             ("region = \"eu\"", "region = \"us\"", "only `eu`"),
             ("wall_cap_s = 3600", "wall_cap_s = 20000", "wall_cap_s"),
             ("gpu_count = 1", "gpu_count = 2", "one GPU"),
-            ("weights = \"volume\"", "weights = \"hub\"", "`volume` only"),
+            (
+                "weights = \"volume\"",
+                "weights = \"hub\"",
+                "unknown variant `hub`",
+            ),
+            (
+                "weights = \"volume\"",
+                "weights = \"r2\"",
+                "unknown variant `r2`",
+            ),
             ("max_usd_per_hr = 2.5", "max_usd_per_hr = 0.0", "positive"),
             ("name = \"t1\"", "name = \"T1\"", "not [a-z0-9]"),
         ] {

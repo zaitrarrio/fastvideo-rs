@@ -2,7 +2,9 @@
 
 - Status: Accepted for the CPU parts of D3 and D4 (`fv-lab report tiers`, `docs/perf/tiers.md` with no run set,
   `fv-lab gold check`, the `gold` tier and its cells, the two workflows). The GPU gold runs that fill the table are
-  not run here (budget); the `gold-run` workflow needs the owner's `RUNPOD_API_KEY` secret (§4)
+  not run here (budget); the `gold-run` workflow needs the owner's `RUNPOD_API_KEY` secret (§4). Since ADR-0019 §14
+  the `gold` tier reads the trees the EU volume lacks from R2 (`weights = "volume+r2"`), so every variant runs; the
+  full run's command and cost are in §3
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-lab-report-ci-bridge
 - Code: `crates/fastvideo-lab/src/{report,goldcheck,goldcell}.rs`, `src/bin/fv-lab.rs` (`report tiers`, `gold check`,
@@ -108,10 +110,28 @@ gold tier has no `runpod-matrix.sh` family to be equal to, so `fv-lab-goldens.sh
 the script-equality tests (`dry_run.rs`, `lab_files.rs`) leave the gold tier out. `--all` names the whole tier
 explicitly (the default for a tier; refused for a single cell and with `--cells`).
 
-On the EU volume about eleven arms run (the H3 and LTX-2.5 variants whose trees are there); the Wan, LongLive, trim,
-NVFP4, VDN and turbo-LoRA trees are R2-only, so those arms are recorded as skipped (`weights incomplete`) and the
-table says so. Variants the engine cannot run from a text request (reference-to-video, audio-to-video) fail and are
-shown as failed: that is a finding, not a number.
+On the EU volume alone about eleven arms run (the H3 and LTX-2.5 variants whose trees are there); the Wan, LongLive,
+trim, NVFP4, VDN and turbo-LoRA trees are R2-only. **Since 2026-10-26 (ADR-0019 §14) the tier is `weights =
+"volume+r2"`**: those trees (18, 530.74 GB) are fetched from the R2 weights store onto the container disk before the
+arms that read them, at most 147.86 GB at once (`container_disk_gb = 300`), so all 32 arms run; a tree in neither place
+would still be recorded as skipped (`weights incomplete`), and a failed fetch as `r2 fetch failed`. Variants the engine
+cannot run from a text request (reference-to-video, audio-to-video) fail and are shown as failed: that is a finding,
+not a number.
+
+**The full gold run (the coordinator's GPU check, ADR-0019 §14.7).** On a commit whose runtime image is published with
+§14 in it, from the repository root:
+
+```sh
+SHA=<7>
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --cells h3-larry-turbo,vdn-h3,sol-h3 --yes --wait   # optional smoke, under $1
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --yes --wait                                       # all 32 arms
+./fv-lab report tiers --runs artifacts/runpod/gold/<tag>
+```
+
+Estimate on the RTX PRO 6000 at about $2.49/hr: boot 5-10 min, R2 11-15 min, 32 cold arms 64-160 min, so about
+1.5-3.1 h and $3.70-$7.70; at most $9.96 at the 4 h cap; a balance of at least $17.96 before the create (fv-deploy's $8
+floor over the cap). The R2 key reaches the pod as Runpod secret references (`fv_r2_access_key_id`,
+`fv_r2_secret_access_key`); nothing new in GitHub.
 
 ### 4. CI
 

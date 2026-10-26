@@ -90,8 +90,14 @@ for FAMILY in $FAMILIES; do
   # runpod-matrix.sh family: its cells come from lab/gold/ and fv-lab's own dry
   # run is its golden (fixtures/gold-dry-run.txt, tests/gold_tier.rs). Its pod
   # is runpod-http.sh's like every tier's, so only the pod body is written here.
+  # Its container disk is its own (weights "volume+r2", ADR-0019 §14: the
+  # largest arm's R2 trees on top of the volume tiers' 120 GB), passed as the
+  # script's FV_CONTAINER_DISK_GB; its env (the R2 key as Runpod secret
+  # references) is the one difference tests/payload_golden.rs allows.
   if [[ "$FAMILY" == gold ]]; then
-    clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
+    disk="$(awk '/^\[\[tier\]\]/ { t = 0 } /^name = "gold"$/ { t = 1 } t && /^container_disk_gb = / { print $3; exit }' "$ROOT/lab/tiers.toml")"
+    [[ "$disk" =~ ^[0-9]+$ ]] || { echo "fv-lab-goldens: no container_disk_gb for the gold tier" >&2; exit 2; }
+    clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" FV_CONTAINER_DISK_GB="$disk" \
       bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
     FIXTURES+=("runpod-http-$FAMILY.json")
     continue

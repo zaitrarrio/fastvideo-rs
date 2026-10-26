@@ -57,7 +57,7 @@ dry run show what will run.
 | `b4a` | `b4a-h3-*` (3) | 6 | the H3 TeaCache step cache, baseline binary vs this build: byte identity and equal cache decisions, a verdict per cell | D1d; needs `--baseline-sha`; retired after its GPU gate (§11.6) |
 | `precision-nvfp4` | `precision-nvfp4-ltx25-{4k5s,1080p20s}` | 4 | NVFP4 video FFN against bf16, LTX-2.5 Sol, compare + lossy gate | was `precision`'s `FV_PRECISION_ARM=ltx-nvfp4` mode; restored (§12) |
 | `ltxvae-gen` | `ltxvae`'s 4 + `ltxvae-gen-{4k5s,1080p20s}` | 16 | `ltxvae`, plus per workload a cold gen saving its latents and the streaming decoder on them | was `ltxvae`'s `FV_VAE_GEN=1`; restored (§12); shares `ltxvae`'s cells |
-| `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)) |
+| `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)); weights `volume+r2` ([below](#weights-from-the-volume-and-r2-volumer2)) |
 
 All eleven above `precision-nvfp4` are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10; `b4a`
 §11.6): their `runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps the other families.
@@ -361,6 +361,29 @@ tier names its arms by variant id), with every value read from that arm's `summa
 Workflows: `gold-check.yml` runs the three checks on lab, family and lab-crate changes; `gold-run.yml`
 (`workflow_dispatch`, input `confirm: spend`) runs `pod up --family gold --yes --wait` and renders the table as an
 artifact. It needs the `RUNPOD_API_KEY` repository secret, which is the owner's to add; without it the job refuses.
+
+## Weights from the volume and R2: `volume+r2`
+
+Design: [ADR-0019 §14](../adr/0019-fv-lab.md#14-weights-by-tree-from-two-places-weights--volumer2). A tier's
+`weights = "volume+r2"` (the `gold` tier) reads every tree the EU volume holds from the volume and fetches every other
+tree from the R2 weights store onto the container disk, right before the first arm that reads it:
+
+- `{weights}` is `/fvscratch/weights`: a symlink per volume tree into `/workspace/weights`, the fetched trees beside
+  them. The volume is never written.
+- Per arm, when a tree it reads is not on the disk yet: the fetched trees it does not read are removed, then
+  `r2-weights.py plan <dest>@<rev>` (the revisions of `scripts/gpu/weights-r2.tsv`) and `r2-fetch.py` fetch the missing
+  ones under the arm's cap. Logs: `<arm>/r2-fetch.log`, `<arm>/r2-fetch.json`, the `r2 <arm>: …` lines of `live.log`; the
+  first fetch installs `python3` with apt (`r2-apt.log`), which the runtime image lacks.
+- A failed fetch records the arm as skipped (`r2 fetch failed`); a tree in neither place as `weights incomplete`.
+- The R2 key is two Runpod secret references in the pod's env (`fv_r2_access_key_id`, `fv_r2_secret_access_key`, filled
+  in by Runpod); `fv-lab run` gives it to the plan step only. Nothing to set locally.
+- `fv-lab run gold --all --dry-run …` prints the plan: one `dry-run weights …` line (18 trees, 530.74 GB, at most
+  147.86 GB at once) and a `dry-run r2 <arm>: drop …; fetch …` line before each arm that fetches. The gold tier's
+  container disk (300 GB) holds the largest arm (`h3-8step`, 147.86 GB) plus the 120 GB every volume tier has
+  (`tests/gold_tier.rs` checks it).
+
+The full gold run, its smoke run and the cost: ADR-0019 §14.7 (about 1.5-3.1 h, $3.70-$7.70, at most $9.96 at the 4 h
+cap).
 
 ## Keeping it equal to the scripts
 

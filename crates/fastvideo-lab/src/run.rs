@@ -20,6 +20,7 @@
 //!   lpips-fetch.log             (FV_LPIPS=1)
 //!   <family>-<cell>.verdict.json, <family>.verdict.json, <cell>.<diff>,
 //!   <arm>/<evidence file>       (a cell's [verdict], D1d: b4a's files)
+//!   <arm>/r2-fetch.log, r2-fetch.json, r2-apt.log   (a `volume+r2` tier, ADR-0019 §14)
 //! ```
 //!
 //! [`Runner::regate`] is `fv-lab gate`: the same gates and verdicts evaluated
@@ -31,9 +32,10 @@
 //! `FV_DRY_RUN=1` does (`[<family>] dry-run <arm>: <printf %q …>`), and
 //! nothing is written.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
+use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -44,6 +46,7 @@ use fastvideo_deploy::launch::utc_iso;
 
 use crate::plan::{GateKind, Paths, Step, Verdict};
 use crate::quote::printf_q_line;
+use crate::weights::{self, gb, R2Setup, R2Tree, WeightsPlan, R2_KEY_ENV, R2_STATE_DIR};
 
 /// `runpod-matrix.sh`'s default binary.
 pub const DEFAULT_GPUCHECK: &str = "/opt/fastvideo-rs/target/release/fv-gpucheck";
@@ -108,6 +111,10 @@ pub struct RunConfig {
     pub aux_dir: Option<PathBuf>,
     /// `FV_TAE_DIR` (default: `<aux>/tae` when complete, else `<scratch>/tae`).
     pub tae_dir: Option<PathBuf>,
+    /// A `weights = "volume+r2"` tier (ADR-0019 §14): `{weights}` is the
+    /// merged root on the scratch disk, and the trees the volume lacks are
+    /// fetched from R2 before the arms that read them. `None`: the volume.
+    pub r2: Option<R2Setup>,
 }
 
 impl RunConfig {
@@ -130,6 +137,7 @@ impl RunConfig {
             baseline_sha: None,
             aux_dir: None,
             tae_dir: None,
+            r2: None,
         }
     }
 
@@ -158,9 +166,40 @@ impl RunConfig {
             .map(|s| self.scratch.join(format!("baseline-{s}")))
     }
 
-    /// `$W`.
+    /// `$W`: the volume's `<work>/weights`, or a `volume+r2` run's merged
+    /// root (`<scratch>/weights`).
     pub fn weights(&self) -> PathBuf {
+        match &self.r2 {
+            Some(r) => r.root.clone(),
+            None => self.volume_weights(),
+        }
+    }
+
+    /// The volume's weights directory (`<work>/weights`).
+    pub fn volume_weights(&self) -> PathBuf {
         self.work.join("weights")
+    }
+
+    /// The selected arms and their trees, in run order (what a `volume+r2`
+    /// run fetches for).
+    pub fn selected_arms<'a>(&self, steps: &'a [Step]) -> Vec<(&'a str, &'a [String])> {
+        Step::flatten(steps)
+            .into_iter()
+            .filter_map(|s| match s {
+                Step::Arm { name, trees, .. } if self.selected(name) => {
+                    Some((name.as_str(), trees.as_slice()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A `volume+r2` run's plan of the selected arms (every fetch assumed to
+    /// succeed); `None` on a volume tier.
+    pub fn weights_plan(&self, steps: &[Step]) -> Option<Result<WeightsPlan, String>> {
+        self.r2
+            .as_ref()
+            .map(|r| WeightsPlan::new(&r.sources, &self.selected_arms(steps)))
     }
 
     /// `$RUNS`: `FV_RUNS_DIR`, else `<scratch>/runs/<family>[/<tag>]`.
@@ -204,12 +243,65 @@ pub fn dry_run_lines(cfg: &RunConfig, steps: &[Step]) -> Vec<String> {
     let f = &cfg.family;
     let build = build_id(&cfg.bin);
     let mut out = vec![format!("[{f}] matrix start image={build}")];
-    dry_run_steps(cfg, steps, &mut out);
+    let plan = match cfg.weights_plan(steps) {
+        None => None,
+        Some(Ok(p)) => {
+            if let Some(r) = &cfg.r2 {
+                out.push(format!("[{f}] dry-run {}", weights_line(cfg, r, &p)));
+            }
+            Some(p)
+        }
+        Some(Err(e)) => {
+            out.push(format!("[{f}] FATAL: {e}"));
+            return out;
+        }
+    };
+    dry_run_steps(cfg, plan.as_ref(), steps, &mut out);
     out.push(format!("[{f}] matrix done"));
     out
 }
 
-fn dry_run_steps(cfg: &RunConfig, steps: &[Step], out: &mut Vec<String>) {
+/// `weights <root>: …`: a `volume+r2` run's weights, logged at its start.
+fn weights_line(cfg: &RunConfig, r: &R2Setup, p: &WeightsPlan) -> String {
+    format!(
+        "weights {}: {} volume trees linked from {}; {} R2 trees ({}) fetched before the arms that read them, at most {} on the container disk at once",
+        r.root.display(),
+        r.sources.link_roots().len(),
+        cfg.volume_weights().display(),
+        p.fetched_trees().len(),
+        gb(p.fetch_bytes),
+        gb(p.peak_bytes),
+    )
+}
+
+/// The dry run's line of one arm's R2 step (`drop …; fetch …`), when it has one.
+fn r2_step_line(root: &Path, w: &weights::ArmWeights) -> Option<String> {
+    let mut parts = Vec::new();
+    if !w.drop.is_empty() {
+        let d: Vec<String> = w
+            .drop
+            .iter()
+            .map(|t| format!("{} ({})", t.dest, gb(t.bytes)))
+            .collect();
+        parts.push(format!("drop {}", d.join(", ")));
+    }
+    if !w.fetch.is_empty() {
+        let d: Vec<String> = w
+            .fetch
+            .iter()
+            .map(|t| format!("{} ({})", t.spec(), gb(t.bytes)))
+            .collect();
+        parts.push(format!("fetch {} into {}", d.join(", "), root.display()));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+fn dry_run_steps(
+    cfg: &RunConfig,
+    plan: Option<&WeightsPlan>,
+    steps: &[Step],
+    out: &mut Vec<String>,
+) {
     let f = &cfg.family;
     for s in steps {
         match s {
@@ -217,6 +309,12 @@ fn dry_run_steps(cfg: &RunConfig, steps: &[Step], out: &mut Vec<String>) {
                 if !cfg.selected(name) {
                     out.push(format!("[{f}] skip {name} (not in FV_CELLS)"));
                 } else {
+                    let r2 = plan.zip(cfg.r2.as_ref()).and_then(|(p, r)| {
+                        p.arm(name).and_then(|w| r2_step_line(&r.root, w))
+                    });
+                    if let Some(l) = r2 {
+                        out.push(format!("[{f}] dry-run r2 {name}: {l}"));
+                    }
                     out.push(format!("[{f}] dry-run {name}: {}", printf_q_line(command)));
                 }
             }
@@ -255,7 +353,7 @@ fn dry_run_steps(cfg: &RunConfig, steps: &[Step], out: &mut Vec<String>) {
                             ));
                         }
                     }
-                    dry_run_steps(cfg, std::slice::from_ref(s), out);
+                    dry_run_steps(cfg, plan, std::slice::from_ref(s), out);
                 }
                 out.push(format!("[{f}] dry-run {cell}: {}", verdict.describe));
             }
@@ -481,6 +579,10 @@ pub struct Runner {
     offline: bool,
     /// Every gate and verdict decided, in order.
     outcomes: Vec<Outcome>,
+    /// A `volume+r2` run: the trees fetched so far and still on the disk.
+    held: BTreeSet<R2Tree>,
+    /// Whether `python3` runs (checked, and installed, at the first fetch).
+    python_ok: Option<bool>,
 }
 
 impl Runner {
@@ -496,6 +598,8 @@ impl Runner {
             tae_fetched: false,
             offline: false,
             outcomes: Vec::new(),
+            held: BTreeSet::new(),
+            python_ok: None,
         }
     }
 
@@ -544,6 +648,10 @@ impl Runner {
     fn cmd(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
         let mut c = Command::new(program);
         c.env_remove("FASTVIDEO_LTX2_WEIGHTS");
+        // The R2 key reaches the plan step alone (`stage_r2`), never an arm.
+        for (k, _) in R2_KEY_ENV {
+            c.env_remove(k);
+        }
         for (k, v) in &self.env {
             c.env(k, v);
         }
@@ -720,12 +828,55 @@ impl Runner {
                 }
             }
         }
+        if self.cfg.r2.is_some() {
+            self.link_volume()?;
+        }
+        Ok(())
+    }
+
+    /// A `volume+r2` run's merged root (`<scratch>/weights`): one symlink per
+    /// volume tree into `<work>/weights` (the volume is only read), made
+    /// once; the fetched trees land beside them.
+    fn link_volume(&self) -> Result<(), RunError> {
+        let Some(r) = &self.cfg.r2 else {
+            return Ok(());
+        };
+        fs::create_dir_all(&r.root).map_err(io(&r.root))?;
+        for t in r.sources.link_roots() {
+            let link = r.root.join(t);
+            if fs::symlink_metadata(&link).is_ok() {
+                continue;
+            }
+            if let Some(p) = link.parent() {
+                fs::create_dir_all(p).map_err(io(p))?;
+            }
+            std::os::unix::fs::symlink(self.cfg.volume_weights().join(t), &link)
+                .map_err(io(&link))?;
+        }
+        if r.key.is_none() {
+            self.log(&format!(
+                "WARN: no R2 key in the environment ({} / {}, from the Runpod secrets {} / {}): arms that read R2 trees are skipped (r2 fetch failed)",
+                R2_KEY_ENV[0].0, R2_KEY_ENV[1].0, R2_KEY_ENV[0].1, R2_KEY_ENV[1].1
+            ));
+        }
         Ok(())
     }
 
     /// Every step, then `matrix done` and `done.json`.
     pub fn run(&mut self, steps: &[Step]) -> Result<(), RunError> {
         self.prepare()?;
+        match self.cfg.weights_plan(steps) {
+            None => {}
+            Some(Ok(p)) => {
+                if let Some(r) = &self.cfg.r2 {
+                    self.log(&weights_line(&self.cfg, r, &p));
+                }
+            }
+            Some(Err(e)) => {
+                self.log(&format!("FATAL: {e}"));
+                return Err(RunError::Fatal(e));
+            }
+        }
         if Step::flatten(steps)
             .iter()
             .any(|s| matches!(s, Step::Arm { baseline: true, .. }))
@@ -757,17 +908,19 @@ impl Runner {
             Step::Arm {
                 name,
                 gate,
+                trees,
                 command,
                 tae: Some(file),
                 ..
-            } => self.tae_gated_cell(name, file, gate, command),
+            } => self.tae_gated_cell(name, file, gate, trees, command),
             Step::Arm {
                 name,
                 gate,
+                trees,
                 command,
                 tae: None,
                 ..
-            } => self.gated_cell(name, gate, command),
+            } => self.gated_cell(name, gate, trees, command),
             Step::Compare {
                 baseline,
                 candidate,
@@ -1120,7 +1273,14 @@ impl Runner {
     /// `tae_gated_cell`: `FV_CELLS`, then the tiny-autoencoder file (one
     /// `fetch-tae.sh` per run when it is missing; still missing: recorded as
     /// skipped), then `gated_cell`.
-    pub fn tae_gated_cell(&mut self, name: &str, file: &Path, gate: &str, command: &[String]) {
+    pub fn tae_gated_cell(
+        &mut self,
+        name: &str,
+        file: &Path,
+        gate: &str,
+        trees: &[String],
+        command: &[String],
+    ) {
         if !self.cfg.selected(name) {
             self.log(&format!("skip {name} (not in FV_CELLS)"));
             return;
@@ -1147,7 +1307,7 @@ impl Runner {
             self.skipped(name, "tae weights missing");
             return;
         }
-        self.gated_cell(name, gate, command);
+        self.gated_cell(name, gate, trees, command);
     }
 
     fn skipped(&self, name: &str, why: &str) {
@@ -1162,11 +1322,20 @@ impl Runner {
         );
     }
 
-    /// `gated_cell`: `FV_CELLS`, then `verify-weights.sh <gate>`, then the arm.
-    pub fn gated_cell(&self, name: &str, gate: &str, command: &[String]) {
+    /// `gated_cell`: `FV_CELLS`, then (a `volume+r2` run) the arm's R2
+    /// trees, then `verify-weights.sh <gate>`, then the arm.
+    pub fn gated_cell(&mut self, name: &str, gate: &str, trees: &[String], command: &[String]) {
         if !self.cfg.selected(name) {
             self.log(&format!("skip {name} (not in FV_CELLS)"));
             return;
+        }
+        if self.cfg.r2.is_some() {
+            if let Err(why) = self.stage_r2(name, trees) {
+                let _ = fs::create_dir_all(self.runs.join(name));
+                self.log(&format!("SKIP {name}: r2 fetch failed: {why}"));
+                self.skipped(name, "r2 fetch failed");
+                return;
+            }
         }
         let wlog = self.runs.join(format!("{name}.weights.log"));
         let verified = match File::create(&wlog) {
@@ -1192,6 +1361,172 @@ impl Runner {
             return;
         }
         self.run_cell(name, command);
+    }
+
+    /// A `volume+r2` arm's R2 trees (ADR-0019 §14), before its gate: when
+    /// one is not on the disk yet, every fetched tree the arm does not read
+    /// is removed, then `r2-weights.py plan` (with the R2 key, the only child
+    /// that gets it) presigns the missing trees into `<scratch>/r2/plan.json`
+    /// and `r2-fetch.py` fetches them into the merged root under the arm's
+    /// cap; the plan is removed after. The fetch's log and status go to
+    /// `<arm>/r2-fetch.log` and `<arm>/r2-fetch.json`.
+    fn stage_r2(&mut self, name: &str, trees: &[String]) -> Result<(), String> {
+        let Some(r) = self.cfg.r2.clone() else {
+            return Ok(());
+        };
+        let need = r.sources.arm_r2(name, trees)?;
+        let st = weights::step(&self.held, &need);
+        for t in &st.drop {
+            remove_fetched(&r.root, &t.dest)?;
+            self.held.remove(t);
+            self.log(&format!("r2 {name}: drop {} ({})", t.dest, gb(t.bytes)));
+        }
+        let mut todo = Vec::new();
+        for t in st.fetch {
+            if fastvideo_deploy::boot::weights::tree_present(&r.root, &t.dest, &t.rev) {
+                self.log(&format!("r2 {name}: {} already on the disk", t.spec()));
+                self.held.insert(t);
+            } else {
+                todo.push(t);
+            }
+        }
+        if todo.is_empty() {
+            return Ok(());
+        }
+        let key = r.key.clone().ok_or_else(|| {
+            format!(
+                "no R2 key in the environment ({} / {})",
+                R2_KEY_ENV[0].0, R2_KEY_ENV[1].0
+            )
+        })?;
+        self.ensure_python(&r)?;
+        let dir = self.runs.join(name);
+        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let state = self.cfg.scratch.join(R2_STATE_DIR);
+        fs::create_dir_all(&state).map_err(|e| format!("{}: {e}", state.display()))?;
+        let _ = fs::set_permissions(&state, fs::Permissions::from_mode(0o700));
+        let plan = state.join("plan.json");
+        let _ = fs::remove_file(&plan);
+        let log = dir.join("r2-fetch.log");
+        let specs: Vec<String> = todo.iter().map(R2Tree::spec).collect();
+        let bytes: u64 = todo.iter().map(|t| t.bytes).sum();
+        self.log(&format!(
+            "r2 {name}: fetch {} ({}) into {}",
+            specs.join(" "),
+            gb(bytes),
+            r.root.display()
+        ));
+        let cap = if self.cfg.cell_timeout_s == 0 {
+            3600
+        } else {
+            self.cfg.cell_timeout_s
+        };
+        let out = |l: &Path| append(l).map_err(|e| e.to_string());
+        let planned = self
+            .cmd(&r.python)
+            .arg(self.cfg.scripts().join("r2-weights.py"))
+            .arg("plan")
+            .args(&specs)
+            .arg("--ttl")
+            .arg((cap + 600).to_string())
+            .arg("--out")
+            .arg(&plan)
+            .envs(key.env())
+            .stdout(out(&log)?)
+            .stderr(out(&log)?)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !planned {
+            let _ = fs::remove_file(&plan);
+            return Err(format!("r2-weights.py plan: {}", last_line(&log)));
+        }
+        let fetched = self
+            .cmd(&self.cfg.timeout)
+            .args(["--signal=TERM", "--kill-after=15", &cap.to_string()])
+            .arg(&r.python)
+            .arg(self.cfg.scripts().join("r2-fetch.py"))
+            .arg("--root")
+            .arg(&r.root)
+            .arg("--plan")
+            .arg(&plan)
+            .arg("--status")
+            .arg(dir.join("r2-fetch.json"))
+            .current_dir(&state)
+            .stdout(out(&log)?)
+            .stderr(out(&log)?)
+            .status()
+            .is_ok_and(|s| s.success());
+        let _ = fs::remove_file(&plan);
+        if !fetched {
+            // The staging of a fetch that did not finish frees its space for
+            // the next arm (the volume's links are never touched).
+            let _ = fs::remove_dir_all(r.root.join(".r2-partial"));
+            fastvideo_deploy::boot::weights::clean_leftovers(&r.root);
+            let why = fastvideo_deploy::boot::weights::r2::failed_line(&log);
+            return Err(format!(
+                "r2-fetch.py: {}",
+                if why.is_empty() { last_line(&log) } else { why }
+            ));
+        }
+        self.held.extend(todo);
+        let ready = fastvideo_deploy::boot::weights::r2::ready_line(&log);
+        self.log(&format!("r2 {name}: {ready}"));
+        Ok(())
+    }
+
+    /// `python3` for the R2 tools: the runtime image has none, so the first
+    /// fetch installs it (`apt-get install python3`, as fv-boot does on an
+    /// older image) into `<runs>/r2-apt.log`. Decided once per run.
+    fn ensure_python(&mut self, r: &R2Setup) -> Result<(), String> {
+        let check = |me: &Self| {
+            me.cmd(&r.python)
+                .args([
+                    "-c",
+                    "import concurrent.futures, hashlib, json, ssl, urllib.request, xml.etree.ElementTree",
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let ok = match self.python_ok {
+            Some(ok) => ok,
+            None => {
+                let mut ok = check(self);
+                if !ok {
+                    let log = self.runs.join("r2-apt.log");
+                    self.log("r2: no python3 in the image: apt-get install python3 (r2-apt.log)");
+                    let apt = |args: &[&str]| {
+                        let (Ok(o), Ok(e)) = (append(&log), append(&log)) else {
+                            return false;
+                        };
+                        self.cmd(&r.apt_get)
+                            .env("DEBIAN_FRONTEND", "noninteractive")
+                            .args([
+                                "-o",
+                                "Acquire::http::Timeout=15",
+                                "-o",
+                                "Acquire::Retries=3",
+                            ])
+                            .args(args)
+                            .stdout(o)
+                            .stderr(e)
+                            .status()
+                            .is_ok_and(|s| s.success())
+                    };
+                    ok = apt(&["update", "-qq"])
+                        && apt(&["install", "-y", "-qq", "--no-install-recommends", "python3"])
+                        && check(self);
+                }
+                self.python_ok = Some(ok);
+                ok
+            }
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err("python3 unavailable (r2-apt.log)".into())
+        }
     }
 
     /// `gpu_clean`: wait for the previous process's memory to drain, kill a
@@ -1541,6 +1876,36 @@ fn resolved(p: &Path) -> PathBuf {
         }
     }
     abs
+}
+
+/// Removes a tree this run fetched from the merged root: a plain directory
+/// only (a volume tree is a symlink there and is never removed).
+fn remove_fetched(root: &Path, dest: &str) -> Result<(), String> {
+    let p = root.join(dest);
+    match fs::symlink_metadata(&p) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{}: {e}", p.display())),
+        Ok(m) if m.file_type().is_dir() => {
+            fs::remove_dir_all(&p).map_err(|e| format!("{}: {e}", p.display()))
+        }
+        Ok(_) => Err(format!(
+            "{} is not a fetched tree (not a directory): left as it is",
+            p.display()
+        )),
+    }
+}
+
+/// The last non-empty line of a log (at most 240 characters).
+fn last_line(p: &Path) -> String {
+    fs::read_to_string(p)
+        .unwrap_or_default()
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .chars()
+        .take(240)
+        .collect()
 }
 
 fn append(p: &Path) -> Result<File, RunError> {

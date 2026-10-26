@@ -1,7 +1,7 @@
 {
   "cloudType": "SECURE",
   "computeType": "GPU",
-  "containerDiskInGb": 120,
+  "containerDiskInGb": 300,
   "dataCenterIds": [
     "EU-RO-1"
   ],

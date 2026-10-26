@@ -35,7 +35,7 @@ use fastvideo_manifest::deploy::{EU_DATA_CENTER, EU_VOLUME_ID};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::plan::Tier;
+use crate::plan::{Tier, TierWeights};
 
 /// Every fv-lab pod's name starts with this (`reap` deletes only these).
 pub const POD_PREFIX: &str = "fv-lab-";
@@ -348,7 +348,12 @@ pub fn launch(tier: &Tier, sha7: &str, start: &StartOptions) -> Result<Launch, P
         image: tier.image.image(sha7),
         entrypoint: Vec::new(),
         args: vec!["/bin/bash".into(), "-c".into(), cmd],
-        env: Default::default(),
+        // A `volume+r2` tier's runner fetches the trees the volume lacks: the
+        // R2 key as Runpod secret references, never values (ADR-0019 §14).
+        env: match tier.weights {
+            TierWeights::Volume => Default::default(),
+            TierWeights::VolumeR2 => crate::weights::r2_env_refs(),
+        },
         ports: vec!["8000/http".into()],
         gpu: GpuSpec {
             types: vec![tier.gpu.clone()],
@@ -369,7 +374,7 @@ pub fn launch(tier: &Tier, sha7: &str, start: &StartOptions) -> Result<Launch, P
             container_gb: tier.container_disk_gb,
             volume_gb: 0,
         },
-        weights: tier.weights,
+        weights: tier.weights.launch_source(),
         guards: Guards::all(
             tier.max_usd_per_hr,
             guard::MIN_BALANCE_USD,
@@ -1297,6 +1302,34 @@ cells = ["c"]
         assert!(l.args[2].contains("verify-weights.sh sol-h3 >"));
         assert!(launch(&t, "ABCDEF1", &o).is_err());
         assert!(launch(&t, "abcdef", &o).is_err());
+        assert!(l.env.is_empty(), "a volume tier's pod carries no env");
+    }
+
+    #[test]
+    fn a_volume_r2_launch_carries_the_r2_key_as_secret_references_only() {
+        let t = Tier {
+            weights: TierWeights::VolumeR2,
+            ..tier()
+        };
+        let o = StartOptions::for_tier(&t, "abcdef1-10241200");
+        let l = launch(&t, "abcdef1", &o).unwrap();
+        // The volume is mounted as on a volume tier, and the start command
+        // is the same: the runner fetches the rest.
+        assert_eq!(l.weights, fastvideo_deploy::provider::WeightsSource::Volume);
+        assert!(l.placement.volume.is_some());
+        assert_eq!(l.args, launch(&tier(), "abcdef1", &o).unwrap().args);
+        assert_eq!(
+            l.env.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "FV_WEIGHTS_R2_ACCESS_KEY_ID",
+                "FV_WEIGHTS_R2_SECRET_ACCESS_KEY"
+            ]
+        );
+        assert!(l
+            .env
+            .values()
+            .all(|v| v.starts_with("{{ RUNPOD_SECRET_fv_r2_") && v.ends_with(" }}")));
+        assert_eq!(guard::check_env(&l, |s| s.contains("rpa_key")), Ok(()));
     }
 
     #[test]

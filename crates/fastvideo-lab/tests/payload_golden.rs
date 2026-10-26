@@ -8,6 +8,9 @@
 //!    `bash …/runpod-matrix.sh` (the one changed line);
 //! 2. the body carries `env: {}` (fv-deploy's `create_body` always sends it;
 //!    the script sends `env` only with FV_POD_FILES, which fv-lab has not);
+//!    a `weights = "volume+r2"` tier's (`gold`, ADR-0019 §14) holds the R2
+//!    key as Runpod secret references and nothing else
+//!    (`weights::r2_env_refs`), which the script has no way to send;
 //! 3. (`up` only, not in a plan) the image is pinned to its digest.
 //!
 //! The name is equal because the golden is made with `FV_POD_PREFIX=fv-lab`.
@@ -29,8 +32,9 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 use fastvideo_deploy::provider::runpod::pod_create_body;
-use fastvideo_lab::plan::Lab;
+use fastvideo_lab::plan::{Lab, TierWeights};
 use fastvideo_lab::pod::{launch, StartOptions};
+use fastvideo_lab::weights::r2_env_refs;
 
 const SHA: &str = "1234567";
 const TAG: &str = "1234567-10241200";
@@ -52,16 +56,26 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     assert!(lab.tiers.tiers.len() >= 10);
     let mut restored = 0;
+    let mut r2_tiers = 0;
     for tier in &lab.tiers.tiers {
         let family = tier.name.as_str();
         let l = launch(tier, SHA, &StartOptions::for_tier(tier, TAG)).expect("launch");
         let mut ours = pod_create_body(&l);
         // Difference 2.
+        let env = match tier.weights {
+            TierWeights::Volume => json!({}),
+            TierWeights::VolumeR2 => {
+                let refs = r2_env_refs();
+                assert!(refs.values().all(|v| v.starts_with("{{ RUNPOD_SECRET_")));
+                json!(refs)
+            }
+        };
         assert_eq!(
             ours.as_object_mut().and_then(|m| m.remove("env")),
-            Some(json!({})),
+            Some(env),
             "{family}"
         );
+        r2_tiers += usize::from(tier.weights == TierWeights::VolumeR2);
         // Difference 1.
         let mut theirs = fixture(family);
         let mut cmd = theirs["dockerStartCmd"][2]
@@ -99,5 +113,11 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         restored,
         common::restored().len(),
         "every restored mode is a tier"
+    );
+    // Only the gold tier reads R2 trees; every other tier's pod is unchanged.
+    assert_eq!(r2_tiers, 1, "one volume+r2 tier (gold)");
+    assert_eq!(
+        lab.tier("gold").map(|t| t.weights),
+        Some(TierWeights::VolumeR2)
     );
 }
