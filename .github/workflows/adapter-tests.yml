@@ -59,6 +59,8 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "scripts/serve/coverage.sh"
+      # fastvideo-deploy's tests/release_goldens.rs runs against this mock (ADR-0018 §10.5).
+      - "scripts/serve/tests/mock_api.py"
       - ".github/workflows/adapter-tests.yml"
   push:
     branches: ["main"]
@@ -97,6 +99,8 @@ on:
       - "docs/serve/certification.tsv"
       - "Cargo.lock"
       - "scripts/serve/coverage.sh"
+      # fastvideo-deploy's tests/release_goldens.rs runs against this mock (ADR-0018 §10.5).
+      - "scripts/serve/tests/mock_api.py"
       - ".github/workflows/adapter-tests.yml"
 
 permissions:

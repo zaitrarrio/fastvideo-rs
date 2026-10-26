@@ -323,7 +323,7 @@ fn num(v: &Value) -> Value {
 
 fn vast_guards() -> fastvideo_deploy::provider::Guards {
     let mut g = guard::default_guards();
-    g.max_usd_per_hr = guard::default_max_usd_per_hr(ProviderKind::Vast);
+    g.max_usd_per_hr = Some(guard::default_max_usd_per_hr(ProviderKind::Vast));
     g
 }
 
@@ -472,7 +472,7 @@ fn gcp_firewall_and_instance_equal_vm_sh() {
     let cfg = std::fs::read_to_string(repo_root().join("configs/serve/gcp-h3-turbo.toml"))
         .unwrap_or_else(|e| panic!("{e}"));
     let mut g = guard::default_guards();
-    g.cap_s = 1800;
+    g.cap_s = Some(1800);
     let l = script_gcp(&ScriptGcp {
         name: "fv-h3-turbo-1025120000",
         image: IMAGE,
@@ -505,7 +505,7 @@ fn gcp_firewall_and_instance_equal_vm_sh() {
 fn preset_gcp_is_the_script_vm_plus_the_channel() {
     let r = repo();
     let mut req = request("h3-turbo", ProviderKind::Gcp);
-    req.guards.cap_s = 1800;
+    req.guards.cap_s = Some(1800);
     let mut l = from_preset(&r, &req, GCP_RUN).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(guard::check_region(&l), Ok(()));
     pin_image(&mut l, IMAGE);
@@ -642,4 +642,40 @@ fn gcp_prices_are_read_from_lib_sh() {
     );
     assert_eq!(p.price("no-such-machine", false, "europe-west4"), None);
     assert!(p.0.len() >= 10, "{:?}", p.0.len());
+}
+
+/// C3d (ADR-0018 §10.1): the serve templates `fv-deploy templates sync`
+/// creates are `runpod-templates.sh plan`'s bodies (`serve-templates.json`:
+/// `fv-serve-cuda-sls`, `fv-serve-cuda-pod`, `fv-serve-cpu-pod` on the
+/// stable channel), built by the Runpod provider's template builder from a
+/// template `Launch` whose guards are "not checked".
+#[test]
+fn serve_templates_equal_runpod_templates_sh() {
+    use fastvideo_deploy::provider::runpod::{serve_template_body, serve_template_launch};
+    const IMAGE_CPU: &str = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    let images = fastvideo_deploy::release::serve_images(&repo());
+    assert_eq!(
+        images
+            .iter()
+            .map(|i| (i.id.as_str(), i.cpu))
+            .collect::<Vec<_>>(),
+        [("cuda", false), ("cpu", true)],
+        "variants.sh FV_IMAGES and its fv_image_flavours (cpu: pod only)"
+    );
+    let mut got = Vec::new();
+    for (id, image) in [("cuda", IMAGE), ("cpu", IMAGE_CPU)] {
+        let img = images
+            .iter()
+            .find(|i| i.id == id)
+            .unwrap_or_else(|| panic!("no image {id}"));
+        for &f in img.flavours() {
+            let l = serve_template_launch(id, f, img.cpu, image, Some("stable"));
+            assert_eq!(
+                l.guards.not_checked(),
+                ["max_usd_per_hr", "cap_s", "ready_timeout_s", "ready_cycles"]
+            );
+            got.push(serve_template_body(&l, id, f, img.cpu, None, true));
+        }
+    }
+    assert_eq!(Value::Array(got), fixture("serve-templates.json"));
 }

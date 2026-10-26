@@ -1801,3 +1801,23 @@ Project code: FVID
 - Executed by: coordinator (GPU run, pods `wgzwvt5mjcn1nv`, `ymrchzi0z3eixy`, `64opofps1163h8`, `kxhdp1v19w151y`, all deleted); recorded by Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §12 "Result"
 - Verification: `artifacts/runpod/ltxvae-gen/compare-8b18d89.txt`, `artifacts/runpod/precision-nvfp4/compare-8b18d89.txt` and the four run directories under `artifacts/runpod/{ltxvae-gen,ltxvae,precision-nvfp4,precision}/`
+
+### FVID · 2026-10-26 · FVID-2026-10-26-fv-deploy-c3d
+- Trigger: plan C3d (ADR-0018 "Open decisions", §6 "Kept: … `runpod-templates.sh` and `release.sh` (C3d)", §7.3's proposal)
+- Options: (a) templates, release promote / rollback, reconcile and the D1 ledger in fv-deploy with request goldens from the scripts, and the guards' numbers as `Option` (null = not checked by this launcher); (b) slices 1 + 2 only (templates, release), the ledger and the schema change later; (c) leave the scripts
+- Decision: (agent, proposed for the coordinator's review) (a). The serve templates are a `Launch` built by the Runpod template builder; promote / rollback / reconcile send the scripts' requests (the same SQL, the deployments upsert's column order, the `digests` key order); `up` / `down` / the sweeps write the same `deployments` rows as the deploy scripts through a `Recorder` (Runpod kinds only; differences: `created_by …/fv-deploy`, `region`, `meta.guards`); `Guards.max_usd_per_hr`, `cap_s`, `ready_timeout_s`, `ready_cycles` become required-nullable (`null` refused by fv-deploy's `up`, shown as "not checked"; fv-control's serverless endpoints write `null`). `mock_api.py` logs requests and serves digests that are the SHA-256 of the manifest bytes. No new dependency; no live resource touched
+- Reason: the last two scripts ADR-0018 kept, on the shared seams and pinned to the scripts by goldens; one ledger for the scripts, fv-deploy and fv-control; the fail-closed 0 that fv-control wrote for unchecked guards could be read as a cap by a consumer
+- Reversibility: high (code; the schema change is additive; the scripts stay until the live gates)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §10
+- Verification: `tests/release_goldens.rs` (28 scenarios against `mock_api.py` with the effects' order and two partial failures, mutation-checked), `payload_goldens` `serve_templates_equal_runpod_templates_sh`, `fv_deploy_bin` `templates_plan_and_release_refusals_make_no_request`, `lifecycle::tests` `not_checked_guards_are_refused_and_shown`, `the_recorder_sees_create_ready_and_delete`, the `release` unit tests, `fv-deploy-goldens.sh --check` (jq 1.6 and 1.7), `release.test.sh` (50), control `launch-goldens.test.ts`; live gates pending the owner (§10.6)
+
+### FVID · 2026-10-26 · FVID-2026-10-26-fv-deploy-c3d-review
+- Trigger: the coordinator's review of #199 (one blocking finding, nine more)
+- Options: fix each in #199 with a test; or defer the non-blocking ones
+- Decision: (coordinator, executed by the C3d agent) fix all in #199. The D1 `created` write comes after the backstop and the billed-price check (a pod deleted at once gets no row); a Runpod listing that is not one fails closed; the goldens pin the effects' order (retags logged in the mock's sequence) and two partial failures (template PATCH 500, release INSERT 500, after the retags); a guard key missing from a `Launch` fails at parse; the python-backed goldens fail in CI without python3; the row's channel is the launch's; the detached backstop records its delete; one `registry.sql` lookup; fv-control names `cap_s` as unchecked without a deadline; ADR §7.2 / §7.3 marked superseded by §10.4
+- Reason: the backstop must never wait on a ledger write; an unreadable listing must never read as "nothing"; the goldens must catch reordering and partial failure
+- Reversibility: high (code only)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §10.3, §10.4, §10.7
+- Verification: `the_ledger_hears_of_a_create_only_after_its_backstop_and_price_check`, `the_backstop_records_its_delete`, `a_listing_that_is_not_one_is_an_error`, `reconcile_and_sync_stop_on_an_answer_that_is_not_a_listing`, `not_checked_guards_are_refused_and_shown` (missing key), `release_goldens` (28 scenarios, order, the launch channel), `fv-deploy-goldens.sh --check` (jq 1.6 and 1.7), control `launch-goldens.test.ts`

@@ -1,0 +1,1514 @@
+{
+  "builds": {
+    "A": "aaaaaaa",
+    "B": "bbbbbbb",
+    "C": "ccccccc (debug cuda: no cpu)"
+  },
+  "mock": "scripts/serve/tests/mock_api.py",
+  "scenarios": [
+    {
+      "args": [
+        "promote",
+        "aaaaaaa",
+        "stable",
+        "--local",
+        "--dry-run"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "promote-dry-run",
+      "ok": true,
+      "order": [],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": [
+        "  retag  :cpu-stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
+        "  retag  :cuda-stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "  retag  :stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>",
+        "  template fv-serve-cuda-sls: ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "  template fv-serve-cuda-pod: ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "  template fv-serve-cpu-pod: ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
+        "(dry run: nothing changed)"
+      ]
+    },
+    {
+      "args": [
+        "promote",
+        "aaaaaaa",
+        "stable",
+        "--notes",
+        "first stable"
+      ],
+      "d1": [],
+      "dispatch": [
+        {
+          "inputs": {
+            "action": "promote",
+            "allow_partial": "false",
+            "channel": "stable",
+            "notes": "first stable",
+            "target": "aaaaaaa",
+            "templates": "true",
+            "to": ""
+          },
+          "ref": "main"
+        }
+      ],
+      "env": [],
+      "name": "promote-dispatch",
+      "ok": true,
+      "order": [
+        "dispatch"
+      ],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": [
+        "dispatched release.yml: promote aaaaaaa -> stable",
+        "https://github.com/zaitrarrio/fastvideo-rs/actions/workflows/release.yml"
+      ]
+    },
+    {
+      "args": [
+        "promote",
+        "aaaaaaa",
+        "stable",
+        "--local",
+        "--notes",
+        "first stable"
+      ],
+      "d1": [
+        [
+          "INSERT INTO releases (channel, git_sha, digests, action, promoted_at, promoted_by, notes, run_url, templates_updated, source_release) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+          [
+            "stable",
+            "aaaaaaa111111111111111111111111111111111",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
+            "promote",
+            "<now>",
+            "test",
+            "first stable",
+            null,
+            1,
+            null
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "promote",
+      "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "PATCH /v1/templates/tpl-cuda-sls",
+        "PATCH /v1/templates/tpl-cuda-pod",
+        "PATCH /v1/templates/tpl-cpu-pod",
+        "d1 INSERT releases"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>"
+        ]
+      ],
+      "runpod": [
+        [
+          "PATCH",
+          "/v1/templates/tpl-cuda-sls",
+          {
+            "containerDiskInGb": 20,
+            "env": {
+              "FV_AUTH_MODE": "trust-gateway",
+              "FV_CACHE_DIR": "/fvstate/cache",
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<A.cuda>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "runpod-queue",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/runpod-volume/weights",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "name": "fv-serve-cuda-sls",
+            "readme": "fv-serve cuda (sls), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0
+          }
+        ],
+        [
+          "PATCH",
+          "/v1/templates/tpl-cuda-pod",
+          {
+            "containerDiskInGb": 30,
+            "env": {
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<A.cuda>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_FORWARD": "1",
+              "FV_SERVE_MODE": "http",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/workspace/weights",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "name": "fv-serve-cuda-pod",
+            "ports": [
+              "8000/http",
+              "70000/tcp"
+            ],
+            "readme": "fv-serve cuda (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0,
+            "volumeMountPath": "/workspace"
+          }
+        ],
+        [
+          "PATCH",
+          "/v1/templates/tpl-cpu-pod",
+          {
+            "containerDiskInGb": 30,
+            "env": {
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<A.cpu>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "http",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
+            "name": "fv-serve-cpu-pod",
+            "ports": [
+              "8000/http"
+            ],
+            "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0,
+            "volumeMountPath": "/workspace"
+          }
+        ]
+      ],
+      "stdout": [
+        "release 1: stable = aaaaaaa (promote)"
+      ]
+    },
+    {
+      "args": [
+        "promote",
+        "aaaaaaa",
+        "stable",
+        "--local"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "promote-again",
+      "ok": true,
+      "order": [],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": [
+        "stable is already aaaaaaa (--force re-applies)"
+      ]
+    },
+    {
+      "args": [
+        "promote",
+        "bbbbbbb",
+        "latest",
+        "--local"
+      ],
+      "d1": [
+        [
+          "INSERT INTO releases (channel, git_sha, digests, action, promoted_at, promoted_by, notes, run_url, templates_updated, source_release) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+          [
+            "latest",
+            "bbbbbbb222222222222222222222222222222222",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
+            "promote",
+            "<now>",
+            "test",
+            null,
+            null,
+            0,
+            null
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "promote-latest",
+      "ok": true,
+      "order": [
+        "retag cpu-latest",
+        "retag cpu",
+        "retag cuda-latest",
+        "retag cuda",
+        "retag latest",
+        "d1 INSERT releases"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-latest",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-latest",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:latest",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>"
+        ]
+      ],
+      "runpod": [],
+      "stdout": [
+        "release 2: latest = bbbbbbb (promote)"
+      ]
+    },
+    {
+      "args": [
+        "promote",
+        "ccccccc",
+        "stable",
+        "--local"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "promote-missing-image",
+      "ok": false,
+      "order": [],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": []
+    },
+    {
+      "args": [
+        "promote",
+        "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+        "stable",
+        "--local",
+        "--no-templates"
+      ],
+      "d1": [
+        [
+          "INSERT INTO releases (channel, git_sha, digests, action, promoted_at, promoted_by, notes, run_url, templates_updated, source_release) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+          [
+            "stable",
+            "bbbbbbb222222222222222222222222222222222",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
+            "promote",
+            "<now>",
+            "test",
+            null,
+            null,
+            0,
+            null
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "promote-digest",
+      "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "d1 INSERT releases"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>"
+        ]
+      ],
+      "runpod": [],
+      "stdout": [
+        "release 3: stable = bbbbbbb (promote)"
+      ]
+    },
+    {
+      "args": [
+        "rollback",
+        "stable",
+        "--local",
+        "--dry-run"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "rollback-dry-run",
+      "ok": true,
+      "order": [],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": [
+        "  retag  :cpu-stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
+        "  retag  :cuda-stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "  retag  :stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>",
+        "  template fv-serve-cuda-sls: image already <A.cuda:12>; env gains FV_RELEASE_CHANNEL=stable",
+        "  template fv-serve-cuda-pod: image already <A.cuda:12>; env gains FV_RELEASE_CHANNEL=stable",
+        "  template fv-serve-cpu-pod: image already <A.cpu:12>; env gains FV_RELEASE_CHANNEL=stable",
+        "(dry run: nothing changed)"
+      ]
+    },
+    {
+      "args": [
+        "rollback",
+        "stable",
+        "--local"
+      ],
+      "d1": [
+        [
+          "UPDATE releases SET rolled_back_at = ? WHERE channel = ? AND git_sha != ? AND rolled_back_at IS NULL AND id > ?",
+          [
+            "<now>",
+            "stable",
+            "aaaaaaa111111111111111111111111111111111",
+            1
+          ]
+        ],
+        [
+          "INSERT INTO releases (channel, git_sha, digests, action, promoted_at, promoted_by, notes, run_url, templates_updated, source_release) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+          [
+            "stable",
+            "aaaaaaa111111111111111111111111111111111",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
+            "rollback",
+            "<now>",
+            "test",
+            null,
+            null,
+            1,
+            1
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "rollback",
+      "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "d1 UPDATE releases",
+        "d1 INSERT releases"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>"
+        ]
+      ],
+      "runpod": [],
+      "stdout": [
+        "release 4: stable = aaaaaaa (rollback)"
+      ]
+    },
+    {
+      "args": [
+        "rollback",
+        "stable",
+        "--local"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "rollback-again",
+      "ok": false,
+      "order": [],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": []
+    },
+    {
+      "args": [
+        "rollback",
+        "stable",
+        "--local",
+        "--to",
+        "3"
+      ],
+      "d1": [
+        [
+          "UPDATE releases SET rolled_back_at = ? WHERE channel = ? AND git_sha != ? AND rolled_back_at IS NULL AND id > ?",
+          [
+            "<now>",
+            "stable",
+            "bbbbbbb222222222222222222222222222222222",
+            3
+          ]
+        ],
+        [
+          "INSERT INTO releases (channel, git_sha, digests, action, promoted_at, promoted_by, notes, run_url, templates_updated, source_release) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+          [
+            "stable",
+            "bbbbbbb222222222222222222222222222222222",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
+            "rollback",
+            "<now>",
+            "test",
+            null,
+            null,
+            1,
+            3
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "rollback-to",
+      "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "PATCH /v1/templates/tpl-cuda-sls",
+        "PATCH /v1/templates/tpl-cuda-pod",
+        "PATCH /v1/templates/tpl-cpu-pod",
+        "d1 UPDATE releases",
+        "d1 INSERT releases"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>"
+        ]
+      ],
+      "runpod": [
+        [
+          "PATCH",
+          "/v1/templates/tpl-cuda-sls",
+          {
+            "containerDiskInGb": 20,
+            "env": {
+              "FV_AUTH_MODE": "trust-gateway",
+              "FV_CACHE_DIR": "/fvstate/cache",
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<B.cuda>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "runpod-queue",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/runpod-volume/weights",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+            "name": "fv-serve-cuda-sls",
+            "readme": "fv-serve cuda (sls), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0
+          }
+        ],
+        [
+          "PATCH",
+          "/v1/templates/tpl-cuda-pod",
+          {
+            "containerDiskInGb": 30,
+            "env": {
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<B.cuda>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_FORWARD": "1",
+              "FV_SERVE_MODE": "http",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/workspace/weights",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+            "name": "fv-serve-cuda-pod",
+            "ports": [
+              "8000/http",
+              "70000/tcp"
+            ],
+            "readme": "fv-serve cuda (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0,
+            "volumeMountPath": "/workspace"
+          }
+        ],
+        [
+          "PATCH",
+          "/v1/templates/tpl-cpu-pod",
+          {
+            "containerDiskInGb": 30,
+            "env": {
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<B.cpu>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "http",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
+            "name": "fv-serve-cpu-pod",
+            "ports": [
+              "8000/http"
+            ],
+            "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0,
+            "volumeMountPath": "/workspace"
+          }
+        ]
+      ],
+      "stdout": [
+        "release 5: stable = bbbbbbb (rollback)"
+      ]
+    },
+    {
+      "args": [
+        "rollback",
+        "stable",
+        "--to",
+        "1"
+      ],
+      "d1": [],
+      "dispatch": [
+        {
+          "inputs": {
+            "action": "rollback",
+            "allow_partial": "false",
+            "channel": "stable",
+            "notes": "",
+            "target": "",
+            "templates": "true",
+            "to": "1"
+          },
+          "ref": "main"
+        }
+      ],
+      "env": [],
+      "name": "rollback-dispatch",
+      "ok": true,
+      "order": [
+        "dispatch"
+      ],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": [
+        "dispatched release.yml: rollback  -> stable",
+        "https://github.com/zaitrarrio/fastvideo-rs/actions/workflows/release.yml"
+      ]
+    },
+    {
+      "args": [
+        "rollback",
+        "stable",
+        "--local",
+        "--to",
+        "6"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "rollback-partial-refused",
+      "ok": false,
+      "order": [],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": []
+    },
+    {
+      "args": [
+        "rollback",
+        "stable",
+        "--local",
+        "--to",
+        "6",
+        "--allow-partial"
+      ],
+      "d1": [
+        [
+          "UPDATE releases SET rolled_back_at = ? WHERE channel = ? AND git_sha != ? AND rolled_back_at IS NULL AND id > ?",
+          [
+            "<now>",
+            "stable",
+            "0000000aaaa",
+            6
+          ]
+        ],
+        [
+          "INSERT INTO releases (channel, git_sha, digests, action, promoted_at, promoted_by, notes, run_url, templates_updated, source_release) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+          [
+            "stable",
+            "0000000aaaa",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"h3-turbo\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
+            "rollback",
+            "<now>",
+            "test",
+            null,
+            null,
+            1,
+            6
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "rollback-partial",
+      "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag stable",
+        "retag h3-turbo-stable",
+        "PATCH /v1/templates/tpl-cpu-pod",
+        "d1 UPDATE releases",
+        "d1 INSERT releases"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:h3-turbo-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ]
+      ],
+      "runpod": [
+        [
+          "PATCH",
+          "/v1/templates/tpl-cpu-pod",
+          {
+            "containerDiskInGb": 30,
+            "env": {
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<A.cpu>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "http",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
+            "name": "fv-serve-cpu-pod",
+            "ports": [
+              "8000/http"
+            ],
+            "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0,
+            "volumeMountPath": "/workspace"
+          }
+        ]
+      ],
+      "stdout": [
+        "release 7: stable = 0000000 (rollback)"
+      ]
+    },
+    {
+      "args": [
+        "rollback",
+        "stable",
+        "--local",
+        "--to",
+        "3"
+      ],
+      "d1": [
+        [
+          "UPDATE releases SET rolled_back_at = ? WHERE channel = ? AND git_sha != ? AND rolled_back_at IS NULL AND id > ?",
+          [
+            "<now>",
+            "stable",
+            "bbbbbbb222222222222222222222222222222222",
+            3
+          ]
+        ],
+        [
+          "INSERT INTO releases (channel, git_sha, digests, action, promoted_at, promoted_by, notes, run_url, templates_updated, source_release) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+          [
+            "stable",
+            "bbbbbbb222222222222222222222222222222222",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
+            "rollback",
+            "<now>",
+            "test",
+            null,
+            null,
+            1,
+            3
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "rollback-back",
+      "ok": true,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "PATCH /v1/templates/tpl-cpu-pod",
+        "d1 UPDATE releases",
+        "d1 INSERT releases"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>"
+        ]
+      ],
+      "runpod": [
+        [
+          "PATCH",
+          "/v1/templates/tpl-cpu-pod",
+          {
+            "containerDiskInGb": 30,
+            "env": {
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<B.cpu>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "http",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
+            "name": "fv-serve-cpu-pod",
+            "ports": [
+              "8000/http"
+            ],
+            "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0,
+            "volumeMountPath": "/workspace"
+          }
+        ]
+      ],
+      "stdout": [
+        "release 8: stable = bbbbbbb (rollback)"
+      ]
+    },
+    {
+      "args": [
+        "sync",
+        "cuda",
+        "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [
+        "FV_RELEASE_CHANNEL=stable"
+      ],
+      "name": "templates-same",
+      "ok": true,
+      "order": [],
+      "prog": "templates",
+      "retags": [],
+      "runpod": [],
+      "stdout": []
+    },
+    {
+      "args": [
+        "sync",
+        "cpu",
+        "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [
+        "FV_RELEASE_CHANNEL=stable"
+      ],
+      "name": "templates-create",
+      "ok": true,
+      "order": [
+        "POST /v1/templates"
+      ],
+      "prog": "templates",
+      "retags": [],
+      "runpod": [
+        [
+          "POST",
+          "/v1/templates",
+          {
+            "category": "CPU",
+            "containerDiskInGb": 30,
+            "env": {
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<B.cpu>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "http",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
+            "isServerless": false,
+            "name": "fv-serve-cpu-pod",
+            "ports": [
+              "8000/http"
+            ],
+            "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0,
+            "volumeMountPath": "/workspace"
+          }
+        ]
+      ],
+      "stdout": []
+    },
+    {
+      "args": [
+        "sync",
+        "cuda",
+        "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [
+        "FV_RELEASE_CHANNEL=latest",
+        "RUNPOD_REGISTRY_AUTH_ID=auth-golden"
+      ],
+      "name": "templates-update",
+      "ok": true,
+      "order": [
+        "PATCH /v1/templates/tpl-cuda-sls",
+        "PATCH /v1/templates/tpl-cuda-pod"
+      ],
+      "prog": "templates",
+      "retags": [],
+      "runpod": [
+        [
+          "PATCH",
+          "/v1/templates/tpl-cuda-sls",
+          {
+            "containerDiskInGb": 20,
+            "containerRegistryAuthId": "auth-golden",
+            "env": {
+              "FV_AUTH_MODE": "trust-gateway",
+              "FV_CACHE_DIR": "/fvstate/cache",
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<A.cuda>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "latest",
+              "FV_SERVE_MODE": "runpod-queue",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/runpod-volume/weights",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "name": "fv-serve-cuda-sls",
+            "readme": "fv-serve cuda (sls), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0
+          }
+        ],
+        [
+          "PATCH",
+          "/v1/templates/tpl-cuda-pod",
+          {
+            "containerDiskInGb": 30,
+            "containerRegistryAuthId": "auth-golden",
+            "env": {
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<A.cuda>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "latest",
+              "FV_SERVE_FORWARD": "1",
+              "FV_SERVE_MODE": "http",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/workspace/weights",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "name": "fv-serve-cuda-pod",
+            "ports": [
+              "8000/http",
+              "70000/tcp"
+            ],
+            "readme": "fv-serve cuda (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0,
+            "volumeMountPath": "/workspace"
+          }
+        ]
+      ],
+      "stdout": []
+    },
+    {
+      "args": [
+        "sync",
+        "gpu",
+        "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "templates-unknown",
+      "ok": false,
+      "order": [],
+      "prog": "templates",
+      "retags": [],
+      "runpod": [],
+      "stdout": []
+    },
+    {
+      "args": [
+        "sync",
+        "cuda",
+        "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "templates-tag",
+      "ok": false,
+      "order": [],
+      "prog": "templates",
+      "retags": [],
+      "runpod": [],
+      "stdout": []
+    },
+    {
+      "args": [
+        "reconcile",
+        "--dry-run"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "reconcile-dry-run",
+      "ok": true,
+      "order": [],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": [
+        "gone      pod ghost   (created by test)",
+        "unknown   pod stray1 fv-serve-smoke-x ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+        "unknown   endpoint ep1 fv-serve-ep-x ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "template  fv-serve-cuda-sls <A.cuda:12> != stable <B.cuda:12>",
+        "template  fv-serve-cuda-pod <A.cuda:12> != stable <B.cuda:12>",
+        "reconcile: 1 gone (not marked: dry run), 2 unknown, 2 drifted"
+      ]
+    },
+    {
+      "args": [
+        "reconcile",
+        "--adopt"
+      ],
+      "d1": [
+        [
+          "UPDATE deployments SET status = ?, deleted_at = COALESCE(deleted_at, ?), updated_at = ? WHERE id = ?",
+          [
+            "gone",
+            "<now>",
+            "<now>",
+            "pod:ghost"
+          ]
+        ],
+        [
+          "INSERT INTO deployments (id, kind, runpod_id, created_at, updated_at, created_by, status, git_sha, variant, channel, name, image, gpu, dc, meta, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at, status = excluded.status, git_sha = excluded.git_sha, variant = excluded.variant, channel = excluded.channel, name = excluded.name, image = excluded.image, gpu = excluded.gpu, dc = excluded.dc, meta = excluded.meta, digest = excluded.digest",
+          [
+            "pod:stray1",
+            "pod",
+            "stray1",
+            "<now>",
+            "<now>",
+            "reconcile/release.sh",
+            "ready",
+            "bbbbbbb222222222222222222222222222222222",
+            "cuda",
+            "latest",
+            "fv-serve-smoke-x",
+            "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+            "RTX PRO 6000",
+            "EU-RO-1",
+            "{\"adopted\":true}",
+            "<B.cuda>"
+          ]
+        ],
+        [
+          "INSERT INTO deployments (id, kind, runpod_id, created_at, updated_at, created_by, status, git_sha, variant, name, image, gpu, dc, meta, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at, status = excluded.status, git_sha = excluded.git_sha, variant = excluded.variant, name = excluded.name, image = excluded.image, gpu = excluded.gpu, dc = excluded.dc, meta = excluded.meta, digest = excluded.digest",
+          [
+            "endpoint:ep1",
+            "endpoint",
+            "ep1",
+            "<now>",
+            "<now>",
+            "reconcile/release.sh",
+            "ready",
+            "0000000aaaa",
+            "h3-turbo",
+            "fv-serve-ep-x",
+            "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            "EU-RO-1",
+            "{\"adopted\":true,\"template\":\"tpl-cuda-sls\"}",
+            "<A.cuda>"
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "reconcile-adopt",
+      "ok": true,
+      "order": [
+        "d1 UPDATE deployments",
+        "d1 INSERT deployments",
+        "d1 INSERT deployments"
+      ],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": [
+        "gone      pod ghost   (created by test)",
+        "unknown   pod stray1 fv-serve-smoke-x ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+        "unknown   endpoint ep1 fv-serve-ep-x ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "template  fv-serve-cuda-sls <A.cuda:12> != stable <B.cuda:12>",
+        "template  fv-serve-cuda-pod <A.cuda:12> != stable <B.cuda:12>",
+        "reconcile: 1 gone, 2 unknown (adopted), 2 drifted"
+      ]
+    },
+    {
+      "args": [
+        "reconcile"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "reconcile-drift",
+      "ok": true,
+      "order": [],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": [
+        "drifted   pod stray1 recorded ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda> live ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "template  fv-serve-cuda-sls <A.cuda:12> != stable <B.cuda:12>",
+        "template  fv-serve-cuda-pod <A.cuda:12> != stable <B.cuda:12>",
+        "reconcile: 0 gone, 0 unknown, 3 drifted"
+      ]
+    },
+    {
+      "args": [
+        "reconcile",
+        "--fix"
+      ],
+      "d1": [
+        [
+          "UPDATE deployments SET image = ?, digest = ?, updated_at = ? WHERE id = ?",
+          [
+            "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "<A.cuda>",
+            "<now>",
+            "pod:stray1"
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "reconcile-fix",
+      "ok": true,
+      "order": [
+        "d1 UPDATE deployments"
+      ],
+      "prog": "release",
+      "retags": [],
+      "runpod": [],
+      "stdout": [
+        "drifted   pod stray1 recorded ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda> live ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "template  fv-serve-cuda-sls <A.cuda:12> != stable <B.cuda:12>",
+        "template  fv-serve-cuda-pod <A.cuda:12> != stable <B.cuda:12>",
+        "reconcile: 0 gone, 0 unknown, 3 drifted"
+      ]
+    },
+    {
+      "args": [
+        "pod",
+        "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+      ],
+      "d1": [
+        [
+          "INSERT INTO deployments (id, kind, runpod_id, created_at, updated_at, created_by, status, git_sha, variant, channel, name, image, gpu, cost_per_hr, dc, meta, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at, status = excluded.status, git_sha = excluded.git_sha, variant = excluded.variant, channel = excluded.channel, name = excluded.name, image = excluded.image, gpu = excluded.gpu, cost_per_hr = excluded.cost_per_hr, dc = excluded.dc, meta = excluded.meta, digest = excluded.digest",
+          [
+            "pod:pod-golden-1",
+            "pod",
+            "pod-golden-1",
+            "<now>",
+            "<now>",
+            "test/runpod-pod.sh",
+            "creating",
+            "bbbbbbb222222222222222222222222222222222",
+            "cuda",
+            "latest",
+            "fv-serve-smoke-1025120000",
+            "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            1.84,
+            "EU-RO-1",
+            "{\"config\":\"/etc/fv/runpod.toml\"}",
+            "<B.cuda>"
+          ]
+        ],
+        [
+          "UPDATE deployments SET status = ?, updated_at = ? WHERE id = ?",
+          [
+            "ready",
+            "<now>",
+            "pod:pod-golden-1"
+          ]
+        ],
+        [
+          "UPDATE deployments SET ready_at = COALESCE(ready_at, ?) WHERE id = ?",
+          [
+            "<now>",
+            "pod:pod-golden-1"
+          ]
+        ],
+        [
+          "UPDATE deployments SET status = ?, deleted_at = COALESCE(deleted_at, ?), updated_at = ? WHERE id = ?",
+          [
+            "deleted",
+            "<now>",
+            "<now>",
+            "pod:pod-golden-1"
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "registry-pod",
+      "ok": true,
+      "order": [
+        "d1 INSERT deployments",
+        "d1 UPDATE deployments",
+        "d1 UPDATE deployments",
+        "d1 UPDATE deployments"
+      ],
+      "prog": "registry",
+      "retags": [],
+      "runpod": [],
+      "stdout": []
+    },
+    {
+      "args": [
+        "endpoint",
+        "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+      ],
+      "d1": [
+        [
+          "INSERT INTO deployments (id, kind, runpod_id, created_at, updated_at, created_by, status, git_sha, variant, channel, name, image, dc, gpu, meta, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at, status = excluded.status, git_sha = excluded.git_sha, variant = excluded.variant, channel = excluded.channel, name = excluded.name, image = excluded.image, dc = excluded.dc, gpu = excluded.gpu, meta = excluded.meta, digest = excluded.digest",
+          [
+            "endpoint:ep-golden-1",
+            "endpoint",
+            "ep-golden-1",
+            "<now>",
+            "<now>",
+            "test/runpod-endpoint.sh",
+            "creating",
+            "bbbbbbb222222222222222222222222222222222",
+            "cuda",
+            "latest",
+            "fv-serve-ep-1025120000",
+            "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+            "EU-RO-1",
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            "{\"type\":\"queue\",\"template\":\"tpl-golden-1\",\"shared_template\":false,\"volume\":\"bz0ofkfx45\",\"config\":\"/etc/fv/runpod.toml\"}",
+            "<B.cuda>"
+          ]
+        ],
+        [
+          "UPDATE deployments SET status = ?, updated_at = ? WHERE id = ?",
+          [
+            "ready",
+            "<now>",
+            "endpoint:ep-golden-1"
+          ]
+        ],
+        [
+          "UPDATE deployments SET ready_at = COALESCE(ready_at, ?) WHERE id = ?",
+          [
+            "<now>",
+            "endpoint:ep-golden-1"
+          ]
+        ],
+        [
+          "UPDATE deployments SET status = ?, deleted_at = COALESCE(deleted_at, ?), updated_at = ? WHERE id = ?",
+          [
+            "deleted",
+            "<now>",
+            "<now>",
+            "endpoint:ep-golden-1"
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "registry-endpoint",
+      "ok": true,
+      "order": [
+        "d1 INSERT deployments",
+        "d1 UPDATE deployments",
+        "d1 UPDATE deployments",
+        "d1 UPDATE deployments"
+      ],
+      "prog": "registry",
+      "retags": [],
+      "runpod": [],
+      "stdout": []
+    },
+    {
+      "args": [
+        "promote",
+        "aaaaaaa",
+        "stable",
+        "--local"
+      ],
+      "d1": [],
+      "dispatch": [],
+      "env": [],
+      "name": "promote-template-fails",
+      "ok": false,
+      "order": [
+        "retag cpu-stable",
+        "retag cuda-stable",
+        "retag stable",
+        "PATCH /v1/templates/tpl-cuda-sls"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>"
+        ]
+      ],
+      "runpod": [
+        [
+          "PATCH",
+          "/v1/templates/tpl-cuda-sls",
+          {
+            "containerDiskInGb": 20,
+            "env": {
+              "FV_AUTH_MODE": "trust-gateway",
+              "FV_CACHE_DIR": "/fvstate/cache",
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<A.cuda>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "runpod-queue",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/runpod-volume/weights",
+              "RUST_LOG": "info"
+            },
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "name": "fv-serve-cuda-sls",
+            "readme": "fv-serve cuda (sls), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+            "volumeInGb": 0
+          }
+        ]
+      ],
+      "stdout": []
+    },
+    {
+      "args": [
+        "promote",
+        "aaaaaaa",
+        "canary",
+        "--local"
+      ],
+      "d1": [
+        [
+          "INSERT INTO releases (channel, git_sha, digests, action, promoted_at, promoted_by, notes, run_url, templates_updated, source_release) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+          [
+            "canary",
+            "aaaaaaa111111111111111111111111111111111",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
+            "promote",
+            "<now>",
+            "test",
+            null,
+            null,
+            0,
+            null
+          ]
+        ]
+      ],
+      "dispatch": [],
+      "env": [],
+      "name": "promote-insert-fails",
+      "ok": false,
+      "order": [
+        "retag cpu-canary",
+        "retag cuda-canary",
+        "retag canary",
+        "d1 INSERT releases"
+      ],
+      "prog": "release",
+      "retags": [
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cpu-canary",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-canary",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:canary",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>"
+        ]
+      ],
+      "runpod": [],
+      "stdout": []
+    }
+  ]
+}

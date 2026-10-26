@@ -29,7 +29,10 @@ pub use pod::{create_body as pod_create_body, Pod, PodListing, PodReach};
 pub use serverless::{
     endpoint_body, template_body, QueueReach, Serverless, SERVERLESS_DELETE_ATTEMPTS,
 };
-pub use template::{template_env_of, template_pod_body, with_worker_config, TemplatePod};
+pub use template::{
+    serve_template_body, serve_template_launch, serve_template_name, template_env_of,
+    template_pod_body, with_worker_config, Flavour, TemplatePod,
+};
 
 use std::time::Duration;
 

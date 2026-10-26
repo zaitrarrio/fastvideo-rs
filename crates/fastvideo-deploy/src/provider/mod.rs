@@ -35,9 +35,9 @@ use serde_json::Value;
 use crate::boot::sys::Method;
 
 pub use types::{
-    Account, ApiCall, CloudType, Cursor, Disk, GpuSpec, Guards, Instance, InstanceId,
-    InstanceState, Launch, LaunchSource, LogPage, Offer, OfferQuery, Placement, ProviderKind,
-    ServerlessSpec, VolumeMount, WeightsSource, LAUNCH_SCHEMA,
+    Account, ApiCall, CheckedGuards, CloudType, Cursor, Disk, GpuSpec, Guards, Instance,
+    InstanceId, InstanceState, Launch, LaunchSource, LogPage, Offer, OfferQuery, Placement,
+    ProviderKind, ServerlessSpec, VolumeMount, WeightsSource, LAUNCH_SCHEMA, NOT_CHECKED,
 };
 
 /// Why a provider call failed. Messages never carry the API key (it is only

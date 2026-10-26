@@ -11,8 +11,8 @@ use fastvideo_manifest::deploy::{EU_DATA_CENTER, EU_REGION, EU_VOLUME_ID};
 
 use crate::boot::sys::{Clock, LogSink};
 use crate::provider::{
-    Account, Guards, Instance, InstanceId, InstanceState, Launch, Offer, Provider, ProviderError,
-    ProviderKind, WeightsSource,
+    Account, CheckedGuards, Guards, Instance, InstanceId, InstanceState, Launch, Offer, Provider,
+    ProviderError, ProviderKind, WeightsSource,
 };
 
 /// CLAUDE.md "GPU pods": stop before the balance would drop below $8.
@@ -60,14 +60,13 @@ pub fn at_most(x: f64, cap: f64) -> bool {
 
 /// The default guards.
 pub fn default_guards() -> Guards {
-    Guards {
-        max_usd_per_hr: MAX_USD_PER_HR,
-        min_balance_usd: MIN_BALANCE_USD,
-        cap_s: CAP_S,
-        ready_timeout_s: READY_TIMEOUT_S,
-        ready_cycles: READY_CYCLES,
-        force: false,
-    }
+    Guards::all(
+        MAX_USD_PER_HR,
+        MIN_BALANCE_USD,
+        CAP_S,
+        READY_TIMEOUT_S,
+        READY_CYCLES,
+    )
 }
 
 /// A guard that refused.
@@ -104,6 +103,8 @@ pub enum GuardError {
     SecretInLaunch(&'static str),
     #[error("guards: {0}")]
     Invalid(String),
+    #[error("guards: {} not checked by the launcher that wrote this launch (null); fv-deploy checks every guard: set them", .0.join(", "))]
+    NotChecked(Vec<&'static str>),
     #[error("backstop: {0}")]
     Backstop(String),
 }
@@ -218,8 +219,11 @@ pub fn default_max_usd_per_hr(kind: ProviderKind) -> f64 {
 /// `vast.sh` `VAST_MAX_DPH`.
 pub const VAST_MAX_USD_PER_HR: f64 = 0.6;
 
-/// The guard numbers themselves.
-pub fn check_guards(g: &Guards) -> Result<(), GuardError> {
+/// The guard numbers themselves: every one present (a `null`, "not checked
+/// by this launcher", is refused: fv-deploy checks them all) and within the
+/// owner's bounds. The numbers `up` runs on.
+pub fn check_guards(g: &Guards) -> Result<CheckedGuards, GuardError> {
+    let g = g.checked().map_err(GuardError::NotChecked)?;
     let bad = |m: &str| Err(GuardError::Invalid(m.to_owned()));
     if !(g.max_usd_per_hr.is_finite() && g.max_usd_per_hr > 0.0) {
         return bad("the price cap must be a positive number");
@@ -248,7 +252,7 @@ pub fn check_guards(g: &Guards) -> Result<(), GuardError> {
             );
         }
     }
-    Ok(())
+    Ok(g)
 }
 
 /// A serverless endpoint's price cap is checked on the GPU's pod quote for one
@@ -525,6 +529,39 @@ pub const BACKSTOP_ATTEMPTS: u32 = 3;
 /// stands down early only after two "gone" readings (a 404) at least a minute
 /// apart, never on a single answer.
 pub fn run_backstop(
+    p: &dyn Provider,
+    id: &InstanceId,
+    deadline: f64,
+    clock: &dyn Clock,
+    log: &dyn LogSink,
+) -> Result<BackstopOutcome, ProviderError> {
+    run_backstop_recorded(p, id, deadline, clock, log, None)
+}
+
+/// [`run_backstop`], telling the deployments ledger (D1, C3d) when it
+/// deleted the instance at the deadline (warn-only, as every ledger write:
+/// a failure is a log line). An instance already gone was recorded by
+/// whoever deleted it.
+pub fn run_backstop_recorded(
+    p: &dyn Provider,
+    id: &InstanceId,
+    deadline: f64,
+    clock: &dyn Clock,
+    log: &dyn LogSink,
+    recorder: Option<&dyn crate::lifecycle::Recorder>,
+) -> Result<BackstopOutcome, ProviderError> {
+    let out = backstop_body(p, id, deadline, clock, log)?;
+    if let (BackstopOutcome::Deleted, Some(r)) = (&out, recorder) {
+        if let Err(e) = r.deleted(p.kind(), id, "deleted") {
+            log.line(&format!(
+                "[backstop] WARNING: the deployments ledger (D1) could not record the delete of {id}: {e}"
+            ));
+        }
+    }
+    Ok(out)
+}
+
+fn backstop_body(
     p: &dyn Provider,
     id: &InstanceId,
     deadline: f64,

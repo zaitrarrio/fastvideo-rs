@@ -57,35 +57,49 @@ export const GpuSpecZ: z.ZodType<GpuSpec> = z.strictObject({
   types: z.array(z.string()),
 });
 
-/** The money and readiness guards of one launch (docs/adr/0018-fv-deploy.md §5). */
+/** The money and readiness guards of one launch (docs/adr/0018-fv-deploy.md §5).
+ * 
+ * `null` (Rust `None`) in `max_usd_per_hr`, `cap_s`, `ready_timeout_s` or
+ * `ready_cycles` means **not checked by the launcher that wrote this
+ * launch** (§10.4): fv-control's serverless endpoints check no serverless
+ * price and no worker readiness, a Runpod template launches nothing. It is
+ * never a cap or a timeout: fv-deploy's own `up` refuses a launch with any
+ * of them `null` ([`Guards::checked`]), and a ledger shows them as "not
+ * checked". The balance floor is always checked (CLAUDE.md: $8). Every
+ * field stays required in the schema: a launcher states each guard, a
+ * number or `null`. */
 export interface Guards {
-  /** Wall-clock cap: the detached backstop deletes the instance this many
-   * seconds after its creation, whatever happens to the CLI. */
-  cap_s: number;
+  /** Wall-clock cap (s): the detached backstop deletes the instance this
+   * many seconds after its creation, whatever happens to the CLI. `null`:
+   * not checked by this launcher. */
+  cap_s: number | null;
   /** Lifts the upper bounds (cap ≤ 4 h, ≤ 3 cycles, ≤ 600 s readiness;
    * `--force-guards`). The $8 floor is never lifted. */
   force?: boolean;
-  /** Price cap: an offer quoted above it is never created; a created
-   * instance billed above it is deleted at once. */
-  max_usd_per_hr: number;
+  /** Price cap ($/hr): an offer quoted above it is never created; a created
+   * instance billed above it is deleted at once. `null`: not checked by
+   * this launcher. */
+  max_usd_per_hr: number | null;
   /** Balance floor: nothing is created while the account balance is below
    * it (CLAUDE.md: $8). */
   min_balance_usd: number;
   /** At most this many instances are created for one `up` (the owner's
    * rule: 3), then it gives up. Every create counts, a GPU-type fallback
-   * after a billed-over-cap delete included. */
-  ready_cycles: number;
-  /** An instance not ready (`/ping` 200) this long after its creation is
-   * deleted and replaced (the owner's rule: 600 s). */
-  ready_timeout_s: number;
+   * after a billed-over-cap delete included. `null`: not checked by this
+   * launcher. */
+  ready_cycles: number | null;
+  /** An instance not ready (`/ping` 200) this long (s) after its creation
+   * is deleted and replaced (the owner's rule: 600 s). `null`: not checked
+   * by this launcher. */
+  ready_timeout_s: number | null;
 }
 export const GuardsZ: z.ZodType<Guards> = z.strictObject({
-  cap_s: z.number().int().min(0),
+  cap_s: z.number().int().min(0).nullable(),
   force: z.boolean().optional(),
-  max_usd_per_hr: z.number(),
+  max_usd_per_hr: z.number().nullable(),
   min_balance_usd: z.number(),
-  ready_cycles: z.number().int().min(0).max(4294967295),
-  ready_timeout_s: z.number().int().min(0),
+  ready_cycles: z.number().int().min(0).max(4294967295).nullable(),
+  ready_timeout_s: z.number().int().min(0).nullable(),
 });
 
 /** A provider's instance id (a Runpod pod id; a serverless endpoint id,

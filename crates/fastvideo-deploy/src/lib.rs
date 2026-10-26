@@ -22,6 +22,11 @@
 //!   feature (its command line and HTTP client); the library is tested on
 //!   the seams without it.
 //!
+//! - [`release`]: `fv-deploy templates | release | reconcile` (plan C3d,
+//!   docs/adr/0018-fv-deploy.md §10): the Runpod serve templates, release
+//!   channels (GHCR tags, the D1 history) and the D1 `deployments` ledger
+//!   fv-control and the scripts share.
+//!
 //! Deploy scripts: `scripts/serve/{runpod-pod,runpod-endpoint,vast,vast-serverless}.sh`.
 
 pub mod boot;
@@ -31,5 +36,6 @@ pub mod guard;
 pub mod launch;
 pub mod lifecycle;
 pub mod provider;
+pub mod release;
 pub mod runpod;
 pub mod vast;
