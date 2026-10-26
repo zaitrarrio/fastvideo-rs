@@ -216,9 +216,15 @@ oracle_fastwan22() {
 
 # FastVideo SF-Wan 1.3B (WanCausalDMDPipeline at its defaults), one request,
 # no warm-up: the hooks dump the first denoise (oracle_dump.py _patch_sf_*).
+# The tree is R2-only since 2026-10-13 (the EU volume holds H3 and LTX): the
+# step r2:sfwan21-1.3b puts it at $UW/sfwan21-1.3b on the container disk
+# (pod.sh weights_r2; docs/adr/0019-fv-lab.md §21), read from there when it
+# is complete, else from the volume as before.
 oracle_sfwan() {
+  local m="$W/sfwan21-1.3b"
+  [[ -f "$UW/sfwan21-1.3b/.complete" ]] && m="$UW/sfwan21-1.3b"
   oracle_cell sfwan13 env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/bench_fastwan.py" \
-    --model "$W/sfwan21-1.3b" --hf-name SFWan2.1-T2V-1.3B-Diffusers --out "$OUT/oracle-sfwan13" \
+    --model "$m" --hf-name SFWan2.1-T2V-1.3B-Diffusers --out "$OUT/oracle-sfwan13" \
     --repeats 1 --no-warmup --prompt "$PROMPT_OURS" --seed "$SEED_OURS" --attention FLASH_ATTN
 }
 

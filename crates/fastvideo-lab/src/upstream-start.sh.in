@@ -1,4 +1,4 @@
-( used=0; n=0; tx0=0
+@R2_HEAD@( used=0; n=0; tx0=0
   fv_self_delete() {
     # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,
     # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no "errors".
@@ -66,6 +66,6 @@ RUNNER=/opt/fvrs
   command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }
   git init -q /opt/fvrs-live && git -C /opt/fvrs-live remote add origin https://github.com/zaitrarrio/fastvideo-rs.git     && git -C /opt/fvrs-live fetch -q --depth 1 origin @UP_SHA@ && git -C /opt/fvrs-live checkout -q FETCH_HEAD     && echo live
 } >"$OUT/clone.log" 2>&1 && RUNNER=/opt/fvrs-live
-env @EXTRA_ENV@ UP_STEPS="@UP_STEPS@" UP_STEPS_BG="" UP_CELLS=""   UP_CELL_TIMEOUT_S=@UP_CELL_TIMEOUT@ UP_LOCAL=1   bash $RUNNER/scripts/gpu/upstream/pod.sh "$OUT" >"$OUT/pod.out" 2>&1
+@R2_ENV@env @EXTRA_ENV@ UP_STEPS="@UP_STEPS@" UP_STEPS_BG="" UP_CELLS=""   UP_CELL_TIMEOUT_S=@UP_CELL_TIMEOUT@ UP_LOCAL=1   bash $RUNNER/scripts/gpu/upstream/pod.sh "$OUT" >"$OUT/pod.out" 2>&1
 echo "done @TAG@" >"$OUT/DONE"
 exec sleep infinity

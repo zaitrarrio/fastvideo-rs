@@ -8,9 +8,10 @@
 //!   published there is planned, fetched part by part and read by the arm.
 //!   Skipped without python3, as `fastvideo-deploy`'s `boot_r2` test.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::io::{BufRead as _, BufReader};
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -22,12 +23,10 @@ use fastvideo_lab::weights::{parse_r2_table, R2Key, R2Setup, TreeSources};
 const KEY_ID: &str = "fake-access-key";
 const KEY_SECRET: &str = "fake-secret";
 
+/// A `#!/bin/sh` fake tool, written so no exec of it can race a fork
+/// (`common::write_exe`).
 fn script(path: &Path, body: &str) {
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d).unwrap();
-    }
-    std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_exe(path, &format!("#!/bin/sh\n{body}"));
 }
 
 fn read(p: &Path) -> String {

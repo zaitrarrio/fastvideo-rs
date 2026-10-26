@@ -410,11 +410,16 @@ pub struct Clip {
 /// the log as `[<tag>] <line>`. A dry run lists each ffmpeg / ffprobe command
 /// as `dry-run metric <tag>: <command>`, every clip assumed present. Nothing
 /// judges the numbers (ADR-0019 §20, decision 2).
+///
+/// A pass that only decodes (`decode` measures, no `copy`, `missing` or
+/// `echo`; ADR-0019 §21) writes no report and needs none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Metric {
-    /// The report directory, below `{runs}/` (`metrics.txt`, the copies).
-    pub report: String,
+    /// The report directory, below `{runs}/` (`metrics.txt`, the copies);
+    /// absent only for a pass that writes nothing there (decodes only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
     /// The echoed lines' prefix and the dry-run lines' name.
     pub tag: String,
     /// The clips, in order.
@@ -434,6 +439,10 @@ pub struct Metric {
     /// After the pass, `metrics.txt` (all of it) into the log.
     #[serde(default, skip_serializing_if = "is_false")]
     pub echo: bool,
+    /// Run right after this arm of the cell instead of after the cell's arms,
+    /// compares and gates ([`Compare::after`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
 }
 
 /// What a [`Metric`] measures of one clip. The comparisons run ffmpeg's
@@ -470,6 +479,11 @@ pub enum Measure {
         width: u32,
         height: u32,
     },
+    /// The clip decoded into PNG frames: `ffmpeg -loglevel error -y -i
+    /// <clip> -start_number 0 <dir>/frame-%03d.png`, `dir` made first; no
+    /// line written (the frames are a `[[compare]]`'s input, ADR-0019 §21).
+    /// `dir` is under `{runs}/` or `{ref_dir}/` (removed with the reference).
+    Decode { dir: String },
 }
 
 /// The reference of an oracle cell (docs/adr/0019-fv-lab.md §15): what an
@@ -865,11 +879,17 @@ impl Arm {
     }
 }
 
-/// `compare_cells <baseline> <candidate> [args]`.
+/// `compare_cells <baseline> <candidate> [args]`: two arms' frames; or, with
+/// `tag`, `compare_one <tag> <baseline> <candidate> [args]`: two frame
+/// directories that are not arms' (ADR-0019 §21: a reference's decoded clip,
+/// an arm's decoded mp4), the report `compare/compare-clips-<tag>.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Compare {
+    /// An arm of the cell; with `tag`, a frame directory (`{runs}/…`,
+    /// `{ref_dir}/…`, `{ref}/…` or `{scratch}/…`).
     pub baseline: String,
+    /// As `baseline`.
     pub candidate: String,
     /// Extra `compare-clips` arguments (`--off-identity`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -877,8 +897,19 @@ pub struct Compare {
     /// The promotion gate of the same pair, run right after this compare
     /// (the script's `compare_cells b c; gate_cells b c …` in one loop
     /// iteration). A `[[gate]]` runs after every compare of the cell instead.
+    /// Not with `tag` (a gate reads two arms' `benchmark.json`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<PairedGate>,
+    /// The report's tag: `baseline` and `candidate` are directories, not
+    /// arms. Run when one of the cell's arms is selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// Run right after this arm of the cell (its hash, if any) instead of
+    /// after all of them. At one arm the cell's anchored `[[metric]]`s run
+    /// first (a decode makes the frames a compare reads), then its anchored
+    /// compares, each kind in file order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
 }
 
 /// The gate of a compare's own pair (`Compare::gate`).
@@ -949,7 +980,9 @@ pub struct Paths {
     pub baseline: Option<PathBuf>,
 }
 
-const PATH_KEYS: [&str; 7] = ["weights", "scratch", "runs", "root", "arm", "tae", "ref"];
+const PATH_KEYS: [&str; 8] = [
+    "weights", "scratch", "runs", "root", "arm", "tae", "ref", "ref_dir",
+];
 const WORKLOAD_KEYS: [&str; 8] = [
     "prompt",
     "prompt_set",
@@ -1158,11 +1191,11 @@ impl CellFile {
                             format!("`{s}`: a list splice is a whole element"),
                         ));
                     }
-                    if p == "ref" && self.reference.is_none() {
+                    if (p == "ref" || p == "ref_dir") && self.reference.is_none() {
                         return Err(field(
                             file,
                             at("argv"),
-                            "`{ref}` in a cell without a [reference]",
+                            format!("`{{{p}}}` in a cell without a [reference]"),
                         ));
                     }
                     if p == "tae" && arm.tae.is_none() {
@@ -1244,7 +1277,46 @@ impl CellFile {
             return Err(field(file, format!("lists.{l}"), "no arm splices it"));
         }
         let arm = |n: &str| names.contains(n);
+        // An arm's position, for `after` (ADR-0019 §21).
+        let pos = |n: &str| self.arms.iter().position(|a| a.name == n);
         for (i, c) in self.compares.iter().enumerate() {
+            let at = format!("compare[{i}]");
+            if let Some(a) = &c.after {
+                if !arm(a) {
+                    return Err(field(
+                        file,
+                        format!("{at}.after"),
+                        format!("`{a}` is not an arm of this cell"),
+                    ));
+                }
+            }
+            if let Some(tag) = &c.tag {
+                // Two frame directories, not arms.
+                if !is_name(tag) {
+                    return Err(field(
+                        file,
+                        format!("{at}.tag"),
+                        format!("`{tag}` is not [a-z0-9][a-z0-9._-]*"),
+                    ));
+                }
+                if c.gate.is_some() {
+                    return Err(field(
+                        file,
+                        format!("{at}.gate"),
+                        "a gate reads two arms' benchmark.json: not with `tag` (directories)",
+                    ));
+                }
+                for d in [&c.baseline, &c.candidate] {
+                    self.check_path(file, &at, d, &["runs", "scratch", "ref", "ref_dir"])?;
+                }
+                self.check_anchor(
+                    file,
+                    &format!("{at}.after"),
+                    c.after.as_deref(),
+                    [c.baseline.as_str(), c.candidate.as_str()],
+                )?;
+                continue;
+            }
             let off = c.gate.as_ref().and_then(|g| g.off.as_ref());
             for n in [Some(&c.baseline), Some(&c.candidate), off]
                 .into_iter()
@@ -1253,9 +1325,19 @@ impl CellFile {
                 if !arm(n) {
                     return Err(field(
                         file,
-                        format!("compare[{i}]"),
+                        at.clone(),
                         format!("`{n}` is not an arm of this cell"),
                     ));
+                }
+                // Anchored: after both arms (and the OFF arm) ran.
+                if let Some(a) = &c.after {
+                    if pos(n) > pos(a) {
+                        return Err(field(
+                            file,
+                            format!("{at}.after"),
+                            format!("`{a}` runs before `{n}`, which the compare reads"),
+                        ));
+                    }
                 }
             }
         }
@@ -1281,49 +1363,112 @@ impl CellFile {
         Ok(())
     }
 
-    /// `[[metric]]` (ADR-0019 §20).
-    fn validate_metrics(&self, file: &str) -> Result<(), LabError> {
-        let path_ok = |s: &str| {
-            ["{runs}", "{scratch}", "{ref}", "{root}"]
-                .iter()
-                .any(|r| s.starts_with(&format!("{r}/")))
-                && !s.split('/').any(|p| p == ".." || p == ".")
-                && !s.contains(['\n', '\r', '\'', '"'])
-                && placeholders(s).is_ok_and(|ph| {
-                    ph.len() == 1 && matches!(ph[0], "runs" | "scratch" | "ref" | "root")
-                })
+    /// `after = "<a>"` on a step that reads `paths`: every arm a path
+    /// `{runs}/<arm>/…` names runs at or before `<a>` (its output is there
+    /// when the step runs), as an arm compare's two arms are checked. An
+    /// anchor that is not an arm is reported by the caller.
+    fn check_anchor<'p>(
+        &self,
+        file: &str,
+        at: &str,
+        after: Option<&str>,
+        paths: impl IntoIterator<Item = &'p str>,
+    ) -> Result<(), LabError> {
+        let pos = |n: &str| self.arms.iter().position(|x| x.name == n);
+        let Some(pa) = after.and_then(pos) else {
+            return Ok(());
         };
-        for (i, m) in self.metrics.iter().enumerate() {
-            let at = |f: &str| format!("metric[{i}].{f}");
-            let check = |f: &str, p: &str| -> Result<(), LabError> {
-                if !path_ok(p) {
-                    return Err(field(
-                        file,
-                        at(f),
-                        format!("`{p}` is not a path under `{{runs}}`, `{{scratch}}`, `{{ref}}` or `{{root}}`"),
-                    ));
-                }
-                if p.starts_with("{ref}/") && self.reference.is_none() {
-                    return Err(field(
-                        file,
-                        at(f),
-                        "`{ref}` in a cell without a [reference]",
-                    ));
-                }
-                Ok(())
+        for p in paths {
+            let Some(n) = p.strip_prefix("{runs}/").and_then(|r| r.split('/').next()) else {
+                continue;
             };
-            let below_runs = m.report.strip_prefix("{runs}/").is_some_and(|rest| {
-                !rest.is_empty()
-                    && rest
-                        .split('/')
-                        .all(|c| !c.is_empty() && c != "." && c != "..")
-            });
-            if !below_runs || !path_ok(&m.report) {
+            if pos(n).is_some_and(|pn| pn > pa) {
                 return Err(field(
                     file,
-                    at("report"),
-                    format!("`{}` is not a directory below `{{runs}}/`", m.report),
+                    at,
+                    format!(
+                        "`{}` runs before `{n}`, whose `{p}` the step reads",
+                        after.unwrap_or_default()
+                    ),
                 ));
+            }
+        }
+        Ok(())
+    }
+
+    /// A path of a `[[metric]]` or a directory `[[compare]]`: one
+    /// placeholder of `roots` then `/…`, no `.` / `..` component, no quotes
+    /// or line breaks; `{ref}` / `{ref_dir}` only in a cell with a
+    /// `[reference]`.
+    fn check_path(&self, file: &str, at: &str, p: &str, roots: &[&str]) -> Result<(), LabError> {
+        let ok = roots.iter().any(|r| p.starts_with(&format!("{{{r}}}/")))
+            && !p.split('/').any(|c| c == ".." || c == ".")
+            && !p.contains(['\n', '\r', '\'', '"'])
+            && placeholders(p).is_ok_and(|ph| ph.len() == 1 && roots.contains(&ph[0]));
+        if !ok {
+            let names: Vec<String> = roots.iter().map(|r| format!("`{{{r}}}`")).collect();
+            return Err(field(
+                file,
+                at,
+                format!("`{p}` is not a path under {}", names.join(", ")),
+            ));
+        }
+        if (p.starts_with("{ref}/") || p.starts_with("{ref_dir}/")) && self.reference.is_none() {
+            return Err(field(
+                file,
+                at,
+                "`{ref}` / `{ref_dir}` in a cell without a [reference]",
+            ));
+        }
+        Ok(())
+    }
+
+    /// `[[metric]]` (ADR-0019 §20, §21).
+    fn validate_metrics(&self, file: &str) -> Result<(), LabError> {
+        const READ: [&str; 5] = ["runs", "scratch", "ref", "ref_dir", "root"];
+        for (i, m) in self.metrics.iter().enumerate() {
+            let at = |f: &str| format!("metric[{i}].{f}");
+            let check = |f: &str, p: &str| self.check_path(file, &at(f), p, &READ);
+            // A report is where lines and copies go: a pass that writes none
+            // (decodes only) needs none.
+            let decodes_only = m
+                .measures
+                .iter()
+                .all(|me| matches!(me, Measure::Decode { .. }));
+            let writes = m.copy || m.missing || m.echo || !decodes_only;
+            match &m.report {
+                Some(report) => {
+                    let below_runs = report.strip_prefix("{runs}/").is_some_and(|rest| {
+                        !rest.is_empty()
+                            && rest
+                                .split('/')
+                                .all(|c| !c.is_empty() && c != "." && c != "..")
+                    });
+                    if !below_runs || check("report", report).is_err() {
+                        return Err(field(
+                            file,
+                            at("report"),
+                            format!("`{report}` is not a directory below `{{runs}}/`"),
+                        ));
+                    }
+                }
+                None if writes => {
+                    return Err(field(
+                        file,
+                        at("report"),
+                        "the report directory (below `{runs}/`) its lines and copies go to",
+                    ));
+                }
+                None => {}
+            }
+            if let Some(a) = &m.after {
+                if !self.arms.iter().any(|x| &x.name == a) {
+                    return Err(field(
+                        file,
+                        at("after"),
+                        format!("`{a}` is not an arm of this cell"),
+                    ));
+                }
             }
             if !is_name(&m.tag) {
                 return Err(field(
@@ -1355,6 +1500,17 @@ impl CellFile {
             for r in &m.requires {
                 check("requires", r)?;
             }
+            // Anchored: after every arm whose output it reads.
+            self.check_anchor(
+                file,
+                &at("after"),
+                m.after.as_deref(),
+                m.clips
+                    .iter()
+                    .map(|c| c.path.as_str())
+                    .chain(m.requires.iter().map(String::as_str))
+                    .chain(m.measures.iter().flat_map(|me| me.inputs())),
+            )?;
             for me in &m.measures {
                 for p in me.inputs() {
                     check("measure", p)?;
@@ -1393,6 +1549,22 @@ impl CellFile {
                     }
                     Measure::FrameVsImage { width, height, .. } if *width == 0 || *height == 0 => {
                         return Err(field(file, at("measure"), "width, height: positive"));
+                    }
+                    // Frames are written there: the run directory, or the
+                    // reference's (removed after the cell); never the
+                    // repository, the scratch root or a weights tree.
+                    Measure::Decode { dir } => {
+                        self.check_path(file, &at("measure"), dir, &["runs", "ref_dir"])?;
+                        let below = dir
+                            .split_once("}/")
+                            .is_some_and(|(_, rest)| rest.split('/').all(|c| !c.is_empty()));
+                        if !below {
+                            return Err(field(
+                                file,
+                                at("measure"),
+                                format!("`{dir}` is not a directory below `{{runs}}/` or `{{ref_dir}}/`"),
+                            ));
+                        }
                     }
                     _ => {}
                 }
@@ -1771,6 +1943,13 @@ impl CellFile {
                         .to_string(),
                     None => return Err(format!("`{s}`: the cell has no [reference]")),
                 },
+                // The reference's directory (`{ref}` is its `dump/`): what
+                // is derived from the reference beside it (ADR-0019 §21: its
+                // decoded clip), removed with it after the cell.
+                "ref_dir" => match &self.reference {
+                    Some(r) => reference_dir(p, &r.target).display().to_string(),
+                    None => return Err(format!("`{s}`: the cell has no [reference]")),
+                },
                 "arm" => arm.to_owned(),
                 "prompt_set" => match &self.workload.prompt_set {
                     Some(ps) => p.root.join(ps).display().to_string(),
@@ -1844,6 +2023,16 @@ pub enum Step {
         candidate: String,
         args: Vec<String>,
     },
+    /// `compare_one <tag> <baseline dir> <candidate dir> <args…>`: two
+    /// frame directories that are not arms' ([`Compare::tag`]). Done when
+    /// one of `arms` (its cell's) is selected.
+    CompareDirs {
+        arms: Vec<String>,
+        tag: String,
+        baseline: PathBuf,
+        candidate: PathBuf,
+        args: Vec<String>,
+    },
     /// `gate_cells <baseline> <candidate> <kind> [off]`.
     Gate {
         baseline: String,
@@ -1900,7 +2089,8 @@ pub enum Step {
     Metric {
         arms: Vec<String>,
         tag: String,
-        report: PathBuf,
+        /// `None`: a pass that writes no report (decodes only).
+        report: Option<PathBuf>,
         clips: Vec<MetricClip>,
         requires: Vec<PathBuf>,
         missing: bool,
@@ -1934,6 +2124,9 @@ pub enum MetricLine {
     /// `<words>: <value>`, the value the last line (stdout and stderr
     /// together) holding `Parsed_<filter>`, after its last `] `.
     Value { words: String, filter: String },
+    /// No line: the command writes frames into this directory, made first
+    /// ([`Measure::Decode`]).
+    Frames(PathBuf),
 }
 
 /// The ffmpeg filters the comparisons run, in order (the script's
@@ -2043,13 +2236,34 @@ impl Measure {
                     })
                     .collect()
             }
+            Measure::Decode { dir } => {
+                let dir = path(dir)?;
+                vec![MetricCommand {
+                    argv: [
+                        "ffmpeg",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-i",
+                        clip,
+                        "-start_number",
+                        "0",
+                        &format!("{dir}/frame-%03d.png"),
+                    ]
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect(),
+                    line: MetricLine::Frames(PathBuf::from(dir)),
+                }]
+            }
         })
     }
 
-    /// The paths the measure reads besides the clip (placeholders kept).
+    /// The paths the measure reads besides the clip (placeholders kept; a
+    /// decode's directory is what it writes).
     fn inputs(&self) -> Vec<&str> {
         match self {
-            Measure::Probe {} => vec![],
+            Measure::Probe {} | Measure::Decode { .. } => vec![],
             Measure::ClipVsClip { against } => vec![against.path.as_str()],
             Measure::KeptFramesVsSource { source, .. } => vec![source.as_str()],
             Measure::FrameVsImage { image, .. } => vec![image.as_str()],
@@ -2361,11 +2575,86 @@ impl Lab {
     fn cell_steps(c: &CellFile, bin: &Path, paths: &Paths) -> Result<Vec<Step>, LabError> {
         let mut out = Vec::new();
         let label = format!("{CELLS_DIR}/{}.toml", c.name);
+        let cell_arms: Vec<String> = c.arms.iter().map(|a| a.name.clone()).collect();
         for pf in &c.prompt_files {
             out.push(Step::PromptFile {
                 path: paths.runs.join(&pf.file),
                 text: c.prompt_file_text(pf),
             });
+        }
+        // The compares (each with its paired gate) and the metrics, rendered,
+        // with the arm each is anchored after (`after`; ADR-0019 §21), if any.
+        let mut compares: Vec<(Option<&str>, Vec<Step>)> = Vec::new();
+        for (i, cmp) in c.compares.iter().enumerate() {
+            let mut steps = Vec::new();
+            match &cmp.tag {
+                Some(tag) => {
+                    let err = |e: String| field(&label, format!("compare[{i}]"), e);
+                    steps.push(Step::CompareDirs {
+                        arms: cell_arms.clone(),
+                        tag: tag.clone(),
+                        baseline: PathBuf::from(c.render(&cmp.baseline, "", paths).map_err(err)?),
+                        candidate: PathBuf::from(c.render(&cmp.candidate, "", paths).map_err(err)?),
+                        args: cmp.args.clone(),
+                    });
+                }
+                None => {
+                    steps.push(Step::Compare {
+                        baseline: cmp.baseline.clone(),
+                        candidate: cmp.candidate.clone(),
+                        args: cmp.args.clone(),
+                    });
+                    if let Some(g) = &cmp.gate {
+                        steps.push(Step::Gate {
+                            baseline: cmp.baseline.clone(),
+                            candidate: cmp.candidate.clone(),
+                            kind: g.kind,
+                            off: g.off.clone(),
+                        });
+                    }
+                }
+            }
+            compares.push((cmp.after.as_deref(), steps));
+        }
+        let mut metrics: Vec<(Option<&str>, Step)> = Vec::new();
+        for (i, m) in c.metrics.iter().enumerate() {
+            let err = |e: String| field(&label, format!("metric[{i}]"), e);
+            let path = |s: &str| c.render(s, "", paths);
+            let mut clips = Vec::new();
+            for clip in &m.clips {
+                let p = path(&clip.path).map_err(err)?;
+                let mut commands = Vec::new();
+                for me in &m.measures {
+                    commands.extend(me.commands(&clip.label, &p, &path).map_err(err)?);
+                }
+                clips.push(MetricClip {
+                    label: clip.label.clone(),
+                    path: PathBuf::from(p),
+                    commands,
+                });
+            }
+            let report = match &m.report {
+                Some(r) => Some(PathBuf::from(path(r).map_err(err)?)),
+                None => None,
+            };
+            metrics.push((
+                m.after.as_deref(),
+                Step::Metric {
+                    arms: cell_arms.clone(),
+                    tag: m.tag.clone(),
+                    report,
+                    clips,
+                    requires: m
+                        .requires
+                        .iter()
+                        .map(|r| path(r).map(PathBuf::from))
+                        .collect::<Result<_, _>>()
+                        .map_err(err)?,
+                    missing: m.missing,
+                    copy: m.copy,
+                    echo: m.echo,
+                },
+            ));
         }
         for a in &c.arms {
             let err = |m: String| field(&label, format!("arm `{}`", a.name), m);
@@ -2391,25 +2680,31 @@ impl Lab {
                     arm: a.name.clone(),
                     hash: r.hash,
                     keep: r.keep.clone(),
-                    cell_arms: c.arms.iter().map(|a| a.name.clone()).collect(),
+                    cell_arms: cell_arms.clone(),
                 });
             }
+            // Anchored after this arm: the metrics (a decode makes the
+            // frames a compare reads), then the compares.
+            let here = Some(a.name.as_str());
+            out.extend(
+                metrics
+                    .iter()
+                    .filter(|(after, _)| *after == here)
+                    .map(|(_, s)| s.clone()),
+            );
+            out.extend(
+                compares
+                    .iter()
+                    .filter(|(after, _)| *after == here)
+                    .flat_map(|(_, s)| s.iter().cloned()),
+            );
         }
-        for cmp in &c.compares {
-            out.push(Step::Compare {
-                baseline: cmp.baseline.clone(),
-                candidate: cmp.candidate.clone(),
-                args: cmp.args.clone(),
-            });
-            if let Some(g) = &cmp.gate {
-                out.push(Step::Gate {
-                    baseline: cmp.baseline.clone(),
-                    candidate: cmp.candidate.clone(),
-                    kind: g.kind,
-                    off: g.off.clone(),
-                });
-            }
-        }
+        out.extend(
+            compares
+                .iter()
+                .filter(|(after, _)| after.is_none())
+                .flat_map(|(_, s)| s.iter().cloned()),
+        );
         for g in &c.gates {
             out.push(Step::Gate {
                 baseline: g.baseline.clone(),
@@ -2418,38 +2713,12 @@ impl Lab {
                 off: g.off.clone(),
             });
         }
-        for (i, m) in c.metrics.iter().enumerate() {
-            let err = |e: String| field(&label, format!("metric[{i}]"), e);
-            let path = |s: &str| c.render(s, "", paths);
-            let mut clips = Vec::new();
-            for clip in &m.clips {
-                let p = path(&clip.path).map_err(err)?;
-                let mut commands = Vec::new();
-                for me in &m.measures {
-                    commands.extend(me.commands(&clip.label, &p, &path).map_err(err)?);
-                }
-                clips.push(MetricClip {
-                    label: clip.label.clone(),
-                    path: PathBuf::from(p),
-                    commands,
-                });
-            }
-            out.push(Step::Metric {
-                arms: c.arms.iter().map(|a| a.name.clone()).collect(),
-                tag: m.tag.clone(),
-                report: PathBuf::from(path(&m.report).map_err(err)?),
-                clips,
-                requires: m
-                    .requires
-                    .iter()
-                    .map(|r| path(r).map(PathBuf::from))
-                    .collect::<Result<_, _>>()
-                    .map_err(err)?,
-                missing: m.missing,
-                copy: m.copy,
-                echo: m.echo,
-            });
-        }
+        out.extend(
+            metrics
+                .into_iter()
+                .filter(|(after, _)| after.is_none())
+                .map(|(_, s)| s),
+        );
         Ok(out)
     }
 }
@@ -3227,7 +3496,10 @@ echo = true
         };
         assert_eq!(arms, &["o1-main", "o1-diff"]);
         assert_eq!(tag, "o1-frames");
-        assert_eq!(report, Path::new("/fvscratch/runs/f/t/o1-frames"));
+        assert_eq!(
+            report.as_deref(),
+            Some(Path::new("/fvscratch/runs/f/t/o1-frames"))
+        );
         assert!(*missing && *copy && !*echo);
         assert_eq!(
             clips[1].path,
@@ -3415,6 +3687,242 @@ echo = true
         assert!(e.contains("nothing to measure or copy"), "{e}");
         let e = CellFile::parse(
             &format!("{CELL}{METRICS}").replace("{runs}/o1-main", "{runs}/a1"),
+            "c1.toml",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("without a [reference]"), "{e}");
+    }
+
+    /// A decode-only pass and two directory compares, anchored after an arm
+    /// (ADR-0019 §21: `sfwan13`'s frames).
+    const FRAMES: &str = r#"
+[[metric]]
+tag = "o1-frames"
+after = "o1-main"
+clips = [{ label = "reference", path = "{ref}/ref.mp4" }]
+measure = [{ kind = "decode", dir = "{ref_dir}/frames" }]
+
+[[metric]]
+tag = "o1-frames"
+after = "o1-main"
+clips = [{ label = "ours", path = "{runs}/o1-main/frames/output.mp4" }]
+measure = [{ kind = "decode", dir = "{runs}/o1-main/mp4frames" }]
+
+[[compare]]
+tag = "o1-frames-vs-ref"
+baseline = "{ref_dir}/frames"
+candidate = "{runs}/o1-main/frames"
+after = "o1-main"
+
+[[compare]]
+tag = "o1-codec-floor"
+baseline = "{runs}/o1-main/frames"
+candidate = "{runs}/o1-main/mp4frames"
+args = ["--off-identity"]
+"#;
+
+    #[test]
+    fn decodes_and_directory_compares_run_where_anchored() {
+        let c = CellFile::parse(&format!("{ORACLE}{FRAMES}"), "o1.toml").unwrap();
+        let steps = Lab::steps(&[&c], Path::new("/bin/fv"), &paths()).unwrap();
+        let Step::Reference { steps: inner, .. } = &steps[0] else {
+            panic!("{steps:?}")
+        };
+        // o1-main, its hash, the two decodes, the anchored compare; o1-diff,
+        // its hash; then the compare without an anchor.
+        let kinds: Vec<&str> = inner
+            .iter()
+            .map(|s| match s {
+                Step::Arm { .. } => "arm",
+                Step::Hash { .. } => "hash",
+                Step::Metric { .. } => "metric",
+                Step::CompareDirs { .. } => "compare",
+                Step::PromptFile { .. } => "prompts",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            ["prompts", "arm", "hash", "metric", "metric", "compare", "arm", "hash", "compare"]
+        );
+        let Step::Metric {
+            report,
+            clips,
+            arms,
+            ..
+        } = &inner[3]
+        else {
+            unreachable!()
+        };
+        assert_eq!(report, &None, "a decode-only pass has no report");
+        assert_eq!(arms, &["o1-main", "o1-diff"]);
+        assert_eq!(
+            clips[0].commands[0].argv,
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                "/fvscratch/oracle-ref/t1/dump/ref.mp4",
+                "-start_number",
+                "0",
+                "/fvscratch/oracle-ref/t1/frames/frame-%03d.png"
+            ]
+        );
+        assert_eq!(
+            clips[0].commands[0].line,
+            MetricLine::Frames(PathBuf::from("/fvscratch/oracle-ref/t1/frames"))
+        );
+        let Step::CompareDirs {
+            tag,
+            baseline,
+            candidate,
+            args,
+            ..
+        } = &inner[5]
+        else {
+            unreachable!()
+        };
+        assert_eq!(tag, "o1-frames-vs-ref");
+        assert_eq!(baseline, Path::new("/fvscratch/oracle-ref/t1/frames"));
+        assert_eq!(candidate, Path::new("/fvscratch/runs/f/t/o1-main/frames"));
+        assert!(args.is_empty());
+        let Step::CompareDirs { tag, args, .. } = &inner[8] else {
+            unreachable!()
+        };
+        assert_eq!(
+            (tag.as_str(), args.as_slice()),
+            ("o1-codec-floor", &["--off-identity".to_owned()][..])
+        );
+        // Without anchors the cell's order is as before: arms, compares, metrics.
+        let plain = CellFile::parse(
+            &format!("{ORACLE}{FRAMES}").replace("after = \"o1-main\"\n", ""),
+            "o1.toml",
+        )
+        .unwrap();
+        let steps = Lab::steps(&[&plain], Path::new("/bin/fv"), &paths()).unwrap();
+        let Step::Reference { steps: inner, .. } = &steps[0] else {
+            panic!("{steps:?}")
+        };
+        let tail: Vec<bool> = inner[5..]
+            .iter()
+            .map(|s| matches!(s, Step::CompareDirs { .. }))
+            .collect();
+        assert_eq!(tail, [true, true, false, false]);
+    }
+
+    #[test]
+    fn decodes_and_directory_compares_refuse_what_would_not_run_as_declared() {
+        let text = format!("{ORACLE}{FRAMES}");
+        for (from, to, want) in [
+            // A decode writes below the run or the reference's directory only.
+            (
+                "dir = \"{ref_dir}/frames\"",
+                "dir = \"{root}/frames\"",
+                "not a path",
+            ),
+            (
+                "dir = \"{ref_dir}/frames\"",
+                "dir = \"{scratch}/frames\"",
+                "not a path",
+            ),
+            (
+                "dir = \"{ref_dir}/frames\"",
+                "dir = \"{ref}/frames\"",
+                "not a path",
+            ),
+            (
+                "dir = \"{ref_dir}/frames\"",
+                "dir = \"{ref_dir}/\"",
+                "not a directory below",
+            ),
+            (
+                "dir = \"{ref_dir}/frames\"",
+                "dir = \"{ref_dir}/../x\"",
+                "not a path",
+            ),
+            // A pass that writes lines needs its report.
+            (
+                "measure = [{ kind = \"decode\", dir = \"{ref_dir}/frames\" }]",
+                "measure = [{ kind = \"probe\" }]",
+                "report directory",
+            ),
+            (
+                "measure = [{ kind = \"decode\", dir = \"{ref_dir}/frames\" }]",
+                "measure = [{ kind = \"decode\", dir = \"{ref_dir}/frames\" }]\nmissing = true",
+                "report directory",
+            ),
+            (
+                "after = \"o1-main\"",
+                "after = \"o1-nope\"",
+                "not an arm of this cell",
+            ),
+            // A directory compare: a tag, paths, no gate.
+            ("tag = \"o1-frames-vs-ref\"", "tag = \"O 1\"", "tag"),
+            (
+                "baseline = \"{ref_dir}/frames\"",
+                "baseline = \"o1-main\"",
+                "not a path",
+            ),
+            (
+                "baseline = \"{ref_dir}/frames\"",
+                "baseline = \"{weights}/x\"",
+                "not a path",
+            ),
+            (
+                "tag = \"o1-codec-floor\"",
+                "tag = \"o1-codec-floor\"\ngate = { kind = \"lossy\" }",
+                "not with `tag`",
+            ),
+            (
+                "measure = [{ kind = \"decode\", dir = \"{ref_dir}/frames\" }]",
+                "measure = [{ kind = \"decode\", dir = \"{ref_dir}/frames\", x = 1 }]",
+                "unknown field",
+            ),
+        ] {
+            assert!(text.contains(from), "{from}");
+            let e = CellFile::parse(&text.replacen(from, to, 1), "o1.toml")
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(want), "{from} -> {to}: {e} lacks {want}");
+        }
+        // An arm compare anchored before one of its arms.
+        let bad = format!("{CELL}after = \"a1\"\n");
+        let e = CellFile::parse(&bad, "c1.toml").unwrap_err().to_string();
+        assert!(e.contains("runs before `a2`"), "{e}");
+        let good = format!("{CELL}after = \"a2\"\n");
+        assert!(CellFile::parse(&good, "c1.toml").is_ok());
+        // A metric or a directory compare anchored before the arm whose
+        // output it reads (N5 of the D1j review): refused as an arm compare is.
+        let frames = format!("{ORACLE}{FRAMES}");
+        for (from, to) in [
+            (
+                "clips = [{ label = \"ours\", path = \"{runs}/o1-main/frames/output.mp4\" }]",
+                "clips = [{ label = \"ours\", path = \"{runs}/o1-diff/frames/output.mp4\" }]",
+            ),
+            (
+                "candidate = \"{runs}/o1-main/frames\"\nafter",
+                "candidate = \"{runs}/o1-diff/frames\"\nafter",
+            ),
+        ] {
+            assert!(frames.contains(from), "{from}");
+            let e = CellFile::parse(&frames.replacen(from, to, 1), "o1.toml")
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("`o1-main` runs before `o1-diff`"), "{to}: {e}");
+            // Anchored at that arm (or unanchored), it parses.
+            let at_diff = frames
+                .replacen(from, to, 1)
+                .replace("after = \"o1-main\"", "after = \"o1-diff\"");
+            assert!(CellFile::parse(&at_diff, "o1.toml").is_ok(), "{to}");
+        }
+        // `{ref_dir}` only in a cell with a reference.
+        let e = CellFile::parse(
+            &format!(
+                "{CELL}\n[[compare]]\ntag = \"x\"\nbaseline = \"{{ref_dir}}/f\"\ncandidate = \"{{runs}}/a1/frames\"\n"
+            ),
             "c1.toml",
         )
         .unwrap_err()

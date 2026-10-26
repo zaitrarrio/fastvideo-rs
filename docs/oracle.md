@@ -86,8 +86,16 @@ the `oracle` tier: the nine tensor-diff targets, and the ten LTX clip-metric
 targets (`ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,retake,retake-v,retake-a,extend,a2v-guided}`,
 the tier's extra cells, run when `--cells` names their arms; their ffmpeg /
 ffprobe `[[metric]]` reports land in `oracle-<target>-frames/metrics.txt`,
-fetched with `--fetch-tree`). Not yet `sfwan13` (its tree is R2-only, §20.5),
-which stays on `oracle.sh`:
+fetched with `--fetch-tree`). `sfwan13` is the `oracle-r2` tier's cell
+(ADR-0019 §21, proposed: `weights = "volume+r2"`, its tree `sfwan21-1.3b` R2-only
+since 2026-10-13; `--family oracle-r2`); its upstream reference fetches the tree
+from R2 onto the `fastvideo` pod's container disk (the step `r2:sfwan21-1.3b`,
+180 GB, the R2 key by Runpod secret reference). On `oracle.sh`'s path the
+upstream side does the same, and the runtime pod (`FV_FAMILY=oracle`) gets
+`FV_R2_TREES=sfwan21-1.3b` on a 150 GB disk: `runpod-http.sh run` makes fv-lab's
+merged weight root `/fvscratch/weights` there (`scripts/gpu/r2-stage.sh`, the
+key by Runpod secret reference to its plan step alone) and the matrix reads it
+(§21.8):
 
 ```
 ./fv-lab oracle --sha <7> --cells <arms>          # the plan: both pods' bodies, no key

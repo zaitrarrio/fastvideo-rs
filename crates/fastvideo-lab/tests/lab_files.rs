@@ -7,20 +7,25 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use fastvideo_deploy::launch::parse_eu_trees;
-use fastvideo_lab::goldcell::GOLD_TIER;
-use fastvideo_lab::plan::{CellFile, Lab};
+use fastvideo_lab::plan::{CellFile, Lab, TierWeights};
+use fastvideo_lab::weights::{Source, TreeSources, WeightsPlan, DISK_RESERVE_GB};
 
-/// The cells of the runpod-matrix.sh families: every cell but the `gold`
-/// tier's, which gate on `variant:<id>` cells and read the trees of their
-/// family variant, on the EU volume or not (tests/gold_tier.rs).
+/// The cells of the runpod-matrix.sh families on the volume: every cell but
+/// those of a `volume+r2` tier (ADR-0019 §16): the `gold` tier's, which gate
+/// on `variant:<id>` cells and read the trees of their family variant
+/// (tests/gold_tier.rs), and `oracle-r2`'s, whose R2 trees are fetched
+/// (`a_volume_r2_script_tier_reads_trees_on_the_volume_or_in_r2`).
 fn script_cells(lab: &Lab) -> Vec<&CellFile> {
-    let gold: BTreeSet<&str> = lab
-        .tier(GOLD_TIER)
-        .map(|t| t.cells.iter().map(String::as_str).collect())
-        .unwrap_or_default();
+    let r2: BTreeSet<&str> = lab
+        .tiers
+        .tiers
+        .iter()
+        .filter(|t| t.weights == TierWeights::VolumeR2)
+        .flat_map(|t| t.all_cells().map(String::as_str))
+        .collect();
     lab.cells
         .values()
-        .filter(|c| !gold.contains(c.name.as_str()))
+        .filter(|c| !r2.contains(c.name.as_str()))
         .collect()
 }
 
@@ -136,6 +141,63 @@ fn the_trees_tiers_lack_on_the_eu_volume_are_h3_8step_fastwan22_and_the_older_lt
         .map(|a| a.name.as_str())
         .collect();
     assert_eq!(wan, ["wan-r1", "wan-r2", "wan-r3", "wan-timed"]);
+}
+
+/// `oracle-r2` (ADR-0019 §21), the one `volume+r2` tier cut from a script
+/// family: its arms gate on verify-weights.sh cells and name manifest trees
+/// like every script cell, each tree is on the EU volume or published in R2
+/// (sfwan21-1.3b, R2-only since 2026-10-13), and its container disk holds its
+/// largest arm's R2 trees plus the volume tiers' 120 GB.
+#[test]
+fn a_volume_r2_script_tier_reads_trees_on_the_volume_or_in_r2() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier("oracle-r2").expect("oracle-r2");
+    assert_eq!(tier.weights, TierWeights::VolumeR2);
+    let manifest: BTreeSet<String> = read("scripts/gpu/weights-manifest.tsv")
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.split('\t').next())
+        .map(str::to_owned)
+        .collect();
+    let verify = read("scripts/gpu/verify-weights.sh");
+    let cells_line = verify
+        .split("CELLS=(")
+        .nth(1)
+        .and_then(|r| r.split(')').next())
+        .expect("verify-weights.sh CELLS=(…)");
+    let gates: BTreeSet<&str> = cells_line.split_whitespace().collect();
+    let sources = TreeSources::load(&repo_root()).expect("volumes.sh, weights-r2.tsv");
+    let mut arms = Vec::new();
+    for c in tier.all_cells().filter_map(|c| lab.cells.get(c)) {
+        for a in &c.arms {
+            let Some(gate) = &a.gate else {
+                assert!(a.trees.is_empty(), "{}: ungated with trees", a.name);
+                continue;
+            };
+            assert!(gates.contains(gate.as_str()), "{}: gate {gate}", a.name);
+            for t in &a.trees {
+                assert!(
+                    manifest.contains(t),
+                    "{}: {t} not in weights-manifest.tsv",
+                    a.name
+                );
+                assert!(
+                    matches!(sources.source(t), Source::R2(_) | Source::Volume(_)),
+                    "{}: {t} neither on the EU volume nor in R2",
+                    a.name
+                );
+            }
+            arms.push((a.name.as_str(), a.trees.as_slice()));
+        }
+    }
+    assert_eq!(arms.len(), 4, "the four sfwan13 generations");
+    let plan = WeightsPlan::new(&sources, &arms).expect("its R2 trees");
+    // sfwan21-1.3b, fetched once before the first arm and kept.
+    assert_eq!(plan.fetch_bytes, 28_928_814_212);
+    assert_eq!(plan.peak_bytes, 28_928_814_212);
+    let peak_gb = plan.peak_bytes.div_ceil(1_000_000_000);
+    assert!(u64::from(tier.container_disk_gb) >= peak_gb + DISK_RESERVE_GB);
+    assert_eq!(tier.container_disk_gb, 150);
 }
 
 #[test]

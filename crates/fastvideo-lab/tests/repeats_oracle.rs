@@ -33,7 +33,8 @@
 //! runpod-matrix.sh oracle`) would hit "unknown family" in the cut copy,
 //! which has no `oracle` branch; no test sets `FV_ORACLE_URL` for it.
 
-use std::os::unix::fs::PermissionsExt as _;
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -47,12 +48,10 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// A `#!/bin/sh` fake tool, written so no exec of it can race a fork
+/// (`common::write_exe`).
 fn script(path: &Path, body: &str) {
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d).unwrap();
-    }
-    std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_exe(path, &format!("#!/bin/sh\n{body}"));
 }
 
 /// fv-gpucheck on the fake box. `compare-dumps --baseline A --candidate B`:
@@ -62,7 +61,20 @@ fn script(path: &Path, body: &str) {
 /// clip directory) and a `warmup/`, `audio.wav` for LTX. The bytes depend on
 /// the timed pick (`FASTVIDEO_SDPA_AUTO`) and f32 activations, so the timed
 /// control differs; the mode word `flaky` makes `h3-r3` and `ltx-t2v-c` differ.
-const GPUCHECK: &str = r#"if [ "$1" = compare-dumps ]; then
+const GPUCHECK: &str = r#"case " $* " in *" compare-clips "*)
+  # `--out D --tag T compare-clips --baseline B --candidate C`: a report of
+  # both directories' PNG bytes (ADR-0019 §21: sfwan13's frame compares).
+  out=""; tag=""; b=""; c=""; prev=""
+  for a in "$@"; do
+    case "$prev" in --out) out="$a" ;; --tag) tag="$a" ;; --baseline) b="$a" ;; --candidate) c="$a" ;; esac
+    prev="$a"
+  done
+  sb="$(cat "$b"/*.png | cksum | cut -d' ' -f1)"; sc="$(cat "$c"/*.png | cksum | cut -d' ' -f1)"
+  printf '{"stage":"compare-clips-%s","baseline":%s,"candidate":%s}\n' "$tag" "$sb" "$sc" >"$out/compare-clips-$tag.json"
+  echo "\"psnr_mean\":$sb.$sc," >&2
+  exit 0 ;;
+esac
+if [ "$1" = compare-dumps ]; then
   for f in "$3"/*.bin; do
     n="$(basename "$f" .bin)"
     if cmp -s "$f" "$5/$n.bin"; then echo "compare-dumps $n rel_l2 0.000e0 cosine 1.000000" >&2
@@ -104,6 +116,8 @@ run "$clip/warmup"
 if [ "$audio" = 1 ] && [ -z "$prompts" ] && [ -n "$clip" ]; then
   printf 'mp4-%s-%s%s' "$salt" "${FASTVIDEO_INJECT_COND:-i}" "${FASTVIDEO_INJECT_PIXELS:-i}" >"$clip/output.mp4"
 fi
+# A Wan clip's video (`wan gen --clip-dir` writes output.mp4; sfwan13, §21).
+case " $* " in *" wan gen "*) [ -n "$clip" ] && printf 'mp4-%s-%s%s' "$salt" "${FASTVIDEO_WAN_CAUSAL_AR:-a}" "${FASTVIDEO_WAN_CAUSAL_FLASH:-f}" >"$clip/output.mp4" ;; esac
 echo "peak vram 1 MiB" >&2
 exit 0
 "#;
@@ -753,12 +767,19 @@ const CLIP_TARGETS: &str = "ltx25-i2v ltx25-kf ltx25-ref2v ltx25-a2v ltx25-a2v-i
 /// ffmpeg on the fake box: the comparison's filter (`ssim` / `psnr`, the end
 /// of the graph) and a checksum of its inputs' bytes and of the graph, as the
 /// last line holding `Parsed_<filter>`, behind a `] `.
-const FFMPEG: &str = r#"graph=""; frames=""; prev=""; ins=""
+const FFMPEG: &str = r#"graph=""; frames=""; prev=""; ins=""; last=""
 for a in "$@"; do
   case "$prev" in -lavfi) graph="$a" ;; -i) ins="$ins $a" ;; esac
   [ "$a" = "-frames:v" ] && frames=1
-  prev="$a"
+  prev="$a"; last="$a"
 done
+# A decode (`-i <clip> -start_number 0 <dir>/frame-%03d.png`, ADR-0019 §21):
+# two frames from the clip's bytes; a missing clip fails as ffmpeg does.
+case "$last" in *.png)
+  for f in $ins; do [ -f "$f" ] || exit 1; done
+  for i in 000 001; do printf 'png-%s-%s' "$(cat $ins | cksum | cut -d' ' -f1)" "$i" >"${last%frame-%03d.png}frame-$i.png"; done
+  exit 0 ;;
+esac
 m="${graph##*]}"
 sum="$(for f in $ins; do cat "$f" 2>/dev/null || echo none; done | cksum | cut -d' ' -f1)"
 g="$(printf '%s %s' "$graph" "$frames" | cksum | cut -d' ' -f1)"
@@ -784,9 +805,7 @@ fn fake_clips(name: &str) -> Fake {
     // The guided target's weight gate fails: its arms skip, its clips are missing.
     let f = fake(name, "no-ltx25-a2v-guided");
     for (tool, body) in [("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)] {
-        let p = f.bin().join(tool);
-        std::fs::write(&p, format!("#!/bin/bash\n{body}")).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        common::write_exe(&f.bin().join(tool), &format!("#!/bin/bash\n{body}"));
     }
     let fx = f.root().join("scripts/gpu/fixtures");
     std::fs::create_dir_all(&fx).unwrap();
@@ -960,5 +979,204 @@ fn clip_metrics_report_as_the_script() {
     for runs in [&s, &l] {
         assert!(!runs.join("oracle-ltx25-a2v-i2v-dump-ownaud").exists());
         assert!(!runs.join("oracle-ltx25-retake-dump-ownenc").exists());
+    }
+}
+
+// ------------------------------------------------------------------ sfwan13
+
+/// `sfwan13` (ADR-0019 §21) on both runners: the live `oracle` branch with
+/// `FV_ORACLE_TARGETS=sfwan13` and `fv-lab run oracle-r2` (its weights
+/// read as a volume's here: the R2 staging is `tests/r2_runner.rs`'s), on
+/// one fake box with a fake ffmpeg (a decode writes frames from the clip's
+/// bytes) and a fake `compare-clips` (a report of both directories' bytes).
+/// The same records, `compare-dumps` lines, decoded frames and compare
+/// reports, in the same order; the dumps and the reference (its decoded
+/// frames with it) gone after the target. Then without the reference's
+/// `ref.mp4`: no reference frames on either side, both compares against
+/// them "frames missing", the codec floor still compared.
+#[test]
+fn sfwan13_decodes_compares_and_cleans_up_as_the_script() {
+    for with_ref_mp4 in [true, false] {
+        let f = fake(
+            if with_ref_mp4 {
+                "oracle-sfwan13"
+            } else {
+                "oracle-sfwan13-noref"
+            },
+            "",
+        );
+        for (tool, body) in [("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)] {
+            common::write_exe(&f.bin().join(tool), &format!("#!/bin/bash\n{body}"));
+        }
+        // The script puts /usr/local/bin before the caller's PATH: the fakes first.
+        let m = f.root().join("scripts/gpu/runpod-matrix.sh");
+        let text = std::fs::read_to_string(&m).unwrap();
+        let line = "export PATH=\"/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:${PATH:-}\"";
+        assert_eq!(text.matches(line).count(), 1, "the script's PATH line");
+        std::fs::write(
+            &m,
+            text.replace(
+                line,
+                &format!(
+                    "export PATH=\"{}:/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:${{PATH:-}}\"",
+                    f.bin().display()
+                ),
+            ),
+        )
+        .unwrap();
+        let d = f.up().join("oracle-sfwan13");
+        std::fs::create_dir_all(d.join("dump")).unwrap();
+        std::fs::write(d.join("dump/latent.bin"), "latent-rule").unwrap();
+        std::fs::write(d.join("dump/noise.bin"), "noise").unwrap();
+        if with_ref_mp4 {
+            std::fs::write(d.join("dump/ref.mp4"), "ref-sfwan13").unwrap();
+        }
+        let st = Command::new("tar")
+            .arg("-cf")
+            .arg(d.join("oracle-dump.tar"))
+            .arg("-C")
+            .arg(&d)
+            .arg("dump")
+            .status()
+            .expect("tar");
+        assert!(st.success());
+        std::fs::remove_dir_all(d.join("dump")).unwrap();
+        std::fs::write(d.join("ORACLE_DONE"), "").unwrap();
+        let path = format!(
+            "{}:{}",
+            f.bin().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let o = Command::new("bash")
+            .arg(&m)
+            .arg("oracle")
+            .env_clear()
+            .env("FV_ORACLE_URL", url(&f))
+            .env("FV_ORACLE_WAIT_S", "0")
+            .env("FV_ORACLE_TARGETS", "sfwan13")
+            .env("PATH", path)
+            .env("HOME", &f.dir)
+            .env("LC_ALL", "C")
+            .env("FV_WORK", f.dir.join("work"))
+            .env("FV_SCRATCH", f.dir.join("script"))
+            .env("FV_RUN_TAG", TAG)
+            .env("FV_GPUCHECK", f.bin().join("fv-gpucheck"))
+            .env("FV_GEN_TIMEOUT_S", "60")
+            .output()
+            .expect("bash runs");
+        assert!(
+            o.status.success(),
+            "runpod-matrix.sh oracle: {}\n{}\n{}",
+            o.status,
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        let s = f.dir.join("script/runs/oracle").join(TAG);
+        let lab = lab();
+        let (_, cells) = lab.resolve("oracle-r2", None).expect("tier");
+        let mut cfg = config(&f, "oracle-r2");
+        cfg.ffmpeg = f.bin().join("ffmpeg").display().to_string();
+        cfg.ffprobe = f.bin().join("ffprobe").display().to_string();
+        let steps = Lab::steps(&cells, &cfg.bin, &cfg.paths()).expect("render");
+        Runner::new(cfg).run(&steps).expect("fv-lab run");
+        let l = f.dir.join("lab/runs/oracle-r2").join(TAG);
+        // fv-lab publishes ORACLE_REFS_DONE once its one reference is
+        // fetched; the script's watcher, given FV_ORACLE_WAIT_S=0 here, does
+        // not wait to (§15.5).
+        assert!(l.join("ORACLE_REFS_DONE").is_file());
+        for runs in [&s, &l] {
+            let _ = std::fs::remove_file(runs.join("ORACLE_REFS_DONE"));
+        }
+        assert_same_outputs(&s, &l);
+        let norm = |runs: &Path| -> Vec<String> {
+            raw_lines(runs)
+                .into_iter()
+                .map(|x| norm_paths(runs, &x))
+                .collect()
+        };
+        assert_eq!(norm(&s), norm(&l));
+        // The compares' log lines, in the script's order between the arms.
+        let order = |runs: &Path| -> Vec<String> {
+            let log = String::from_utf8_lossy(&read(&runs.join("live.log")).unwrap_or_default())
+                .into_owned();
+            log.lines()
+                .filter_map(|x| x.split_once("] ").map(|(_, r)| r))
+                .filter_map(|r| r.split_once("] ").map_or(Some(r), |(_, r)| Some(r)))
+                .filter(|r| {
+                    r.starts_with("ok oracle-")
+                        || r.starts_with("compare oracle-")
+                        || r.starts_with("skip compare oracle-")
+                })
+                .map(|r| {
+                    let r = r.split("  ").next().unwrap_or(r);
+                    let r = r.split(" exit=").next().unwrap_or(r);
+                    r.split(" (frames missing)").next().unwrap_or(r).to_owned()
+                })
+                .collect()
+        };
+        assert_eq!(order(&s), order(&l));
+        let o = order(&l);
+        let at = |w: &str| {
+            o.iter()
+                .position(|x| x.ends_with(w))
+                .unwrap_or_else(|| panic!("{w}: {o:?}"))
+        };
+        assert!(at("oracle-sfwan13-bf16-vs-f32") < at("oracle-sfwan13-frames-vs-ref"));
+        assert!(at("oracle-sfwan13-codec-floor") < at("oracle-sfwan13-legacy"));
+        assert!(at("oracle-sfwan13-legacy-diff") < at("oracle-sfwan13-legacy-frames-vs-ref"));
+        assert!(at("oracle-sfwan13-legacy-frames-vs-ref") < at("oracle-sfwan13-composed"));
+        for runs in [&s, &l] {
+            let sum = |a: &str| {
+                String::from_utf8_lossy(
+                    &read(&runs.join(a).join("summary.json")).unwrap_or_default(),
+                )
+                .into_owned()
+            };
+            for a in [
+                "oracle-sfwan13",
+                "oracle-sfwan13-f32",
+                "oracle-sfwan13-legacy",
+                "oracle-sfwan13-composed",
+                "oracle-sfwan13-flash-vs-composed",
+            ] {
+                assert!(sum(a).contains("\"exit\":0"), "{a}: {}", sum(a));
+            }
+            // Our mp4 decoded beside our frames; the codec floor compared.
+            assert!(runs
+                .join("oracle-sfwan13/mp4frames/frame-001.png")
+                .is_file());
+            let rep = |t: &str| {
+                String::from_utf8_lossy(
+                    &read(&runs.join(format!("compare/compare-clips-{t}.json")))
+                        .unwrap_or_default(),
+                )
+                .into_owned()
+            };
+            assert!(rep("oracle-sfwan13-codec-floor").contains("\"baseline\":"));
+            for t in [
+                "oracle-sfwan13-frames-vs-ref",
+                "oracle-sfwan13-legacy-frames-vs-ref",
+            ] {
+                if with_ref_mp4 {
+                    assert!(rep(t).contains("\"candidate\":"), "{t}: {}", rep(t));
+                } else {
+                    assert!(rep(t).contains("frames missing"), "{t}: {}", rep(t));
+                }
+            }
+            // The four dumps are gone after the target.
+            for d in ["", "-f32", "-legacy", "-composed"] {
+                assert!(
+                    !runs.join(format!("oracle-sfwan13-dump{d}")).exists(),
+                    "{d}"
+                );
+            }
+        }
+        // The reference, its decoded frames with it, is gone on both sides.
+        for side in ["script", "lab"] {
+            assert!(
+                !f.dir.join(side).join("oracle-ref/sfwan13").exists(),
+                "{side}"
+            );
+        }
     }
 }

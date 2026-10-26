@@ -26,7 +26,10 @@
 #                                the container disk (UP_LOCAL=1). With a weights:ltx25*
 #                                step (or UP_HUB_TOKEN=1) the pod gets HF_TOKEN as the
 #                                Runpod secret reference {{ RUNPOD_SECRET_fv_hf_token }}
-#                                (docs/ops/runpod-secrets.md)
+#                                (docs/ops/runpod-secrets.md); with an r2:<tree> step
+#                                the R2 weights key as the references
+#                                {{ RUNPOD_SECRET_fv_r2_access_key_id }} /
+#                                {{ RUNPOD_SECRET_fv_r2_secret_access_key }} (ADR-0019 §21)
 #   runpod-http.sh attach <pod> <tag>  re-attach to a running pod (wait, collect, delete)
 #   runpod-http.sh status <pod>  print live.log from a running pod
 #   runpod-http.sh down <pod>    destroy a pod
@@ -76,6 +79,15 @@
 # floor is its min_ram_gb in lab/tiers.toml, ADR-0019 §16.10),
 # FV_AVOID_MACHINES (space-separated Runpod machine ids: a pod placed on one
 # is deleted at once and created again),
+# FV_R2_TREES (`run` / `all` / `plan` only; space-separated weights-r2.tsv trees the EU
+# volume lacks, e.g. sfwan21-1.3b: the pod gets the R2 key as the Runpod
+# secret references fv-lab's volume+r2 pods carry, and before the matrix
+# scripts/gpu/r2-stage.sh makes fv-lab's merged weight root /fvscratch/weights
+# (the volume's trees linked, these fetched from R2) and the matrix runs with
+# FV_WORK=/fvscratch, so its $W and its command lines are a volume+r2 tier's;
+# FV_CONTAINER_DISK_GB must hold the trees and 120 GB, and the idle limits
+# default to fv-lab's weights::r2_idle_min; ADR-0019 §21.8. Unset: nothing
+# changes),
 # FV_POD_SCRIPT (the basename of one of FV_POD_FILES, run instead of the
 # image's runpod-matrix.sh with the same environment, e.g. sol-bench-pod.sh;
 # it skips the default weight gate).
@@ -125,6 +137,58 @@ OUT_ROOT="$ROOT/artifacts/runpod/$FAMILY"
 if [[ "${1:-}" == run || "${1:-}" == all || "${1:-}" == plan ]] && fv_script_retired "$FAMILY"; then
   echo "runpod-http: $FAMILY is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): $(fv_script_retired_why "$FAMILY")" >&2
   exit 2
+fi
+# FV_R2_TREES (ADR-0019 §21.8): checked before the key, any lookup or a pod.
+# Each tree a weights-r2.tsv dest that the EU volume neither holds nor sits
+# inside; the container disk at least the trees and fv-lab's 120 GB reserve
+# (refused, not raised: the body says what the caller asked for); `run` /
+# `all` / `plan` of a script family only, on the EU volume (the link roots are
+# FV_EU_VOLUME_TREES, so another volume is refused). Sets R2_SPECS (dest@rev …) and R2_LINKS
+# (fv-lab's TreeSources::link_roots of FV_EU_VOLUME_TREES), and the idle
+# limits' defaults (an R2 fetch keeps the GPU at 0 %).
+R2_SPECS="" R2_LINKS=""
+if [[ -n "${FV_R2_TREES:-}" && -n "${FV_R2_TREES//[[:space:]]/}" ]]; then
+  r2die() { echo "runpod-http: FV_R2_TREES: $*" >&2; exit 2; }
+  [[ "${1:-}" == run || "${1:-}" == all || "${1:-}" == plan ]] \
+    || r2die "for \`run\`, \`all\` and \`plan\` only (the matrix's weights), not \`${1:-}\`"
+  [[ "${RUNPOD_NO_VOLUME:-0}" != 1 ]] || r2die "the merged root links the EU volume's trees: not with RUNPOD_NO_VOLUME=1"
+  # The links are the EU volume's trees (FV_EU_VOLUME_TREES): another volume
+  # would get links to trees it may not hold.
+  [[ -z "${RUNPOD_VOLUME_ID:-}" || "$RUNPOD_VOLUME_ID" == "$FV_EU_VOLUME_ID" ]] \
+    || r2die "the merged root links the EU volume's trees ($FV_EU_VOLUME_ID): not with RUNPOD_VOLUME_ID=$RUNPOD_VOLUME_ID"
+  [[ "$VOL_NAME" == "$FV_EU_VOLUME_NAME" ]] \
+    || r2die "the merged root links the EU volume's trees ($FV_EU_VOLUME_NAME): not with the volumes '$VOL_NAME'"
+  [[ -z "${FV_PLAN_VOLUME:-}" || "${FV_PLAN_VOLUME%% *}" == "$FV_EU_VOLUME_ID" ]] \
+    || r2die "the merged root links the EU volume's trees ($FV_EU_VOLUME_ID): not with FV_PLAN_VOLUME=$FV_PLAN_VOLUME"
+  r2_table="$ROOT/scripts/gpu/weights-r2.tsv"
+  r2_bytes=0
+  for t in $FV_R2_TREES; do
+    [[ "$t" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ && "/$t/" != */./* && "/$t/" != */../* ]] \
+      || r2die "'$t' is not a tree name (relative, [A-Za-z0-9._/-], no . or ..)"
+    [[ " $R2_SPECS " != *" $t@"* ]] || r2die "$t twice"
+    for v in $FV_EU_VOLUME_TREES; do
+      [[ "$t" == "$v" || "$t" == "$v"/* ]] && r2die "$t is on the EU volume ($v): the matrix reads it there"
+      [[ "$v" == "$t"/* ]] && r2die "$t holds the EU volume's tree $v (its link would sit inside the fetched tree)"
+    done
+    row="$(awk -F'\t' -v d="$t" '$1 == d { print $2 "\t" $4; exit }' "$r2_table")"
+    [[ -n "$row" ]] || r2die "$t is not a dest of scripts/gpu/weights-r2.tsv"
+    R2_SPECS+="${R2_SPECS:+ }$t@${row%%$'\t'*}"
+    r2_bytes=$(( r2_bytes + ${row##*$'\t'} ))
+  done
+  for v in $FV_EU_VOLUME_TREES; do
+    covered=0
+    for o in $FV_EU_VOLUME_TREES; do [[ "$o" != "$v" && "$v" == "$o"/* ]] && covered=1; done
+    (( covered )) || R2_LINKS+=" $v"
+  done
+  R2_LINKS="$(tr ' ' '\n' <<<"$R2_LINKS" | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/^ *//; s/ *$//')"
+  r2_need=$(( (r2_bytes + 999999999) / 1000000000 + 120 ))
+  [[ "${FV_CONTAINER_DISK_GB:-120}" =~ ^[0-9]+$ ]] && (( 10#${FV_CONTAINER_DISK_GB:-120} >= r2_need )) \
+    || r2die "the container disk (FV_CONTAINER_DISK_GB=${FV_CONTAINER_DISK_GB:-120}) must hold the trees ($(awk -v b="$r2_bytes" 'BEGIN { printf "%.2f", b / 1e9 }') GB) and 120 GB: FV_CONTAINER_DISK_GB=$r2_need or more"
+  r2_cell="${FV_GEN_TIMEOUT_S:-3600}"
+  [[ "$r2_cell" =~ ^[0-9]+$ ]] || r2die "FV_GEN_TIMEOUT_S '$r2_cell' is not a number of seconds"
+  (( r2_cell > 0 )) || r2_cell=3600
+  r2_idle=$(( (600 + r2_cell + 59) / 60 + 15 )); (( r2_idle >= 30 )) || r2_idle=30
+  FV_IDLE_GPU_MIN="${FV_IDLE_GPU_MIN:-$r2_idle}" FV_IDLE_GPU_GRACE_MIN="${FV_IDLE_GPU_GRACE_MIN:-$r2_idle}"
 fi
 # A dry run (FV_DRY_RUN=1: the route and the command, nothing created) needs no key.
 [[ "${FV_DRY_RUN:-0}" == 1 ]] || : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
@@ -222,6 +286,25 @@ start_cmd() {
     return
   fi
   local cells="fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage"
+  # FV_R2_TREES (ADR-0019 §21.8): the R2 key leaves the start command's
+  # environment on its first line, before anything starts, so no child (the
+  # watchdogs, the file server, the matrix) has it in its environment;
+  # r2-stage.sh alone gets it back, and hands it to its plan step alone. It
+  # stays in the container's initial environment (PID 1's /proc/<pid>/environ),
+  # readable by root on the pod, as HF_TOKEN and RUNPOD_API_KEY are; it is the
+  # store's read-only key (§21.2). The matrix's $W is the merged root then.
+  local work=/workspace r2_block=""
+  if [[ -n "$R2_SPECS" ]]; then
+    printf '%s\n' '_fvr2_id="${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}" _fvr2_secret="${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}"; unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY'
+    work='$SCRATCH'
+    r2_block="# FV_R2_TREES (docs/adr/0019-fv-lab.md §21.8): fv-lab's merged weight root of a volume+r2 tier,
+# \$SCRATCH/weights (the volume's trees linked, these fetched from R2; never the volume), the matrix's \$W.
+FV_WEIGHTS_R2_ACCESS_KEY_ID=\"\$_fvr2_id\" FV_WEIGHTS_R2_SECRET_ACCESS_KEY=\"\$_fvr2_secret\" bash /opt/fastvideo-rs/scripts/gpu/r2-stage.sh \\
+  \$SCRATCH/weights \$SCRATCH/r2 \"\$OUT\" ${r2_cell} /workspace/weights \"$R2_LINKS\" $R2_SPECS >\"\$OUT/r2-stage.log\" 2>&1
+echo \"exit=\$?\" >>\"\$OUT/r2-stage.log\"
+_fvr2_id=\"\" _fvr2_secret=\"\"
+"
+  fi
   idle_watchdog
   cat <<EOF
 set -u
@@ -300,8 +383,8 @@ if [ "$mode" = kernels ] || [ "$mode" = all ]; then
   echo "exit=\$?" >>"\$OUT/kernels.out"
   cp "\$OUT"/gpucheck/*.json "\$OUT"/ 2>/dev/null
 fi
-if [ "$mode" = run ] || [ "$mode" = all ]; then
-  env ${FV_EXTRA_ENV:-} FV_WORK=/workspace FV_SCRATCH=\$SCRATCH FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
+${r2_block}if [ "$mode" = run ] || [ "$mode" = all ]; then
+  env ${FV_EXTRA_ENV:-} FV_WORK=$work FV_SCRATCH=\$SCRATCH FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
     ${FV_PROMPTS:+FV_PROMPTS="$FV_PROMPTS"} ${FV_LPIPS:+FV_LPIPS=$FV_LPIPS} \
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
     bash ${FV_POD_SCRIPT:+/fvscratch/files/}${FV_POD_SCRIPT:-/opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh} $FAMILY >"\$OUT/matrix.out" 2>&1
@@ -319,6 +402,15 @@ upstream_start_cmd() {
   # UP_LOCAL=1: nothing is written to the volume (it is read for weights only);
   # venvs, derived weights and results live on the container disk.
   [[ "${UP_LOCAL:-1}" == 1 ]] && runs=/root/runs
+  # An r2:<tree> step (upstream_r2_key): the R2 key leaves the start command's
+  # environment on its first line, before the watchdogs, the file server and
+  # the clone start, and goes back to pod.sh alone (ADR-0019 §21.2; fv-lab
+  # oracle::R2_KEY_CAPTURE / R2_KEY_HANDOFF render the same lines).
+  local r2_env=""
+  if upstream_r2_key; then
+    printf '%s\n' '_fvr2_id="${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}" _fvr2_secret="${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}"; unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY'
+    r2_env='FV_WEIGHTS_R2_ACCESS_KEY_ID="$_fvr2_id" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$_fvr2_secret" '
+  fi
   idle_watchdog net
   cat <<EOF
 set -u
@@ -340,7 +432,7 @@ RUNNER=/opt/fvrs
     && git -C /opt/fvrs-live fetch -q --depth 1 origin $UP_SHA && git -C /opt/fvrs-live checkout -q FETCH_HEAD \
     && echo live
 } >"\$OUT/clone.log" 2>&1 && RUNNER=/opt/fvrs-live
-env ${FV_EXTRA_ENV:-} UP_STEPS="${UP_STEPS:-info:box}" UP_STEPS_BG="${UP_STEPS_BG:-}" UP_CELLS="${UP_CELLS:-}" \
+${r2_env}env ${FV_EXTRA_ENV:-} UP_STEPS="${UP_STEPS:-info:box}" UP_STEPS_BG="${UP_STEPS_BG:-}" UP_CELLS="${UP_CELLS:-}" \
   UP_CELL_TIMEOUT_S=${UP_CELL_TIMEOUT_S:-5400} UP_LOCAL=${UP_LOCAL:-1} \
   bash \$RUNNER/scripts/gpu/upstream/pod.sh "\$OUT" >"\$OUT/pod.out" 2>&1
 echo "done $tag" >"\$OUT/DONE"
@@ -367,9 +459,23 @@ upstream_hub_token() {
   [[ "$steps" == *" weights:ltx25"* ]]
 }
 
+# upstream_r2_key: whether an upstream pod gets the R2 weights store's key as
+# the Runpod secret references fv-lab's volume+r2 pods carry
+# (crates/fastvideo-lab weights::r2_env_refs; never values): when UP_STEPS or
+# UP_STEPS_BG has an r2:<tree> step (scripts/gpu/upstream/pod.sh weights_r2,
+# which hands it to the plan step alone), as fv-lab oracle's stack targets
+# with `r2` trees (lab/upstream.toml; ADR-0019 §21).
+upstream_r2_key() {
+  local steps
+  steps=" $(printf '%s %s' "${UP_STEPS:-}" "${UP_STEPS_BG:-}" | tr -s '[:space:]' ' ') "
+  [[ "$steps" == *" r2:"* ]]
+}
+
 pod_payload() {
-  local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" files="" f hub=false
+  local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" files="" f hub=false r2=false
   [[ "$mode" == upstream ]] && upstream_hub_token && hub=true
+  [[ "$mode" == upstream ]] && upstream_r2_key && r2=true
+  [[ ( "$mode" == run || "$mode" == all ) && -n "$R2_SPECS" ]] && r2=true
   if [[ -n "${FV_POD_FILES:-}" ]]; then
     local ft
     ft="$(mktemp -d)"
@@ -380,9 +486,11 @@ pod_payload() {
   jq -n --arg files "$files" --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
     --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" \
-    --arg ram "${FV_MIN_RAM_GB:-}" --argjson hub "$hub" '
+    --arg ram "${FV_MIN_RAM_GB:-}" --argjson hub "$hub" --argjson r2 "$r2" '
     ((if $files == "" then {} else {FV_POD_FILES_TGZ: $files} end)
-      + (if $hub then {HF_TOKEN: "{{ RUNPOD_SECRET_fv_hf_token }}"} else {} end)) as $env
+      + (if $hub then {HF_TOKEN: "{{ RUNPOD_SECRET_fv_hf_token }}"} else {} end)
+      + (if $r2 then {FV_WEIGHTS_R2_ACCESS_KEY_ID: "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+          FV_WEIGHTS_R2_SECRET_ACCESS_KEY: "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}"} else {} end)) as $env
     | {
       name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
@@ -631,7 +739,7 @@ fv_lab_route() {
     || die "$FAMILY: no complete [[tier]] in lab/tiers.toml"
   # No equivalent at all.
   for v in FV_POD_FILES FV_POD_SCRIPT FV_POD_FILE FV_PROMPTS FV_PROMPT FV_SEED FV_AVOID_MACHINES \
-    FV_CREATE_WAIT_S RUNPOD_ALLOWED_CUDA; do
+    FV_CREATE_WAIT_S RUNPOD_ALLOWED_CUDA FV_R2_TREES; do
     [[ -z "${!v:-}" ]] || refuse "has no $v"
   done
   # The host-RAM floor is the tier's (min_ram_gb, ADR-0019 §16.10): the same
@@ -781,6 +889,12 @@ cmd_run() {
   # The `gold` tier was never a script family: its pod is fv-lab's only.
   if [[ "$FAMILY" == gold && ( "$mode" == run || "$mode" == all ) ]]; then
     die "gold is no runpod-matrix.sh family (docs/adr/0023-lab-report-and-ci-bridge.md): fv-lab pod up --sha $sha --family gold --yes --wait"
+  fi
+  # Nor is a sibling tier (fv-lab-retired.sh FV_LAB_SIBLINGS): its cells are
+  # its family's targets on another pod (oracle-r2: weights from R2).
+  local sib
+  if sib="$(fv_lab_sibling "$FAMILY")" && [[ "$mode" == run || "$mode" == all ]]; then
+    die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib's targets its tier cannot run (docs/adr/0019-fv-lab.md §21): fv-lab oracle --family $FAMILY --sha $sha --cells <arms> --yes, or fv-lab pod up --sha $sha --family $FAMILY --cells <arms> --yes --wait; the script runs them as FV_FAMILY=$sib"
   fi
   # Nor were the tiers made from a port one-off (fv-lab-retired.sh FV_LAB_EXPERIMENTS).
   if fv_lab_experiment "$FAMILY" && [[ "$mode" == run || "$mode" == all ]]; then

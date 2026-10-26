@@ -131,8 +131,24 @@
       "description": "One oracle target of a stack: `oracle-<name>` on the pod, the\n`[reference] target` of one cell.",
       "type": "object",
       "properties": {
+        "container_disk_gb": {
+          "description": "The container disk its reference needs (GB), when more than the\nstack's: the pod gets the largest of the stack's and its selected\ntargets', so a run without this target keeps the stack's disk.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1
+        },
         "name": {
           "type": "string"
+        },
+        "r2": {
+          "description": "Weight trees its reference reads from the R2 weights store\n(`scripts/gpu/weights-r2.tsv` dests; ADR-0019 §21): each a `pod.sh`\nstep `r2:<tree>` after `steps` (`r2-weights.py plan --pin`, then\n`r2-fetch.py --root $UW`, onto the container disk, never the volume).\nA selected target with one gives the pod the R2 key as Runpod secret\nreferences (`weights::r2_env_refs`), which `pod.sh` hands to that\nstep alone.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "steps": {
           "description": "The `scripts/gpu/upstream/pod.sh` steps its reference needs before\n`oracle:` (`weights:<view>`), in order.",

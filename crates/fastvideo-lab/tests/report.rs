@@ -4,6 +4,8 @@
 //! (`scripts/gpu/tests/fv-lab-report-goldens.sh`); every one is compared here,
 //! byte for byte.
 
+mod common;
+
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -116,8 +118,7 @@ fn hd_is_hd_report_without_the_sharpness() {
     std::fs::create_dir_all(d.join("a/frames/b")).unwrap();
     std::fs::write(d.join("a/frames/b/c.mp4"), b"x").unwrap();
     let echo = d.join("probe");
-    std::fs::write(&echo, "#!/usr/bin/env bash\necho '[1]'\n").unwrap();
-    Command::new("chmod").arg("+x").arg(&echo).status().unwrap();
+    common::write_exe(&echo, "#!/usr/bin/env bash\necho '[1]'\n");
     assert!(summary::hd_summary(&d, echo.as_os_str()).is_err());
     let _ = std::fs::remove_dir_all(&d);
 }

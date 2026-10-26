@@ -6,8 +6,9 @@
 #     dropped modes' knobs refused in FV_EXTRA_ENV (the two restored modes
 #     naming their tier, ADR-0019 §12), lists split without globbing, and a
 #     fake FV_LAB_BIN receiving exactly the command;
-#   - `gold` and the experiment tiers (h3-graphs, ADR-0019 §14) refused for
-#     run / all (their plan still the script's body);
+#   - `gold`, the experiment tiers (h3-graphs, ADR-0019 §14) and the sibling
+#     tiers (oracle-r2, §21) refused for run / all (their plan still the
+#     script's body);
 #   - the families retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
 #     ADR-0019 §18) refused by runpod-http.sh run / all / plan (dry run or not,
 #     before the key) and by runpod-matrix.sh, exit 2, naming what replaces
@@ -187,6 +188,16 @@ for mode in run all; do
 done
 expect "h3-graphs: plan is runpod-http.sh's body" 0 '"name": "fv-lab-h3-graphs-abc1234-t"' -- RUNPOD_API_KEY=x \
   FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=h3-graphs bash "$HTTP" plan abc1234 abc1234-t
+
+# A sibling tier (fv-lab-retired.sh FV_LAB_SIBLINGS, ADR-0019 §21: oracle-r2,
+# the oracle family's sfwan13 on a volume+r2 pod): like gold, never the script
+# path (its targets run there as FV_FAMILY=oracle); its plan the script's body.
+for mode in run all; do
+  expect "oracle-r2: $mode refused" 1 "fv-lab oracle --family oracle-r2 --sha abc1234" -- RUNPOD_API_KEY=x FV_FAMILY=oracle-r2 bash "$HTTP" "$mode" abc1234
+  expect "oracle-r2: $mode names the script family" 1 "the script runs them as FV_FAMILY=oracle" -- RUNPOD_API_KEY=x FV_FAMILY=oracle-r2 bash "$HTTP" "$mode" abc1234
+done
+expect "oracle-r2: plan is runpod-http.sh's body" 0 '"name": "fv-lab-oracle-r2-abc1234-t"' -- RUNPOD_API_KEY=x \
+  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=oracle-r2 bash "$HTTP" plan abc1234 abc1234-t
 
 # b4a (ADR-0019 §11.6): fv-lab only, its GPU gate's cell selected by arm;
 # the script side's FV_B4A_CELLS in FV_EXTRA_ENV is refused with that answer.

@@ -1479,12 +1479,24 @@ Audio: male speech, clear voice, quiet room"
         # Frames: the reference's mp4 (its full VAE, bf16 decode, then its
         # encoder) against our PNG frames; our own mp4 against our PNGs is
         # the codec floor of that comparison.
+        # The two decodes are metric commands (metric_dry: a dry run logs
+        # them, fv-lab's goldens, docs/adr/0019-fv-lab.md §20.5, §21); our
+        # clip is the first mp4 of our frames (`wan gen --clip-dir` writes
+        # output.mp4 there, which a dry run names). Neither ends the family:
+        # `ls` finding no mp4 under pipefail, or a failed decode, leaves the
+        # compares below to log "frames missing". (`dec`, not `cmd`: the
+        # -legacy and -composed runs below read the target's `cmd`.)
         for d in "$ref/frames" "$RUNS/oracle-$target/mp4frames"; do mkdir -p "$d"; done
-        if [[ -f "$ref/dump/ref.mp4" ]]; then
-          ffmpeg -loglevel error -y -i "$ref/dump/ref.mp4" -start_number 0 "$ref/frames/frame-%03d.png" || true
+        if [[ "$DRY_RUN" == 1 || -f "$ref/dump/ref.mp4" ]]; then
+          dec=(ffmpeg -loglevel error -y -i "$ref/dump/ref.mp4" -start_number 0 "$ref/frames/frame-%03d.png")
+          metric_dry "$target-frames" "${dec[@]}" || "${dec[@]}" || true
         fi
-        m="$(ls "$RUNS/oracle-$target"/frames/*.mp4 2>/dev/null | head -1)"
-        [[ -n "$m" ]] && ffmpeg -loglevel error -y -i "$m" -start_number 0 "$RUNS/oracle-$target/mp4frames/frame-%03d.png"
+        m="$(ls "$RUNS/oracle-$target"/frames/*.mp4 2>/dev/null | head -1 || true)"
+        [[ "$DRY_RUN" == 1 ]] && m="$RUNS/oracle-$target/frames/output.mp4"
+        if [[ -n "$m" ]]; then
+          dec=(ffmpeg -loglevel error -y -i "$m" -start_number 0 "$RUNS/oracle-$target/mp4frames/frame-%03d.png")
+          metric_dry "$target-frames" "${dec[@]}" || "${dec[@]}" || true
+        fi
         compare_one "oracle-$target-frames-vs-ref" "$ref/frames" "$RUNS/oracle-$target/frames"
         compare_one "oracle-$target-codec-floor" "$RUNS/oracle-$target/frames" "$RUNS/oracle-$target/mp4frames"
         # Before the fix: the whole clip at once under the per-frame mask

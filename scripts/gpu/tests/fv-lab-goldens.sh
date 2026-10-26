@@ -46,7 +46,12 @@
 # FV_GEN_TIMEOUT_S scripts/gpu/oracle.sh passes (5400), for all three fixtures;
 # and its extra cells (ADR-0019 §20.3, the ten clip-metric targets) are the
 # family with FV_ORACLE_TARGETS naming those: oracle-extra-dry-run.txt and
-# oracle-extra-gates.tsv (the pod body is the tier's, one fixture).
+# oracle-extra-gates.tsv (the pod body is the tier's, one fixture). A sibling
+# tier (fv-lab-retired.sh FV_LAB_SIBLINGS, ADR-0019 §21) has no branch of its
+# own: its dry run and gates are its family's under its settings
+# (`oracle-r2`: the oracle family with FV_ORACLE_TARGETS=sfwan13), its pod
+# body runpod-http.sh plan's for the tier. A `weights = "volume+r2"` tier's
+# body (gold, oracle-r2) carries its container disk, idle limit and RAM floor.
 #
 # No network, no GPU, no weights: the dry run logs instead of running, and the
 # plan takes the volume's datacentre from FV_PLAN_VOLUME. Needs bash and jq.
@@ -81,6 +86,13 @@ has_branch() {
 }
 for f in $FV_LAB_RETIRED; do
   grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: retired family $f is no tier of lab/tiers.toml" >&2; exit 2; }
+done
+for e in $FV_LAB_SIBLINGS; do
+  t="${e%%:*}" f="${e#*:}"
+  grep -qx "$t" <<<"$FAMILIES" || { echo "fv-lab-goldens: sibling tier $t is no tier of lab/tiers.toml" >&2; exit 2; }
+  has_branch "$f" || { echo "fv-lab-goldens: sibling tier $t's family $f has no runpod-matrix.sh branch" >&2; exit 2; }
+  ! has_branch "$t" || { echo "fv-lab-goldens: sibling tier $t has a runpod-matrix.sh branch of its own" >&2; exit 2; }
+  ! fv_lab_retired "$t" && ! fv_lab_experiment "$t" || { echo "fv-lab-goldens: sibling tier $t is in another list of fv-lab-retired.sh" >&2; exit 2; }
 done
 for f in $FV_LAB_EXPERIMENTS; do
   grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: experiment tier $f is no tier of lab/tiers.toml" >&2; exit 2; }
@@ -123,23 +135,26 @@ for FAMILY in $FAMILIES; do
   # the GPU's first use), and so is its host-RAM floor (min_ram_gb, passed as
   # FV_MIN_RAM_GB); its env (the R2 key as Runpod secret references) is
   # the one difference tests/payload_golden.rs allows.
-  if [[ "$FAMILY" == gold ]] || fv_lab_experiment "$FAMILY"; then
-    extra=()
-    if [[ "$FAMILY" == gold ]]; then
-      tv() { awk -v k="$1" '/^\[\[tier\]\]/ { t = 0 } /^name = "gold"$/ { t = 1 } t && $1 == k && $2 == "=" { print $3; exit }' "$ROOT/lab/tiers.toml"; }
-      disk="$(tv container_disk_gb)"; cell="$(tv cell_timeout_s)"
-      [[ "$disk" =~ ^[0-9]+$ && "$cell" =~ ^[0-9]+$ ]] || { echo "fv-lab-goldens: no container_disk_gb / cell_timeout_s for the gold tier" >&2; exit 2; }
-      (( cell > 0 )) || cell=3600
-      idle=$(( (600 + cell + 59) / 60 + 15 )); (( idle >= 30 )) || idle=30
-      extra=(FV_CONTAINER_DISK_GB="$disk" FV_IDLE_GPU_MIN="$idle" FV_IDLE_GPU_GRACE_MIN="$idle")
-      # Its host-RAM floor (min_ram_gb, ADR-0019 §16.10) is the script's
-      # FV_MIN_RAM_GB: minRAMPerGPU in both bodies.
-      ram="$(tv min_ram_gb)"
-      if [[ -n "$ram" ]]; then
-        [[ "$ram" =~ ^[1-9][0-9]*$ ]] || { echo "fv-lab-goldens: the gold tier's min_ram_gb '$ram' is not a positive whole number" >&2; exit 2; }
-        extra+=(FV_MIN_RAM_GB="$ram")
-      fi
+  # A volume+r2 tier's pod (gold, oracle-r2): its container disk, idle limit
+  # and host-RAM floor as the script's settings.
+  tv() { awk -v k="$1" -v n="name = \"$FAMILY\"" '/^\[\[tier\]\]/ { t = 0 } $0 == n { t = 1 } t && $1 == k && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' "$ROOT/lab/tiers.toml"; }
+  r2_body=()
+  if [[ "$(tv weights)" == volume+r2 ]]; then
+    disk="$(tv container_disk_gb)"; cell="$(tv cell_timeout_s)"
+    [[ "$disk" =~ ^[0-9]+$ && "$cell" =~ ^[0-9]+$ ]] || { echo "fv-lab-goldens: no container_disk_gb / cell_timeout_s for the $FAMILY tier" >&2; exit 2; }
+    (( cell > 0 )) || cell=3600
+    idle=$(( (600 + cell + 59) / 60 + 15 )); (( idle >= 30 )) || idle=30
+    r2_body=(FV_CONTAINER_DISK_GB="$disk" FV_IDLE_GPU_MIN="$idle" FV_IDLE_GPU_GRACE_MIN="$idle")
+    # Its host-RAM floor (min_ram_gb, ADR-0019 §16.10) is the script's
+    # FV_MIN_RAM_GB: minRAMPerGPU in both bodies.
+    ram="$(tv min_ram_gb)"
+    if [[ -n "$ram" ]]; then
+      [[ "$ram" =~ ^[1-9][0-9]*$ ]] || { echo "fv-lab-goldens: the $FAMILY tier's min_ram_gb '$ram' is not a positive whole number" >&2; exit 2; }
+      r2_body+=(FV_MIN_RAM_GB="$ram")
     fi
+  fi
+  if [[ "$FAMILY" == gold ]] || fv_lab_experiment "$FAMILY"; then
+    extra=(${r2_body[@]+"${r2_body[@]}"})
     clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" ${extra[@]+"${extra[@]}"} \
       bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
     FIXTURES+=("runpod-http-$FAMILY.json")
@@ -154,7 +169,10 @@ for FAMILY in $FAMILIES; do
     FROZEN+=("$FAMILY-dry-run.txt" "$FAMILY-gates.tsv" "runpod-http-$FAMILY.json")
     continue
   fi
-  has_branch "$FAMILY" || {
+  # The script family whose branch the tier's goldens come from: its own, or
+  # a sibling tier's family (FV_LAB_SIBLINGS).
+  SCRIPT_FAMILY="$(fv_lab_sibling "$FAMILY" || echo "$FAMILY")"
+  has_branch "$SCRIPT_FAMILY" || {
     echo "fv-lab-goldens: tier $FAMILY has no runpod-matrix.sh branch and is not in fv-lab-retired.sh (freeze its fixtures there, or restore the branch)" >&2
     exit 2
   }
@@ -168,6 +186,9 @@ for FAMILY in $FAMILIES; do
         FV_GEN_TIMEOUT_S=5400)
       extra_env=("FV_ORACLE_TARGETS=ltx25-i2v ltx25-kf ltx25-ref2v ltx25-a2v ltx25-a2v-i2v ltx25-retake ltx25-retake-v ltx25-retake-a ltx25-extend ltx25-a2v-guided"
         FV_GEN_TIMEOUT_S=5400) ;;
+    # The oracle family's SF-Wan target, on its volume+r2 tier (ADR-0019 §21).
+    oracle-r2)
+      fam_env=(FV_ORACLE_TARGETS=sfwan13 FV_GEN_TIMEOUT_S=5400) ;;
   esac
   # 1. and 2.: <name>-dry-run.txt and <name>-gates.tsv of the family under <env>.
   dry_golden() { # <name> [K=V …]
@@ -182,9 +203,9 @@ for FAMILY in $FAMILIES; do
     # 1. The dry run: the commands, in order (the family's own log lines).
     clean "$@" FV_DRY_RUN=1 FV_DRY_RUN_GATES="$TMP/pairs.txt" FV_WORK="$TMP/work" FV_SCRATCH="$TMP/scratch" \
       FV_RUN_TAG="$TAG" FV_BASELINE_SHA="$BASELINE_SHA" \
-      bash "$ROOT/scripts/gpu/runpod-matrix.sh" "$FAMILY" 2>/dev/null \
+      bash "$ROOT/scripts/gpu/runpod-matrix.sh" "$SCRIPT_FAMILY" 2>/dev/null \
       | sed -E 's/^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] //' \
-      | grep -F "[$FAMILY] " \
+      | grep -F "[$SCRIPT_FAMILY] " \
       | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" -e "s#$ROOT#/opt/fastvideo-rs#g" \
         >"$TMP/new/$name-dry-run.txt"
 
@@ -209,11 +230,23 @@ for FAMILY in $FAMILIES; do
     FIXTURES+=("$FAMILY-extra-dry-run.txt" "$FAMILY-extra-gates.tsv")
   fi
 
-  # 3. The pod body.
-  clean ${fam_env[@]+"${fam_env[@]}"} RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
+  # 3. The pod body (a volume+r2 tier's with its disk, idle limit and floor).
+  clean ${fam_env[@]+"${fam_env[@]}"} ${r2_body[@]+"${r2_body[@]}"} RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
     bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
   FIXTURES+=("$FAMILY-dry-run.txt" "$FAMILY-gates.tsv" "runpod-http-$FAMILY.json")
 done
+
+# 3a. The script runner's pod for the oracle-r2 GPU check (ADR-0019 §21.7,
+#     §21.8): FV_FAMILY=oracle with FV_R2_TREES=sfwan21-1.3b (the R2 key as the
+#     Runpod secret references, r2-stage.sh before the matrix, FV_WORK the
+#     merged root's parent), the oracle-r2 tier's disk and cell cap.
+#     tests/payload_golden.rs holds its env to fv-lab's references and its
+#     idle limit to the tier's. Without FV_R2_TREES every body above is
+#     unchanged (they are all made without it).
+clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY=oracle \
+  FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 FV_GEN_TIMEOUT_S=5400 \
+  bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-oracle-sfwan13-r2.json"
+FIXTURES+=("runpod-http-oracle-sfwan13-r2.json")
 
 # 3b. The upstream pods of `fv-lab oracle` (ADR-0019 §19): runpod-http.sh
 #     plan-upstream with the settings scripts/gpu/oracle.sh's start_up passes
@@ -244,6 +277,11 @@ upstream_golden fastvideo UP_IMAGE_TARGET=fastvideo FV_CONTAINER_DISK_GB=150 FV_
 upstream_golden sol-ltx25 UP_IMAGE_TARGET=sol-ltx25 FV_CONTAINER_DISK_GB=250 \
   "UP_STEPS=info:box weights:ltx25 oracle:ltx25-512p,ltx25-512p-dense" \
   "FV_EXTRA_ENV=FASTVIDEO_DUMP_OPS=0,1,24,47 RECON_ACCEPT_MISMATCH=1"
+# The fastvideo stack making sfwan13 (ADR-0019 §21): its r2:sfwan21-1.3b step
+# (the R2 key as Runpod secret references in the body's env) and its
+# target's 180 GB disk, as oracle.sh's start_up passes them for sfwan13.
+upstream_golden fastvideo-sfwan13 UP_IMAGE_TARGET=fastvideo FV_CONTAINER_DISK_GB=180 FV_MIN_RAM_GB=192 \
+  "UP_STEPS=info:box r2:sfwan21-1.3b oracle:sfwan13" "FV_EXTRA_ENV=FASTVIDEO_DUMP_OPS=0,1,24,47"
 
 # 4. The frames digest: the script's own function, on a copy of the sample.
 sed -n '/^frames_digest() {$/,/^}$/p' "$ROOT/scripts/gpu/runpod-matrix.sh" >"$TMP/digest.sh"

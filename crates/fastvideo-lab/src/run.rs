@@ -442,6 +442,12 @@ fn dry_run_steps(
                 "[{f}] dry-run compare {baseline}--{candidate} {}",
                 args.join(" ")
             )),
+            // The script's dry `compare_one <tag> …` (ADR-0019 §21).
+            Step::CompareDirs { arms, tag, args, .. } => {
+                if verdict_selected(cfg, arms) {
+                    out.push(format!("[{f}] dry-run compare {tag} {}", args.join(" ")));
+                }
+            }
             Step::Gate {
                 baseline,
                 candidate,
@@ -629,6 +635,7 @@ pub fn outputs(steps: &[Step]) -> Vec<String> {
             }
             Step::Arm { .. }
             | Step::Compare { .. }
+            | Step::CompareDirs { .. }
             | Step::Reference { .. }
             | Step::PromptFile { .. }
             | Step::Hash { .. }
@@ -1141,6 +1148,7 @@ impl Runner {
         match s {
             Step::Arm { .. }
             | Step::Compare { .. }
+            | Step::CompareDirs { .. }
             | Step::PromptFile { .. }
             | Step::Hash { .. }
             | Step::Metric { .. }
@@ -1215,7 +1223,15 @@ impl Runner {
                 echo,
             } => {
                 if verdict_selected(&self.cfg, arms) {
-                    self.metric(tag, report, clips, requires, *missing, *copy, *echo);
+                    self.metric(
+                        tag,
+                        report.as_deref(),
+                        clips,
+                        requires,
+                        *missing,
+                        *copy,
+                        *echo,
+                    );
                 }
             }
             Step::Compare {
@@ -1223,6 +1239,17 @@ impl Runner {
                 candidate,
                 args,
             } => self.compare_cells(baseline, candidate, args),
+            Step::CompareDirs {
+                arms,
+                tag,
+                baseline,
+                candidate,
+                args,
+            } => {
+                if verdict_selected(&self.cfg, arms) {
+                    self.compare_one(tag, baseline, candidate, args);
+                }
+            }
             Step::Gate {
                 baseline,
                 candidate,
@@ -1260,22 +1287,28 @@ impl Runner {
     /// its `oracle` branch): `metrics.txt` in `report`, the copies, and the
     /// file echoed into the log. A command that fails or prints no result
     /// leaves its value empty; the run goes on (the script, under `set -e`,
-    /// did the same since §20: `|| true`).
+    /// did the same since §20: `|| true`). A decode (§21) writes frames and
+    /// no line; a pass of decodes only has no report.
     #[allow(clippy::too_many_arguments)]
     fn metric(
         &self,
         tag: &str,
-        report: &Path,
+        report: Option<&Path>,
         clips: &[MetricClip],
         requires: &[PathBuf],
         missing: bool,
         copy: bool,
         echo: bool,
     ) {
-        let _ = fs::create_dir_all(report);
-        let txt = report.join("metrics.txt");
+        if let Some(r) = report {
+            let _ = fs::create_dir_all(r);
+        }
+        let txt = report.map(|r| r.join("metrics.txt"));
         let append = |bytes: &[u8]| {
-            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&txt) {
+            let Some(txt) = &txt else {
+                return;
+            };
+            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(txt) {
                 let _ = f.write_all(bytes);
             }
         };
@@ -1292,8 +1325,8 @@ impl Runner {
                 }
                 continue;
             }
-            if copy {
-                let _ = fs::copy(&c.path, report.join(format!("{}.mp4", c.label)));
+            if let (true, Some(r)) = (copy, report) {
+                let _ = fs::copy(&c.path, r.join(format!("{}.mp4", c.label)));
             }
             for m in &c.commands {
                 let tool = match m.argv[0].as_str() {
@@ -1322,6 +1355,11 @@ impl Runner {
                         }
                         append(&b);
                     }
+                    MetricLine::Frames(dir) => {
+                        // `ffmpeg … || true`: its output to the run's, no line.
+                        let _ = fs::create_dir_all(dir);
+                        let _ = cmd.stdin(Stdio::null()).status();
+                    }
                     MetricLine::Value { words, filter } => {
                         // `$(ffmpeg … 2>&1 | grep -E "Parsed_<m>" | tail -1)`
                         // (`-f null -` writes nothing to stdout).
@@ -1336,8 +1374,8 @@ impl Runner {
                 }
             }
         }
-        if echo {
-            let text = fs::read(&txt).unwrap_or_default();
+        if let (true, Some(txt)) = (echo, &txt) {
+            let text = fs::read(txt).unwrap_or_default();
             for l in log_lines(&text) {
                 self.raw(&format!("[{tag}] {}", String::from_utf8_lossy(l)));
             }

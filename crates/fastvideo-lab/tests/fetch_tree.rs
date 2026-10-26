@@ -5,6 +5,8 @@
 //! through a fake HTTP client. The two trees are byte-identical, with and
 //! without a skip pattern and a size limit.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -168,9 +170,10 @@ fn script_tree(work: &Path, skip: Option<&str>, max_mb: Option<u64>) -> PathBuf 
     let bin = work.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     // curl -sS --max-time N --fail [--max-filesize N] URL [-o FILE]
-    std::fs::write(
-        bin.join("curl"),
-        format!(
+    // Never held open for writing here: an exec racing a fork (ETXTBSY).
+    common::write_exe(
+        &bin.join("curl"),
+        &format!(
             r#"#!/usr/bin/env bash
 out="" max="" url=""
 while (( $# )); do
@@ -191,13 +194,7 @@ if [[ -n "$out" ]]; then cp "$f" "$out"; else cat "$f"; fi
 "#,
             site = site_dir.display()
         ),
-    )
-    .unwrap();
-    Command::new("chmod")
-        .arg("+x")
-        .arg(bin.join("curl"))
-        .status()
-        .unwrap();
+    );
     let dest = work.join("script");
     let mut env = String::new();
     if let Some(s) = skip {

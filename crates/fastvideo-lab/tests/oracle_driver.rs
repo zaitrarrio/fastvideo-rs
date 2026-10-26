@@ -16,6 +16,9 @@
 //!    `create_body` always sends it); a `hub_token` stack's `env` is the
 //!    script's, `HF_TOKEN` as the Runpod secret reference
 //!    `{{ RUNPOD_SECRET_fv_hf_token }}` (ADR-0019 §20.7 "First attempt");
+//!    a selection with an `r2` tree (`sfwan13`, ADR-0019 §21) carries the R2
+//!    key as the Runpod secret references on both sides (`r2:<tree>` in the
+//!    script's `UP_STEPS`), and its target's container disk;
 //! 3. (`up` only, not in a plan) the image is pinned to its digest.
 
 use std::collections::BTreeMap;
@@ -30,9 +33,10 @@ use fastvideo_lab::oracle::{
     check_balance, check_image_tag, drive, hub_step, hub_token_ref, plan_oracle, runtime_args,
     secret_like, up_steps, upstream_launch, upstream_start_command, OracleOps, OraclePlan,
     OracleRequest, RefState, RuntimePod, Stacks, UpPod, UpState, UpstreamPlan, UpstreamStart,
-    FINAL_ASKS, FINAL_ASK_GAP_S, STOCK_WAIT_S,
+    FINAL_ASKS, FINAL_ASK_GAP_S, R2_KEY_CAPTURE, R2_KEY_HANDOFF, STOCK_WAIT_S,
 };
 use fastvideo_lab::plan::Lab;
+use fastvideo_lab::weights::r2_env_refs;
 
 const SHA: &str = "1234567";
 const TAG: &str = "1234567-10241200";
@@ -77,12 +81,18 @@ fn cap_block() -> String {
 fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdog() {
     let (_, stacks) = lab();
     // The selections fv-lab-goldens.sh passes (oracle.sh's start_up settings,
-    // UP_STEPS in §15.7's form).
-    let cases: [(&str, &[&str]); 2] = [
-        ("fastvideo", &["fasth3-4step-vsa"]),
-        ("sol-ltx25", &["ltx25-512p", "ltx25-512p-dense"]),
+    // UP_STEPS in §15.7's form): the fixture, the stack, its targets.
+    let cases: [(&str, &str, &[&str]); 3] = [
+        ("fastvideo", "fastvideo", &["fasth3-4step-vsa"]),
+        (
+            "sol-ltx25",
+            "sol-ltx25",
+            &["ltx25-512p", "ltx25-512p-dense"],
+        ),
+        // A target with an R2 tree (ADR-0019 §21).
+        ("fastvideo-sfwan13", "fastvideo", &["sfwan13"]),
     ];
-    for (name, targets) in cases {
+    for (golden, name, targets) in cases {
         let stack = stacks
             .stacks
             .iter()
@@ -90,23 +100,37 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
             .expect("the stack");
         let targets: Vec<String> = targets.iter().map(|t| (*t).to_owned()).collect();
         let start = UpstreamStart::for_stack(stack, TAG, UP_SHA, &up_steps(stack, &targets));
-        let l = upstream_launch(stack, "latest", &start).expect("launch");
+        let l = upstream_launch(stack, &targets, "latest", &start).expect("launch");
         let mut ours = pod_create_body(&l);
-        let mut theirs = fixture(&format!("runpod-http-upstream-{name}.json"));
+        let mut theirs = fixture(&format!("runpod-http-upstream-{golden}.json"));
         // The Hub token: a secret reference on both sides for a hub_token
         // stack (the script: its weights:ltx25 step), on neither otherwise;
-        // never a value.
-        let want_env = if stack.hub_token {
-            json!({ "HF_TOKEN": hub_token_ref() })
-        } else {
-            json!({})
-        };
-        assert_eq!(ours["env"], want_env, "{name}");
+        // the R2 key for a selected target with an `r2` tree (the script:
+        // its r2:<tree> step); never a value.
+        let mut want_env = serde_json::Map::new();
+        if stack.hub_token {
+            want_env.insert("HF_TOKEN".into(), json!(hub_token_ref()));
+        }
+        let r2 = stack
+            .targets
+            .iter()
+            .any(|t| targets.contains(&t.name) && !t.r2.is_empty());
+        if r2 {
+            for (k, v) in r2_env_refs() {
+                want_env.insert(k, json!(v));
+            }
+        }
+        let want_env = Value::Object(want_env);
+        assert_eq!(r2, golden == "fastvideo-sfwan13", "{golden}");
+        assert_eq!(ours["env"], want_env, "{golden}");
         assert_eq!(
             theirs.get("env").cloned().unwrap_or_else(|| json!({})),
             want_env,
-            "{name}"
+            "{golden}"
         );
+        // The disk: the stack's, or the selected target's when larger.
+        let disk = if r2 { 180 } else { stack.container_disk_gb };
+        assert_eq!(ours["containerDiskInGb"], json!(disk), "{golden}");
         // Difference 2: fv-deploy sends `env` always, the script only with an entry.
         ours.as_object_mut().and_then(|m| m.remove("env"));
         theirs.as_object_mut().and_then(|m| m.remove("env"));
@@ -117,25 +141,37 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
             .to_owned();
         let block = cap_block();
         let block = block.replace("@CAP_S@", &stack.wall_cap_s.to_string());
-        assert_eq!(cmd.matches(&block).count(), 1, "{name}: one cap watchdog");
+        assert_eq!(cmd.matches(&block).count(), 1, "{golden}: one cap watchdog");
         assert!(cmd.contains(&format!("set -u\n{block}OUT=/root/runs/upstream/{TAG}\n")));
         ours["dockerStartCmd"][2] = Value::String(cmd.replace(&block, ""));
         if ours != theirs {
             let a = ours["dockerStartCmd"][2].as_str().unwrap_or("");
             let b = theirs["dockerStartCmd"][2].as_str().unwrap_or("");
             for (i, (x, y)) in a.lines().zip(b.lines()).enumerate() {
-                assert_eq!(x, y, "{name}: start command line {i}");
+                assert_eq!(x, y, "{golden}: start command line {i}");
             }
-            assert_eq!(ours, theirs, "{name}");
+            assert_eq!(ours, theirs, "{golden}");
         }
         assert_eq!(
             ours["minRAMPerGPU"].as_u64(),
             stack.min_ram_gb.map(u64::from),
-            "{name}"
+            "{golden}"
         );
     }
     // Every stack has a golden.
-    assert_eq!(stacks.stacks.len(), cases.len());
+    for s in &stacks.stacks {
+        assert!(cases.iter().any(|(_, n, _)| *n == s.name), "{}", s.name);
+    }
+    // Only the sfwan13 target fetches from R2, and only its selection carries
+    // the key: the fastvideo stack's other targets keep their pod body.
+    let r2: Vec<(&str, &[String])> = stacks
+        .stacks
+        .iter()
+        .flat_map(|s| &s.targets)
+        .filter(|t| !t.r2.is_empty())
+        .map(|t| (t.name.as_str(), t.r2.as_slice()))
+        .collect();
+    assert_eq!(r2, [("sfwan13", &["sfwan21-1.3b".to_owned()][..])]);
     // Only the LTX stack reads gated Hub files.
     let hub: Vec<&str> = stacks
         .stacks
@@ -177,6 +213,11 @@ fn the_upstream_start_command_is_the_scripts_with_its_values() {
         up_steps(s, &["h3-ref2va-4step".to_owned()]),
         "info:box oracle:h3-ref2va-4step"
     );
+    // A target's R2 trees after its weight steps (ADR-0019 §21).
+    assert_eq!(
+        up_steps(s, &["fasth3-4step-vsa".to_owned(), "sfwan13".to_owned()]),
+        "info:box weights:h3-diffusers r2:sfwan21-1.3b oracle:fasth3-4step-vsa,sfwan13"
+    );
     let mut o = UpstreamStart::for_stack(s, TAG, UP_SHA, "info:box oracle:fasth3-4step-vsa");
     let cmd = upstream_start_command(&o).expect("command");
     assert!(cmd.contains(&format!("fetch -q --depth 1 origin {UP_SHA} ")));
@@ -198,6 +239,31 @@ fn the_upstream_start_command_is_the_scripts_with_its_values() {
     ] {
         assert!(!cmd.contains(m), "{m}");
     }
+    // No r2:<tree> step: no R2 line (the key is not in the pod's env).
+    assert!(!cmd.contains("_fvr2_") && !cmd.contains("FV_WEIGHTS_R2_"));
+    // An r2:<tree> step: the key out of the start command's environment on
+    // its first line, before the watchdogs, the file server and the clone,
+    // and back to pod.sh alone (S1 of the D1j review; runpod-http.sh's
+    // upstream_start_cmd renders the same lines).
+    let steps = up_steps(s, &["sfwan13".to_owned()]);
+    let r2 = UpstreamStart::for_stack(s, TAG, UP_SHA, &steps);
+    assert!(r2.has_r2_step() && !o.has_r2_step());
+    let rcmd = upstream_start_command(&r2).expect("command");
+    assert_eq!(rcmd.lines().next(), Some(R2_KEY_CAPTURE));
+    let handoff: Vec<&str> = rcmd.lines().filter(|l| l.contains("$_fvr2_")).collect();
+    assert_eq!(handoff.len(), 1, "{handoff:?}");
+    assert!(handoff[0].starts_with(&format!("{R2_KEY_HANDOFF}env ")));
+    assert!(handoff[0]
+        .ends_with("bash $RUNNER/scripts/gpu/upstream/pod.sh \"$OUT\" >\"$OUT/pod.out\" 2>&1"));
+    // The key in the env and the r2 step go together.
+    let sf = vec!["sfwan13".to_owned()];
+    assert!(upstream_launch(s, &sf, "latest", &r2).is_ok());
+    let e = upstream_launch(s, &sf, "latest", &o).unwrap_err();
+    assert!(e.contains("disagree"), "{e}");
+    let vsa = vec!["fasth3-4step-vsa".to_owned()];
+    assert!(upstream_launch(s, &vsa, "latest", &r2)
+        .unwrap_err()
+        .contains("disagree"));
     // Shell text is refused.
     o.up_steps = "info:box $(id)".into();
     assert!(upstream_start_command(&o).is_err());
@@ -320,6 +386,18 @@ fn the_stacks_file_refuses_what_it_cannot_run() {
             "env = [\"FASTVIDEO_DUMP_OPS=0,1,24,47\"]",
             "env = [\"RUNPOD_API_KEY=x\"]",
         ),
+        // A target's R2 trees and disk (ADR-0019 §21): typed tree names, once
+        // each; a positive disk.
+        ("r2 = [\"sfwan21-1.3b\"]", "r2 = [\"../x\"]"),
+        ("r2 = [\"sfwan21-1.3b\"]", "r2 = [\"/abs\"]"),
+        ("r2 = [\"sfwan21-1.3b\"]", "r2 = [\"a b\"]"),
+        (
+            "r2 = [\"sfwan21-1.3b\"]",
+            "r2 = [\"sfwan21-1.3b\", \"sfwan21-1.3b\"]",
+        ),
+        ("r2 = [\"sfwan21-1.3b\"]", "r2 = \"sfwan21-1.3b\""),
+        ("container_disk_gb = 180", "container_disk_gb = 0"),
+        ("container_disk_gb = 180", "container_disk_gb = -1"),
     ] {
         assert!(text.contains(from), "{from}");
         let bad = text.replacen(from, to, 1);
@@ -344,6 +422,66 @@ fn the_stacks_file_refuses_what_it_cannot_run() {
     )
     .unwrap();
     assert!(extra.check_against(&lab).is_err());
+    // An R2 tree weights-r2.tsv does not publish: refused against the
+    // repository (the plan step would find no manifest to pin).
+    let unpublished = Stacks::parse(
+        &text.replacen(
+            "r2 = [\"sfwan21-1.3b\"]",
+            "r2 = [\"sfwan21-1.3b-unpublished\"]",
+            1,
+        ),
+        "u",
+    )
+    .unwrap();
+    let e = unpublished.check_against(&lab).unwrap_err().to_string();
+    assert!(
+        e.contains("is not a dest of scripts/gpu/weights-r2.tsv"),
+        "{e}"
+    );
+}
+
+/// `sfwan13` (ADR-0019 §21) on the `oracle-r2` tier: one `fastvideo` pod
+/// whose steps fetch the tree from R2, with the target's disk and the R2 key
+/// as Runpod secret references; the same stack without it keeps its 150 GB
+/// and has no key; the runtime side is `pod up --family oracle-r2`.
+#[test]
+fn the_plan_of_sfwan13_fetches_its_tree_upstream_and_runs_on_oracle_r2() {
+    let (lab, stacks) = lab();
+    let arms: Vec<String> = lab.cells["oracle-sfwan13"]
+        .arms
+        .iter()
+        .map(|a| a.name.clone())
+        .collect();
+    let names: Vec<&str> = arms.iter().map(String::as_str).collect();
+    let mut r = request(&names);
+    // The oracle tier has no sfwan13 cell: its arms are not the tier's.
+    let e = plan_oracle(&lab, &stacks, &r).unwrap_err();
+    assert!(e.contains("is not an arm of tier `oracle`"), "{e}");
+    r.tier = "oracle-r2".into();
+    let p = plan_oracle(&lab, &stacks, &r).expect("plan");
+    assert_eq!(p.tier, "oracle-r2");
+    assert_eq!(p.upstream.len(), 1);
+    let u = &p.upstream[0];
+    assert_eq!(u.stack, "fastvideo");
+    assert_eq!(u.targets, ["sfwan13"]);
+    assert_eq!(u.start.up_steps, "info:box r2:sfwan21-1.3b oracle:sfwan13");
+    assert_eq!(u.launch.disk.container_gb, 180);
+    assert_eq!(u.launch.env, r2_env_refs());
+    assert!(u
+        .launch
+        .env
+        .values()
+        .all(|v| v.starts_with("{{ RUNPOD_SECRET_fv_r2_")));
+    assert_eq!(u.launch.gpu.min_ram_gb, Some(192));
+    let a = runtime_args(&p, &["https://a/upstream/t".into()], &p.cells);
+    assert!(
+        a.windows(2).any(|w| w == ["--family", "oracle-r2"]),
+        "{a:?}"
+    );
+    // The fastvideo stack without it: its disk and no env, as before.
+    let p = plan_oracle(&lab, &stacks, &request(&VSA)).expect("plan");
+    assert_eq!(p.upstream[0].launch.disk.container_gb, 150);
+    assert!(p.upstream[0].launch.env.is_empty());
 }
 
 // ------------------------------------------------------------------ the plan

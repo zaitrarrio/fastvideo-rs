@@ -42,6 +42,19 @@ FV_LAB_RESTORED="precision-nvfp4:precision:FV_PRECISION_ARM=ltx-nvfp4 ltxvae-gen
 # and `all` for them and names the fv-lab command.
 FV_LAB_EXPERIMENTS="h3-graphs"
 
+# Sibling tiers of a live runpod-matrix.sh family (ADR-0019 §20.5, §21):
+# `<tier>:<family>` is a tier whose cells are targets of <family>'s branch
+# that its own tier cannot run (another pod: `oracle-r2`, the oracle family's
+# sfwan13 target, reads its tree from R2, `weights = "volume+r2"`). Its
+# fixtures are <family>'s dry run under the tier's settings
+# (tests/fv-lab-goldens.sh fam_env) and runpod-http.sh plan's body for the
+# tier; fv-lab's dry run equals the first with the tier's name for the
+# family's and its merged weights root for the volume's
+# (crates/fastvideo-lab/tests/dry_run.rs). No branch of its own:
+# runpod-http.sh refuses `run` / `all` for it and names fv-lab's command; the
+# script runs those targets as <family> (FV_FAMILY=<family>).
+FV_LAB_SIBLINGS="oracle-r2:oracle"
+
 # The runpod-matrix.sh families retired with no tier (ADR-0019 §18, D1g,
 # coordinator decision 2026-10-26): finished experiments and one-time
 # measurements whose evidence is committed or recorded, families the EU volume
@@ -60,6 +73,16 @@ fv_lab_retired() {
 # fv_lab_experiment <tier>: true for a tier made from a port one-off.
 fv_lab_experiment() {
   [[ " $FV_LAB_EXPERIMENTS " == *" ${1:-} "* ]]
+}
+
+# fv_lab_sibling <tier>: the live family a sibling tier is cut from (empty
+# and false for any other name).
+fv_lab_sibling() {
+  local e
+  for e in $FV_LAB_SIBLINGS; do
+    [[ "${e%%:*}" == "${1:-}" ]] && { echo "${e#*:}"; return 0; }
+  done
+  return 1
 }
 
 # fv_script_retired <family>: true when the family is retired with no tier.
