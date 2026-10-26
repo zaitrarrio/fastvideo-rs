@@ -47,9 +47,10 @@ export interface GpuSpec {
   /** Runpod serverless `minCudaVersion`. */
   min_cuda?: string | null;
   /** A Runpod pod's host-RAM floor (`PodCreateInput.minRAMPerGPU`): whole
-   * GB per GPU, positive. `None` sends nothing: Runpod's default floor
-   * (8 GB per GPU), above which the host's share decides
-   * (docs/adr/0019-fv-lab.md §16.10). */
+   * GB per GPU, at least 1. `None` sends nothing: Runpod's default floor
+   * (8 GB per GPU), above which the host's share decides. On any other
+   * launch kind (no create body carries it) `guard::check_min_ram`
+   * refuses it before anything is created (docs/adr/0019-fv-lab.md §16.10). */
   min_ram_gb?: number | null;
   /** Provider GPU type ids in fallback order (one is tried at a time for a
    * pod; a serverless endpoint gets the whole list). */
@@ -59,7 +60,7 @@ export const GpuSpecZ: z.ZodType<GpuSpec> = z.strictObject({
   allowed_cuda: z.array(z.string()).optional(),
   count: z.number().int().min(0).max(4294967295),
   min_cuda: z.string().nullable().optional(),
-  min_ram_gb: z.number().int().min(0).max(4294967295).nullable().optional(),
+  min_ram_gb: z.number().int().min(1).max(4294967295).nullable().optional(),
   types: z.array(z.string()),
 });
 

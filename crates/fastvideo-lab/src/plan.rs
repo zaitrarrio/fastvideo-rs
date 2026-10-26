@@ -183,6 +183,7 @@ pub struct Tier {
     /// ADR-0019 §16.10): a positive integer. Absent: none is asked for, and
     /// Runpod's default floor (8 GB per GPU) leaves the host's share to decide.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
     pub min_ram_gb: Option<u32>,
     /// Where the arms' weight trees come from: `volume` (the EU volume,
     /// mounted at `/workspace`, trees under `/workspace/weights`) or

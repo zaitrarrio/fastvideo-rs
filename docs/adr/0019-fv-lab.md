@@ -2059,35 +2059,44 @@ gave; and `box.txt` did not record that share, so the OOM kill could not be prov
    string or out-of-range value. Absent, nothing changes: no tier's pod body changes but the gold tier's.
 2. *fv-deploy.* `GpuSpec::min_ram_gb` (`launch.v1.json`, additive, omitted when unset) is Runpod's `PodCreateInput`
    `minRAMPerGPU` in `pod::create_body`, sent only when set, so every existing payload golden is byte-identical.
-   `guard::check_min_ram` (in `Deployer::preflight`) refuses 0 and a floor on any launch but a Runpod pod (no other
-   create body carries one). fv-control's `runpodPodBody` mirrors it; `launch-gen.ts` is regenerated.
+   `guard::check_min_ram` (in `Deployer::preflight`, which every fv-deploy `up` runs) refuses 0 and a floor on any
+   launch but a Runpod pod (no other create body carries one, so a serverless launch's would otherwise be dropped).
+   The schemas say `minimum: 1` (`#[schemars(range(min = 1))]`), so fv-control's zod validator refuses 0 too.
+   fv-control's `runpodPodBody` mirrors the field; its endpoint bodies have none, and it builds no launch with a
+   floor; `launch-gen.ts` is regenerated (`gen-configs.mjs` now carries an integer's `minimum` into zod).
    `Instance::memory_gb` / `vcpus` (`instance.v1.json`, additive) are the create answer's `memoryInGb` / `vcpuCount`;
    `up` logs them with the price (`runpod-pod <id> on <gpu> at $x/hr ram=<n>GB vcpu=<n>`), as `runpod-http.sh` does,
-   and `pod up` records them, with the floor asked for, in `pod.json`.
+   and `pod up` records them, with the floor asked for, in `pod.json` and `<state>/pods/<id>.json`. `PodRecord` keeps
+   `deny_unknown_fields` (a misspelt field is an error), so `pod reap` skips a record it cannot read (another fv-lab
+   version's, a torn write) with a warning naming the file, and reaps the rest (`pod::read_records`).
 3. *fv-lab pod.* `pod::launch` copies the tier's floor into the launch. The pod body golden passes it to the script as
    `FV_MIN_RAM_GB` (§16.6), so both bodies carry `minRAMPerGPU` and `tests/payload_golden.rs` pins it to the tier's
-   value (and that only the gold tier has one). On the script route of a retired family, `FV_MIN_RAM_GB` equal to the
-   tier's floor passes and any other value, or one for a tier without a floor, is refused naming `min_ram_gb`.
+   value (and that only the gold tier has one). On the script route of a retired family, `FV_MIN_RAM_GB` for a tier
+   without a floor is refused naming `min_ram_gb` (`fv-lab-route.test.sh`). The branch that passes a value equal to
+   the tier's floor is defensive: today only `gold` has a floor, and `gold` never takes that route (`run` / `all`
+   are refused for it first).
 4. *The runner records the pod's memory* (`podmem`, the method of `scripts/gpu/upstream/pod.sh` `cg_dir` / `cg_mem`):
    the memory cgroup from `/proc/self/cgroup` (v2 `0::<path>`, else v1's `memory` controller) under `/sys/fs/cgroup`,
    else the mount's root. At start it appends to `box.txt` `cpus=<n> mem=<host GiB>G` and `cgroup=<v2|v1> <dir>
    pod_ram_limit_mib=<n|null> oom_kills=<n>` and logs `pod memory: …`. Each arm that runs is sampled every second
    (anon + shmem on v2, total_rss + total_shmem on v1: process memory without the page cache), and its `summary.json`
-   gains, before `ended`, `peak_ram_mib`, `ram_limit_mib`, `pod_peak_mib_cumulative` (v2 `memory.peak`, v1
-   `memory.max_usage_in_bytes`: since the pod started, page cache included) and `oom_kills` (during the arm); `null`
-   when unreadable, and none of the four without a memory cgroup. New fields only: every reader reads by key
+   gains, before `ended`, `peak_ram_mib` (the whole cgroup's sample: the runner and anything beside the arm count
+   too), `ram_limit_mib` (the runner's own cgroup's limit; an ancestor's is not read), `pod_peak_mib_cumulative`
+   (v2 `memory.peak`, v1 `memory.max_usage_in_bytes`: since the pod started, page cache included; `null` on v2
+   before Linux 5.19) and `oom_kills` (during the arm); `null` when unreadable, and none of the four without a
+   memory cgroup. New fields only: every reader reads by key
    (`report tiers`, `fv-lab-compare-runs.sh`), by `"exit":…` (`summary_exit_ok`) or carries the object whole (`report
-   table`'s rows). `live.log` gets `ram <arm>: ram <peak>
-   MiB of <limit> MiB, oom_kills <n>` per arm, and `OOM <arm>: the kernel OOM-killed <n> process(es) in this pod
+   table`'s rows). `live.log` gets `ram <arm>: ram <peak> MiB of <limit> MiB, oom_kills <n>` per arm, and `OOM <arm>: the kernel OOM-killed <n> process(es) in this pod
    during the arm (host RAM, not GPU …)` when the count rose, after the arm's `FAIL` line.
 5. *The gold tier's floor: 192 GB.* The largest host load of a gold arm is `wan14b-plug-4step`'s:
    `wan::plug::load_merged_transformer` maps the DiT shards but copies every tensor into an owned host buffer in its
    on-disk dtype (`load_raw_tensors_native`; the 14B DiT is f32 on disk, about 57 GB of the 80.41 GB tree), merges
    the two LoRA trees (3.68 GB) into it, and holds it while `WanPipeline` loads the f32 UMT5 encoder the same way
-   (`WeightMap::from_dir`, about 23 GB): about 80 GB of process memory at the peak. The page cache comes on top and
-   is charged to the same cgroup: the 84 GB the arm just fetched (reclaimable only once written back) and the shards
-   the copy reads. 192 GB holds the 80 GB with the arm's trees cached and about 28 GB to spare, and is the floor the
-   upstream cells use. Every other gold arm reads smaller trees, or `h3-8step` (147.86 GB) through a loader whose host
+   (`WeightMap::from_dir`, about 23 GB): about 80 GB of process memory at the peak. 192 GB is that with more than
+   100 GB of headroom, and the floor the upstream cells' rerun asked for on a PRO 6000 in EU-RO-1, where Runpod gave
+   the pod 283 GB (docs/oracle.md "Upstream cells: host RAM"). The page cache the fetch and the copy fill is charged
+   to the same cgroup but reclaimable, so it is no OOM risk; the one caveat is pages not yet written back, at most
+   the 84 GB the arm just fetched. Every other gold arm reads smaller trees, or `h3-8step` (147.86 GB) through a loader whose host
    footprint the H3 tiers run without a floor today; no other tier gets one without evidence.
 
 **Consequences.** A pod with a floor can only land on a host with that much RAM to give: fewer offers, and a create

@@ -324,12 +324,21 @@ fv-lab run rtx6000-ltx25                                                        
 The pod's start command does this. It writes `runpod-matrix.sh`'s run directory (`<scratch>/runs/<tier>/<tag>/`:
 `live.log`, per arm `summary.json`, `stdout.log`, `stderr.log`, `nvidia-smi-{start,end}.txt`, frames,
 `benchmark.json`, `compare/`, `gate/`, `done.json`). It also records the pod's memory, from its memory cgroup
-([ADR-0019 §16.10](../adr/0019-fv-lab.md#1610-the-host-ram-floor-min_ram_gb-2026-10-26)): at start it appends
-`cpus=… mem=…G` and `cgroup=v2 <dir> pod_ram_limit_mib=… oom_kills=…` to `box.txt` (the pod's RAM limit, not the
-host's `free`); each arm's `summary.json` gains `peak_ram_mib` (sampled each second: anon + shmem, no page cache),
-`ram_limit_mib`, `pod_peak_mib_cumulative` and `oom_kills` (during the arm), and `live.log` a `ram <arm>: …` line.
-An arm the kernel OOM-killed (exit 137, often nothing printed) gets `OOM <arm>: the kernel OOM-killed <n>
-process(es) in this pod during the arm (host RAM, not GPU …)`. Without a memory cgroup the fields are left out. Settings, as flags or the script's variables: `--work`
+([ADR-0019 §16.10](../adr/0019-fv-lab.md#1610-the-host-ram-floor-min_ram_gb-2026-10-26)):
+
+- at start, `box.txt` gets `cpus=… mem=…G` and `cgroup=v2 <dir> pod_ram_limit_mib=… oom_kills=…`: the pod's RAM
+  limit, not the host's `free`;
+- each arm's `summary.json` gains `peak_ram_mib`, `ram_limit_mib`, `pod_peak_mib_cumulative` and `oom_kills`, and
+  `live.log` a `ram <arm>: …` line. `peak_ram_mib` is sampled each second as the whole cgroup's anon + shmem (no page
+  cache), so it includes the runner and anything running beside the arm, not the arm alone. `ram_limit_mib` is the
+  limit of the runner's own cgroup only (an ancestor's tighter limit is not read). `pod_peak_mib_cumulative` is the
+  cgroup's peak since the pod started, page cache included, and `null` on cgroup v2 before Linux 5.19 (no
+  `memory.peak`). `oom_kills` counts the kernel's OOM kills in the cgroup during the arm;
+- an arm the kernel OOM-killed (exit 137, often nothing printed) gets `OOM <arm>: the kernel OOM-killed <n>
+  process(es) in this pod during the arm (host RAM, not GPU …)`;
+- without a memory cgroup the fields are left out.
+
+Settings, as flags or the script's variables: `--work`
 (`FV_WORK`), `--scratch` (`FV_SCRATCH`), `--tag` (`FV_RUN_TAG`), `--runs-dir` (`FV_RUNS_DIR`, the run directory
 itself instead of `<scratch>/runs/<tier>/<tag>`), `--cells` (`FV_CELLS`), `--gpucheck`
 (`FV_GPUCHECK`), `--cell-timeout-s` (`FV_GEN_TIMEOUT_S`, default the tier's), `FV_LPIPS=1`, `FV_GATE_POLICY`. Exit 2

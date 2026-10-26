@@ -257,10 +257,10 @@ cells = ["b4a-h3-fullopt-env", "b4a-h3-fullopt-prof", "b4a-h3-4step-tea"]
 # 57 GB of the 80.41 GB wan21-t2v-14b tree. It merges the two LoRA trees
 # (3.68 GB) into that copy and keeps it while the pipeline loads the f32 text
 # encoder (about 23 GB) beside it: about 80 GB of process memory at the peak.
-# The page cache comes on top: the 84 GB the arm just fetched and the shards
-# the copy reads, charged to the pod's cgroup and reclaimable only once
-# written back. 192 GB per GPU is the 80 GB with the arm's 84 GB of trees
-# cached and about 28 GB to spare, and the floor the upstream cells use
+# 192 GB per GPU is that with more than 100 GB of headroom (the page cache the
+# fetch and the copy fill is reclaimable; only pages not yet written back, at
+# most the arm's 84 GB just fetched, are a caveat), and the floor the upstream
+# cells' rerun asked for on a PRO 6000 in EU-RO-1, where Runpod gave 283 GB
 # (docs/oracle.md "Upstream cells: host RAM"). The runner records the pod's
 # RAM limit in box.txt and each arm's peak and OOM kills in its summary.json:
 # the evidence to lower it from.

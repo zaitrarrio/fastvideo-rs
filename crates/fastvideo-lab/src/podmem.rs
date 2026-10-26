@@ -234,12 +234,16 @@ pub fn ram_text(used_mib: Option<u64>, limit_mib: Option<u64>) -> String {
 /// One arm's memory, read around it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ArmMem {
-    /// The arm's sampled peak process memory (MiB, no page cache).
+    /// The peak process memory sampled during the arm (MiB, no page cache):
+    /// the whole cgroup's anon + shmem, so the runner and anything running
+    /// beside the arm count too.
     pub peak_ram_mib: Option<u64>,
-    /// The pod's RAM limit (MiB).
+    /// The RAM limit of the runner's own cgroup (MiB); an ancestor's tighter
+    /// limit is not read.
     pub ram_limit_mib: Option<u64>,
     /// The cgroup's exact peak since the pod started (MiB, page cache
-    /// included; cumulative).
+    /// included; cumulative). `None` on cgroup v2 before Linux 5.19, which
+    /// has no `memory.peak`.
     pub pod_peak_mib_cumulative: Option<u64>,
     /// Processes the kernel OOM-killed in the pod during the arm.
     pub oom_kills: Option<u64>,
@@ -261,6 +265,8 @@ impl ArmMem {
 
 /// An arm's peak process memory, sampled every `period` on a thread from
 /// [`Sampler::start`] until [`Sampler::finish`], with one sample at each end.
+/// Dropped without `finish` (a panic, an early return), it still stops and
+/// joins its thread.
 pub struct Sampler {
     cg: MemCgroup,
     oom0: Option<u64>,
@@ -272,6 +278,7 @@ pub struct Sampler {
 
 impl Sampler {
     pub fn start(cg: &MemCgroup, period: Duration) -> Sampler {
+        let oom0 = cg.oom_kills();
         let stop = Arc::new(AtomicBool::new(false));
         let peak = Arc::new(AtomicU64::new(0));
         let sample = |cg: &MemCgroup, peak: &AtomicU64| {
@@ -294,20 +301,25 @@ impl Sampler {
         };
         Sampler {
             cg: cg.clone(),
-            oom0: cg.oom_kills(),
+            oom0,
             stop,
             peak,
             thread,
         }
     }
 
-    /// Stops the sampling; the arm's memory.
-    pub fn finish(mut self) -> ArmMem {
+    /// Stops the thread and waits for it (once: the handle is taken out).
+    fn stop_thread(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(t) = self.thread.take() {
             t.thread().unpark();
             let _ = t.join();
         }
+    }
+
+    /// Stops the sampling; the arm's memory.
+    pub fn finish(mut self) -> ArmMem {
+        self.stop_thread();
         if let Some(b) = self.cg.used_bytes() {
             self.peak.fetch_max(b.saturating_add(1), Ordering::Relaxed);
         }
@@ -321,6 +333,12 @@ impl Sampler {
                 _ => None,
             },
         }
+    }
+}
+
+impl Drop for Sampler {
+    fn drop(&mut self) {
+        self.stop_thread();
     }
 }
 
@@ -455,6 +473,29 @@ mod tests {
         assert_eq!(ram_text(None, Some(2)), "ram ? of 2 MiB");
         assert_eq!(ram_text(Some(1), None), "ram 1 MiB");
         assert_eq!(ram_text(None, None), "ram unknown (no memory cgroup)");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A sampler dropped without `finish` stops and joins its thread (its
+    /// clone of the shared peak is gone once the thread has ended).
+    #[test]
+    fn a_dropped_sampler_stops_its_thread() {
+        let root = tmp("drop");
+        put(&root, "memory.stat", "anon 1048576\n");
+        let cg = MemCgroup {
+            v2: true,
+            dir: root.clone(),
+        };
+        let s = Sampler::start(&cg, Duration::from_secs(3600));
+        let (stop, peak) = (Arc::clone(&s.stop), Arc::clone(&s.peak));
+        assert_eq!(
+            Arc::strong_count(&peak),
+            3,
+            "the sampler, its thread and this test"
+        );
+        drop(s);
+        assert!(stop.load(Ordering::Relaxed));
+        assert_eq!(Arc::strong_count(&peak), 1, "the thread has ended");
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -123,6 +123,8 @@ describe("fv-deploy's types in TypeScript (src/launch-gen.ts, gen-configs.mjs)",
         ["ports", { type: "array", items: { type: "string" }, uniqueItems: true }, "unsupported keyword uniqueItems on a array node"],
         ["schema", { type: "integer", format: "uint32", minimum: 0, maximum: 1 }, "unsupported keyword maximum on a integer node"],
         ["schema", { type: "integer", format: "uint32", minimum: 0, exclusiveMinimum: 0 }, "unsupported keyword exclusiveMinimum on a integer node"],
+        ["schema", { type: "integer", format: "uint32" }, "integer minimum undefined"],
+        ["schema", { type: "integer", format: "uint32", minimum: -1 }, "integer minimum -1"],
       ] as [string, unknown, string][]) {
         const keep = j.properties[prop];
         j.properties[prop] = node;
@@ -199,6 +201,8 @@ describe("a Launch's Runpod bodies are the Rust provider's (the C3a payload gold
     // A host-RAM floor (fv-lab's tier min_ram_gb) is minRAMPerGPU, as pod.rs create_body sends it.
     const floor = wire(runpodPodBody(checkLaunch({ ...scriptPod(), gpu: { ...scriptPod().gpu, min_ram_gb: 192 } })));
     expect(floor).toStrictEqual({ ...fixture("runpod-pod.json"), minRAMPerGPU: 192 });
+    // At least 1 GB (launch.v1.json minimum 1, as guard::check_min_ram).
+    expect(() => checkLaunch({ ...scriptPod(), gpu: { ...scriptPod().gpu, min_ram_gb: 0 } })).toThrow(LaunchSchemaError);
     const e = wire(runpodEndpointBody({ ...scriptEndpoint(), gpu: { types: [GPU], count: 1 }, placement: {} }, "t"));
     expect(e).not.toHaveProperty("minCudaVersion");
     expect(e).not.toHaveProperty("networkVolumeId");

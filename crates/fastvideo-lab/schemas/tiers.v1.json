@@ -96,7 +96,7 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "name": {
           "description": "The family name (`fv-lab run <name>`; the run directory\n`runs/<name>/<tag>` and `artifacts/runpod/<name>/<tag>`).",

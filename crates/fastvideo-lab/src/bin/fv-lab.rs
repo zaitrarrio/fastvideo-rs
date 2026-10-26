@@ -1363,7 +1363,7 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
                     .collect();
                 reap_account(&pods, now, &caps)
             } else {
-                let records = read_records(&state)?;
+                let records = read_records(&state);
                 reap_recorded(&pods, now, &records)
             };
             let mut ok = true;
@@ -1400,20 +1400,15 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
 }
 
 /// Every pod record of this machine (`<state>/pods/*.json`).
-fn read_records(state: &Path) -> Result<Vec<PodRecord>, String> {
-    let dir = state.join("pods");
-    let Ok(rd) = std::fs::read_dir(&dir) else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::new();
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.extension().is_some_and(|x| x == "json") {
-            let t = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-            out.push(serde_json::from_str(&t).map_err(|e| format!("{}: {e}", p.display()))?);
-        }
+/// This machine's pod records (`<state>/pods/*.json`); one it cannot read
+/// (another version's, a torn write) is skipped with a warning naming it, so
+/// the others are still reaped.
+fn read_records(state: &Path) -> Vec<PodRecord> {
+    let (records, skipped) = fastvideo_lab::pod::read_records(&state.join("pods"));
+    for w in skipped {
+        eprintln!("[fv-lab] WARN: skipping pod record {w}");
     }
-    Ok(out)
+    records
 }
 
 fn cmd_backstop(

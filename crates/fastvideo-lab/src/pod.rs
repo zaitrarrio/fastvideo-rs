@@ -559,6 +559,33 @@ pub struct PodRecord {
     pub vcpus: Option<f64>,
 }
 
+/// The pod records in `dir` (`<state>/pods/*.json`), and one line per file
+/// that could not be read or parsed (`<path>: <why>`): skipped, not fatal, so
+/// a record of another fv-lab version ([`PodRecord`] refuses unknown fields)
+/// or a torn write never stops `pod reap` from reading the rest.
+pub fn read_records(dir: &Path) -> (Vec<PodRecord>, Vec<String>) {
+    let (mut out, mut skipped) = (Vec::new(), Vec::new());
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return (out, skipped);
+    };
+    let mut paths: Vec<PathBuf> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    paths.sort();
+    for p in paths {
+        match std::fs::read_to_string(&p)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str::<PodRecord>(&t).map_err(|e| e.to_string()))
+        {
+            Ok(r) => out.push(r),
+            Err(e) => skipped.push(format!("{}: {e}", p.display())),
+        }
+    }
+    (out, skipped)
+}
+
 /// `artifacts/runpod/<family>/<tag>` under `root`: where `runpod-http.sh`
 /// puts a run, so existing summaries and compares read fv-lab runs.
 pub fn run_dir(root: &Path, family: &str, tag: &str) -> PathBuf {
@@ -1613,6 +1640,29 @@ cells = ["c"]
             memory_gb: None,
             vcpus: None,
         }
+    }
+
+    /// An unreadable record (another version's field, a torn write) is
+    /// skipped and named; the others are read.
+    #[test]
+    fn read_records_skips_what_it_cannot_read() {
+        let dir = std::env::temp_dir().join(format!("fv-lab-records-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = record("p1", 3600, Some(1.0));
+        std::fs::write(dir.join("p1.json"), serde_json::to_string(&good).unwrap()).unwrap();
+        let mut newer = serde_json::to_value(record("p2", 3600, None)).unwrap();
+        newer["field_of_a_later_version"] = serde_json::json!(1);
+        std::fs::write(dir.join("p2.json"), newer.to_string()).unwrap();
+        std::fs::write(dir.join("p3.json"), "{\"id\":").unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a record").unwrap();
+        let (records, skipped) = read_records(&dir);
+        assert_eq!(records, [good]);
+        assert_eq!(skipped.len(), 2, "{skipped:?}");
+        assert!(skipped[0].contains("p2.json") && skipped[0].contains("field_of_a_later_version"));
+        assert!(skipped[1].contains("p3.json"));
+        assert_eq!(read_records(&dir.join("none")), (Vec::new(), Vec::new()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

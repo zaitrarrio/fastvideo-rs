@@ -156,10 +156,12 @@ pub struct GpuSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_cuda: Option<String>,
     /// A Runpod pod's host-RAM floor (`PodCreateInput.minRAMPerGPU`): whole
-    /// GB per GPU, positive. `None` sends nothing: Runpod's default floor
-    /// (8 GB per GPU), above which the host's share decides
-    /// (docs/adr/0019-fv-lab.md §16.10).
+    /// GB per GPU, at least 1. `None` sends nothing: Runpod's default floor
+    /// (8 GB per GPU), above which the host's share decides. On any other
+    /// launch kind (no create body carries it) `guard::check_min_ram`
+    /// refuses it before anything is created (docs/adr/0019-fv-lab.md §16.10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
     pub min_ram_gb: Option<u32>,
 }
 
