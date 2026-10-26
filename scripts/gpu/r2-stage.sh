@@ -40,7 +40,9 @@
 # served run directory (<status dir>/../.., the start command's
 # $SCRATCH/runs), and the status directory off the volume.
 # python3: the runtime image has none (its CI job keeps it Python-free), so it
-# is installed with apt under a 600 s cap, as fv-lab's runner does (§16.4).
+# is installed with apt under a 600 s cap, as fv-lab's runner does (§16.4);
+# apt's output goes to <status dir>/r2-apt.log (fv-lab's name), and this log
+# says only that python3 was installed (apt's last lines too, on a failure).
 #
 # Exit 0: every tree is there and every link made; non-zero otherwise (the
 # matrix's arms then record `weights incomplete`). scripts/gpu/tests/runpod-r2.test.sh
@@ -137,12 +139,14 @@ if (( ${#todo[@]} )); then
   PY="${FV_R2_PYTHON:-python3}"
   check='import concurrent.futures, hashlib, hmac, http.client, json, ssl, urllib.request, xml.etree.ElementTree'
   if ! "$PY" -c "$check" >/dev/null 2>&1; then
-    log "no python3 in the image: apt-get install python3"
+    log "no python3 in the image: apt-get install python3 (apt's output in r2-apt.log)"
     OPTS="-o Acquire::http::Timeout=15 -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120"
     DEBIAN_FRONTEND=noninteractive timeout --signal=TERM --kill-after=15 600 sh -c \
       "\"\$0\" $OPTS update -qq && \"\$0\" $OPTS install -y -qq --no-install-recommends python3" "${FV_R2_APT:-apt-get}" \
-      || die "apt-get install python3 failed"
-    "$PY" -c "$check" >/dev/null 2>&1 || die "python3 unavailable after apt-get"
+      >"$STATUS/r2-apt.log" 2>&1 \
+      || { rc=$?; tail -n 20 "$STATUS/r2-apt.log" 2>/dev/null | sed 's/^/  apt: /'; die "apt-get install python3 failed (exit $rc; r2-apt.log)"; }
+    "$PY" -c "$check" >/dev/null 2>&1 || die "python3 unavailable after apt-get (r2-apt.log)"
+    log "python3 installed"
   fi
   log "fetch ${todo[*]} into $ROOT (cap ${CAP}s)"
   PT="${FV_R2_PLAN_TIMEOUT_S:-300}"
