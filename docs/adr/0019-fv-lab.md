@@ -3697,15 +3697,21 @@ reserve, 3,300 s, enough for a cold pull, the fetch and the reference. Stop befo
 
 **Results (2026-10-26): pass, on every criterion.** `SHA=4b4980b` (main after #219) on both sides: image
 `ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-4b4980b` (digest `sha256:fb4c1bb3c33654b5e2c5c28e22cbb718a2c6c6771c04ca044dca8b7c9325f791`,
-tools label `tools-v0.1.76`), fv-lab 0.1.76 built from `4b4980b`, the upstream image
+tools label `tools-v0.1.76`), fv-lab 0.1.76 built from `4b4980b` (the tools label and the fv-lab version as the
+coordinator's terminal showed them; no committed file records them), the upstream image
 `fastvideo-rs-upstream-fastvideo:latest` pinned to `sha256:c766ab4c8ffd4ea2f572c1d40cfae7ebb2947e89e7947b719a117b3bef27d41a`,
 RTX PRO 6000 Blackwell Server Edition pods in EU-RO-1 on `bz0ofkfx45` at $2.49/hr, the commands above.
 
+- **The plan** (the first command, without `--yes`, at 21:26Z, under its own dry-run tag `4b4980b-1026212531-b7dc`;
+  `artifacts/runpod/oracle-r2/oracle-plan-4b4980b.json.txt`): one `fastvideo` upstream pod whose body has
+  `"containerDiskInGb": 180` and `"minRAMPerGPU": 192`, the `oracle-r2` runtime pod's `"containerDiskInGb": 150`, and
+  in both bodies' `env` only the two R2 references, `{{ RUNPOD_SECRET_fv_r2_access_key_id }}` and
+  `{{ RUNPOD_SECRET_fv_r2_secret_access_key }}`.
 - **The driver's report** (`artifacts/runpod/oracle-r2/oracle-report-4b4980b.json`): `fv-lab oracle rc=0` (the
-  script side `rc=0` too), `"served": ["sfwan13"]`, `"missing": []`, `"runtime_ok": true`, `"runtime_exit_code": 0`,
+  script side `rc=0` too: `artifacts/runpod/oracle-r2/oracle-driver-4b4980b.log`), `"served": ["sfwan13"]`, `"missing": []`, `"runtime_ok": true`, `"runtime_exit_code": 0`,
   `"runtime_pod": {"id": "ifjs6vuy8cs5vo", …}`, `"problems": []`; one upstream entry, `beelfsmgjfn15i` (tag
   `4b4980b-1026212538-5198`), `"released": "the runtime side ended; the hold is lifted"`, fetched and `"deleted":
-  {"Ok": null}`. `lab.log` has `reference sfwan13 served by beelfsmgjfn15i` and its `FV_ORACLE_URL`.
+  {"Ok": null}`. `oracle-lab-4b4980b.log` has `reference sfwan13 served by beelfsmgjfn15i` and its `FV_ORACLE_URL`.
 - **The upstream pod**: created 21:25:41Z, ready 197.0 s later; `pod.json` `"min_ram_gb": 192`; `box.txt`
   `r2_key=env`, `hf_token=none`; `steps.tsv` `info:box	0`, `r2:sfwan21-1.3b	0` (21:29:25Z: 28.93 GB in 29.7 s,
   973 MB/s, with the image's own Python, `r2-sfwan21-1.3b.json` done), `oracle:sfwan13	0` (21:30:11Z); `cell.json`
@@ -3715,12 +3721,13 @@ RTX PRO 6000 Blackwell Server Edition pods in EU-RO-1 on `bz0ofkfx45` at $2.49/h
   `weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees (28.93 GB) fetched before
   the arms that read them, at most 28.93 GB on the container disk at once`; `oracle: sfwan13 reference 170M`; python3
   installed with apt (`r2-apt.log`); `r2 oracle-sfwan13: weights ready: 1 tree(s), 28.93 GB fetched in 27.4s (1057
-  MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 1`; `matrix_exit=0`.
-- **The script side's pod** `g8b71opyu94ele` (21:31:21Z to 21:36:11Z, `destroy pod`): `r2-stage.log` `r2_key=env`,
+  MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 1`; `matrix.out` `matrix_exit=0`.
+- **The script side's pod** `g8b71opyu94ele` (21:31:21Z to 21:36:11Z, `destroy pod`, in
+  `artifacts/runpod/oracle/oracle-script-4b4980b.log`): `r2-stage.log` `r2_key=env`,
   apt installing python3, `r2-fetch.py` 28.93 GB in 40.6 s (712 MB/s; retries 0, slow restarts 3), then `weights
   /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees (1 fetched):
-  sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004` and `exit=0`; `r2-fetch.json` done; `oracle: sfwan13
-  reference 170M`; `matrix_exit=0`.
+  sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004` and `exit=0`; `r2-fetch.json` done; `live.log` `oracle: sfwan13
+  reference 170M`; `matrix.out` `matrix_exit=0`.
 - **The compare** (`artifacts/runpod/oracle-r2/compare-4b4980b.txt`): `fv-lab-compare-runs.sh` exit 0, "10 arm(s)
   the same (4 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 6 with the same compare-dumps
   lines), 0 control arm(s) reported, 3 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0
@@ -3730,19 +3737,25 @@ RTX PRO 6000 Blackwell Server Edition pods in EU-RO-1 on `bz0ofkfx45` at $2.49/h
 - **Secrets**: the grep above found nothing ("no key value or presigned URL in any fetched file"); the committed files
   were scanned again before the commit (below).
 - **Pods and ledger**: the ledger's created / ready / deleted lines for the two fv-lab pods are in
-  `artifacts/runpod/oracle-r2/oracle-r2-ledger-4b4980b.tsv`. Cost about $0.86 (the balance $24.27 before, $23.41
-  after), under the estimate of $2.50-$3.60: the reference took 44 s and each runtime pod's arms about 3 min.
+  `artifacts/runpod/oracle-r2/oracle-r2-ledger-4b4980b.tsv`; `fv-lab pod reap --account` (list only, no `--yes`, at
+  21:53:58Z): `nothing to reap`, exit 0 (`artifacts/runpod/oracle-r2/oracle-reap-4b4980b.txt`). Cost about $0.86
+  (the balance $24.27 before, in `oracle-lab-4b4980b.log`'s `balance` lines; $23.41 after, from the coordinator's
+  terminal), under the estimate of $2.50-$3.60: the reference took 44 s and each runtime pod's arms about 3 min.
 
 Evidence (force-added): fv-lab `artifacts/runpod/oracle-r2/4b4980b-1026212538-1552`, script
 `artifacts/runpod/oracle/4b4980b-10262131`, upstream `artifacts/runpod/upstream/4b4980b-1026212538-5198` (without
 dumps or clips; the runtime arms' `text-cache/*.h3text`, binary text-encoder caches of 0.8 MB each, left out), with
-`compare-4b4980b.txt`, `oracle-report-4b4980b.json`, the driver's stderr `oracle-lab-4b4980b.log` and
-`oracle-r2-ledger-4b4980b.tsv`. No committed file holds a key or token (searched for this container's credential
+`compare-4b4980b.txt`, `oracle-report-4b4980b.json`, the driver's stderr `oracle-lab-4b4980b.log`, the plan
+`oracle-plan-4b4980b.json.txt`, the check's exit codes `oracle-driver-4b4980b.log`, `oracle-reap-4b4980b.txt` and
+`oracle-r2-ledger-4b4980b.tsv` under `artifacts/runpod/oracle-r2/`, and the script side's host log
+`artifacts/runpod/oracle/oracle-script-4b4980b.log`. In those five logs and texts the coordinator's local paths are
+redacted: its scratch directory reads `<scratch>` and the repository checkout `<repo>`. No committed file holds a key or token (searched for this container's credential
 values, `X-Amz-Signature`, `X-Amz-Credential`, `hf_`, `rpa_`, `RUNPOD_API_KEY`, `Bearer` and long base64 strings).
 
 One follow-up, done with this evidence: the script side's `r2-stage.log` held apt's whole output (57 lines of dpkg
 progress); `r2-stage.sh` now writes it to `<status dir>/r2-apt.log`, as fv-lab's runner does, and logs only `python3
-installed` (apt's last 20 lines on a failure; `runpod-r2.test.sh`).
+installed` (apt's last 20 lines on a failure), the status directory made once it is checked off the volume
+(`runpod-r2.test.sh`).
 
 #### 21.8 The script side's tree: `runpod-http.sh run` `FV_R2_TREES` (decided: A)
 
@@ -3823,8 +3836,8 @@ volume may not hold), and for a family fv-lab runs, whose tier says where its tr
 After §21.7 passes (and §20.7's re-run with the Hub token), in the next D1 PR, as §20.8 with `sfwan13` included.
 §21.7 passed on `4b4980b` (2026-10-26, "Results"); §20.7's clip-metric re-run has not run: it is blocked on the owner
 creating the Runpod secret `fv_hf_token` (docs/ops/runpod-secrets.md). The retirement waits for it: `oracle` does not
-retire before every cell family it covers (the tensor-diff targets, §15.7 and §19.7; the clip-metric targets, §20.7;
-`sfwan13`, §21.7) has passed its GPU check.
+retire before every cell family it covers (the tensor-diff targets, checked on `fasth3-4step-vsa` in §15.7 and §19.7;
+the clip-metric targets, §20.7; `sfwan13`, §21.7) has passed its GPU check.
 
 1. **Knobs.** `oracle` joins `FV_LAB_RETIRED`; `FV_ORACLE_TARGETS`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`,
    `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT` and the five `FV_LTX_*_PROMPT` move from `SCRIPT_KNOBS` to `MODE_KNOBS`;

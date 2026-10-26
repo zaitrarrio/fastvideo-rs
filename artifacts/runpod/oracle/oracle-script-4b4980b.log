@@ -1,0 +1,19 @@
+[21:31:19] create pod gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition" image=ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-4b4980b volume=bz0ofkfx45 dc=EU-RO-1 cloud=SECURE quoted=$2.49/hr
+[21:31:21] pod g8b71opyu94ele  $2.49/hr  (hard cap 3600s)  ram=94GB vcpu=32
+[21:32:26] pod: [21:32:25] [oracle] ▶ oracle-sfwan13  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/sfwan13/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-dump /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13/frames  (wall cap 5400s; 0=none)
+[21:33:31] pod: [21:33:00] [oracle] ▶ oracle-sfwan13-f32  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/sfwan13/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-dump-f32 FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-f32/frames  (wall cap 5400s; 0=none)
+[21:34:04] pod: [21:33:36] [oracle] ▶ oracle-sfwan13-legacy  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/sfwan13/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-dump-legacy FASTVIDEO_WAN_CAUSAL_AR=0 FASTVIDEO_WAN_CAUSAL_FPB=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-legacy/frames  (wall cap 5400s; 0=none)
+[21:34:37] pod: [21:34:07] [oracle] ▶ oracle-sfwan13-composed  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/sfwan13/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-dump-composed FASTVIDEO_WAN_CAUSAL_FLASH=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-composed/frames  (wall cap 5400s; 0=none)
+[21:36:11] results → <repo>/artifacts/runpod/oracle/4b4980b-10262131
+[21:36:11] destroy pod g8b71opyu94ele
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+weights ok: fasth3-4step-vsa
+weights ok: fasth3-4step-dense
+weights ok: sol-h3
+weights ok: sol-h3-spark
+weights ok: ltx25-two-stage
+exit=1
+exit=0 (attempt 1)

@@ -97,7 +97,7 @@ off_volume "$STATUS" || die "the status directory $STATUS is on the volume"
 # The plan (bearer URLs) never where the pod serves files from.
 SERVED="$(readlink -m "$STATUS/../..")/"
 [[ "$(readlink -m "$STATE")/" != "$SERVED"* ]] || die "the state directory $STATE is in the served directory $SERVED"
-mkdir -p "$ROOT" "$STATE" && chmod 700 "$STATE" || die "cannot make $ROOT / $STATE"
+mkdir -p "$ROOT" "$STATE" "$STATUS" && chmod 700 "$STATE" || die "cannot make $ROOT / $STATE / $STATUS"
 ROOT_R="$(readlink -m "$ROOT")/"
 # under_root <path>: <path> resolves under the root and off the volume (a
 # symlink on the way, a volume link included, is followed).

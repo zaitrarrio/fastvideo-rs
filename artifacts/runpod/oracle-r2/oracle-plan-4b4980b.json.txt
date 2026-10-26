@@ -1,0 +1,220 @@
+{
+  "hold_upstream": null,
+  "note": "`--yes` pins every image to its digest; FV_ORACLE_URL's `upstream-pod` is each upstream pod's id once it is up; the upstream pods are fetched and deleted on the runtime pod's ORACLE_REFS_DONE, after --stock-wait-s without a runtime pod, or on any failure",
+  "projection_usd": 9.166666666666666,
+  "refs_wait_s": 3300,
+  "runtime": {
+    "cells": [
+      "oracle-sfwan13",
+      "oracle-sfwan13-diff",
+      "oracle-sfwan13-f32",
+      "oracle-sfwan13-f32-diff",
+      "oracle-sfwan13-bf16-vs-f32",
+      "oracle-sfwan13-legacy",
+      "oracle-sfwan13-legacy-diff",
+      "oracle-sfwan13-composed",
+      "oracle-sfwan13-composed-diff",
+      "oracle-sfwan13-flash-vs-composed"
+    ],
+    "command": [
+      "fv-lab",
+      "pod",
+      "up",
+      "--sha",
+      "4b4980b",
+      "--family",
+      "oracle-r2",
+      "--tag",
+      "4b4980b-1026212531-b7dc",
+      "--cells",
+      "oracle-sfwan13,oracle-sfwan13-diff,oracle-sfwan13-f32,oracle-sfwan13-f32-diff,oracle-sfwan13-bf16-vs-f32,oracle-sfwan13-legacy,oracle-sfwan13-legacy-diff,oracle-sfwan13-composed,oracle-sfwan13-composed-diff,oracle-sfwan13-flash-vs-composed",
+      "--extra-env",
+      "FV_ORACLE_URL=https://upstream-pod-8000.proxy.runpod.net/upstream/4b4980b-1026212531-7b14",
+      "--wall-cap-s",
+      "3600",
+      "--fetch-tree",
+      "--fetch-skip",
+      "/frames/|/mp4frames/",
+      "--yes",
+      "--wait"
+    ],
+    "launch": {
+      "args": [
+        "/bin/bash",
+        "-c",
+        "( used=0; n=0; tx0=0\n  fv_self_delete() {\n    # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,\n    # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no \"errors\".\n    # The key reaches curl on stdin (-H @-), never in its argv; the answer is logged, then removed.\n    _fvsd_code=$(printf 'Authorization: Bearer %s\\n' \"$RUNPOD_API_KEY\" | curl -sS --max-time 30 -o \"$1.resp\" \\\n      -w '%{http_code}' -X POST https://api.runpod.io/graphql -H 'Content-Type: application/json' -H @- \\\n      --data \"{\\\"query\\\":\\\"mutation { podTerminate(input: {podId: \\\\\\\"$RUNPOD_POD_ID\\\\\\\"}) }\\\"}\" 2>>\"$1\")\n    { cat \"$1.resp\"; echo \" http=$_fvsd_code\"; } >>\"$1\" 2>/dev/null\n    _fvsd_ok=1\n    [ \"$_fvsd_code\" = 200 ] && ! grep -q '\"errors\"' \"$1.resp\" 2>/dev/null && _fvsd_ok=0\n    rm -f \"$1.resp\"\n    return \"$_fvsd_ok\"\n  }\n  txb() { awk 'NR > 2 { sub(/^[ \\t]+/, \"\"); split($0, f, /[: ]+/); if (f[1] != \"lo\") s += f[10] } END { printf \"%.0f\", s }' /proc/net/dev 2>/dev/null || echo 0; }\n  [ \"\" = net ] && tx0=$(txb)\n  while sleep 60; do\n    u=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1 | tr -d ' ')\n    sent=0\n    if [ \"\" = net ]; then tx1=$(txb); sent=$(( tx1 - tx0 )); tx0=$tx1; fi\n    if [ \"${u:-0}\" -gt 0 ] 2>/dev/null || [ \"$sent\" -ge 262144 ] 2>/dev/null; then used=1; n=0; else n=$((n + 1)); fi\n    lim=115; [ \"$used\" = 1 ] && lim=115\n    if [ \"$n\" -ge \"$lim\" ] && [ -n \"${RUNPOD_API_KEY:-}\" ] && [ -n \"${RUNPOD_POD_ID:-}\" ]; then\n      echo \"$(date -u +%FT%TZ) idle $n min at 0 % GPU: deleting pod $RUNPOD_POD_ID\" >>/tmp/idle-watchdog.log\n      fv_self_delete /tmp/idle-watchdog.log\n    fi\n  done ) >/dev/null 2>&1 &\nset -u\n# The pod's own wall cap (FV_POD_CAP_S, docs/adr/0023-lab-report-and-ci-bridge.md §4):\n# 3600 s after the container starts it deletes itself with the pod-scoped key\n# Runpod injects (GraphQL podTerminate), retrying each minute, whatever the driver's host did.\nif [ -n \"${RUNPOD_API_KEY:-}\" ] && [ -n \"${RUNPOD_POD_ID:-}\" ]; then\n  ( fv_self_delete() {\n      # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,\n      # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no \"errors\".\n      # The key reaches curl on stdin (-H @-), never in its argv; the answer is logged, then removed.\n      _fvsd_code=$(printf 'Authorization: Bearer %s\\n' \"$RUNPOD_API_KEY\" | curl -sS --max-time 30 -o \"$1.resp\" \\\n        -w '%{http_code}' -X POST https://api.runpod.io/graphql -H 'Content-Type: application/json' -H @- \\\n        --data \"{\\\"query\\\":\\\"mutation { podTerminate(input: {podId: \\\\\\\"$RUNPOD_POD_ID\\\\\\\"}) }\\\"}\" 2>>\"$1\")\n      { cat \"$1.resp\"; echo \" http=$_fvsd_code\"; } >>\"$1\" 2>/dev/null\n      _fvsd_ok=1\n      [ \"$_fvsd_code\" = 200 ] && ! grep -q '\"errors\"' \"$1.resp\" 2>/dev/null && _fvsd_ok=0\n      rm -f \"$1.resp\"\n      return \"$_fvsd_ok\"\n    }\n    sleep 3600\n    while :; do\n      echo \"$(date -u +%FT%TZ) wall cap 3600 s: deleting pod $RUNPOD_POD_ID\" >>/tmp/cap-watchdog.log\n      fv_self_delete /tmp/cap-watchdog.log && break\n      sleep 60\n    done ) >/dev/null 2>&1 &\nfi\n# All writes on the container disk: the weight volume is read-only for us\n# (some hosts have silently dropped data writes to it).\nSCRATCH=/fvscratch\nOUT=$SCRATCH/runs/oracle-r2/4b4980b-1026212531-b7dc\nmkdir -p \"$OUT\"\n# FV_POD_FILES: local files shipped in the pod's env (a base64 tar.gz),\n# unpacked into $SCRATCH/files (e.g. FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh).\nif [ -n \"${FV_POD_FILES_TGZ:-}\" ]; then\n  mkdir -p $SCRATCH/files && echo \"$FV_POD_FILES_TGZ\" | base64 -d | tar -xz -C $SCRATCH/files\nfi\nFV=/opt/fastvideo-rs/target/release/fv-gpucheck\nif \"$FV\" serve --help >/dev/null 2>&1; then\n  \"$FV\" serve --dir $SCRATCH/runs --port 8000 >\"$OUT/http.log\" 2>&1 &\nelse\n  # Images before fv-gpucheck serve: Python's server (needs apt on the box).\n  ( apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq python3-minimal >/dev/null 2>&1\n    cd $SCRATCH/runs && exec python3 -m http.server 8000 ) >\"$OUT/http.log\" 2>&1 &\nfi\n{\n  echo \"image_build_id=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null)\"\n  nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader\n} >\"$OUT/box.txt\" 2>&1\n# The CUDA 13 image needs driver >= 580. Hosts are not\n# filtered by allowedCudaVersions by default (that filter can hide stock), so\n# stop here on an older driver instead of failing later.\ndrv=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)\nif [ -n \"$drv\" ] && [ \"$drv\" -lt 580 ]; then\n  echo \"driver_too_old=$drv\" >>\"$OUT/box.txt\"\n  echo \"done 4b4980b-1026212531-b7dc\" >\"$OUT/DONE\"\n  exec sleep infinity\nfi\n# kernels mode needs no weights (and may run without a volume).\nif [ \"run\" != kernels ]; then\n( cd /workspace/weights && for d in *; do echo \"== $d\"; find -L \"$d\" -maxdepth 3 \\( -name '*.safetensors' -o -name '*.json' \\) -printf '%s %p\\n' 2>/dev/null | head -60; done ) >\"$OUT/tree.txt\" 2>&1\n# A pod script (FV_POD_SCRIPT) gates each of its cells on its own trees.\nif [ -z \"\" ]; then\nFV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.sh fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage >\"$OUT/weights.log\" 2>&1\necho \"exit=$?\" >>\"$OUT/weights.log\"\nfi\n# Tiny-autoencoder weights (taeh3, taeltx2_3_wide) onto the container disk;\n# the matrix's *-taeh3 / *-taehv cells read them from $SCRATCH/tae.\nif [ \"0\" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then\n  bash /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh $SCRATCH/tae >\"$OUT/tae.log\" 2>&1\n  echo \"exit=$?\" >>\"$OUT/tae.log\"\nfi\nfi\nif [ \"run\" = kernels ] || [ \"run\" = all ]; then\n  cd \"$OUT\" && env FV_ORACLE_URL=https://upstream-pod-8000.proxy.runpod.net/upstream/4b4980b-1026212531-7b14 /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out \"$OUT/gpucheck\" kernels >\"$OUT/kernels.out\" 2>&1\n  echo \"exit=$?\" >>\"$OUT/kernels.out\"\n  cp \"$OUT\"/gpucheck/*.json \"$OUT\"/ 2>/dev/null\nfi\nif [ \"run\" = run ] || [ \"run\" = all ]; then\n  env FV_ORACLE_URL=https://upstream-pod-8000.proxy.runpod.net/upstream/4b4980b-1026212531-7b14 FV_WORK=/workspace FV_SCRATCH=$SCRATCH FV_RUN_TAG=4b4980b-1026212531-b7dc FV_CELLS=\"oracle-sfwan13 oracle-sfwan13-diff oracle-sfwan13-f32 oracle-sfwan13-f32-diff oracle-sfwan13-bf16-vs-f32 oracle-sfwan13-legacy oracle-sfwan13-legacy-diff oracle-sfwan13-composed oracle-sfwan13-composed-diff oracle-sfwan13-flash-vs-composed\"           FV_GEN_TIMEOUT_S=5400     /opt/fastvideo-rs/target/release/fv-lab run oracle-r2 >\"$OUT/matrix.out\" 2>&1\n  echo \"matrix_exit=$?\" >>\"$OUT/matrix.out\"\nfi\necho \"done 4b4980b-1026212531-b7dc\" >\"$OUT/DONE\"\nexec sleep infinity"
+      ],
+      "disk": {
+        "container_gb": 150,
+        "volume_gb": 0
+      },
+      "env": {
+        "FV_WEIGHTS_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+        "FV_WEIGHTS_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}"
+      },
+      "gpu": {
+        "count": 1,
+        "types": [
+          "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+        ]
+      },
+      "guards": {
+        "cap_s": 14400,
+        "max_usd_per_hr": 2.5,
+        "min_balance_usd": 8.0,
+        "ready_cycles": 3,
+        "ready_timeout_s": 600
+      },
+      "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-4b4980b",
+      "name": "fv-lab-oracle-r2-4b4980b-1026212531-b7dc",
+      "placement": {
+        "cloud": "SECURE",
+        "data_centers": [
+          "EU-RO-1"
+        ],
+        "region": "eu",
+        "volume": {
+          "id": "bz0ofkfx45",
+          "mount_path": "/workspace"
+        }
+      },
+      "ports": [
+        "8000/http"
+      ],
+      "provider": "runpod-pod",
+      "schema": 1,
+      "weights": "volume"
+    },
+    "requests": [
+      {
+        "body": {
+          "cloudType": "SECURE",
+          "computeType": "GPU",
+          "containerDiskInGb": 150,
+          "dataCenterIds": [
+            "EU-RO-1"
+          ],
+          "dockerStartCmd": [
+            "/bin/bash",
+            "-c",
+            "( used=0; n=0; tx0=0\n  fv_self_delete() {\n    # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,\n    # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no \"errors\".\n    # The key reaches curl on stdin (-H @-), never in its argv; the answer is logged, then removed.\n    _fvsd_code=$(printf 'Authorization: Bearer %s\\n' \"$RUNPOD_API_KEY\" | curl -sS --max-time 30 -o \"$1.resp\" \\\n      -w '%{http_code}' -X POST https://api.runpod.io/graphql -H 'Content-Type: application/json' -H @- \\\n      --data \"{\\\"query\\\":\\\"mutation { podTerminate(input: {podId: \\\\\\\"$RUNPOD_POD_ID\\\\\\\"}) }\\\"}\" 2>>\"$1\")\n    { cat \"$1.resp\"; echo \" http=$_fvsd_code\"; } >>\"$1\" 2>/dev/null\n    _fvsd_ok=1\n    [ \"$_fvsd_code\" = 200 ] && ! grep -q '\"errors\"' \"$1.resp\" 2>/dev/null && _fvsd_ok=0\n    rm -f \"$1.resp\"\n    return \"$_fvsd_ok\"\n  }\n  txb() { awk 'NR > 2 { sub(/^[ \\t]+/, \"\"); split($0, f, /[: ]+/); if (f[1] != \"lo\") s += f[10] } END { printf \"%.0f\", s }' /proc/net/dev 2>/dev/null || echo 0; }\n  [ \"\" = net ] && tx0=$(txb)\n  while sleep 60; do\n    u=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1 | tr -d ' ')\n    sent=0\n    if [ \"\" = net ]; then tx1=$(txb); sent=$(( tx1 - tx0 )); tx0=$tx1; fi\n    if [ \"${u:-0}\" -gt 0 ] 2>/dev/null || [ \"$sent\" -ge 262144 ] 2>/dev/null; then used=1; n=0; else n=$((n + 1)); fi\n    lim=115; [ \"$used\" = 1 ] && lim=115\n    if [ \"$n\" -ge \"$lim\" ] && [ -n \"${RUNPOD_API_KEY:-}\" ] && [ -n \"${RUNPOD_POD_ID:-}\" ]; then\n      echo \"$(date -u +%FT%TZ) idle $n min at 0 % GPU: deleting pod $RUNPOD_POD_ID\" >>/tmp/idle-watchdog.log\n      fv_self_delete /tmp/idle-watchdog.log\n    fi\n  done ) >/dev/null 2>&1 &\nset -u\n# The pod's own wall cap (FV_POD_CAP_S, docs/adr/0023-lab-report-and-ci-bridge.md §4):\n# 3600 s after the container starts it deletes itself with the pod-scoped key\n# Runpod injects (GraphQL podTerminate), retrying each minute, whatever the driver's host did.\nif [ -n \"${RUNPOD_API_KEY:-}\" ] && [ -n \"${RUNPOD_POD_ID:-}\" ]; then\n  ( fv_self_delete() {\n      # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,\n      # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no \"errors\".\n      # The key reaches curl on stdin (-H @-), never in its argv; the answer is logged, then removed.\n      _fvsd_code=$(printf 'Authorization: Bearer %s\\n' \"$RUNPOD_API_KEY\" | curl -sS --max-time 30 -o \"$1.resp\" \\\n        -w '%{http_code}' -X POST https://api.runpod.io/graphql -H 'Content-Type: application/json' -H @- \\\n        --data \"{\\\"query\\\":\\\"mutation { podTerminate(input: {podId: \\\\\\\"$RUNPOD_POD_ID\\\\\\\"}) }\\\"}\" 2>>\"$1\")\n      { cat \"$1.resp\"; echo \" http=$_fvsd_code\"; } >>\"$1\" 2>/dev/null\n      _fvsd_ok=1\n      [ \"$_fvsd_code\" = 200 ] && ! grep -q '\"errors\"' \"$1.resp\" 2>/dev/null && _fvsd_ok=0\n      rm -f \"$1.resp\"\n      return \"$_fvsd_ok\"\n    }\n    sleep 3600\n    while :; do\n      echo \"$(date -u +%FT%TZ) wall cap 3600 s: deleting pod $RUNPOD_POD_ID\" >>/tmp/cap-watchdog.log\n      fv_self_delete /tmp/cap-watchdog.log && break\n      sleep 60\n    done ) >/dev/null 2>&1 &\nfi\n# All writes on the container disk: the weight volume is read-only for us\n# (some hosts have silently dropped data writes to it).\nSCRATCH=/fvscratch\nOUT=$SCRATCH/runs/oracle-r2/4b4980b-1026212531-b7dc\nmkdir -p \"$OUT\"\n# FV_POD_FILES: local files shipped in the pod's env (a base64 tar.gz),\n# unpacked into $SCRATCH/files (e.g. FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh).\nif [ -n \"${FV_POD_FILES_TGZ:-}\" ]; then\n  mkdir -p $SCRATCH/files && echo \"$FV_POD_FILES_TGZ\" | base64 -d | tar -xz -C $SCRATCH/files\nfi\nFV=/opt/fastvideo-rs/target/release/fv-gpucheck\nif \"$FV\" serve --help >/dev/null 2>&1; then\n  \"$FV\" serve --dir $SCRATCH/runs --port 8000 >\"$OUT/http.log\" 2>&1 &\nelse\n  # Images before fv-gpucheck serve: Python's server (needs apt on the box).\n  ( apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq python3-minimal >/dev/null 2>&1\n    cd $SCRATCH/runs && exec python3 -m http.server 8000 ) >\"$OUT/http.log\" 2>&1 &\nfi\n{\n  echo \"image_build_id=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null)\"\n  nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader\n} >\"$OUT/box.txt\" 2>&1\n# The CUDA 13 image needs driver >= 580. Hosts are not\n# filtered by allowedCudaVersions by default (that filter can hide stock), so\n# stop here on an older driver instead of failing later.\ndrv=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)\nif [ -n \"$drv\" ] && [ \"$drv\" -lt 580 ]; then\n  echo \"driver_too_old=$drv\" >>\"$OUT/box.txt\"\n  echo \"done 4b4980b-1026212531-b7dc\" >\"$OUT/DONE\"\n  exec sleep infinity\nfi\n# kernels mode needs no weights (and may run without a volume).\nif [ \"run\" != kernels ]; then\n( cd /workspace/weights && for d in *; do echo \"== $d\"; find -L \"$d\" -maxdepth 3 \\( -name '*.safetensors' -o -name '*.json' \\) -printf '%s %p\\n' 2>/dev/null | head -60; done ) >\"$OUT/tree.txt\" 2>&1\n# A pod script (FV_POD_SCRIPT) gates each of its cells on its own trees.\nif [ -z \"\" ]; then\nFV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.sh fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage >\"$OUT/weights.log\" 2>&1\necho \"exit=$?\" >>\"$OUT/weights.log\"\nfi\n# Tiny-autoencoder weights (taeh3, taeltx2_3_wide) onto the container disk;\n# the matrix's *-taeh3 / *-taehv cells read them from $SCRATCH/tae.\nif [ \"0\" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then\n  bash /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh $SCRATCH/tae >\"$OUT/tae.log\" 2>&1\n  echo \"exit=$?\" >>\"$OUT/tae.log\"\nfi\nfi\nif [ \"run\" = kernels ] || [ \"run\" = all ]; then\n  cd \"$OUT\" && env FV_ORACLE_URL=https://upstream-pod-8000.proxy.runpod.net/upstream/4b4980b-1026212531-7b14 /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out \"$OUT/gpucheck\" kernels >\"$OUT/kernels.out\" 2>&1\n  echo \"exit=$?\" >>\"$OUT/kernels.out\"\n  cp \"$OUT\"/gpucheck/*.json \"$OUT\"/ 2>/dev/null\nfi\nif [ \"run\" = run ] || [ \"run\" = all ]; then\n  env FV_ORACLE_URL=https://upstream-pod-8000.proxy.runpod.net/upstream/4b4980b-1026212531-7b14 FV_WORK=/workspace FV_SCRATCH=$SCRATCH FV_RUN_TAG=4b4980b-1026212531-b7dc FV_CELLS=\"oracle-sfwan13 oracle-sfwan13-diff oracle-sfwan13-f32 oracle-sfwan13-f32-diff oracle-sfwan13-bf16-vs-f32 oracle-sfwan13-legacy oracle-sfwan13-legacy-diff oracle-sfwan13-composed oracle-sfwan13-composed-diff oracle-sfwan13-flash-vs-composed\"           FV_GEN_TIMEOUT_S=5400     /opt/fastvideo-rs/target/release/fv-lab run oracle-r2 >\"$OUT/matrix.out\" 2>&1\n  echo \"matrix_exit=$?\" >>\"$OUT/matrix.out\"\nfi\necho \"done 4b4980b-1026212531-b7dc\" >\"$OUT/DONE\"\nexec sleep infinity"
+          ],
+          "env": {
+            "FV_WEIGHTS_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+            "FV_WEIGHTS_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}"
+          },
+          "gpuCount": 1,
+          "gpuTypeIds": [
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+          ],
+          "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-4b4980b",
+          "name": "fv-lab-oracle-r2-4b4980b-1026212531-b7dc",
+          "networkVolumeId": "bz0ofkfx45",
+          "ports": [
+            "8000/http"
+          ],
+          "volumeInGb": 0,
+          "volumeMountPath": "/workspace"
+        },
+        "method": "POST",
+        "url": "https://rest.runpod.io/v1/pods"
+      }
+    ],
+    "tag": "4b4980b-1026212531-b7dc",
+    "tier": "oracle-r2"
+  },
+  "stock_wait_s": 2100,
+  "upstream": [
+    {
+      "launch": {
+        "args": [
+          "/bin/bash",
+          "-c",
+          "_fvr2_id=\"${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}\" _fvr2_secret=\"${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}\"; unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY\n( used=0; n=0; tx0=0\n  fv_self_delete() {\n    # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,\n    # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no \"errors\".\n    # The key reaches curl on stdin (-H @-), never in its argv; the answer is logged, then removed.\n    _fvsd_code=$(printf 'Authorization: Bearer %s\\n' \"$RUNPOD_API_KEY\" | curl -sS --max-time 30 -o \"$1.resp\" \\\n      -w '%{http_code}' -X POST https://api.runpod.io/graphql -H 'Content-Type: application/json' -H @- \\\n      --data \"{\\\"query\\\":\\\"mutation { podTerminate(input: {podId: \\\\\\\"$RUNPOD_POD_ID\\\\\\\"}) }\\\"}\" 2>>\"$1\")\n    { cat \"$1.resp\"; echo \" http=$_fvsd_code\"; } >>\"$1\" 2>/dev/null\n    _fvsd_ok=1\n    [ \"$_fvsd_code\" = 200 ] && ! grep -q '\"errors\"' \"$1.resp\" 2>/dev/null && _fvsd_ok=0\n    rm -f \"$1.resp\"\n    return \"$_fvsd_ok\"\n  }\n  txb() { awk 'NR > 2 { sub(/^[ \\t]+/, \"\"); split($0, f, /[: ]+/); if (f[1] != \"lo\") s += f[10] } END { printf \"%.0f\", s }' /proc/net/dev 2>/dev/null || echo 0; }\n  [ \"net\" = net ] && tx0=$(txb)\n  while sleep 60; do\n    u=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1 | tr -d ' ')\n    sent=0\n    if [ \"net\" = net ]; then tx1=$(txb); sent=$(( tx1 - tx0 )); tx0=$tx1; fi\n    if [ \"${u:-0}\" -gt 0 ] 2>/dev/null || [ \"$sent\" -ge 262144 ] 2>/dev/null; then used=1; n=0; else n=$((n + 1)); fi\n    lim=30; [ \"$used\" = 1 ] && lim=10\n    if [ \"$n\" -ge \"$lim\" ] && [ -n \"${RUNPOD_API_KEY:-}\" ] && [ -n \"${RUNPOD_POD_ID:-}\" ]; then\n      echo \"$(date -u +%FT%TZ) idle $n min at 0 % GPU: deleting pod $RUNPOD_POD_ID\" >>/tmp/idle-watchdog.log\n      fv_self_delete /tmp/idle-watchdog.log\n    fi\n  done ) >/dev/null 2>&1 &\nset -u\n# The pod's own wall cap (FV_POD_CAP_S, docs/adr/0023-lab-report-and-ci-bridge.md §4):\n# 7200 s after the container starts it deletes itself with the pod-scoped key\n# Runpod injects (GraphQL podTerminate), retrying each minute, whatever the driver's host did.\nif [ -n \"${RUNPOD_API_KEY:-}\" ] && [ -n \"${RUNPOD_POD_ID:-}\" ]; then\n  ( fv_self_delete() {\n      # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,\n      # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no \"errors\".\n      # The key reaches curl on stdin (-H @-), never in its argv; the answer is logged, then removed.\n      _fvsd_code=$(printf 'Authorization: Bearer %s\\n' \"$RUNPOD_API_KEY\" | curl -sS --max-time 30 -o \"$1.resp\" \\\n        -w '%{http_code}' -X POST https://api.runpod.io/graphql -H 'Content-Type: application/json' -H @- \\\n        --data \"{\\\"query\\\":\\\"mutation { podTerminate(input: {podId: \\\\\\\"$RUNPOD_POD_ID\\\\\\\"}) }\\\"}\" 2>>\"$1\")\n      { cat \"$1.resp\"; echo \" http=$_fvsd_code\"; } >>\"$1\" 2>/dev/null\n      _fvsd_ok=1\n      [ \"$_fvsd_code\" = 200 ] && ! grep -q '\"errors\"' \"$1.resp\" 2>/dev/null && _fvsd_ok=0\n      rm -f \"$1.resp\"\n      return \"$_fvsd_ok\"\n    }\n    sleep 7200\n    while :; do\n      echo \"$(date -u +%FT%TZ) wall cap 7200 s: deleting pod $RUNPOD_POD_ID\" >>/tmp/cap-watchdog.log\n      fv_self_delete /tmp/cap-watchdog.log && break\n      sleep 60\n    done ) >/dev/null 2>&1 &\nfi\nOUT=/root/runs/upstream/4b4980b-1026212531-7b14\nmkdir -p \"$OUT\"\n# What oracle.sh fetches as its heartbeat while the runtime pod is up.\nhead -c 1048576 /dev/urandom >/root/runs/keepalive.bin 2>/dev/null || true\nif fv-gpucheck serve --help >/dev/null 2>&1; then\n  ( while true; do fv-gpucheck serve --dir /root/runs --port 8000; sleep 2; done ) >/tmp/http.log 2>&1 &\nelse\n  ( cd /root/runs && while true; do python3 -m http.server 8000; sleep 2; done ) >/tmp/http.log 2>&1 &\nfi\n# The runner scripts come from this repo at $UP_SHA (so a script fix needs no\n# image rebuild); baked images keep a copy in /opt/fvrs as the fallback.\nRUNNER=/opt/fvrs\n{\n  command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }\n  git init -q /opt/fvrs-live && git -C /opt/fvrs-live remote add origin https://github.com/zaitrarrio/fastvideo-rs.git     && git -C /opt/fvrs-live fetch -q --depth 1 origin 4b4980b8e08f4889fc1f6591108edc03cf49d0c1 && git -C /opt/fvrs-live checkout -q FETCH_HEAD     && echo live\n} >\"$OUT/clone.log\" 2>&1 && RUNNER=/opt/fvrs-live\nFV_WEIGHTS_R2_ACCESS_KEY_ID=\"$_fvr2_id\" FV_WEIGHTS_R2_SECRET_ACCESS_KEY=\"$_fvr2_secret\" env FASTVIDEO_DUMP_OPS=0,1,24,47 UP_STEPS=\"info:box r2:sfwan21-1.3b oracle:sfwan13\" UP_STEPS_BG=\"\" UP_CELLS=\"\"   UP_CELL_TIMEOUT_S=7200 UP_LOCAL=1   bash $RUNNER/scripts/gpu/upstream/pod.sh \"$OUT\" >\"$OUT/pod.out\" 2>&1\necho \"done 4b4980b-1026212531-7b14\" >\"$OUT/DONE\"\nexec sleep infinity"
+        ],
+        "disk": {
+          "container_gb": 180,
+          "volume_gb": 0
+        },
+        "env": {
+          "FV_WEIGHTS_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+          "FV_WEIGHTS_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}"
+        },
+        "gpu": {
+          "count": 1,
+          "min_ram_gb": 192,
+          "types": [
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+          ]
+        },
+        "guards": {
+          "cap_s": 7200,
+          "max_usd_per_hr": 2.5,
+          "min_balance_usd": 8.0,
+          "ready_cycles": 3,
+          "ready_timeout_s": 600
+        },
+        "image": "ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo:latest",
+        "name": "fv-lab-upstream-4b4980b-1026212531-7b14",
+        "placement": {
+          "cloud": "SECURE",
+          "data_centers": [
+            "EU-RO-1"
+          ],
+          "region": "eu",
+          "volume": {
+            "id": "bz0ofkfx45",
+            "mount_path": "/workspace"
+          }
+        },
+        "ports": [
+          "8000/http"
+        ],
+        "provider": "runpod-pod",
+        "schema": 1,
+        "weights": "volume"
+      },
+      "requests": [
+        {
+          "body": {
+            "cloudType": "SECURE",
+            "computeType": "GPU",
+            "containerDiskInGb": 180,
+            "dataCenterIds": [
+              "EU-RO-1"
+            ],
+            "dockerStartCmd": [
+              "/bin/bash",
+              "-c",
+              "_fvr2_id=\"${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}\" _fvr2_secret=\"${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}\"; unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY\n( used=0; n=0; tx0=0\n  fv_self_delete() {\n    # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,\n    # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no \"errors\".\n    # The key reaches curl on stdin (-H @-), never in its argv; the answer is logged, then removed.\n    _fvsd_code=$(printf 'Authorization: Bearer %s\\n' \"$RUNPOD_API_KEY\" | curl -sS --max-time 30 -o \"$1.resp\" \\\n      -w '%{http_code}' -X POST https://api.runpod.io/graphql -H 'Content-Type: application/json' -H @- \\\n      --data \"{\\\"query\\\":\\\"mutation { podTerminate(input: {podId: \\\\\\\"$RUNPOD_POD_ID\\\\\\\"}) }\\\"}\" 2>>\"$1\")\n    { cat \"$1.resp\"; echo \" http=$_fvsd_code\"; } >>\"$1\" 2>/dev/null\n    _fvsd_ok=1\n    [ \"$_fvsd_code\" = 200 ] && ! grep -q '\"errors\"' \"$1.resp\" 2>/dev/null && _fvsd_ok=0\n    rm -f \"$1.resp\"\n    return \"$_fvsd_ok\"\n  }\n  txb() { awk 'NR > 2 { sub(/^[ \\t]+/, \"\"); split($0, f, /[: ]+/); if (f[1] != \"lo\") s += f[10] } END { printf \"%.0f\", s }' /proc/net/dev 2>/dev/null || echo 0; }\n  [ \"net\" = net ] && tx0=$(txb)\n  while sleep 60; do\n    u=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1 | tr -d ' ')\n    sent=0\n    if [ \"net\" = net ]; then tx1=$(txb); sent=$(( tx1 - tx0 )); tx0=$tx1; fi\n    if [ \"${u:-0}\" -gt 0 ] 2>/dev/null || [ \"$sent\" -ge 262144 ] 2>/dev/null; then used=1; n=0; else n=$((n + 1)); fi\n    lim=30; [ \"$used\" = 1 ] && lim=10\n    if [ \"$n\" -ge \"$lim\" ] && [ -n \"${RUNPOD_API_KEY:-}\" ] && [ -n \"${RUNPOD_POD_ID:-}\" ]; then\n      echo \"$(date -u +%FT%TZ) idle $n min at 0 % GPU: deleting pod $RUNPOD_POD_ID\" >>/tmp/idle-watchdog.log\n      fv_self_delete /tmp/idle-watchdog.log\n    fi\n  done ) >/dev/null 2>&1 &\nset -u\n# The pod's own wall cap (FV_POD_CAP_S, docs/adr/0023-lab-report-and-ci-bridge.md §4):\n# 7200 s after the container starts it deletes itself with the pod-scoped key\n# Runpod injects (GraphQL podTerminate), retrying each minute, whatever the driver's host did.\nif [ -n \"${RUNPOD_API_KEY:-}\" ] && [ -n \"${RUNPOD_POD_ID:-}\" ]; then\n  ( fv_self_delete() {\n      # GraphQL podTerminate: the pod-scoped key may not DELETE through REST (HTTP 403,\n      # docs/adr/0023-lab-report-and-ci-bridge.md §4). Success: HTTP 200 and no \"errors\".\n      # The key reaches curl on stdin (-H @-), never in its argv; the answer is logged, then removed.\n      _fvsd_code=$(printf 'Authorization: Bearer %s\\n' \"$RUNPOD_API_KEY\" | curl -sS --max-time 30 -o \"$1.resp\" \\\n        -w '%{http_code}' -X POST https://api.runpod.io/graphql -H 'Content-Type: application/json' -H @- \\\n        --data \"{\\\"query\\\":\\\"mutation { podTerminate(input: {podId: \\\\\\\"$RUNPOD_POD_ID\\\\\\\"}) }\\\"}\" 2>>\"$1\")\n      { cat \"$1.resp\"; echo \" http=$_fvsd_code\"; } >>\"$1\" 2>/dev/null\n      _fvsd_ok=1\n      [ \"$_fvsd_code\" = 200 ] && ! grep -q '\"errors\"' \"$1.resp\" 2>/dev/null && _fvsd_ok=0\n      rm -f \"$1.resp\"\n      return \"$_fvsd_ok\"\n    }\n    sleep 7200\n    while :; do\n      echo \"$(date -u +%FT%TZ) wall cap 7200 s: deleting pod $RUNPOD_POD_ID\" >>/tmp/cap-watchdog.log\n      fv_self_delete /tmp/cap-watchdog.log && break\n      sleep 60\n    done ) >/dev/null 2>&1 &\nfi\nOUT=/root/runs/upstream/4b4980b-1026212531-7b14\nmkdir -p \"$OUT\"\n# What oracle.sh fetches as its heartbeat while the runtime pod is up.\nhead -c 1048576 /dev/urandom >/root/runs/keepalive.bin 2>/dev/null || true\nif fv-gpucheck serve --help >/dev/null 2>&1; then\n  ( while true; do fv-gpucheck serve --dir /root/runs --port 8000; sleep 2; done ) >/tmp/http.log 2>&1 &\nelse\n  ( cd /root/runs && while true; do python3 -m http.server 8000; sleep 2; done ) >/tmp/http.log 2>&1 &\nfi\n# The runner scripts come from this repo at $UP_SHA (so a script fix needs no\n# image rebuild); baked images keep a copy in /opt/fvrs as the fallback.\nRUNNER=/opt/fvrs\n{\n  command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }\n  git init -q /opt/fvrs-live && git -C /opt/fvrs-live remote add origin https://github.com/zaitrarrio/fastvideo-rs.git     && git -C /opt/fvrs-live fetch -q --depth 1 origin 4b4980b8e08f4889fc1f6591108edc03cf49d0c1 && git -C /opt/fvrs-live checkout -q FETCH_HEAD     && echo live\n} >\"$OUT/clone.log\" 2>&1 && RUNNER=/opt/fvrs-live\nFV_WEIGHTS_R2_ACCESS_KEY_ID=\"$_fvr2_id\" FV_WEIGHTS_R2_SECRET_ACCESS_KEY=\"$_fvr2_secret\" env FASTVIDEO_DUMP_OPS=0,1,24,47 UP_STEPS=\"info:box r2:sfwan21-1.3b oracle:sfwan13\" UP_STEPS_BG=\"\" UP_CELLS=\"\"   UP_CELL_TIMEOUT_S=7200 UP_LOCAL=1   bash $RUNNER/scripts/gpu/upstream/pod.sh \"$OUT\" >\"$OUT/pod.out\" 2>&1\necho \"done 4b4980b-1026212531-7b14\" >\"$OUT/DONE\"\nexec sleep infinity"
+            ],
+            "env": {
+              "FV_WEIGHTS_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_WEIGHTS_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}"
+            },
+            "gpuCount": 1,
+            "gpuTypeIds": [
+              "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+            ],
+            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo:latest",
+            "minRAMPerGPU": 192,
+            "name": "fv-lab-upstream-4b4980b-1026212531-7b14",
+            "networkVolumeId": "bz0ofkfx45",
+            "ports": [
+              "8000/http"
+            ],
+            "volumeInGb": 0,
+            "volumeMountPath": "/workspace"
+          },
+          "method": "POST",
+          "url": "https://rest.runpod.io/v1/pods"
+        }
+      ],
+      "stack": "fastvideo",
+      "targets": [
+        "sfwan13"
+      ]
+    }
+  ],
+  "url_file": null
+}

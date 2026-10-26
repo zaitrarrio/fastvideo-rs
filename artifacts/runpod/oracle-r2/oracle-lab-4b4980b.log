@@ -7,7 +7,7 @@
 [fv-deploy] keeping beelfsmgjfn15i (the backstop deletes it 7200 s after create; `fv-deploy down beelfsmgjfn15i` now)
 [fv-lab oracle] upstream fastvideo pod beelfsmgjfn15i tag 4b4980b-1026212538-5198: https://beelfsmgjfn15i-8000.proxy.runpod.net/upstream/4b4980b-1026212538-5198
 [fv-lab oracle] reference sfwan13 served by beelfsmgjfn15i
-[fv-lab oracle] FV_ORACLE_URL=https://beelfsmgjfn15i-8000.proxy.runpod.net/upstream/4b4980b-1026212538-5198 -> /tmp/claude-0/-home-user/de48c6d9-bcc0-53f8-8d49-b7c8445479d1/scratchpad/gpu2/o217/urls
+[fv-lab oracle] FV_ORACLE_URL=https://beelfsmgjfn15i-8000.proxy.runpod.net/upstream/4b4980b-1026212538-5198 -> <scratch>/o217/urls
 [fv-lab oracle] runtime side (pid 1701): fv-lab pod up --sha 4b4980b --family oracle-r2 --tag 4b4980b-1026212538-1552 --cells oracle-sfwan13,oracle-sfwan13-diff,oracle-sfwan13-f32,oracle-sfwan13-f32-diff,oracle-sfwan13-bf16-vs-f32,oracle-sfwan13-legacy,oracle-sfwan13-legacy-diff,oracle-sfwan13-composed,oracle-sfwan13-composed-diff,oracle-sfwan13-flash-vs-composed --extra-env FV_ORACLE_URL=https://beelfsmgjfn15i-8000.proxy.runpod.net/upstream/4b4980b-1026212538-5198 --wall-cap-s 3600 --fetch-tree --fetch-skip /frames/|/mp4frames/ --yes --wait
 [fv-lab] fv-lab-oracle-r2-4b4980b-1026212538-1552 on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:fb4c1bb3c33654b5e2c5c28e22cbb718a2c6c6771c04ca044dca8b7c9325f791 (ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-4b4980b)
 [fv-deploy] balance $24.27 (floor $8.00)
@@ -53,9 +53,9 @@
 [fv-lab] pod: [21:33:18] [oracle-r2] ▶ oracle-sfwan13-legacy  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/sfwan13/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-legacy FASTVIDEO_WAN_CAUSAL_AR=0 FASTVIDEO_WAN_CAUSAL_FPB=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-legacy/frames  (wall cap 2266s; 0=none)
 [fv-lab] pod: [21:33:51] [oracle-r2] ▶ oracle-sfwan13-composed  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/sfwan13/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-composed FASTVIDEO_WAN_CAUSAL_FLASH=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-composed/frames  (wall cap 2233s; 0=none)
 [fv-lab] pod: [21:34:47] [oracle-r2] matrix done
-[fv-lab] results -> /home/user/fastvideo-rs/artifacts/runpod/oracle-r2/4b4980b-1026212538-1552
+[fv-lab] results -> <repo>/artifacts/runpod/oracle-r2/4b4980b-1026212538-1552
 [fv-deploy] deleted ifjs6vuy8cs5vo (done)
 [fv-lab oracle] release upstream pod beelfsmgjfn15i (fastvideo): the runtime side ended; the hold is lifted
-[fv-lab] results -> /home/user/fastvideo-rs/artifacts/runpod/upstream/4b4980b-1026212538-5198
+[fv-lab] results -> <repo>/artifacts/runpod/upstream/4b4980b-1026212538-5198
 [fv-deploy] deleted beelfsmgjfn15i (down)
-[fv-lab oracle] results: /home/user/fastvideo-rs/artifacts/runpod/oracle-r2/4b4980b-1026212538-1552 and artifacts/runpod/upstream/<tag> (4b4980b-1026212538-5198)
+[fv-lab oracle] results: <repo>/artifacts/runpod/oracle-r2/4b4980b-1026212538-1552 and artifacts/runpod/upstream/<tag> (4b4980b-1026212538-5198)
