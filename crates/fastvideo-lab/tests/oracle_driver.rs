@@ -27,9 +27,10 @@ use serde_json::{json, Value};
 use fastvideo_deploy::provider::runpod::pod_create_body;
 use fastvideo_deploy::provider::{Account, ProviderKind};
 use fastvideo_lab::oracle::{
-    check_balance, check_image_tag, drive, hub_token_ref, plan_oracle, runtime_args, up_steps,
-    upstream_launch, upstream_start_command, OracleOps, OraclePlan, OracleRequest, RefState,
-    RuntimePod, Stacks, UpPod, UpState, UpstreamPlan, UpstreamStart, STOCK_WAIT_S,
+    check_balance, check_image_tag, drive, hub_step, hub_token_ref, plan_oracle, runtime_args,
+    secret_like, up_steps, upstream_launch, upstream_start_command, OracleOps, OraclePlan,
+    OracleRequest, RefState, RuntimePod, Stacks, UpPod, UpState, UpstreamPlan, UpstreamStart,
+    FINAL_ASKS, FINAL_ASK_GAP_S, STOCK_WAIT_S,
 };
 use fastvideo_lab::plan::Lab;
 
@@ -144,6 +145,22 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
         .collect();
     assert_eq!(hub, ["sol-ltx25"]);
     assert_eq!(hub_token_ref(), "{{ RUNPOD_SECRET_fv_hf_token }}");
+    // No stack env name looks like a secret.
+    for s in &stacks.stacks {
+        for e in &s.env {
+            let k = e.split_once('=').map(|(k, _)| k).unwrap_or_default();
+            assert!(!secret_like(k), "{}: {k}", s.name);
+        }
+    }
+    // The script's rule (a weights:ltx25* step) and the stacks' agree.
+    for s in &stacks.stacks {
+        let ltx = s
+            .targets
+            .iter()
+            .flat_map(|t| &t.steps)
+            .any(|st| hub_step(st));
+        assert_eq!(ltx, s.hub_token, "{}", s.name);
+    }
 }
 
 #[test]
@@ -282,11 +299,26 @@ fn the_stacks_file_refuses_what_it_cannot_run() {
             "cell_timeout_s = 7200",
             "cell_timeout_s = 7200\nunknown = 1",
         ),
-        // The Hub token: typed, and never a value in the file.
+        // The Hub token: typed, required by the LTX steps (as the script's
+        // weights:ltx25* rule), and never a value in the file.
         ("hub_token = true", "hub_token = \"yes\""),
+        ("hub_token = true", "hub_token = false"),
+        ("hub_token = true\n", ""),
         (
             "env = [\"FASTVIDEO_DUMP_OPS=0,1,24,47\"]",
             "env = [\"FASTVIDEO_DUMP_OPS=0,1,24,47\", \"HF_TOKEN=hf_x\"]",
+        ),
+        (
+            "env = [\"FASTVIDEO_DUMP_OPS=0,1,24,47\"]",
+            "env = [\"HUGGING_FACE_HUB_TOKEN=x\"]",
+        ),
+        (
+            "env = [\"FASTVIDEO_DUMP_OPS=0,1,24,47\"]",
+            "env = [\"FV_WEIGHTS_R2_SECRET_ACCESS_KEY=x\"]",
+        ),
+        (
+            "env = [\"FASTVIDEO_DUMP_OPS=0,1,24,47\"]",
+            "env = [\"RUNPOD_API_KEY=x\"]",
         ),
     ] {
         assert!(text.contains(from), "{from}");
@@ -591,6 +623,11 @@ struct Fake {
     /// When a target's cell ends without a dump (`ORACLE_DONE` alone), and
     /// its exit (absent: never).
     no_dump_at: BTreeMap<&'static str, (f64, i32)>,
+    /// How many asks for a served target still answer Pending (its listing
+    /// a proxy error).
+    flaky: BTreeMap<&'static str, usize>,
+    /// Every ask: (time, target).
+    asks: Vec<(f64, String)>,
     /// When a stack's upstream run writes DONE / its pod is gone.
     finished_at: BTreeMap<&'static str, f64>,
     gone_at: BTreeMap<&'static str, f64>,
@@ -655,8 +692,15 @@ impl OracleOps for Fake {
         })
     }
     fn reference(&mut self, _pod: &UpPod, target: &str) -> RefState {
+        self.asks.push((self.t, target.to_owned()));
         if self.served_at.get(target).is_some_and(|t| self.t >= *t) {
-            RefState::Served
+            match self.flaky.get_mut(target) {
+                Some(n) if *n > 0 => {
+                    *n -= 1;
+                    RefState::Pending
+                }
+                _ => RefState::Served,
+            }
         } else if let Some((_, e)) = self.no_dump_at.get(target).filter(|(t, _)| self.t >= *t) {
             RefState::NoDump(format!(
                 "ORACLE_DONE without oracle-dump.tar; cell exit {e}"
@@ -990,6 +1034,65 @@ fn a_reference_without_its_dump_drops_its_arms_and_fails_the_run() {
     assert!(start.contains("--cells oracle-ltx25-a2v-i2v,"), "{start}");
     assert!(!start.contains("retake"), "{start}");
     assert_eq!(r.runtime_ok, Some(true));
+    all_released(&f);
+}
+
+/// Review of #218: `ORACLE_DONE` and `DONE` in one poll window (§19.7's run
+/// wrote both at 17:29:26), and the listing answering a proxy error once. The
+/// pod reads Finished, but its pending reference is asked again
+/// (`FINAL_ASKS`, `FINAL_ASK_GAP_S` apart) before it fails: served.
+#[test]
+fn a_finished_pod_is_asked_again_before_its_reference_fails() {
+    let p = plan(&VSA);
+    let mut f = Fake {
+        served_at: [("fasth3-4step-vsa", 300.0)].into(),
+        finished_at: [("fastvideo", 300.0)].into(),
+        flaky: [("fasth3-4step-vsa", 1)].into(),
+        pod_after: Some(60.0),
+        refs_after: Some(120.0),
+        exit_after: Some((600.0, true)),
+        ..Fake::default()
+    };
+    let r = drive(&mut f, &p);
+    assert!(r.ok(), "{:?}", r.problems);
+    assert_eq!(r.served, ["fasth3-4step-vsa"]);
+    assert!(r.runtime_started);
+    // Asked at 300 (the proxy error), then again at once: no sleep needed.
+    let at300: Vec<f64> = f
+        .asks
+        .iter()
+        .map(|(t, _)| *t)
+        .filter(|t| *t >= 300.0)
+        .collect();
+    assert_eq!(at300, [300.0, 300.0], "{:?}", f.asks);
+    all_released(&f);
+
+    // A listing that keeps failing: FINAL_ASKS more asks, FINAL_ASK_GAP_S
+    // apart, then the target fails as before (no runtime pod).
+    let mut f = Fake {
+        served_at: [("fasth3-4step-vsa", 300.0)].into(),
+        finished_at: [("fastvideo", 300.0)].into(),
+        flaky: [("fasth3-4step-vsa", 99)].into(),
+        ..Fake::default()
+    };
+    let r = drive(&mut f, &p);
+    assert_eq!(r.missing, ["fasth3-4step-vsa"]);
+    assert!(!r.runtime_started);
+    let late: Vec<f64> = f
+        .asks
+        .iter()
+        .map(|(t, _)| *t)
+        .filter(|t| *t >= 300.0)
+        .collect();
+    assert_eq!(
+        late.len(),
+        1 + FINAL_ASKS as usize,
+        "the poll's ask and the final ones: {late:?}"
+    );
+    assert_eq!(
+        late.last().copied(),
+        Some(300.0 + (FINAL_ASKS as f64 - 1.0) * FINAL_ASK_GAP_S as f64)
+    );
     all_released(&f);
 }
 

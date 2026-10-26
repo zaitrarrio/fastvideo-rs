@@ -1,0 +1,56 @@
+[fv-lab oracle] upstream pod (sol-ltx25): info:box weights:ltx25 oracle:ltx25-a2v-i2v,ltx25-retake on ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25:latest
+[fv-lab oracle] fv-lab-upstream-664473b-1026174958-11b7 on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25@sha256:f236d72f3bba697e17dbeadb2536551cf2b2210a9b63171ba82d162fa3d2003b (ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25:latest)
+[fv-deploy] balance $26.35 (floor $8.00)
+[fv-deploy] backstop armed for o3pc3w4jfxa3xg (pid 3012): deleted at the latest 7200 s after create
+[fv-deploy] runpod-pod o3pc3w4jfxa3xg on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr ram=94GB vcpu=32
+[fv-deploy] o3pc3w4jfxa3xg ready 181.1 s after create
+[fv-deploy] keeping o3pc3w4jfxa3xg (the backstop deletes it 7200 s after create; `fv-deploy down o3pc3w4jfxa3xg` now)
+[fv-lab oracle] upstream sol-ltx25 pod o3pc3w4jfxa3xg tag 664473b-1026174958-11b7: https://o3pc3w4jfxa3xg-8000.proxy.runpod.net/upstream/664473b-1026174958-11b7
+[fv-lab oracle] reference ltx25-a2v-i2v served by o3pc3w4jfxa3xg
+[fv-lab oracle] reference ltx25-retake served by o3pc3w4jfxa3xg
+[fv-lab oracle] FV_ORACLE_URL=https://o3pc3w4jfxa3xg-8000.proxy.runpod.net/upstream/664473b-1026174958-11b7 -> /tmp/claude-0/-home-user/de48c6d9-bcc0-53f8-8d49-b7c8445479d1/scratchpad/gpu2/o207/urls
+[fv-lab oracle] runtime side (pid 3156): fv-lab pod up --sha 664473b --family oracle --tag 664473b-1026174958-33ed --cells oracle-ltx25-a2v-i2v,oracle-ltx25-a2v-i2v-diff,oracle-ltx25-a2v-i2v-ownaud,oracle-ltx25-a2v-i2v-ownaud-diff,oracle-ltx25-retake,oracle-ltx25-retake-diff,oracle-ltx25-retake-ownenc,oracle-ltx25-retake-ownenc-diff --extra-env FV_ORACLE_URL=https://o3pc3w4jfxa3xg-8000.proxy.runpod.net/upstream/664473b-1026174958-11b7 --wall-cap-s 3600 --fetch-tree --fetch-skip /frames/ --yes --wait
+[fv-lab] fv-lab-oracle-664473b-1026174958-33ed on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:c971e2ee04b8e976475a94e0cc719fea80fdc08765f7920a5d52d5fbea9c9406 (ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-664473b)
+[fv-deploy] balance $26.02 (floor $8.00)
+[fv-deploy] backstop armed for aab4l1pfdqzb4m (pid 3197): deleted at the latest 3600 s after create
+[fv-deploy] runpod-pod aab4l1pfdqzb4m on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr ram=94GB vcpu=32
+[fv-deploy] aab4l1pfdqzb4m ready 27.5 s after create
+[fv-deploy] keeping aab4l1pfdqzb4m (the backstop deletes it 3600 s after create; `fv-deploy down aab4l1pfdqzb4m` now)
+{
+  "name": "fv-lab-oracle-664473b-1026174958-33ed",
+  "provider": "runpod-pod",
+  "instance": {
+    "id": "aab4l1pfdqzb4m",
+    "provider": "runpod-pod",
+    "name": "fv-lab-oracle-664473b-1026174958-33ed",
+    "state": "running",
+    "url": "https://aab4l1pfdqzb4m-8000.proxy.runpod.net",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "data_center": "EU-RO-1",
+    "usd_per_hr": 2.49,
+    "created_at": 1793037380.6862135,
+    "memory_gb": 94.0,
+    "vcpus": 32.0
+  },
+  "cycles": [
+    {
+      "n": 1,
+      "instance": "aab4l1pfdqzb4m",
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "usd_per_hr": 2.49,
+      "ready_after_s": 27.522990465164185,
+      "outcome": "ready"
+    }
+  ],
+  "smoke": null,
+  "deleted": false,
+  "ok": true
+}
+[fv-lab] pod aab4l1pfdqzb4m runs `fv-lab run oracle` (tag 664473b-1026174958-33ed); results: fv-lab pod fetch aab4l1pfdqzb4m --wait --down
+[fv-lab] pod: [17:56:48] [oracle] oracle: fetch of ltx25-a2v-i2v failed (attempt 1)
+[fv-lab] results -> /home/user/fastvideo-rs/artifacts/runpod/oracle/664473b-1026174958-33ed
+[fv-deploy] deleted aab4l1pfdqzb4m (done)
+[fv-lab oracle] release upstream pod o3pc3w4jfxa3xg (sol-ltx25): the runtime side ended; the hold is lifted
+[fv-lab] results -> /home/user/fastvideo-rs/artifacts/runpod/upstream/664473b-1026174958-11b7
+[fv-deploy] deleted o3pc3w4jfxa3xg (down)
+[fv-lab oracle] results: /home/user/fastvideo-rs/artifacts/runpod/oracle/664473b-1026174958-33ed and artifacts/runpod/upstream/<tag> (664473b-1026174958-11b7)

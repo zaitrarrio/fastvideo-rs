@@ -80,8 +80,8 @@ the floor the Rust-vs-Python profile is judged against.
 Results: `artifacts/runpod/oracle/<tag>/oracle-<target>-diff/` (the stderr
 table and `gpucheck-out/*.json`); the dumps themselves stay on the pods.
 
-**With fv-lab** (ADR-0019 §19 and §20, proposed; §19.7's GPU check passed
-on `664473b`, §20.7's is to be re-run once the Hub token secret exists): the same run on fv-deploy's guards, for the targets that are cells of
+**With fv-lab** (ADR-0019 §19, accepted: its GPU check passed on `664473b`;
+§20, proposed: its check is to be re-run once the Hub token secret exists): the same run on fv-deploy's guards, for the targets that are cells of
 the `oracle` tier: the nine tensor-diff targets, and the ten LTX clip-metric
 targets (`ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,retake,retake-v,retake-a,extend,a2v-guided}`,
 the tier's extra cells, run when `--cells` names their arms; their ffmpeg /

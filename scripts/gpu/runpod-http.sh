@@ -131,6 +131,8 @@ fi
 
 die() { echo "runpod-http: $*" >&2; exit 1; }
 # Checked before anything else runs, so a bad value never reaches jq or the API.
+[[ -z "${UP_HUB_TOKEN:-}" || "$UP_HUB_TOKEN" == 0 || "$UP_HUB_TOKEN" == 1 ]] \
+  || die "UP_HUB_TOKEN is 1 (pass the Hub token's secret reference), 0 (do not) or unset (for weights:ltx25* steps), not '$UP_HUB_TOKEN'"
 [[ -z "${FV_MIN_RAM_GB:-}" || "$FV_MIN_RAM_GB" =~ ^[1-9][0-9]*$ ]] \
   || die "FV_MIN_RAM_GB is the pod's minRAMPerGPU in whole GB (e.g. 192), not '$FV_MIN_RAM_GB'"
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -359,7 +361,10 @@ upstream_hub_token() {
     1) return 0 ;;
     0) return 1 ;;
   esac
-  [[ " ${UP_STEPS:-} ${UP_STEPS_BG:-} " == *" weights:ltx25"* ]]
+  local steps
+  # Any whitespace (tabs, newlines) separates steps.
+  steps=" $(printf '%s %s' "${UP_STEPS:-}" "${UP_STEPS_BG:-}" | tr -s '[:space:]' ' ') "
+  [[ "$steps" == *" weights:ltx25"* ]]
 }
 
 pod_payload() {

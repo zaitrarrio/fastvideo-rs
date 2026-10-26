@@ -262,15 +262,19 @@ impl OracleOps for LiveOps<'_> {
         if hrefs(&listing).iter().any(|h| h == ORACLE_DUMP_TAR) {
             return RefState::Served;
         }
-        let exit = self
+        let exit = match self
             .get(&format!("{dir}cell.json"), 30)
             .filter(|(s, _)| *s == 200)
-            .and_then(|(_, b)| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            .map(|v| match &v["exit"] {
-                serde_json::Value::Null => "cell.json has no exit".to_owned(),
-                e => format!("cell exit {e}"),
-            })
-            .unwrap_or_else(|| "no cell.json".to_owned());
+        {
+            None => "no cell.json".to_owned(),
+            Some((_, b)) => match serde_json::from_slice::<serde_json::Value>(&b) {
+                Err(_) => "cell.json malformed".to_owned(),
+                Ok(v) => match &v["exit"] {
+                    serde_json::Value::Null => "cell.json has no exit".to_owned(),
+                    e => format!("cell exit {e}"),
+                },
+            },
+        };
         RefState::NoDump(format!("ORACLE_DONE without {ORACLE_DUMP_TAR}; {exit}"))
     }
 

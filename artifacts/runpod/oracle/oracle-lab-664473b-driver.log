@@ -1,0 +1,57 @@
+[fv-lab oracle] upstream pod (fastvideo): info:box weights:h3-diffusers oracle:fasth3-4step-vsa on ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo:latest
+[fv-lab oracle] fv-lab-upstream-664473b-1026171653-1e64 on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo@sha256:50f54e99439c96d0b37e32781aa1bb24acb1054d52872a8ef245dd5c8bb85632 (ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo:latest), host RAM floor 192 GB per GPU (minRAMPerGPU)
+[fv-deploy] balance $28.98 (floor $8.00)
+[fv-deploy] backstop armed for g0e1srbtwgor6r (pid 1431): deleted at the latest 7200 s after create
+[fv-deploy] runpod-pod g0e1srbtwgor6r on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr ram=283GB vcpu=28
+[fv-deploy] g0e1srbtwgor6r ready 212.5 s after create
+[fv-deploy] keeping g0e1srbtwgor6r (the backstop deletes it 7200 s after create; `fv-deploy down g0e1srbtwgor6r` now)
+[fv-lab oracle] upstream fastvideo pod g0e1srbtwgor6r tag 664473b-1026171653-1e64: https://g0e1srbtwgor6r-8000.proxy.runpod.net/upstream/664473b-1026171653-1e64
+[fv-lab oracle] reference fasth3-4step-vsa served by g0e1srbtwgor6r
+[fv-lab oracle] FV_ORACLE_URL=https://g0e1srbtwgor6r-8000.proxy.runpod.net/upstream/664473b-1026171653-1e64 -> /tmp/claude-0/-home-user/de48c6d9-bcc0-53f8-8d49-b7c8445479d1/scratchpad/gpu2/o197/urls
+[fv-lab oracle] runtime side (pid 1758): fv-lab pod up --sha 664473b --family oracle --tag 664473b-1026171653-0fee --cells oracle-fasth3-4step-vsa,oracle-fasth3-4step-vsa-diff,oracle-fasth3-4step-vsa-f32,oracle-fasth3-4step-vsa-f32-diff,oracle-fasth3-4step-vsa-bf16-vs-f32 --extra-env FV_ORACLE_URL=https://g0e1srbtwgor6r-8000.proxy.runpod.net/upstream/664473b-1026171653-1e64 --wall-cap-s 5400 --yes --wait
+[fv-lab] fv-lab-oracle-664473b-1026171653-0fee on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:c971e2ee04b8e976475a94e0cc719fea80fdc08765f7920a5d52d5fbea9c9406 (ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-664473b)
+[fv-deploy] balance $28.57 (floor $8.00)
+[fv-deploy] backstop armed for e6l855vip3meed (pid 1762): deleted at the latest 5400 s after create
+[fv-deploy] runpod-pod e6l855vip3meed on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr ram=94GB vcpu=32
+[fv-deploy] e6l855vip3meed ready 28.6 s after create
+[fv-deploy] keeping e6l855vip3meed (the backstop deletes it 5400 s after create; `fv-deploy down e6l855vip3meed` now)
+{
+  "name": "fv-lab-oracle-664473b-1026171653-0fee",
+  "provider": "runpod-pod",
+  "instance": {
+    "id": "e6l855vip3meed",
+    "provider": "runpod-pod",
+    "name": "fv-lab-oracle-664473b-1026171653-0fee",
+    "state": "running",
+    "url": "https://e6l855vip3meed-8000.proxy.runpod.net",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "data_center": "EU-RO-1",
+    "usd_per_hr": 2.49,
+    "created_at": 1793035801.3771899,
+    "memory_gb": 94.0,
+    "vcpus": 32.0
+  },
+  "cycles": [
+    {
+      "n": 1,
+      "instance": "e6l855vip3meed",
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "usd_per_hr": 2.49,
+      "ready_after_s": 28.57629418373108,
+      "outcome": "ready"
+    }
+  ],
+  "smoke": null,
+  "deleted": false,
+  "ok": true
+}
+[fv-lab] pod e6l855vip3meed runs `fv-lab run oracle` (tag 664473b-1026171653-0fee); results: fv-lab pod fetch e6l855vip3meed --wait --down
+[fv-lab] pod: [17:30:31] [oracle] oracle: fetching https://g0e1srbtwgor6r-8000.proxy.runpod.net/upstream/664473b-1026171653-1e64/oracle-fasth3-4step-vsa/oracle-dump.tar
+[fv-lab] pod: [17:30:46] [oracle] ▶ oracle-fasth3-4step-vsa  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/fasth3-4step-vsa/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-dump /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder streamed --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --clip-dir /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa/frames --adaln-cache /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-adaln.cache  (wall cap 4149s; 0=none)
+[fv-lab] pod: [17:39:24] [oracle] ▶ oracle-fasth3-4step-vsa-f32  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/fasth3-4step-vsa/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-dump-f32 FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder streamed --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --clip-dir /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-f32/frames --adaln-cache /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-adaln.cache  (wall cap 3631s; 0=none)
+[fv-lab] results -> /home/user/fastvideo-rs/artifacts/runpod/oracle/664473b-1026171653-0fee
+[fv-deploy] deleted e6l855vip3meed (done)
+[fv-lab oracle] release upstream pod g0e1srbtwgor6r (fastvideo): the runtime side ended; the hold is lifted
+[fv-lab] results -> /home/user/fastvideo-rs/artifacts/runpod/upstream/664473b-1026171653-1e64
+[fv-deploy] deleted g0e1srbtwgor6r (down)
+[fv-lab oracle] results: /home/user/fastvideo-rs/artifacts/runpod/oracle/664473b-1026171653-0fee and artifacts/runpod/upstream/<tag> (664473b-1026171653-1e64)

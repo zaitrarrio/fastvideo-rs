@@ -23,13 +23,14 @@
   `h3` (§17.4) and §14.7's `hunyuan`, `sana-video`, `b200`, `writer`, `precision-debug`, `identity` and `h3attn` are
   retired from the script with no tier (`FV_SCRIPT_RETIRED`, refused with a pointer). §19 (D1h: `fv-lab oracle`, the driver of §15.6: the upstream reference pods of
   `lab/upstream.toml` on fv-deploy's guards, the `oracle` tier's runtime pod with `FV_ORACLE_URL`, their release on
-  `ORACLE_REFS_DONE`, a bounded wait for it, a stock wait or any failure; payload goldens from `runpod-http.sh plan-upstream`) is proposed,
-  CPU-tested; its GPU check passed on `664473b` (§19.7 "Results"); since that run a reference counts as served only
-with its dump, and the `sol-ltx25` stack's pod gets the Hub token by Runpod secret reference (§20.7 "First attempt").
-§20 (D1i, the coordinator's decisions on §19.9: a typed `[[metric]]` step in
-  the cell, `metrics.txt` a report, the ten LTX clip-metric targets as the `oracle` tier's `extra_cells`) is proposed,
-  CPU-tested; its GPU check is §20.7 (a first attempt on `664473b` compared nothing: the upstream pod had no Hub token;
-to be re-run once the owner's secret `fv_hf_token` exists, §20.7 "First attempt"). `sfwan13` is a follow-up (§20.5), so `oracle`'s branch stays whole
+  `ORACLE_REFS_DONE`, a bounded wait for it, a stock wait or any failure; payload goldens from
+  `runpod-http.sh plan-upstream`) is accepted (coordinator, 2026-10-26): its GPU check passed on `664473b` (§19.7
+  "Results"); since that run a reference counts as served only with its dump, and the `sol-ltx25` stack's pod gets the
+  Hub token by Runpod secret reference (§20.7 "First attempt"). §20 (D1i, the coordinator's decisions on §19.9: a
+  typed `[[metric]]` step in the cell, `metrics.txt` a report, the ten LTX clip-metric targets as the `oracle` tier's
+  `extra_cells`) is proposed, CPU-tested; its GPU check is §20.7 (a first attempt on `664473b` compared nothing: the
+  upstream pod had no Hub token; to be re-run once the owner's secret `fv_hf_token` exists, §20.7 "First attempt").
+  `sfwan13` is a follow-up (§20.5), so `oracle`'s branch stays whole
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -2644,8 +2645,8 @@ proposals (`mmaudio`, `speechtest`, `sfstream`, `sfquality`, the `sol*` families
 
 ### 19. D1h: the `fv-lab oracle` driver
 
-Status: proposed 2026-10-26 (draft PR from `claude/d1h-oracle-driver`), CPU-tested; its GPU check is the
-coordinator's (§19.7). Decision-id FVID-2026-10-26-fv-lab-oracle-driver. This is §15.6's driver ("upstream pods up, the
+Status: accepted 2026-10-26 (coordinator): its GPU check passed on `664473b` (§19.7 "Results"). Proposed
+2026-10-26 (draft PR from `claude/d1h-oracle-driver`), CPU-tested. Decision-id FVID-2026-10-26-fv-lab-oracle-driver. This is §15.6's driver ("upstream pods up, the
 runtime tier with `FV_ORACLE_URL`, release on `ORACLE_REFS_DONE`") and the first of the two things §15.10 says must
 exist before `oracle`'s branch retires. The second, the clip-metric targets and `sfwan13` as cells, is **not** in
 this slice: it needs a derived-clip / metric step the ADR has not designed (§19.9). Nothing is retired here.
@@ -2670,7 +2671,10 @@ on fv-deploy's guards (`oracle::drive` on the `OracleOps` trait; the binary's wo
    **served only with its dump**. `ORACLE_DONE` without the tar (`scripts/gpu/upstream/oracle.sh` writes it after a
    cell that left no dump too, and the script runtime path relies on that) makes the target **missing** at once, its
    reason the cell's `cell.json` exit when the pod serves it (`ORACLE_DONE without oracle-dump.tar; cell exit 2`);
-   a listing that cannot be read is asked again at the next poll (§20.7 "First attempt"). Meanwhile each pod's
+   a listing that cannot be read leaves the target pending: asked again at the next poll, and, once its pod's run
+   wrote `DONE` or the pod is gone, `FINAL_ASKS` (3) times more `FINAL_ASK_GAP_S` (5 s) apart before the target fails
+   (`ORACLE_DONE` and `DONE` can land in one poll window, as at 17:29:26Z in §19.7's run; review of #218; §20.7
+   "First attempt"). Meanwhile each pod's
    `keepalive.bin` is fetched (its idle watchdog counts that
    traffic as busy, `runpod-http.sh idle_watchdog net`), until every target is served, or its pod's run wrote `DONE`
    without it, or the pod is gone, or `--refs-wait-s` passed **since the first create** (default: what the upstream
@@ -2772,8 +2776,10 @@ changes; the tiers and cell schemas are untouched.
 stack's pod gets `HF_TOKEN` as the Runpod secret reference `{{ RUNPOD_SECRET_fv_hf_token }}` in its create body's
 `env`, never a value (`oracle::HUB_TOKEN_ENV`, as the R2 key's `fv_r2_*` references of a `volume+r2` tier, §16). Only
 `sol-ltx25` carries it (`weights:ltx25` / `weights:ltx25-dev` range-read the gated `Lightricks/LTX-2.5`), so the
-`fastvideo` stack's pod body and golden are unchanged. A stack's plain `env` may not name `HF_TOKEN` (a value would be
-in the repository).
+`fastvideo` stack's pod body and golden are unchanged. Refused (review of #218): a stack's plain `env` naming anything
+secret-like (a key containing `TOKEN`, `SECRET` or `KEY`: `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, …; a value would be in
+the repository; neither stack's env has one), and a stack with a `weights:ltx25*` step without `hub_token = true`
+(`oracle::hub_step`, the same rule as `runpod-http.sh upstream`'s, so the two paths cannot drift).
 
 #### 19.3 The upstream pod: `runpod-http.sh upstream`'s, and its payload golden
 
@@ -2840,7 +2846,7 @@ fails on an unreadable `lab/upstream.toml`), `pod.rs` (`write_record`, `or_delet
 image and `control.yml` workflows' path filters name it); `tests/fv_lab_bin.rs::the_runtime_images_lab_subset_passes_check`
 copies exactly what that stage of the Dockerfile copies into a root of its own and runs `check` and a dry run there.
 
-`tests/oracle_driver.rs` (24): the payload golden (the `hub_token` stack's `env` equal to the script's, the other's
+`tests/oracle_driver.rs` (25): the payload golden (the `hub_token` stack's `env` equal to the script's, the other's
 none) and the start command; the stacks file against the cells, its
 refusals and no tier named `upstream`; the plan (one pod per stack, the tier's order, the caps, the waits, the
 projection) and its 14 refusals; the balance guard; and the driver on a fake world whose clock is its sleeps: the
@@ -2855,14 +2861,19 @@ during the run), with a failed fetch (the delete still runs) and a failed delete
 (lifted after `ORACLE_REFS_DONE`, after the runtime side's end, never: its limit; not on the stock wait; not after a
 failed runtime side); `ORACLE_DONE` without a dump (§20.7's run: both targets missing with the cells' exit, no
 runtime pod, the upstream pod released at the next poll, not at the deadline) and one of two targets without it (the
-runtime side runs the other's arms, the run fails naming the reason). `tests/oracle_live.rs` (7): `LiveOps` against a fake provider (fv-deploy's `Deployer` creates
+runtime side runs the other's arms, the run fails naming the reason); a pod whose run ends in the poll window its
+reference is written, the listing failing once (asked again: served) or always (`FINAL_ASKS` asks, 5 s apart, then
+missing). `tests/oracle_live.rs` (7): `LiveOps` against a fake provider (fv-deploy's `Deployer` creates
 and deletes through it), a fake HTTP and a fake `fv-lab` script: an upstream pod recorded (ledger, records, digest);
 one whose record cannot be written deleted; a runtime side stopped with SIGTERM and waited for, its still-live pod
 deleted after its failure, its arguments carrying the run's root and state; one that ends well left alone, one that
 fails (exit 3) with its pod deleted; a reused tag refused; the URL and hold files; the reference and run state
 through the proxy (served: `ORACLE_DONE` and `oracle-dump.tar` in the listing; `ORACLE_DONE` with no tar, a
-`.part` only, or no `cell.json`: no dump, with the exit or `no cell.json`; a listing answering 502: pending; the tar
-never downloaded). `pod.rs`: `or_delete`. `tests/fv_lab_bin.rs`: the plan through the binary without a key, five
+`.part` only, no `cell.json`, a malformed one or one whose exit is null: no dump, each with its reason; a listing
+answering 502: pending; the tar never downloaded). `scripts/gpu/tests/hub-token.test.sh` (CI, `control.yml`): `pod.sh`'s
+`hub_token_init` on nine inputs (the `box.txt` line, `HF_TOKEN` as a child sees it, the value in no output), `pod.sh`
+reading the value nowhere else, and `runpod-http.sh plan-upstream`'s reference for `weights:ltx25*` steps (tabs and
+newlines too), `UP_HUB_TOKEN=1/0` and its refusal of any other value. `pod.rs`: `or_delete`. `tests/fv_lab_bin.rs`: the plan through the binary without a key, five
 refusals, `--yes` without a key, `check`'s stack lines, and the runtime image's `lab/` subset (the Dockerfile's
 `COPY` lines of the stage that ships fv-lab, in a root of their own) passing `check` and the smoke's dry run.
 
@@ -2876,7 +2887,10 @@ target waits for the deadline (both); its reason dropped from `problems` (both);
 listing without the tar, or a listing it could not read taken as no dump (`references_and_the_upstream_run_through_the_proxy`);
 `hub_token` ignored by `upstream_launch` (`the_upstream_pod_body_…`, `the_plan_takes_the_extra_cells_by_arm`); an
 `HF_TOKEN=` value accepted in a stack's `env` (`the_stacks_file_refuses_what_it_cannot_run`); `runpod-http.sh` without
-the reference (`fv-lab-goldens.sh --check`: `runpod-http-upstream-sol-ltx25.json differs`).
+the reference (`fv-lab-goldens.sh --check`: `runpod-http-upstream-sol-ltx25.json differs`). After the review of #218:
+no final asks for a finished pod's pending targets (`a_finished_pod_is_asked_again_…`); in `hub-token.test.sh`, no
+whitespace trim, the env's note dropped when the file wins, an empty file taken as the token, an unfilled reference
+taken as the token, `runpod-http.sh` matching the steps without normalising tabs and newlines.
 
 #### 19.6 What does not change
 
@@ -2967,12 +2981,16 @@ RTX PRO 6000 Blackwell Server Edition pods in EU-RO-1 on `bz0ofkfx45` at $2.49/h
   the three `compare-dumps` arms the same. Both runtime pods `matrix_exit=0`; both `live.log`s `oracle:
   fasth3-4step-vsa reference 1.3G`.
 - **Pods and ledger**: fv-lab's runtime pod `e6l855vip3meed` created 17:30:01Z, ready 28.6 s, deleted 17:48:14Z
-  (`done`); the script side's `1q3o43c0g6477d` (17:30:16Z to 17:48:35Z, `destroy pod`). `artifacts/fv-lab/ledger.tsv`
-  shows both fv-lab pods created and deleted. Cost about $2.63 (the balance $28.98 before, $26.35 after).
+  (`done`); the script side's `1q3o43c0g6477d` (17:30:16Z to 17:48:35Z, `destroy pod`). The ledger
+  (`artifacts/fv-lab/ledger.tsv`, not committed; its lines for this run's and §20.7's four fv-lab pods in
+  `artifacts/runpod/oracle/oracle-ledger-664473b.tsv`) shows both fv-lab pods created, ready and deleted. Cost about
+  $2.63 (the balance $28.98 before, $26.35 after).
 
 Evidence (force-added): fv-lab `artifacts/runpod/oracle/664473b-1026171653-0fee`, script
 `artifacts/runpod/oracle/664473b-10261730`, upstream `artifacts/runpod/upstream/664473b-1026171653-1e64` (without
-dumps or clips), with `compare-664473b-driver.txt` and `oracle-report-664473b-driver.json`. No file holds a key or
+dumps or clips), with `compare-664473b-driver.txt`, `oracle-report-664473b-driver.json`, the driver's stderr
+`oracle-lab-664473b-driver.log` (the `served by`, `FV_ORACLE_URL`, readiness and delete lines quoted above) and
+`oracle-ledger-664473b.tsv`. No file holds a key or
 token (searched for `RUNPOD_API_KEY`, `hf_`, `token`, `secret`, `rpa_` and key-shaped strings).
 
 #### 19.8 Then: `oracle.sh` on the driver, and the retirement of `oracle`
@@ -3321,7 +3339,7 @@ applies. Stop before the balance would fall below $8 (CLAUDE.md).
 the image, fv-lab and pods of §19.7's run, the commands above. Evidence (force-added): fv-lab
 `artifacts/runpod/oracle/664473b-1026174958-33ed`, script `artifacts/runpod/oracle/664473b-10261756`, upstream
 `artifacts/runpod/upstream/664473b-1026174958-11b7`, `compare-664473b-metrics.txt`,
-`oracle-report-664473b-metrics.json`.
+`oracle-report-664473b-metrics.json`, `oracle-lab-664473b-metrics.log`, `oracle-ledger-664473b.tsv`.
 
 - **What failed.** The `sol-ltx25` pod (`o3pc3w4jfxa3xg`, ready 181.1 s after its create) ran `weights:ltx25`, which
   rebuilds the single-file LTX-2.5 packs from the volume's Diffusers tree with range reads of the Hub
@@ -3342,16 +3360,19 @@ the image, fv-lab and pods of §19.7's run, the commands above. Evidence (force-
   `j3ylkifd0vcobj` 17:56:21Z to 17:58:38Z). The balance went from $26.35 to $25.78.
 - **Fixed since** (no change to `oracle.sh`'s `ORACLE_DONE`, which the script runtime path relies on):
   1. *Served means a dump exists* (§19.1 item 2): `ORACLE_DONE` and `oracle-dump.tar` in the reference directory's
-     listing; `ORACLE_DONE` alone is missing at once with the cell's exit. With nothing served the upstream pods are
+     listing; `ORACLE_DONE` alone is missing at once with the cell's exit (`cell.json malformed` / `has no exit` /
+     `no cell.json` otherwise); a listing that cannot be read is asked again, `FINAL_ASKS` more times once the pod's
+     run ended, before the target fails. With nothing served the upstream pods are
      released without a runtime pod and the run fails: this run would have ended about 7 min after the upstream
      create with `references not served: ltx25-a2v-i2v (ORACLE_DONE without oracle-dump.tar; cell exit 2),
      ltx25-retake (…; cell exit 2)` and no runtime pod.
   2. *The Hub token by Runpod secret reference*: `hub_token = true` on `sol-ltx25` (§19.2) and `runpod-http.sh
      upstream` for `weights:ltx25*` steps (§19.3) put `HF_TOKEN = {{ RUNPOD_SECRET_fv_hf_token }}` in the create
-     body, never a value. `upstream/pod.sh` takes a value that is blank or still holds `{{` as no token (then
-     `/workspace/hf/token`, as before) and writes where the token came from, never the token, to `box.txt`
-     (`hf_token=env`, `hf_token=/workspace/hf/token`, `hf_token=none (unfilled secret reference)` or
-     `hf_token=none`).
+     body, never a value. `upstream/pod.sh` (`hub_token_init`) drops whitespace, takes a value that is blank or
+     still holds `{{` as no token (then `/workspace/hf/token`, as before; an empty file is none too) and writes
+     where the token came from, never the token, to `box.txt`: `hf_token=env`, `hf_token=/workspace/hf/token`,
+     `hf_token=none`, `hf_token=none (empty /workspace/hf/token)`, each followed by ` (env: unfilled secret
+     reference)` or ` (env: blank)` when the env had one (`scripts/gpu/tests/hub-token.test.sh`, in CI).
 - **What a missing secret does: UNVERIFIED.** Runpod's documentation (docs.runpod.io "Manage secrets",
   "Environment variables", read 2026-10-26) says a `{{ RUNPOD_SECRET_<name> }}` reference is substituted when the
   pod starts and that deleting a secret still in use makes those deployments fail; it does not say what a reference

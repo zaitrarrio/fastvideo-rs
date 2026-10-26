@@ -50,8 +50,10 @@ has tried one. Every outcome is handled:
   upstream` dies with `pod create failed: …`.
 - **Empty value, or the text `{{ RUNPOD_SECRET_fv_hf_token }}` left as it
   is**: `upstream/pod.sh` takes a blank value, or one that still holds `{{`, as
-  no token and falls back to `/workspace/hf/token` as before; `box.txt` says
-  `hf_token=none (unfilled secret reference)` or `hf_token=none`.
+  no token and falls back to `/workspace/hf/token` as before (an empty file is
+  no token either); `box.txt` says `hf_token=none (env: unfilled secret
+  reference)` or `hf_token=none (env: blank)` (the file's path in place of
+  `none` when the file had a token; `scripts/gpu/tests/hub-token.test.sh`).
   `weights:ltx25` then fails with 401, the oracle cells write `ORACLE_DONE`
   without a dump, and `fv-lab oracle` reports those targets missing
   (`ORACLE_DONE without oracle-dump.tar; cell exit 2`), releases the upstream

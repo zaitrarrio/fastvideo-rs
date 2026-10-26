@@ -76,6 +76,18 @@ const UPSTREAM_START_TEMPLATE: &str = include_str!("upstream-start.sh.in");
 /// passes it for the LTX weight steps.
 pub const HUB_TOKEN_ENV: (&str, &str) = ("HF_TOKEN", "fv_hf_token");
 
+/// A `pod.sh` step that reads a gated Hub repository: `weights:ltx25*`, for
+/// which `runpod-http.sh upstream` passes the token (`upstream_hub_token`);
+/// a stack with one must set `hub_token`, so the two paths cannot drift.
+pub fn hub_step(step: &str) -> bool {
+    step.starts_with("weights:ltx25")
+}
+
+/// An env name that would put a secret's value in the repository.
+pub fn secret_like(key: &str) -> bool {
+    ["TOKEN", "SECRET", "KEY"].iter().any(|w| key.contains(w))
+}
+
 /// `{{ RUNPOD_SECRET_fv_hf_token }}`: the reference, never the token.
 pub fn hub_token_ref() -> String {
     format!("{{{{ RUNPOD_SECRET_{} }}}}", HUB_TOKEN_ENV.1)
@@ -264,18 +276,35 @@ impl Stacks {
                     format!("`{e}` is not K=V with a plain value"),
                 ));
             }
-            if s.env
+            if let Some(k) = s
+                .env
                 .iter()
-                .any(|e| e.split_once('=').is_some_and(|(k, _)| k == HUB_TOKEN_ENV.0))
+                .filter_map(|e| e.split_once('=').map(|(k, _)| k))
+                .find(|k| secret_like(k))
             {
                 return Err(sfield(
                     file,
                     at("env"),
                     format!(
-                        "`{}` is a secret: `hub_token = true` passes it as a Runpod secret reference, never a value",
-                        HUB_TOKEN_ENV.0
+                        "`{k}` looks like a secret: a stack's env is in the repository (the Hub token: `hub_token = true`, a Runpod secret reference)"
                     ),
                 ));
+            }
+            if !s.hub_token {
+                if let Some(st) = s
+                    .targets
+                    .iter()
+                    .flat_map(|t| &t.steps)
+                    .find(|st| hub_step(st))
+                {
+                    return Err(sfield(
+                        file,
+                        at("hub_token"),
+                        format!(
+                            "`{st}` reads the gated Lightricks/LTX-2.5: set `hub_token = true` (runpod-http.sh upstream passes the token for it too)"
+                        ),
+                    ));
+                }
             }
             if s.targets.is_empty() {
                 return Err(sfield(file, at("target"), "empty"));
@@ -987,6 +1016,44 @@ struct Live {
     released: bool,
 }
 
+/// How often a reference still pending is asked for once its pod's run has
+/// ended or the pod is gone, [`FINAL_ASK_GAP_S`] apart, before its target
+/// fails: `ORACLE_DONE` and `DONE` can land in one poll window, and one
+/// proxy error on the listing must not drop a finished reference.
+pub const FINAL_ASKS: u32 = 3;
+pub const FINAL_ASK_GAP_S: u64 = 5;
+
+/// One answer of [`OracleOps::reference`] for `t`, noted (and logged).
+#[allow(clippy::too_many_arguments)]
+fn note_ref<O: OracleOps>(
+    ops: &mut O,
+    pod: &UpPod,
+    t: &str,
+    st: RefState,
+    served: &mut Vec<String>,
+    failed: &mut Vec<String>,
+    why: &mut Vec<(String, String)>,
+) {
+    match st {
+        RefState::Pending => {}
+        RefState::Served => {
+            ops.log(&format!(
+                "[fv-lab oracle] reference {t} served by {}",
+                pod.id
+            ));
+            served.push(t.to_owned());
+        }
+        RefState::NoDump(w) => {
+            ops.log(&format!(
+                "[fv-lab oracle] reference {t} not served by {}: {w}",
+                pod.id
+            ));
+            failed.push(t.to_owned());
+            why.push((t.to_owned(), w));
+        }
+    }
+}
+
 /// Fetch (unless `fetch` is false: an interrupt deletes at once, a fetch may
 /// take 900 s a file), then delete, every pod not yet released.
 fn release<O: OracleOps>(
@@ -1042,7 +1109,8 @@ fn release<O: OracleOps>(
 /// 2. The references waited for (every [`POLL_S`], keepalive meanwhile):
 ///    until each selected target is served (`ORACLE_DONE` and its
 ///    `oracle-dump.tar`), ended without a dump (`ORACLE_DONE` alone: missing,
-///    with the reason), its pod finished without it or is gone, or
+///    with the reason), its pod finished without it or is gone (asked
+///    [`FINAL_ASKS`] times more first, [`FINAL_ASK_GAP_S`] apart), or
 ///    `refs_wait_s` passed since the first create. No reference: release
 ///    without a runtime pod, fail. A pod none of whose targets was served is
 ///    released at once.
@@ -1127,48 +1195,51 @@ pub fn drive<O: OracleOps>(ops: &mut O, plan: &OraclePlan) -> DriveReport {
         }
         for l in &live {
             for t in &l.pod.targets {
-                if served.contains(t) || failed.contains(t) {
-                    continue;
-                }
-                match ops.reference(&l.pod, t) {
-                    RefState::Pending => {}
-                    RefState::Served => {
-                        ops.log(&format!(
-                            "[fv-lab oracle] reference {t} served by {}",
-                            l.pod.id
-                        ));
-                        served.push(t.clone());
-                    }
-                    RefState::NoDump(w) => {
-                        ops.log(&format!(
-                            "[fv-lab oracle] reference {t} not served by {}: {w}",
-                            l.pod.id
-                        ));
-                        failed.push(t.clone());
-                        why.push((t.clone(), w));
-                    }
+                if !served.contains(t) && !failed.contains(t) {
+                    let st = ops.reference(&l.pod, t);
+                    note_ref(ops, &l.pod, t, st, &mut served, &mut failed, &mut why);
                 }
             }
         }
         for l in &live {
-            let pending: Vec<String> = l
-                .pod
-                .targets
-                .iter()
-                .filter(|t| !served.contains(t) && !failed.contains(t))
-                .cloned()
-                .collect();
-            if pending.is_empty() {
+            let pending = |served: &[String], failed: &[String]| -> Vec<String> {
+                l.pod
+                    .targets
+                    .iter()
+                    .filter(|t| !served.contains(t) && !failed.contains(t))
+                    .cloned()
+                    .collect()
+            };
+            if pending(&served, &failed).is_empty() {
                 continue;
             }
             let st = ops.upstream_state(&l.pod);
             if st != UpState::Running {
-                ops.log(&format!(
-                    "[fv-lab oracle] upstream pod {} is {st:?} without {}",
-                    l.pod.id,
-                    pending.join(", ")
-                ));
-                failed.extend(pending);
+                // Its run ended (or the pod went) in this poll window: a
+                // reference written just before may have met a transient
+                // proxy error above. Ask again, a few times, before failing.
+                for ask in 0..FINAL_ASKS {
+                    let left = pending(&served, &failed);
+                    if left.is_empty() {
+                        break;
+                    }
+                    if ask > 0 {
+                        ops.sleep(Duration::from_secs(FINAL_ASK_GAP_S));
+                    }
+                    for t in &left {
+                        let r = ops.reference(&l.pod, t);
+                        note_ref(ops, &l.pod, t, r, &mut served, &mut failed, &mut why);
+                    }
+                }
+                let left = pending(&served, &failed);
+                if !left.is_empty() {
+                    ops.log(&format!(
+                        "[fv-lab oracle] upstream pod {} is {st:?} without {}",
+                        l.pod.id,
+                        left.join(", ")
+                    ));
+                    failed.extend(left);
+                }
             }
         }
         if served.len() + failed.len() >= plan.arms_by_target.len() {

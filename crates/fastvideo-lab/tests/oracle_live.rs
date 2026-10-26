@@ -566,6 +566,23 @@ fn references_and_the_upstream_run_through_the_proxy() {
         format!("{base}/oracle-ltx25-a2v-i2v/"),
         (200, listing(&["ORACLE_DONE", "oracle-dump.tar.part"])),
     );
+    // ltx25-i2v: no dump, cell.json not JSON; ltx25-kf: no dump, its exit
+    // null (a cell killed before it wrote one).
+    for (t, cell) in [
+        ("ltx25-i2v", "{\"cell\":"),
+        ("ltx25-kf", r#"{"cell":"oracle-ltx25-kf","exit":null}"#),
+    ] {
+        http.answers.insert(
+            format!("{base}/oracle-{t}/ORACLE_DONE"),
+            (200, "done\n".into()),
+        );
+        http.answers.insert(
+            format!("{base}/oracle-{t}/"),
+            (200, listing(&["ORACLE_DONE", "cell.json"])),
+        );
+        http.answers
+            .insert(format!("{base}/oracle-{t}/cell.json"), (200, cell.into()));
+    }
     // ltx25-512p: ORACLE_DONE but the listing not answered (a proxy 502):
     // asked again at the next poll.
     http.answers.insert(
@@ -597,6 +614,16 @@ fn references_and_the_upstream_run_through_the_proxy() {
                 RefState::NoDump("ORACLE_DONE without oracle-dump.tar; no cell.json".into())
             );
             assert_eq!(o.reference(&pod, "ltx25-512p"), RefState::Pending);
+            assert_eq!(
+                o.reference(&pod, "ltx25-i2v"),
+                RefState::NoDump("ORACLE_DONE without oracle-dump.tar; cell.json malformed".into())
+            );
+            assert_eq!(
+                o.reference(&pod, "ltx25-kf"),
+                RefState::NoDump(
+                    "ORACLE_DONE without oracle-dump.tar; cell.json has no exit".into()
+                )
+            );
             assert_eq!(
                 o.upstream_state(&pod),
                 fastvideo_lab::oracle::UpState::Finished
