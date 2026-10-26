@@ -34,7 +34,9 @@
   upstream tree fetched from R2 by a typed `r2` step of `lab/upstream.toml`; a `decode` measure, directory
   `[[compare]]`s and `after` anchors in the cell schema; the script runner's R2 trees, `runpod-http.sh run`
   `FV_R2_TREES`, §21.8, decided A), is accepted (coordinator, 2026-10-26): its GPU check passed on `4b4980b` (§21.7
-  "Results"). `oracle`'s branch stays whole until §20.7's re-run with the Hub token passes too (§21.9)
+  "Results"). `oracle`'s branch stays whole until §20.7's re-run with the Hub token passes too (§21.9). §22 (the
+  fifteen other script families: eleven retired with no tier, `hd` a tier now, `serve-engine`, `sfstream` and `wan`
+  after one cell addition) is a proposal, not decided
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -3863,3 +3865,367 @@ The `oracle` tier (its default run, extra cells, three fixtures, pod body); the 
 pod bodies and goldens when `sfwan13` is not selected; every other tier and its pod; the 15 other families' dry runs;
 `fv-lab pod up`, `fv-lab oracle` (`--family oracle-r2` was always accepted); the `sfwan` family's prelude; every
 existing cell file (the schema additions are optional fields and new kinds); `runpod-http.sh` without `FV_R2_TREES`.
+
+### 22. D1: the remaining families (proposal)
+
+Status: **proposed** 2026-10-26, **not decided** (draft PR from `claude/d1-remaining-proposal`, docs only). No
+decision-id and no `decision-log` line: each row below is a proposal for the coordinator (or, where it says so, the
+owner). Nothing here changes a file outside this section and the plan's D1 row.
+
+Fifteen `runpod-matrix.sh` families are left besides `oracle` (§18.3), which retires on its own once §20.7's re-run
+passes (§21.9); this section leaves `oracle` out. For each family: what it measures and who reads the result, when it
+last ran, what keeps it from being a tier under the schema **as it is at `05d14444`**, the weights it reads, and a
+proposal: **(a)** a tier now, **(b)** a tier after a named schema addition, **(c)** retired with no tier (§18's way),
+**(d)** an owner decision.
+
+#### 22.1 How this was checked
+
+- **The branches** at `05d14444`: `scripts/gpu/runpod-matrix.sh` `mmaudio` 468-539, `speechtest` 540-621, `sfwan`
+  622-631, `sfstream` 632-651, `sfquality` 652-691, `headline` 692-731, `cold` 732-795, `wan` 796-1106, `eval`
+  1107-1161, `ltxoffload` 1517-1580, `solbench` 1581-1693, `hd` 1694-1790, `serve-engine` 1791-1831, `sol-lingbot`
+  1832-1849, `sol-cosmos3` 1850-1894.
+- **Their dry runs** (`FV_DRY_RUN=1`, `FV_DRY_RUN_GATES`, a fake work directory whose `auxiliary/tae` is marked
+  complete as on `bz0ofkfx45` (§9.3), no `FV_ORACLE_URL`, `FV_LAB_BIN` unset): the arm and gate counts below are
+  those runs' `arm` / `gate` records. Not committed (a scratch run, as §18.2's before / after comparison).
+
+| family | `dry-run` lines | gated arms | gate records | notes |
+|---|---|---|---|---|
+| `wan` | 80 | 45 | 20 | + `kernels-wan` (ungated), 3 `compare-dumps`, 2 references, 29 compares |
+| `sfwan` | 34 | 4 | 20 | the `wan` branch under its `FV_CELLS` (the prelude needs `FV_ORACLE_URL`); `gate_cells` records a gate whether its arms are selected or not |
+| `sfstream` / `sfquality` | 2 / 2 | 2 / 2 | 0 | |
+| `headline` | 4 | 0 | 0 | four `fv-lab run <tier> --cells …` lines |
+| `cold` / `eval` / `hd` | 10 / 9 / 8 | 10 / 5 / 8 | 0 / 3 / 0 | `eval`: + `lpips-selftest` (ungated), 2 compares; `hd`: the Lanczos step is not dry-run-aware (it needs frames) |
+| `ltxoffload` / `serve-engine` | 5 / 6 | 3 / 6 | 1 / 0 | `ltxoffload`: the 4K arms only when 512p frames hash equal, so never in a dry run |
+| `mmaudio` / `speechtest` | 2 / 4 | 2 / 4 | 0 | both end at exit 1 on a `find` of a directory a dry run does not make (as §18.2) |
+| `solbench` / `sol-lingbot` / `sol-cosmos3` | 12 / 3 / 3 | 6 / 2 / 3 | 6 / 0 / 0 | `solbench` defaults `FV_CELLS` to six arms (1595); `lingbot-router` is ungated |
+
+- **Evidence**: `git ls-files artifacts/runpod/<family>` (artifacts are ignored, `.gitignore:8`, so only force-added
+  runs are in the repository) and the docs that cite a run. "None recorded" means neither exists; whether the family
+  ran anyway is UNVERIFIED.
+- **Weights**: `scripts/gpu/volumes.sh:26-28` (`FV_EU_VOLUME_TREES`, the 500 GB EU volume) and
+  `scripts/gpu/weights-r2.tsv` column 4 (bytes; sizes below in GB of 10^9 bytes).
+- **Costs**: an RTX PRO 6000 in EU-RO-1 at $2.49/hr. A GPU check is §8's: the same commit through both runners, two
+  pods in parallel, the cheapest arms that exercise what is new; about 5 min of boot and preflight per side (§9.5); an
+  R2 fetch about 1 min per 29 GB (§21.7 "a 28.93 GB fetch takes about a minute"). The arm times are estimates from the
+  cited runs, not measurements, so every cost below is UNVERIFIED until run.
+
+#### 22.2 The §9.1 blockers against the schema now
+
+| blocker (§9.1, §14.7) | now | where |
+|---|---|---|
+| trees not on the EU volume (Wan, MMAudio, the sol models) | **gone**: `weights = "volume+r2"`; the script side `FV_R2_TREES` | §16, §21.8 |
+| prompt sets | **gone**: `workload.prompt_set` and `{prompt_set}` (the `h3-graphs` cells use them) | `plan.rs:778-780`, `plan.rs:1954-1957`, `lab/cells/h3-graphs-turbo.toml:30` |
+| run lists from the environment (`FV_SFQ_RUNS`, `FV_ENGINE_CELLS`, `FV_COSMOS3_ARMS`, …) | **gone**: the cells are the defaults, `--cells` by arm, a variant is another tier | §9.4, §15.5, §20.3 (`extra_cells`) |
+| ungated runs (`kernels-wan`, `lingbot-router`) and their `[PASS]` lines | **gone** when the arm reads no weights: ungated arms, `echo` | §15.2 items 6, 7 |
+| reference fetches, `compare-dumps`, dump clean-up (`wan`'s two oracle cells) | **gone**: `[reference]`, `requires`, `fresh`, `echo`; without `FV_ORACLE_URL` the cell skips as the script's does | §15.2 items 7, 8; `run.rs:2669-2671` |
+| derived clips | **partly**: `[[metric]]` passes over clip *files* (§20.2), `decode` of a clip into frames, directory compares, `after` anchors (§21.4); nothing reads a *frame sequence* or applies a scale filter (`hd`'s Lanczos step) | §20.2, §21.4 |
+| per-arm timeouts (`solbench`'s 1800 / 5400 / 2400 s) | **open**: one `cell_timeout_s` per tier | `plan.rs:179-180` |
+| `{tae}` in an arm that is not TAE-gated (`--tae-dir`, `--taehv`, `FASTVIDEO_TAE_DIR`) | **open**: refused | `plan.rs:1201-1207` |
+| an `export` before the arms (`FASTVIDEO_TAE_DIR`, `solbench`'s Wan settings) | **open**: an arm's `env` only; the runner sets `PATH`, `LD_LIBRARY_PATH`, `FV_AUX_DIR` on every child, nothing a cell names | `run.rs:743`, `run.rs:952` |
+| `env -u NAME` (`cold`, `ltxoffload`) | **open**: `env` entries must be `K=V` | `plan.rs:1153` |
+| a page-cache drop before an arm (`cold`) | **open** | — |
+| arms that run only when two earlier arms' frames hash equal (`ltxoffload`) | **open** | — |
+| frames removed after an arm or the family (`cold`, `wan`, `serve-engine`, `hd`, `ltxoffload`) | **none needed**: disk only (as §15.5's `-dump-cond`): `frames.sha256.json` is written right after each arm (`runpod-matrix.sh:162-176`), which is what `fv-lab-compare-runs.sh` compares (its header, lines 12-14), and `pod fetch` takes no frames (`pod.rs:797-821`) | — |
+| LPIPS on by default for a family (`eval`) | **open**: `--lpips` / `FV_LPIPS` is a run flag, not a tier field, and an ungated arm may not read `{weights}/auxiliary/lpips` | `bin/fv-lab.rs:436-438`, `pod.rs:78-79`, §15.2 item 6 |
+| a tier of other tiers' cells (`headline`) | **open**: a cell belongs to exactly one tier | §9.3, `tests/lab_files.rs` |
+| commands that are not `fv-gpucheck` (Python venvs, `pip`, `git clone`, Whisper, a `curl`ed script) | **out of scope by design**: an arm runs `fv-gpucheck` (`bin = "gpucheck" \| "baseline"`), and the runtime image is Python-free | §9.2 item 1, §16.4 |
+
+#### 22.3 The families
+
+**`wan`** (`runpod-matrix.sh:796-1106`) — proposal **(b)**, after §22.4's one addition.
+- *Measures*: FastWan2.1 1.3B DMD (VSA vs dense; the kernel arms f32act / bf16act / fuse / mxfp8 / w8a8 with lossy
+  gates and the fused-vs-unfused `exact` gate; full VAE vs TAEHV; the exact-cache identity; Sol-Attn and TeaCache);
+  SF-Wan 1.3B at 81 frames (flash / composed / whole-clip / full VAE); TI2V-5B and T2V-14B kernel A/B at 12 steps;
+  T2V-14B at 50 steps with EasyCache / TeaCache / Sol / fullstack; the TI2V-5B recipe with TAEHV, i2v and EasyCache;
+  two module-parity oracle cells (`wan22-ti2v`, `fastwan22-ti2v`); fal's 580p / 720p / 161-frame cells; the
+  `wan-turbo` engine-vs-CLI pair (`cli-fw22` / `engine-fw22`).
+- *Who reads it*: `docs/ports/wan.md` (e.g. the tables at 67-79 and 393-430), `docs/serve/fal-parity.md` §3; `runpod.sh
+  matrix` (`RP_MATRIX_FAMILIES=(ltx wan)`, `scripts/gpu/runpod.sh:597`); `sfwan` (below). The served Wan variants
+  (`families/wan.toml`) have their numbers from the `gold` tier's cells (`lab/tiers.toml:286-319`, D3), not from
+  `wan`; `wan` is their kernel, cache and parity regression check, as `fuse` / `precision` are for H3 and LTX.
+- *Last run*: 2026-09-28 at `9b2c963`, `FV_CELLS` subsets (the fal-parity cells, 30 min,
+  `artifacts/runpod/wan/9b2c963-09282019/`; `wan5b-oracle`, `9b2c963-09282112/`; commit `71a6ad9d`). Whole-family
+  runs on 2026-09-27 (`docs/ports/wan.md:67-79, 120, 207`), not committed.
+- *Blockers now*: the trees (`volume+r2`), the oracle cells (`[reference]`), `kernels-wan` (ungated, `echo`; the
+  script's `cut -c1-200` and missing `[kernels-wan]` prefix are log only, §9.4) are covered. Open: `export
+  FASTVIDEO_TAE_DIR="$TAE"` (817), `engine-fw22`'s `--tae-dir "$TAE"` (1099) and the oracle arms' `--taehv
+  "$TAE/taew2_2.safetensors"` on arms gated by tree only (998, 1054): §22.4. Configuration, no schema: the two upstream
+  targets are in `scripts/gpu/upstream/oracle.sh:204-214` (reading `$W/wan22-ti2v-5b` and `$W/fastwan22-ti2v-5b`, which
+  the EU volume lacks) but not in `lab/upstream.toml`; they need `fastvideo` stack targets with `r2 = [<tree>]` and the
+  `$UW` fallback §21.2 gave `oracle_sfwan`.
+- *Weights*: `fastwan21-1.3b` 29.21, `sfwan21-1.3b` 28.93, `wan22-ti2v-5b` 34.20, `wan21-t2v-14b` 80.41,
+  `fastwan22-ti2v-5b` 24.20 GB (`weights-r2.tsv:25, 62, 69, 67, 26`): 196.95 GB, all R2-only; the TAE files from the
+  volume's `auxiliary/tae`. In the script's arm order §16.4's step (drop what the arm does not read, then fetch) makes
+  eleven fetches, 428.10 GB per full run, 80.41 GB at most on the disk: `container_disk_gb = 210`. The base 14B arms'
+  host-RAM peak is UNVERIFIED (§16.10 measured the Plug loader's, 156,004 MiB); `min_ram_gb = 256` as `gold`'s until
+  a run records `peak_ram_mib`.
+- *Size*: large: about a dozen cell files (51 arms, 29 compares, 20 gates, 2 references; one cell per loop iteration
+  or helper call, §9.2), goldens, the two upstream targets, `oracle_wan22`'s fallback, `runpod.sh matrix` through
+  fv-lab (as `ltx`, §17.6). UNVERIFIED estimate: 1,500-2,500 lines, mostly TOML and fixtures.
+- *GPU check*: `wan13-dmd wan13-dmd-dense kernels-wan cli-fw22 engine-fw22` (two R2 trees, 53.41 GB; the script
+  side with `FV_R2_TREES="fastwan21-1.3b fastwan22-ti2v-5b" FV_CONTAINER_DISK_GB=174`, §21.8), about 25 min a side:
+  **about $2.10**. The two oracle cells through `fv-lab oracle` with an upstream `fastvideo` pod: about $2.60 more,
+  §19.7's cost, if wanted. A full default run: 3-4 h, $8-10 (UNVERIFIED estimate): the owner's spend, not part of D1.
+- *Depends*: `sfwan` runs its cells; `oracle_fetch` / `oracle_diff` stay in the script for it and `mmaudio` (§21.9
+  item 3).
+
+**`sfwan`** (622-631) — proposal **(c)**, in the PR that retires `oracle` (§21.9).
+- *Measures*: SF-Wan 1.3B on one pod: the `sfwan13` oracle target (the prelude, only with `FV_ORACLE_URL`, 626-628),
+  then `wan`'s `kernels-wan` and four `sfwan13-81f-*` arms (`FV_SFWAN_CELLS`, 629-630).
+- *Who reads it*: `scripts/gpu/oracle.sh` with `FV_ORACLE_FAMILY=sfwan` (`oracle.sh:22-23, 178`;
+  `docs/ports/wan.md:475`); `docs/ports/wan.md:520, 563`.
+- *Last run*: `sfwan/fadb6f1-09271211` (2026-09-27, `docs/ports/wan.md:520`), not committed.
+- *Blockers*: none of its own: it is a composition of `oracle` and `wan`.
+- *Weights*: `sfwan21-1.3b` 28.93 GB (R2-only, `weights-r2.tsv:62`).
+- *Why (c)*: its oracle half is the `oracle-r2` tier (§21, GPU check passed on `4b4980b`), run by `fv-lab oracle
+  --family oracle-r2`; its `wan` half is `wan`'s arms by `--cells` (a tier, if `wan`'s proposal is taken; until then
+  `FV_FAMILY=wan FV_CELLS=…`). Lost: both on one pod (two pods instead). §21.9 item 5 then retires `sfwan` instead of
+  rewriting its prelude, and `oracle.sh` refuses `FV_ORACLE_FAMILY=sfwan` with that pointer.
+- *Depends*: `oracle` (the recursion at 627) and `wan` (629).
+
+**`sfstream`** (632-651) — proposal **(b)**, after §22.4.
+- *Measures*: the open-ended causal SF-Wan rollout (`fv-gpucheck wan stream`): `--parity` (streamed against the
+  bounded 81-frame path), a 120 s rebased sink-15 run, prompt switches with `keep` and `reset`, and a 10-minute
+  memory-growth run.
+- *Who reads it*: `docs/ports/wan.md:655-680`. The served `sfwan21-1.3b` causal sessions run the same rollout
+  (`wan::stream::CausalRollout`: `crates/fastvideo-engine-service/src/cuda/causal.rs:30`,
+  `crates/fastvideo-gpucheck/src/wan_stream.rs:51`). The serve E2E pod runs a 60 s `wan stream` without `--parity`
+  (`scripts/serve/e2e/wan-pod-run.sh:251`), so `sfstream` is the only pod check of the parity.
+- *Last run*: on an H100 in US-CA-2 (`docs/ports/wan.md:663`), about 2026-09-27 (commits `edda433f`, `5969860f`); no
+  run directory named or committed: the date is UNVERIFIED.
+- *Blockers*: the tree (`volume+r2`) and the run list (the cell's default) are covered; `export FASTVIDEO_TAE_DIR`
+  (639): §22.4. Its `fetch_taehv.sh` (637) runs only when `taew2_1` is missing, which the volume's `auxiliary/tae`
+  holds (`lab/cells/gold-fastwan21-1.3b-taehv.toml:19`).
+- *Weights*: `sfwan21-1.3b` 28.93 GB (R2-only); `container_disk_gb = 150`, as `oracle-r2` (§21.3).
+- *Size*: small: one cell, two arms, its goldens, §22.4's lockstep line in the branch.
+- *GPU check*: `sfstream-main`, about 15 min a side: **about $1.25**.
+
+**`sfquality`** (652-691) — proposal **(c)**.
+- *Measures*: the R12 long-rollout study: twelve 90-180 s runs over RoPE policies, sink and window sizes, KV re-cache,
+  graphs against eager, an f32 run, an optional second seed.
+- *Who reads it*: its outcome is shipped: the default sink of 15 frames (`families/wan.toml:460`) and the causal
+  session caps (`docs/serve/design.md:957, 1074`); `docs/ports/wan.md:806-830`, `docs/serve/e2e/wan.md:125`.
+- *Last run*: 2026-09-28 at `2c987e8` (`artifacts/serve/e2e/wan/r12/2c987e8-09282029-sfq-main.json.gz`, committed).
+- *Blockers*: as `sfstream`'s.
+- *Weights*: as `sfstream`'s.
+- *Why (c)*: a finished study whose decision is made; `sfstream`'s tier keeps a pod check of the rollout. Lost: the
+  sweep in one command (by hand: `fv-gpucheck wan stream --run <spec>`, the specs in the branch at the retiring
+  commit).
+
+**`headline`** (692-731) — proposal **(c)**.
+- *Measures*: "the headline configurations on one pod (a new GPU type, one run)": nine arms of `fastvideo`, `rtx6000`,
+  `rtx5090` and `precision`, through `fv-lab run <tier> --cells …` into its own run directory since §10 (725-730).
+- *Who reads it*: `docs/dev/fv-lab.md:187`; tests `scripts/gpu/tests/fv-lab-route.test.sh:359-400`. The
+  `--runs-dir` / `FV_RUNS_DIR` feature it uses (`crates/fastvideo-lab/tests/fv_lab_bin.rs:221-252`) stays.
+- *Last run*: none recorded (added `95f75080`, 2026-09-27).
+- *Blockers*: a tier cannot hold other tiers' cells (§22.2).
+- *Weights*: `h3-base`, the LoRA, `ltx25` (volume); `h3-8step` (147.86 GB, R2-only), whose arms skip on the volume.
+- *Why (c)*: the served numbers are the `gold` tier's (D3); the same nine arms are four `fv-lab run <tier> --cells …`
+  lines (or four `pod up`s); a new GPU class is a tier with another `gpu` (`lab/tiers.toml:1-8`). Lost: the nine arms
+  on one pod.
+- *Depends*: the four tiers, and fv-lab in the image.
+
+**`cold`** (732-795) — proposal **(c)**.
+- *Measures*: sol-engine-style one-request timings: LTX-2.5 4k5s and 1080p20s, `--offload cpu` and resident, a fresh
+  process without `--warm`, the prompt always encoded, the page cache dropped before each; H3 fresh-prompt cells
+  (8-step and 4-step VSA at 768p and 480p, `sol-h3`, `h3-768p-fullopt`).
+- *Who reads it*: nothing found: no doc, gold file or decision cites a `cold` run.
+- *Last run*: none recorded (added `e91b669d`, 2026-09-27; no `artifacts/runpod/cold/`).
+- *Blockers*: `env -u FASTVIDEO_LTX_OFFLOAD` (753), the page-cache drop (741-748); the PNG deletion (762) is disk only.
+- *Weights*: `ltx25`, `h3-base`, the LoRA (volume); `h3-8step` (R2-only, two arms skip).
+- *Why (c)*: no result exists to keep. LTX-2.5 4k5s / 1080p20s against sol-engine's contracts are the `rtx5090` tier's
+  (`lab/tiers.toml:99`); load time is every gold file's `[latency] load_s`; the `--offload cpu` identity is
+  `b6-ltx25-offload-cpu`. Lost: a page-cache-cold end-to-end time (load included), never recorded. If wanted: (b)
+  after an arm `unset = [<name>]` (rendered `env -u`) and a `drop_page_cache` step, both small.
+
+**`eval`** (1107-1161) — proposal **(c)**.
+- *Measures*: the evaluation layer end to end: the LPIPS self-test, FastH3 8-step 480p f32act / bf16act / f32act-off
+  with a lossy gate and the OFF arm's `exact` gate, LTX-2.5 512p f32act / bf16act with a lossy gate, five prompts,
+  LPIPS on (its defaults, 101-103).
+- *Who reads it*: `scripts/gpu/README.md:197`; it is the sample script family of a dry-run route test
+  (`scripts/gpu/tests/fv-lab-route.test.sh:314`) and of `docs/dev/fv-lab.md:182`, which move to another live family.
+- *Last run*: none recorded (added `2172ef87`, 2026-09-26).
+- *Blockers*: LPIPS on by default and the self-test reading the LPIPS directory (§22.2); prompt sets and gates are
+  covered.
+- *Weights*: `h3-8step` (R2-only: its three H3 arms skip on the volume), `ltx25`, `auxiliary/lpips` (volume).
+- *Why (c)*: `precision` runs the same f32act / bf16act pairs with lossy gates at the served canvases (FastH3 8-step
+  768p, LTX-2.5 4k5s: `lab/cells/precision-*.toml`), `fuse` the `exact` gates with an OFF arm, `fastvideo` a standalone
+  gate; prompt sets are cells' (`h3-graphs`), LPIPS is `--lpips` on any run. Lost: the 480p / 512p five-prompt LPIPS
+  pairs (never recorded) and the LPIPS self-test on a pod (by hand: `fv-gpucheck lpips --weights <dir>`,
+  `scripts/gpu/README.md:195`). If wanted: (b) after a tier field `lpips = true` and an `{lpips}` placeholder.
+
+**`hd`** (1694-1790) — proposal **(a)** for its eight arms, with the derived step dropped from the script in the same
+PR: a coordinator decision (a real-run change, as §17.2's `ltx` gating).
+- *Measures*: H3 at the served 1080P canvas (`hd_1080p = true` for `sol-h3` and `fasth3-4step-vsa`,
+  `families/h3.toml:66-75, 140-149`): turbo and max at 768p and 1088x1920 (`--oversize-canvas`), portrait, 10 s, the
+  prompts of `prompts-hd.json`; then 768p clips Lanczos-upscaled (`ffmpeg`, 1756-1769) and compared with the native
+  1080p ones, an optional post script (`FV_HD_POST_URL`, 1771-1779), and keyframes kept, the other PNGs deleted
+  (1780-1789).
+- *Who reads it*: `docs/serve/h3-1080p-and-upscaler.md` (the gate runs, 169-260 and 264-390); the engine's 1080p
+  working-set estimate it was checked against (`runpod-matrix.sh:1741-1743`,
+  `crates/fastvideo-models/src/h3/memory.rs:436`); `hd_report.py` (§13.5). The gold H3 cells run 832x480
+  (`lab/gold/sol-h3.toml:20-22`), so `hd` is the only pod check of the served 1080p canvas.
+- *Last run*: 2026-09-29 at `2cd1ba0` (`artifacts/runpod/hd/2cd1ba0-09290122/`, committed in `6aa81154`; five runs of
+  2026-09-28 / 29 are committed).
+- *Blockers*: none for the eight generation arms (gated on `fasth3-4step-vsa` / `sol-h3`, the technique profiles in the
+  argv, the prompt set as `{prompt_set}`, which renders the script's `/opt/fastvideo-rs/scripts/gpu/prompts-hd.json`).
+  The derived step is what does not fit: the Lanczos upscale reads a *frame sequence* and applies a scale filter (no
+  measure does, §22.2); its per-prompt compares would fit as directory compares with the prompt names listed; the
+  keyframe copy has no step; `FV_HD_POST_URL` runs a fetched script, which a cell never will. The script's dry run
+  lists none of them (they need frames), so no golden would hold them either without a dry-run fix first (§20.6,
+  §21.5's way).
+- *Why drop the derived step*: its findings are recorded (native 1080p against the Lanczos baseline, and the SeedVR2
+  upscaler benchmark, `docs/serve/h3-1080p-and-upscaler.md:642-793`); the time and memory of the served canvas is what
+  stays worth re-running. Lost: re-running the Lanczos comparison and the keyframe sheets. **Alternative (b)**: keep
+  it, after a `frames-scale` measure (a frame directory in, a scaled one out), a keyframe step and the script's
+  dry-run fixes: medium.
+- Observed, not changed: the turbo arms share `--adaln-cache "$RUNS/4step-vsa-adaln.cache"` (and the max arms
+  theirs, 1729), the pattern §9.4 fixed for `techniques`; equality keeps it.
+- *Weights*: `h3-base` 144.04 and the LoRA 6.82 GB (volume); `weights = "volume"`.
+- *Size*: small: two or three cell files, eight arms, goldens, the script change.
+- *GPU check*: `turbo-768p turbo-1080p`, about 15 min a side (the 2026-09-28 run took 30 min for six cells,
+  `artifacts/runpod/hd/d46ca17-09282023/live.log`): **about $1.25**.
+
+**`ltxoffload`** (1517-1580) — proposal **(c)**.
+- *Measures*: `FASTVIDEO_LTX_OFFLOAD=cpu` against resident and `none` at 512p (hashes, two `--off-identity`
+  compares, an `exact` gate), then cpu at 4k5s and 1080p20s only when the 512p frames hash equal.
+- *Who reads it*: `docs/ports/ltx25.md:66-170` (the placement table and findings); `docs/serve/research-8gb-av.md:383`
+  names a future 8 GiB cell for it (a research note, no work started).
+- *Last run*: 2026-09-27, runs `a73173e-09270009`, `a2cd194-09270039`, `a2cd194-09270103`
+  (`docs/ports/ltx25.md:131-132`), not committed.
+- *Blockers*: `env -u` (1533), the data-dependent 4K arms (1561-1565).
+- *Weights*: `ltx25` (volume).
+- *Why (c)*: a finished measurement; no served variant sets an LTX offload (`families/ltx2.toml` has none); the cpu
+  placement's identity across builds is `b6-ltx25-offload-cpu` (512p, `--offload cpu`, baseline against this build,
+  `--off-identity`), and streamed against resident blocks is `streamed_blocks_are_bit_identical_to_resident`
+  (`crates/fastvideo-cudarc/src/rt/offload.rs:989`; whether CI runs it on a GPU is UNVERIFIED). Lost: the in-run
+  resident-vs-cpu compare and the 4K cpu peaks (recorded in the doc). The 8 GiB cell is a new tier when that work
+  starts.
+
+**`serve-engine`** (1791-1831) — proposal **(b)**, after §22.4.
+- *Measures*: per model (`h3-turbo`, `ltx-turbo`, `fastwan21-1.3b`) the CLI generation, then the same request through
+  `EngineService` + `CudaBackend` (`fv-gpucheck engine --reference <the CLI frames> --cancel-after-step N`): frames
+  byte-compared with the CLI's, a second job cancelled mid-run.
+- *Who reads it*: `docs/serve/design.md:2083-2085` names it the engine's GPU check (with `fv-gpucheck engine`); it
+  covers three served variants (`fasth3-4step-vsa`, `ltx25-distill-sol`, `fastwan21-1.3b`). The `gold` tier runs the
+  engine too but compares it with nothing.
+- *Last run*: none recorded (added `61e810b9`, 2026-09-27). `wan`'s `cli-fw22` / `engine-fw22`, the same check for
+  `wan-turbo`, ran on 2026-09-28 (`artifacts/runpod/wan/9b2c963-09282019/`).
+- *Blockers*: the engine arms' `--tae-dir "$TAE"` (1805, 1817, 1826): §22.4. `FV_ENGINE_CELLS` is `--cells` by arm;
+  the frame deletion (1830) is disk only; `fastwan21-1.3b` is R2-only (`volume+r2`).
+- Observed, not changed: `cli-h3-turbo` and `engine-h3-turbo` share `--adaln-cache "$RUNS/h3-adaln.cache"` (1799), so
+  the engine arm may read the projections the CLI arm wrote (§9.4's pattern); whether the engine path reads that flag
+  is UNVERIFIED. To check in the tier's PR; equality keeps it until then.
+- *Weights*: `h3-base`, the LoRA, `ltx25` (volume); `fastwan21-1.3b` 29.21 GB (R2-only): `container_disk_gb = 150`.
+- *Size*: small to medium: §22.4 itself, three cells, six arms, goldens.
+- *GPU check*: all six arms, about 25 min a side: **about $2.10**.
+
+**`mmaudio`** (468-539) — proposal **(c)**.
+- *Measures*: the MMAudio V2A sidecar on FastWan and SF-Wan; upstream MMAudio (a Python venv, `pip install torch …`,
+  `git clone` at `974010a`) timed and dumped; our port timed; three inject arms with `compare-dumps`; five waveform
+  comparisons in Python.
+- *Who reads it*: `docs/ports/mmaudio.md:99-158`; the opt-in knob `FASTVIDEO_WAN_AUDIO=mmaudio` in fv-control's
+  catalog (`control/src/cluster/catalog.json:121`); no served variant has audio (`families/wan.toml`).
+- *Last run*: `778c65e`, 2026-09-27 (`docs/ports/mmaudio.md:101-105`; its run directory is named there, not committed).
+- *Blockers*: the upstream half and the waveform compare are Python on the runtime pod (498-536): out of scope by
+  design (§22.2). As a tier: an upstream `mmaudio` stack in `lab/upstream.toml` through `fv-lab oracle` and the
+  compare moved there or to Rust: large.
+- *Weights*: `mmaudio-44k-v2` 21.46, `fastwan21-1.3b` 29.21, `sfwan21-1.3b` 28.93 GB, all R2-only
+  (`weights-r2.tsv:60, 25, 62`).
+- *Why (c)*: finished port parity, nothing served depends on it. Lost: re-running parity against upstream on one pod.
+  If the opt-in knob is to keep a pod check, that is the large (b) above: see §22.6.
+
+**`speechtest`** (540-621) — proposal **(c)**.
+- *Measures*: whether MMAudio can say a given line: T2A in three styles, V2A on a FastWan clip with and without the
+  line, H3 joint audio for comparison, all transcribed by Whisper large-v3 (a venv on the pod, 610-620).
+- *Who reads it*: `docs/ports/mmaudio.md:159` ff. ("Speech").
+- *Last run*: `fc6053d`, 2026-09-27 (`docs/ports/mmaudio.md:167-171`; its run directory is named there, not committed).
+- *Blockers*: Whisper in Python on the pod (out of scope by design); the manifest and the H3 prompt set written by
+  shell.
+- *Weights*: `mmaudio-44k-v2`, `fastwan21-1.3b` (R2-only); `h3-base`, the LoRA (volume).
+- *Why (c)*: the question is answered in the doc and nothing served depends on it. Lost: the Whisper check in one
+  command.
+
+**`solbench`, `sol-lingbot`, `sol-cosmos3`** (1581-1693, 1832-1849, 1850-1894) — proposal **(c)** for the three
+branches.
+- *Measures*: sol-engine's published cells, baseline against optimized: Wan2.1 1.3B, Wan2.2 A14B, LTX-2.3 HQ
+  (`solbench`); LingBot-Video MoE 30B-A3B with its router check; Cosmos3-Super 64B.
+- *Who reads it*: `docs/ports/sol-wan-ltx23.md:259-290`, `docs/ports/lingbot.md:155-162`,
+  `docs/ports/cosmos3.md:124-130`, `docs/perf/sol-lingbot-cosmos3-plan.md`. The numbers in `docs/perf/sol-bench.md` (and the context sources of five gold
+  files, e.g. `lab/gold/fastwan21-1.3b.toml:64-69`) came from `scripts/gpu/sol-bench-pod.sh`, whose cell sets "mirror
+  runpod-matrix.sh's solbench, sana-video, sol-lingbot and sol-cosmos3 families" (`sol-bench-pod.sh:167-169`;
+  `docs/perf/sol-bench.md:214-230`), under the owner's rules for that benchmark (`docs/perf/sol-bench.md:8-28`). No
+  served variant reads these trees (`families/*.toml`).
+- *Last run*: the branches: none recorded (the ports docs say "not run", `lingbot.md:155, 176`, `cosmos3.md:124,
+  144`). The sol-bench pod sets: 2026-10-06 / 07 (`artifacts/runpod/sol-bench/2026-10-06*/`, committed).
+- *Blockers*: `solbench`: per-arm caps (1620-1687) and its exported Wan settings (1602-1605). `sol-lingbot` and
+  `sol-cosmos3` fit the schema now (one cap per tier, 14400 / 10800 s; the router an ungated arm; the prompt files as
+  `{root}/scripts/gpu/sol/…` or literal prompts), with `volume+r2` and a 250 GB disk.
+- *Weights*: `wan21-t2v-1.3b` 28.93, `wan22-t2v-a14b` 126.20, `ltx23` 71.60, `ltx23-dev` 54.75,
+  `lingbot-video-moe-30b-a3b` 129.95, `cosmos3-super` 129.47 GB, all R2-only (`weights-r2.tsv:66, 68, 54, 55, 41, 20`).
+- *Why (c)*: the branches duplicate `sol-bench-pod.sh`'s sets and are not what the benchmark runs; nothing served
+  depends on them. Lost: nothing that ran. The open sol-bench items (`lingbot-fullopt`, the `a14b-sol-fullopt` rerun,
+  `docs/perf/sol-bench.md:568-575`) stay with `sol-bench-pod.sh`, a `runpod-http.sh` caller of its own (§14.6); whether
+  it becomes an fv-lab experiment tier (as `h3-graphs`, §14.3) is §22.6's owner question.
+
+#### 22.4 The one schema addition the tiers need: `{tae}` without a TAE gate (cell v1, additive)
+
+**Proposed addition 16.** An arm may read `{tae}` (the directory, or a file under it) without `tae`: it is then not
+TAE-gated (no `fetch-tae.sh`, no `tae weights missing` skip) and gates on its trees only, as the script's `gated_cell`
+/ `run_cell` arms that pass `$TAE` do. `tae = "<file>"` keeps its meaning (§9.2 item 3: gate on that file). Only in a
+tier with `tae = true`, whose pod fetches the files when the volume lacks them. Code: the refusal at
+`plan.rs:1201-1207` becomes that tier check; the tests and `schemas/cell.v1.json`'s text. Small.
+
+**In lockstep, in the script** (a no-op for the runs, as §15.4's flat `env`): `wan`'s and `sfstream`'s `export
+FASTVIDEO_TAE_DIR="$TAE"` (817, 639) becomes `FASTVIDEO_TAE_DIR="$TAE"` in each generation arm's `env`, so the
+dry run shows it and the goldens hold it.
+
+**Not chosen**: (1) a cell-level `export` the runner sets on every child (as it sets `FV_AUX_DIR`): the dry run
+would not show it, so no golden could hold it; (2) `{weights}/auxiliary/tae` in place of `{tae}`: it renders the same
+path while the volume's `auxiliary/tae` is complete, but not the script's `$TAE` fallback (§9.3 refused `{scratch}/tae`
+for the same reason).
+
+Users: `serve-engine` (`--tae-dir`), `wan` (`--tae-dir`, `--taehv {tae}/taew2_2.safetensors`, `FASTVIDEO_TAE_DIR`),
+`sfstream` (`FASTVIDEO_TAE_DIR`). It ships with the first of them (`serve-engine`).
+
+#### 22.5 Slices, in order
+
+Retirements and the tier-now family first; then the addition with its first user; each tier's branch leaves the script
+only after its own check through both runners (§8), as before.
+
+| slice | content | depends on | size | GPU check |
+|---|---|---|---|---|
+| S1 | retire with no tier: `eval`, `cold`, `ltxoffload`, `headline`, `mmaudio`, `speechtest`, `sfquality`, `solbench`, `sol-lingbot`, `sol-cosmos3` (§18.2's mechanism: `FV_SCRIPT_RETIRED` with a pointer each, 593 branch lines deleted, `eval`'s defaults (101-103) with them, `headline`'s route tests, the sample family of `fv-lab-route.test.sh:314` and `docs/dev/fv-lab.md:182` switched, the remaining dry runs compared before and after) | — | medium, CPU only (as #215) | none: **$0** |
+| S2 | `hd` as a tier (eight arms, `volume`), the script's derived step dropped in lockstep | S1 (both edit `runpod-matrix.sh`; each such PR compares the other families' dry runs before and after, §10 item 1) | small | `turbo-768p turbo-1080p`: **~$1.25** |
+| S3 | §22.4 and `serve-engine` as a tier (`volume+r2`, 150 GB) | — | small to medium | all six arms: **~$2.10** |
+| S4 | `sfstream` as a tier (`volume+r2`, 150 GB), the lockstep `FASTVIDEO_TAE_DIR` line | S3 | small | `sfstream-main`: **~$1.25** |
+| S5 | `wan` as a tier (`volume+r2`, 210 GB), its two upstream targets, `runpod.sh matrix` through fv-lab | S3 | large | five arms: **~$2.10** (+ ~$2.60 for the two oracle cells, optional) |
+| S6 | the branches of S2-S5 deleted after their checks, goldens frozen (`FV_LAB_RETIRED`, §10's way) | S2-S5 checks | small each | none: $0 |
+| S7 | `sfwan` retired in `oracle`'s retirement PR (§21.9 item 5) | §20.7's re-run (blocked on `fv_hf_token`), S5 | small | none: $0 |
+
+**Total GPU**: about **$6.70** (four checks, eight pods, about 2.7 GPU-hours at $2.49/hr), **about $9.30** with
+`wan`'s oracle cells. Every number is an estimate (§22.1). Two pods at a time keep the Runpod balance guard ($8,
+CLAUDE.md) in reach; the build pod is stopped before each run (§21.7). After S6 and S7, `runpod-matrix.sh` has no
+branch left and goes, and with it `runpod-http.sh run`'s script path (§14.6; `oracle.sh`'s upstream pods and
+`sol-bench-pod.sh` still call `runpod-http.sh`).
+
+#### 22.6 Decisions needed
+
+The coordinator's:
+1. The eleven retirements (S1's ten and `sfwan`), each or together.
+2. `hd`: drop the derived step and tier the eight arms (recommended), or keep it as (b).
+3. §22.4 as proposed (and the lockstep `FASTVIDEO_TAE_DIR` change), or the cell-level `export`.
+4. `sfwan`: retire in `oracle`'s retirement PR (recommended), or now with an `oracle.sh` refusal of
+   `FV_ORACLE_FAMILY=sfwan`.
+5. Whether S5's check includes the two oracle cells (~$2.60 more).
+
+The owner's:
+6. The spend of S2-S5's checks (about $6.70, or $9.30) and of any full `wan` run (3-4 h, $8-10, UNVERIFIED).
+7. Whether `FASTVIDEO_WAN_AUDIO=mmaudio` stays an offered knob (`control/src/cluster/catalog.json:121`) without a pod
+   check once `mmaudio` retires; a check would be the large (b) of §22.3.
+8. Whether the sol-bench procedure (`sol-bench-pod.sh`, run under the owner's rules) moves to an fv-lab experiment tier
+   or stays a pod script; S1 retires only the three unused `runpod-matrix.sh` branches either way.
+
+#### 22.7 What this section does not change
+
+Nothing: no script, cell, tier, golden, schema or test; no family is retired by it.
