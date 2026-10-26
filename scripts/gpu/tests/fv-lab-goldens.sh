@@ -81,6 +81,13 @@ for f in $FV_LAB_EXPERIMENTS; do
   fv_lab_retired "$f" && { echo "fv-lab-goldens: $f is both an experiment tier and retired (fv-lab-retired.sh)" >&2; exit 2; }
   ! has_branch "$f" || { echo "fv-lab-goldens: experiment tier $f has a runpod-matrix.sh branch" >&2; exit 2; }
 done
+# Retired with no tier (FV_SCRIPT_RETIRED, ADR-0019 §18): no fixtures, no tier,
+# no branch, and in neither other list.
+for f in $FV_SCRIPT_RETIRED; do
+  ! grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: $f is retired with no tier (FV_SCRIPT_RETIRED) but is a tier of lab/tiers.toml" >&2; exit 2; }
+  ! fv_lab_retired "$f" && ! fv_lab_experiment "$f" || { echo "fv-lab-goldens: $f is in FV_SCRIPT_RETIRED and another list of fv-lab-retired.sh" >&2; exit 2; }
+  ! has_branch "$f" || { echo "fv-lab-goldens: $f is retired with no tier (FV_SCRIPT_RETIRED) but runpod-matrix.sh still has its branch" >&2; exit 2; }
+done
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

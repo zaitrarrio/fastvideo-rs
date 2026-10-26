@@ -126,23 +126,30 @@ impl Fake {
     }
 }
 
-/// runpod-matrix.sh and what it sources: from this checkout for `oracle`
-/// (its branch is live), from `fixtures/det-script/` (frozen at `0f63c56b`)
-/// for the retired `det-short` and `determinism`.
-const SOURCED: [&str; 4] = [
+/// runpod-matrix.sh and what it sources, from this checkout for `oracle`
+/// (its branch is live). `b4-verdict.sh` went with the B4 branches
+/// (ADR-0019 §18), so the live script no longer sources it.
+const SOURCED: [&str; 3] = ["runpod-matrix.sh", "cuda-13.pins", "fv-lab-retired.sh"];
+
+/// The same from `fixtures/det-script/` (frozen at `0f63c56b`) for the
+/// retired `det-short` and `determinism`: that copy still sources its
+/// `b4-verdict.sh`.
+const SOURCED_FROZEN: [&str; 4] = [
     "runpod-matrix.sh",
     "b4-verdict.sh",
     "cuda-13.pins",
     "fv-lab-retired.sh",
 ];
 
-/// Where a family's script comes from: the frozen copy for the retired ones.
-fn script_source(family: &str) -> PathBuf {
+/// Where a family's script comes from, and its files: the frozen copy for
+/// the retired ones.
+fn script_source(family: &str) -> (PathBuf, &'static [&'static str]) {
     match family {
-        "det-short" | "determinism" => {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/det-script")
-        }
-        _ => repo_root().join("scripts/gpu"),
+        "det-short" | "determinism" => (
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/det-script"),
+            &SOURCED_FROZEN,
+        ),
+        _ => (repo_root().join("scripts/gpu"), &SOURCED),
     }
 }
 
@@ -157,8 +164,8 @@ fn fake(name: &str, mode: &str) -> Fake {
         .into_iter()
         .find(|fam| name.starts_with(fam))
         .expect("a fake is named after its family");
-    let src = script_source(family);
-    for s in SOURCED {
+    let (src, files) = script_source(family);
+    for s in files {
         std::fs::copy(src.join(s), gpu.join(s)).unwrap();
     }
     std::fs::write(f.dir.join("mode"), mode).unwrap();

@@ -52,7 +52,7 @@ about.
 | DiT, Gemma-2 encode, pipeline (CFG, sampler, EasyCache, Wan VAE) | `crates/fastvideo-cudarc/src/sana_video/` |
 | softcapped GQA attention | `crates/fastvideo-cudarc/src/llm/attn.rs` |
 | benchmark stage | `fv-gpucheck sana-video {info,gen}` (`crates/fastvideo-gpucheck/src/sana_video_stage.rs`) |
-| benchmark arm | `scripts/gpu/runpod-matrix.sh sana-video` |
+| benchmark arm | was `scripts/gpu/runpod-matrix.sh sana-video`, retired with no tier (`docs/adr/0019-fv-lab.md` §18); the `fv-gpucheck` command below |
 
 Batch is 1: the two CFG branches are two transformer calls (the reference
 batches them; a batched path is a later optimisation).
@@ -95,15 +95,17 @@ skipped and `--vae /workspace/weights/wan21-t2v-14b/vae` passed instead
 (identical file), but the tree is self-contained by default.
 
 **Expected path on the pod:** `/workspace/weights/sana-video-2b-480p`
-(override with `FV_SANA_WEIGHTS`).
+(the retired script family read `FV_SANA_WEIGHTS` to override it).
 
 ## Benchmark arm (ready, not run)
 
-From the CI runtime image (no compile, no download on the pod):
+From the CI runtime image (no compile, no download on the pod). The
+`runpod-matrix.sh sana-video` family that ran the two cells (`sana-baseline`,
+`sana-full`, then `compare_cells`) is retired with no tier
+(`docs/adr/0019-fv-lab.md` §18: the tree is not on the EU volume and nothing
+serves the model; its commands: `git show b019ccb2:scripts/gpu/runpod-matrix.sh`). By hand, per arm:
 
 ```bash
-bash scripts/gpu/runpod-matrix.sh sana-video        # cells sana-baseline, sana-full
-# one cell by hand:
 fv-gpucheck --mode fast sana-video gen --weights /workspace/weights/sana-video-2b-480p \
   --prompt "a corgi running on the beach" --arm full --seed 42 --warm --clip out/frames
 ```

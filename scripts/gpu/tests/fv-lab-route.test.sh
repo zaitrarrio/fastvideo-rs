@@ -8,6 +8,10 @@
 #     fake FV_LAB_BIN receiving exactly the command;
 #   - `gold` and the experiment tiers (h3-graphs, ADR-0019 §14) refused for
 #     run / all (their plan still the script's body);
+#   - the families retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
+#     ADR-0019 §18) refused by runpod-http.sh run / all / plan (dry run or not,
+#     before the key) and by runpod-matrix.sh, exit 2, naming what replaces
+#     each; never routed to fv-lab;
 #   - runpod-matrix.sh `headline` on a fake box: its cells through a fake
 #     fv-lab (FV_RUNS_DIR), a failing fv-lab logged, a missing one and
 #     FV_PROMPTS / FV_PROMPT / FV_SEED refused (exit 2);
@@ -269,14 +273,34 @@ for fam in fuse attn3 ltx; do
   expect "plan: fv-lab's plan for $fam" 0 "--family $fam --root $ROOT --tag abc1234-1025120000-abcd" -- \
     FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
 done
-# The other D1f candidates stay on the script path (ADR-0019 §17.3, §17.4):
-# the B4 families wait for §17.3's decision, h3 for §17.4's.
-for fam in h3 b4c b4c2; do
-  dry "$fam: still a script family" 0 "on the script path, nothing created" FV_FAMILY="$fam"
+# Retired with no tier (ADR-0019 §18, FV_SCRIPT_RETIRED): h3 (§17.4), the B4
+# families (§17.3 option (b)) and the §14.7 rows. No branch and no tier:
+# runpod-http.sh run / all / plan refuse them (exit 2) before the key, with or
+# without a dry run, naming what replaces each; runpod-matrix.sh refuses them
+# too. Each has a pointer, none is a tier or in FV_LAB_RETIRED / FV_LAB_EXPERIMENTS.
+# shellcheck source=scripts/gpu/fv-lab-retired.sh
+. "$ROOT/scripts/gpu/fv-lab-retired.sh"
+[[ "$FV_SCRIPT_RETIRED" == "h3 hunyuan sana-video b200 writer precision-debug identity b4b b4c b4c2 h3attn" ]] \
+  && ok "FV_SCRIPT_RETIRED: the eleven families of ADR-0019 §18" || bad "FV_SCRIPT_RETIRED: $FV_SCRIPT_RETIRED"
+tiers="$(awk '/^\[\[tier\]\]/ { t = 1; next } t && /^name = "/ { gsub(/^name = "|"$/, ""); print; t = 0 }' "$ROOT/lab/tiers.toml")"
+for fam in $FV_SCRIPT_RETIRED; do
+  why="$(fv_script_retired_why "$fam")"
+  if [[ -n "$why" ]] && ! fv_lab_retired "$fam" && ! fv_lab_experiment "$fam" && ! grep -qx "$fam" <<<"$tiers"; then
+    ok "$fam: a pointer, no tier, not routed to fv-lab"
+  else
+    bad "$fam: why '$why', retired to fv-lab: $(fv_lab_retired "$fam" && echo yes), a tier: $(grep -qx "$fam" <<<"$tiers" && echo yes)"
+  fi
+  msg="runpod-http: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): $why"
+  dry "$fam: dry run refused, no tier" 2 "$msg" FV_FAMILY="$fam"
+  expect "$fam: run refused without a key" 2 "$msg" -- FV_FAMILY="$fam" bash "$HTTP" run abc1234
+  # No key: a regression past the refusal stops at the key check, never at the API.
+  expect "$fam: all refused" 2 "$msg" -- FV_FAMILY="$fam" bash "$HTTP" all abc1234
+  expect "$fam: plan refused" 2 "$msg" -- FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
+  mx "matrix: $fam is retired with no tier" "FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED): $why" "$fam"
 done
 
 # A script family's dry run creates nothing.
-dry "script family: dry run" 0 "on the script path, nothing created" FV_FAMILY=b4b
+dry "script family: dry run" 0 "on the script path, nothing created" FV_FAMILY=eval
 
 # A fake fv-lab: exactly the command, its exit code back.
 cat >"$TMP/fake-fv-lab" <<'EOF'
@@ -296,6 +320,30 @@ else
 fi
 expect "no fv-lab: says how to build it" 1 "cargo build --release --locked -p fastvideo-lab --features cli" -- \
   RUNPOD_API_KEY=x FV_LAB_BIN="$TMP/none" FV_FAMILY=trace bash "$HTTP" run abc1234
+# A family retired with no tier never reaches fv-lab (ADR-0019 §18).
+expect "h3: refused, the fake FV_LAB_BIN not called" 2 "the rtx6000 tier runs every arm but" -- RUNPOD_API_KEY=x \
+  FV_LAB_BIN="$TMP/fake-fv-lab" FAKE_LOG="$TMP/never.log" FV_FAMILY=h3 bash "$HTTP" run abc1234
+[[ ! -e "$TMP/never.log" ]] && ok "h3: fv-lab not run" || bad "h3: fv-lab ran: $(cat "$TMP/never.log")"
+
+# runpod-http.sh's private copy (TMPDIR/runpod-http.XXXXXX) is removed when the
+# run ends: a refusal, a die, a dry run, the usage text, and the exec of fv-lab.
+# With FV_HTTP_COPY set the script runs in place and removes nothing.
+mkdir -p "$TMP/copies"
+ok_copies=1
+for args in "FV_FAMILY=h3 run abc1234" "FV_FAMILY=trace FV_AVOID_MACHINES=m1 FV_DRY_RUN=1 run abc1234" \
+  "FV_FAMILY=trace FV_DRY_RUN=1 run abc1234" "usage" \
+  "RUNPOD_API_KEY=x FV_LAB_BIN=$TMP/fake-fv-lab FAKE_LOG=$TMP/copies.log FV_FAMILY=trace run abc1234"; do
+  read -r -a a <<<"$args"
+  envs=() rest=()
+  for w in "${a[@]}"; do if [[ "$w" == *=* ]]; then envs+=("$w"); elif [[ "$w" != usage ]]; then rest+=("$w"); fi; done
+  (cd "$TMP" && clean TMPDIR="$TMP/copies" "${envs[@]}" bash "$HTTP" ${rest[@]+"${rest[@]}"} >/dev/null 2>&1) || true
+  if [[ -n "$(ls -A "$TMP/copies")" ]]; then ok_copies=0; bad "private copy left after: $args ($(ls "$TMP/copies"))"; rm -f "$TMP/copies"/*; fi
+done
+[[ "$ok_copies" == 1 ]] && ok "runpod-http.sh: the private copy is removed after a refusal, a die, a dry run, the usage and fv-lab's exec"
+cp "$HTTP" "$TMP/http-in-place.sh"
+(cd "$TMP" && clean FV_HTTP_COPY=1 FV_FAMILY=h3 bash "$TMP/http-in-place.sh" run abc1234 >/dev/null 2>&1) || true
+[[ -f "$TMP/http-in-place.sh" ]] && ok "runpod-http.sh with FV_HTTP_COPY set runs in place and removes nothing" \
+  || bad "runpod-http.sh removed the script it ran in place"
 
 # 4. headline on a fake box (no GPU): fv-gpucheck, nvidia-smi and the CUDA
 # library links faked, the cells through the fake fv-lab.
