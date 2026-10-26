@@ -1960,3 +1960,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §14.4 "Result", §15.10
 - Verification: `knobs::tests::the_retired_determinism_families_knobs_are_not_read` (`check_run_env` refuses `FV_ORACLE_URL` for `determinism`, not for `oracle` / `det-short`), `fv-lab-route.test.sh` (a newline in `FV_EXTRA_ENV` refused), `fv-lab-experiment-goldens.sh --check` (passes with the live `prompts-hd5.json` edited: the history's copy is read), `tests/repeats_oracle.rs::the_frozen_script_dry_runs_as_the_frozen_goldens`
+
+### FVID · 2026-10-26 · FVID-2026-10-26-gold-causal-progress
+- Trigger: the full gold run on `e9b9435` (ADR-0019 §16.7, `artifacts/runpod/gold/e9b9435-1026062720-e2e4`) failed `longlive-1.3b` and `sfwan21-1.3b` on `engine/progress` alone: `{"events":28,"last":[28,28]}` vs `{"steps":4}`, the MP4 and its 81 frames passing
+- Options: (a) the engine reports the recipe's 4 steps (or 1..4 per block) for a causal clip; (b) the check expects what the engine reports, every causal block's steps, derived from the variant's recipe
+- Decision: (coordinator's request, executed by the agent) (b): `CudaModel::progress_steps(num_frames)` = the recipe's steps x `SfWanRecipe::blocks` (`num_frames.div_ceil(block_frames)`, from the family file) on a causal recipe, else the recipe's steps; `fv-gpucheck engine` checks the event count against it (`limits.events`, `limits.steps` kept as the recipe's per-block steps that `report tiers` compares with the gold `[workload] steps`); the engine's `planned` total for an SF-Wan clip is the same product; no cell or gold file changes
+- Reason: a job's `Progress { step, total }` counts its denoise forwards across its stepping stages (`output::deliver`, LTX 8 + 3 = 11), the cudarc SF-Wan rollout counts `index / total` across blocks, and every API surface serves `step / total` as one 0..1 fraction; (a) would end a 28-forward job at 4 / 4 or restart the fraction each block
+- Reversibility: high (code and docs)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0023-lab-report-and-ci-bridge.md §3
+- Verification: `cuda::caps::tests::causal_clip_progress_counts_every_block` (both causal variants: 9 / 21 / 81 frames are 1 / 2 / 7 blocks, 81 frames 28 events with 4 recipe steps; a bidirectional Wan reports its recipe's steps); the CUDA type-check of `fastvideo-engine-service` and `fastvideo-gpucheck`; GPU: the next gold run's two causal arms

@@ -24,7 +24,9 @@
 //! mapped to `ApiError` kind `Cancelled`. Stage boundaries and denoise steps
 //! are reported through the `StepControl` (stages `text`, `denoise`,
 //! `upsample`, `refine`, `audio_decode`, `video_decode`, then `encode`);
-//! steps count across the denoise stages (LTX two-stage: 8 + 3 = 11).
+//! steps count across the denoise stages (LTX two-stage: 8 + 3 = 11) and,
+//! on an SF-Wan / LongLive clip, across its causal blocks (81 frames, 4
+//! steps per 12-frame block: 7 x 4 = 28; `CudaModel::progress_steps`).
 //!
 //! **Output** (E2 in-memory sinks): every generate attaches a
 //! `fastvideo_cudarc::sink::FrameSink`, so the decoded RGB8 frames and the

@@ -308,6 +308,17 @@ pub struct SfWanRecipe {
     pub longlive: Option<LongLiveRecipe>,
 }
 
+impl SfWanRecipe {
+    /// Causal blocks of a clip of `num_frames` frames: the first block
+    /// carries 3 fewer frames (its first latent frame decodes to one), so
+    /// the causal frame grid is `block_frames * k - 3` and this is `k`
+    /// (81 frames, 12-frame blocks: 7). The pipeline rolls out
+    /// `latent_frames / num_frames_per_block` blocks, the same count.
+    pub fn blocks(&self, num_frames: u32) -> u32 {
+        num_frames.div_ceil(self.block_frames.max(1))
+    }
+}
+
 /// The extra served name of a LongLive model: the fal app
 /// `fastvideo/longlive` resolves to it (docs/serve/director-causal.md §5).
 pub const LONGLIVE_NAME: &str = "longlive";
@@ -498,6 +509,21 @@ impl CudaModel {
             },
         });
         c
+    }
+
+    /// The `Progress` events one clip job of `num_frames` frames reports
+    /// (the last is `step == total`): the job's denoise forwards, counted
+    /// across its stepping stages (`output::deliver`). That is the recipe's
+    /// steps ([`Self::describe`]), except for an SF-Wan / LongLive clip,
+    /// which steps every causal block in turn: the recipe's steps per block
+    /// times [`SfWanRecipe::blocks`] (81 frames, 4 steps: 28), so the
+    /// fraction `step / total` rises once from 0 to 1 over the rollout.
+    pub fn progress_steps(&self, num_frames: u32) -> Option<u32> {
+        let steps = self.describe().steps?;
+        Some(match &self.recipe {
+            CudaRecipe::SfWan(r) => steps * r.blocks(num_frames),
+            _ => steps,
+        })
     }
 
     /// The recipe description served in `/fv/v1/capabilities`.
@@ -1529,6 +1555,35 @@ mod tests {
                 })
             })
         ));
+    }
+
+    /// A causal clip reports every block's steps (the cudarc SF-Wan rollout
+    /// counts `index / total` across blocks): the default 81-frame clip of
+    /// the family file's 4-step, 12-frame-block recipe is 7 blocks, 28
+    /// events, while the recipe's steps stay 4. A bidirectional Wan reports
+    /// its recipe's steps.
+    #[test]
+    fn causal_clip_progress_counts_every_block() {
+        let cat = catalog(&WeightLayout::default()).unwrap();
+        for id in ["sfwan21-1.3b", "longlive-1.3b"] {
+            let m = find(&cat, id).unwrap();
+            let CudaRecipe::SfWan(r) = &m.recipe else {
+                panic!("{id}: not a causal recipe")
+            };
+            assert_eq!(m.describe().steps, Some(4), "{id}");
+            let frames = &m.caps().frames;
+            assert_eq!(
+                (r.blocks(9), r.blocks(21), r.blocks(frames.default)),
+                (1, 2, 7),
+                "{id}"
+            );
+            assert_eq!(m.progress_steps(9), Some(4), "{id}");
+            assert_eq!(m.progress_steps(frames.default), Some(28), "{id}");
+        }
+        let m = find(&cat, "fastwan21-1.3b").unwrap();
+        let steps = m.describe().steps;
+        assert!(steps.is_some());
+        assert_eq!(m.progress_steps(81), steps);
     }
 
     #[test]

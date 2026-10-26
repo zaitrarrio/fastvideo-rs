@@ -201,12 +201,17 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
             "load_s": load_s,
         }),
     );
+    // `steps`: the recipe's denoise steps (per causal block on SF-Wan; what
+    // fv-lab compares with the gold file's `[workload] steps`). `events`:
+    // the Progress events the job reports, every block's steps on a causal
+    // rollout (CudaModel::progress_steps).
     let want_steps = model.describe().steps.unwrap_or(0);
+    let want_events = model.progress_steps(job.num_frames).unwrap_or(0);
     report.check(
         "progress",
-        steps.last().is_some_and(|(s, t)| s == t) && steps.len() as u32 == want_steps,
+        steps.last().is_some_and(|(s, t)| s == t) && steps.len() as u32 == want_events,
         json!({"events": steps.len(), "last": steps.last()}),
-        json!({"steps": want_steps}),
+        json!({"steps": want_steps, "events": want_events}),
     )?;
     let mp4 = out.mp4.clone().ok_or_else(|| anyhow::anyhow!("no mp4"))?;
     let bytes = std::fs::metadata(&mp4).map(|m| m.len()).unwrap_or(0);
