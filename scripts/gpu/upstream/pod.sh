@@ -40,7 +40,47 @@ TI2V_PROMPT="Aerial drone shot of a tropical beach: turquoise sea waves roll in 
 H3_REV=bfc8ed0353f5a9733be73e6b2c98ec0948195b86        # sol-engine H3 configs' H3_MODEL_REVISION
 F8_REV=3da2ddfe1954d9cda4c05b643dc0f26007a655c5        # FastVideo/FastVideo-FastH3-8-Step-V2
 export HF_HOME="$UP/hf"   # the image presets HF_HOME under /workspace
-[[ -z "${HF_TOKEN:-}" && -f /workspace/hf/token ]] && HF_TOKEN="$(tr -d '[:space:]' </workspace/hf/token)" && export HF_TOKEN
+# hub_token_init <token file>: HF_TOKEN from the pod's env (fv-lab oracle's
+# hub_token stacks and runpod-http.sh upstream's LTX steps pass the Runpod
+# secret reference {{ RUNPOD_SECRET_fv_hf_token }}), else the file (the
+# volume's /workspace/hf/token). Whitespace is dropped (a token has none). A
+# reference Runpod did not fill in (no such secret on the account,
+# docs/ops/runpod-secrets.md), a blank value and an empty file count as none.
+# HF_TOKEN_SRC says where the token came from, never the token (box.txt's
+# hf_token= line); the env's diagnostic is kept when the file wins.
+# scripts/gpu/tests/hub-token.test.sh runs it.
+hub_token_init() {
+  local file="$1" v note=""
+  v="${HF_TOKEN:-}"
+  v="${v//[[:space:]]/}"
+  if [[ "$v" == *'{{'* ]]; then
+    note="unfilled secret reference"
+    v=""
+  elif [[ -z "$v" && -n "${HF_TOKEN+x}" ]]; then
+    note="blank"
+  fi
+  if [[ -n "$v" ]]; then
+    HF_TOKEN="$v"
+    export HF_TOKEN
+    HF_TOKEN_SRC=env
+    return 0
+  fi
+  unset HF_TOKEN
+  HF_TOKEN_SRC=none
+  if [[ -f "$file" ]]; then
+    v="$(tr -d '[:space:]' <"$file" 2>/dev/null)"
+    if [[ -n "$v" ]]; then
+      HF_TOKEN="$v"
+      export HF_TOKEN
+      HF_TOKEN_SRC="$file"
+    else
+      HF_TOKEN_SRC="none (empty $file)"
+    fi
+  fi
+  [[ -z "$note" ]] || HF_TOKEN_SRC="$HF_TOKEN_SRC (env: $note)"
+  return 0
+}
+hub_token_init /workspace/hf/token
 export HF_HUB_DISABLE_TELEMETRY=1
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LIVE" >&2; }
@@ -99,6 +139,8 @@ info_box() {
     done
     [[ -f "$UP/sol-ltx25/.stamp" ]] && echo "sol-ltx25: $(cat "$UP/sol-ltx25/.stamp")"
     env | grep -E '^(HOME|UV_|XDG_|HF_HOME)=' | sort
+    # Where the Hub token came from, never its value.
+    echo "hf_token=$HF_TOKEN_SRC"
   } >"$OUT/box.txt" 2>&1
   return 0
 }

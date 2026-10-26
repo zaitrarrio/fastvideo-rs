@@ -1,0 +1,336 @@
+[17:30:30] [oracle] matrix start image=0ad49143bec3413b
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-2516326a-4a6d-867f-5f71-1f73b0fd8417)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[17:30:30] [oracle] pod memory: cgroup v2 /sys/fs/cgroup, limit 89645 MiB, oom_kills 0
+[17:30:30] [oracle] skip oracle-fasth3-8step (no arm in FV_CELLS)
+[17:30:30] [oracle] skip oracle-fasth3-8step-vsa0 (no arm in FV_CELLS)
+[17:30:31] [oracle] oracle: fetching https://g0e1srbtwgor6r-8000.proxy.runpod.net/upstream/664473b-1026171653-1e64/oracle-fasth3-4step-vsa/oracle-dump.tar
+[17:30:45] [oracle] oracle: fasth3-4step-vsa reference 1.3G
+[17:30:46] [oracle] ▶ oracle-fasth3-4step-vsa  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/fasth3-4step-vsa/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-dump /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder streamed --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --clip-dir /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa/frames --adaln-cache /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-adaln.cache  (wall cap 4149s; 0=none)
+[17:39:16] [oracle] ok oracle-fasth3-4step-vsa  509s  /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa/stderr.log:[INFO] h3/timings {"audio_decode_s":0.139740837,"decode_s":14.239642102,"denoise_s":38.949390776,"load_s":256.094900665,"peak_mib":60420,"refine_s":0.005394473,"step_s":[21.420201171875,5.83485986328125,5.83660205078125,5.8575849609375],"text_cache":"miss","text_encoder":"streamed","text_s":199.333841336,"total_s":252.769182868,"video_decode_s":14.099901265,"video_encode_s":0.142853704,"video_push_s":10.602915622000001,"video_rgb_s":0.1109418269845294,"video_vae_s":4.619742039740086,"video_wait_s":9.451237724,"warm":false,"write_s":0.131970168}
+[17:39:16] [oracle] ram oracle-fasth3-4step-vsa: ram 66941 MiB of 89645 MiB, oom_kills 0
+[17:39:16] [oracle] ▶ oracle-fasth3-4step-vsa-diff  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/oracle-ref/fasth3-4step-vsa/dump --candidate /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-dump  (wall cap 3639s; 0=none)
+[17:39:17] [oracle] ok oracle-fasth3-4step-vsa-diff  1s  
+[17:39:17] [oracle] ram oracle-fasth3-4step-vsa-diff: ram 24 MiB of 89645 MiB, oom_kills 0
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_sigmas                 rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 5
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_step01                 rel_l2 3.778e-3  cosine 0.999993  max_abs 3.112e-2  n 13248
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_step02                 rel_l2 2.667e-2  cosine 0.999644  max_abs 1.917e-1  n 13248
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_step03                 rel_l2 1.446e-1  cosine 0.989570  max_abs 1.006e0  n 13248
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_step04                 rel_l2 4.882e-1  cosine 0.881102  max_abs 2.319e0  n 13248
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_step00_in              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 13248
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_timesteps              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 4
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_vel_step01             rel_l2 3.274e-2  cosine 0.999465  max_abs 3.112e-1  n 13248
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_vel_step02             rel_l2 1.228e-1  cosine 0.992430  max_abs 1.265e0  n 13248
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_vel_step03             rel_l2 2.960e-1  cosine 0.956478  max_abs 4.063e0  n 13248
+[oracle-fasth3-4step-vsa-diff] compare-dumps audio_vel_step04             rel_l2 4.246e-1  cosine 0.910097  max_abs 3.395e0  n 13248
+[oracle-fasth3-4step-vsa-diff] compare-dumps rope_cos                     rel_l2 1.043e-3  cosine 0.999999  max_abs 1.953e-3  n 56640
+[oracle-fasth3-4step-vsa-diff] compare-dumps rope_sin                     rel_l2 1.386e-3  cosine 0.999999  max_abs 1.951e-3  n 56640
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b0_adaln              rel_l2 1.287e-4  cosine 1.000000  max_abs 3.906e-3  n 19031040
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b0_attn_in            rel_l2 4.266e-3  cosine 0.999991  max_abs 6.250e-2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b0_attn_out           rel_l2 5.547e-3  cosine 0.999985  max_abs 3.000e0  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b0_ffn_in             rel_l2 6.272e-3  cosine 0.999980  max_abs 3.906e-2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b0_ffn_out            rel_l2 1.787e-3  cosine 0.999998  max_abs 3.200e1  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b0_resid_msa          rel_l2 5.763e-3  cosine 0.999983  max_abs 4.000e0  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b1_adaln              rel_l2 5.924e-5  cosine 1.000000  max_abs 3.906e-3  n 19031040
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b1_attn_in            rel_l2 5.722e-3  cosine 0.999984  max_abs 2.500e-1  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b1_attn_out           rel_l2 2.168e-2  cosine 0.999765  max_abs 1.122e2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b1_ffn_in             rel_l2 7.064e-3  cosine 0.999975  max_abs 2.256e-1  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b1_ffn_out            rel_l2 4.706e-3  cosine 0.999989  max_abs 1.280e2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b1_resid_msa          rel_l2 6.965e-3  cosine 0.999976  max_abs 5.662e1  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b24_adaln             rel_l2 6.121e-5  cosine 1.000000  max_abs 3.906e-3  n 19031040
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b24_attn_in           rel_l2 3.468e-2  cosine 0.999399  max_abs 2.699e0  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b24_attn_out          rel_l2 4.062e-2  cosine 0.999175  max_abs 1.466e2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b24_ffn_in            rel_l2 3.611e-2  cosine 0.999348  max_abs 1.172e0  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b24_ffn_out           rel_l2 5.265e-2  cosine 0.998613  max_abs 4.955e2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b24_resid_msa         rel_l2 1.551e-2  cosine 0.999882  max_abs 8.192e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b47_adaln             rel_l2 7.502e-5  cosine 1.000000  max_abs 3.125e-2  n 19031040
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b47_attn_in           rel_l2 4.434e-1  cosine 0.902015  max_abs 4.381e1  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b47_attn_out          rel_l2 4.248e-1  cosine 0.910041  max_abs 2.992e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b47_ffn_in            rel_l2 4.308e-1  cosine 0.907620  max_abs 9.305e0  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b47_ffn_out           rel_l2 5.678e-1  cosine 0.840025  max_abs 1.234e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_b47_resid_msa         rel_l2 3.639e-1  cosine 0.933757  max_abs 2.688e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_0               rel_l2 8.193e-4  cosine 1.000000  max_abs 1.600e1  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_1               rel_l2 3.918e-3  cosine 0.999992  max_abs 1.280e2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_2               rel_l2 4.470e-3  cosine 0.999990  max_abs 1.280e2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_3               rel_l2 4.762e-3  cosine 0.999989  max_abs 1.280e2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_4               rel_l2 4.736e-3  cosine 0.999989  max_abs 1.280e2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_5               rel_l2 4.793e-3  cosine 0.999989  max_abs 1.920e2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_6               rel_l2 4.865e-3  cosine 0.999988  max_abs 1.280e2  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_7               rel_l2 5.816e-3  cosine 0.999986  max_abs 2.048e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_8               rel_l2 5.917e-3  cosine 0.999985  max_abs 2.048e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_9               rel_l2 5.989e-3  cosine 0.999985  max_abs 2.048e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_10              rel_l2 6.051e-3  cosine 0.999984  max_abs 2.048e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_11              rel_l2 5.746e-3  cosine 0.999986  max_abs 2.048e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_12              rel_l2 5.859e-3  cosine 0.999985  max_abs 2.048e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_13              rel_l2 6.381e-3  cosine 0.999988  max_abs 4.096e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_14              rel_l2 6.486e-3  cosine 0.999987  max_abs 4.096e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_15              rel_l2 6.627e-3  cosine 0.999986  max_abs 4.096e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_16              rel_l2 6.821e-3  cosine 0.999985  max_abs 4.096e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_17              rel_l2 7.070e-3  cosine 0.999983  max_abs 4.096e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_18              rel_l2 1.354e-2  cosine 0.999910  max_abs 8.704e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_19              rel_l2 1.339e-2  cosine 0.999912  max_abs 8.192e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_20              rel_l2 1.330e-2  cosine 0.999913  max_abs 8.192e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_21              rel_l2 1.411e-2  cosine 0.999902  max_abs 8.192e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_22              rel_l2 1.481e-2  cosine 0.999892  max_abs 8.192e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_23              rel_l2 1.518e-2  cosine 0.999887  max_abs 8.192e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_24              rel_l2 1.529e-2  cosine 0.999885  max_abs 7.680e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_25              rel_l2 1.685e-2  cosine 0.999861  max_abs 7.168e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_26              rel_l2 1.955e-2  cosine 0.999811  max_abs 7.168e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_27              rel_l2 2.762e-2  cosine 0.999619  max_abs 1.638e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_28              rel_l2 3.142e-2  cosine 0.999506  max_abs 1.638e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_29              rel_l2 3.697e-2  cosine 0.999316  max_abs 1.638e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_30              rel_l2 4.708e-2  cosine 0.998892  max_abs 3.379e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_31              rel_l2 5.905e-2  cosine 0.998255  max_abs 3.584e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_32              rel_l2 7.770e-2  cosine 0.996978  max_abs 3.584e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_33              rel_l2 8.994e-2  cosine 0.995951  max_abs 3.584e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_34              rel_l2 1.079e-1  cosine 0.994180  max_abs 3.584e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_35              rel_l2 1.175e-1  cosine 0.993104  max_abs 7.168e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_36              rel_l2 1.225e-1  cosine 0.992493  max_abs 9.216e3  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_37              rel_l2 1.358e-1  cosine 0.990780  max_abs 1.126e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_38              rel_l2 1.613e-1  cosine 0.986983  max_abs 1.843e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_39              rel_l2 1.569e-1  cosine 0.987690  max_abs 1.894e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_40              rel_l2 1.858e-1  cosine 0.982736  max_abs 2.816e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_41              rel_l2 2.137e-1  cosine 0.977195  max_abs 4.275e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_42              rel_l2 2.240e-1  cosine 0.974924  max_abs 1.613e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_43              rel_l2 2.458e-1  cosine 0.969783  max_abs 2.534e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_44              rel_l2 2.702e-1  cosine 0.963497  max_abs 2.790e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_45              rel_l2 3.125e-1  cosine 0.951147  max_abs 2.848e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_46              rel_l2 3.553e-1  cosine 0.936873  max_abs 2.227e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_47              rel_l2 3.998e-1  cosine 0.920221  max_abs 2.970e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_48              rel_l2 4.544e-1  cosine 0.896839  max_abs 5.478e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_block_49              rel_l2 3.561e-1  cosine 0.936616  max_abs 5.222e4  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps step00_packed_in             rel_l2 3.238e-3  cosine 0.999995  max_abs 1.250e-1  n 3171840
+[oracle-fasth3-4step-vsa-diff] compare-dumps text_hidden                  rel_l2 1.289e-2  cosine 0.999984  max_abs 1.886e2  n 235520
+[oracle-fasth3-4step-vsa-diff] compare-dumps text_refined                 rel_l2 8.169e-3  cosine 0.999967  max_abs 1.500e0  n 247296
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_sigmas                 rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 5
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_step01                 rel_l2 7.224e-3  cosine 0.999974  max_abs 7.919e-2  n 3580416
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_step02                 rel_l2 2.492e-2  cosine 0.999690  max_abs 2.660e-1  n 3580416
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_step03                 rel_l2 8.458e-2  cosine 0.996423  max_abs 8.007e-1  n 3580416
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_step04                 rel_l2 4.348e-1  cosine 0.905620  max_abs 6.037e0  n 3580416
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_step00_in              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 3580416
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_timesteps              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 4
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_vel_step01             rel_l2 1.847e-1  cosine 0.982942  max_abs 2.930e0  n 3580416
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_vel_step02             rel_l2 3.014e-1  cosine 0.954607  max_abs 5.181e0  n 3580416
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_vel_step03             rel_l2 3.299e-1  cosine 0.945499  max_abs 5.959e0  n 3580416
+[oracle-fasth3-4step-vsa-diff] compare-dumps video_vel_step04             rel_l2 3.456e-1  cosine 0.940324  max_abs 6.658e0  n 3580416
+[oracle-fasth3-4step-vsa-diff] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (1.6s)
+[17:39:24] [oracle] ▶ oracle-fasth3-4step-vsa-f32  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/fasth3-4step-vsa/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-dump-f32 FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder streamed --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --clip-dir /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-f32/frames --adaln-cache /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-adaln.cache  (wall cap 3631s; 0=none)
+[17:47:32] [oracle] ok oracle-fasth3-4step-vsa-f32  488s  /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-f32/stderr.log:[INFO] h3/timings {"audio_decode_s":0.127722503,"decode_s":4.8759120000000005,"denoise_s":36.96174315,"load_s":242.341322871,"peak_mib":66244,"refine_s":0.00421043,"step_s":[10.918228515625,8.6720439453125,8.680810546875,8.69051953125],"text_cache":"miss","text_encoder":"streamed","text_s":203.00149646,"total_s":245.099774467,"video_decode_s":4.748189497,"video_encode_s":0.096712917,"video_push_s":0.00002264,"video_rgb_s":0.09654104600148285,"video_vae_s":4.634376898705959,"video_wait_s":0.131438361,"warm":false,"write_s":0.13104301}
+[17:47:32] [oracle] ram oracle-fasth3-4step-vsa-f32: ram 66880 MiB of 89645 MiB, oom_kills 0
+[17:47:32] [oracle] ▶ oracle-fasth3-4step-vsa-f32-diff  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/oracle-ref/fasth3-4step-vsa/dump --candidate /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-dump-f32  (wall cap 3143s; 0=none)
+[17:47:34] [oracle] ok oracle-fasth3-4step-vsa-f32-diff  1s  
+[17:47:34] [oracle] ram oracle-fasth3-4step-vsa-f32-diff: ram 15 MiB of 89645 MiB, oom_kills 0
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_sigmas                 rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 5
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_step01                 rel_l2 4.128e-3  cosine 0.999991  max_abs 2.392e-2  n 13248
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_step02                 rel_l2 2.757e-2  cosine 0.999620  max_abs 2.229e-1  n 13248
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_step03                 rel_l2 1.147e-1  cosine 0.993433  max_abs 6.134e-1  n 13248
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_step04                 rel_l2 4.445e-1  cosine 0.901556  max_abs 1.883e0  n 13248
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_step00_in              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 13248
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_timesteps              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 4
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_vel_step01             rel_l2 3.578e-2  cosine 0.999362  max_abs 2.392e-1  n 13248
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_vel_step02             rel_l2 1.270e-1  cosine 0.991917  max_abs 1.468e0  n 13248
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_vel_step03             rel_l2 2.271e-1  cosine 0.974166  max_abs 2.430e0  n 13248
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps audio_vel_step04             rel_l2 3.959e-1  cosine 0.922727  max_abs 3.593e0  n 13248
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps rope_cos                     rel_l2 1.043e-3  cosine 0.999999  max_abs 1.953e-3  n 56640
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps rope_sin                     rel_l2 1.386e-3  cosine 0.999999  max_abs 1.951e-3  n 56640
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b0_adaln              rel_l2 1.659e-3  cosine 0.999999  max_abs 3.906e-3  n 19031040
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b0_attn_in            rel_l2 6.201e-3  cosine 0.999981  max_abs 8.142e-2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b0_attn_out           rel_l2 5.543e-3  cosine 0.999985  max_abs 3.000e0  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b0_ffn_in             rel_l2 9.055e-3  cosine 0.999959  max_abs 7.822e-2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b0_ffn_out            rel_l2 2.513e-3  cosine 0.999997  max_abs 3.200e1  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b0_resid_msa          rel_l2 5.206e-3  cosine 0.999987  max_abs 3.456e0  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b1_adaln              rel_l2 1.721e-3  cosine 0.999999  max_abs 7.812e-3  n 19031040
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b1_attn_in            rel_l2 5.664e-3  cosine 0.999984  max_abs 1.955e-1  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b1_attn_out           rel_l2 1.516e-2  cosine 0.999885  max_abs 1.375e1  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b1_ffn_in             rel_l2 7.386e-3  cosine 0.999973  max_abs 9.390e-2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b1_ffn_out            rel_l2 4.821e-3  cosine 0.999990  max_abs 2.560e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b1_resid_msa          rel_l2 6.033e-3  cosine 0.999983  max_abs 3.051e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b24_adaln             rel_l2 1.835e-3  cosine 0.999998  max_abs 7.812e-3  n 19031040
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b24_attn_in           rel_l2 2.469e-2  cosine 0.999695  max_abs 9.675e-1  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b24_attn_out          rel_l2 3.261e-2  cosine 0.999468  max_abs 1.260e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b24_ffn_in            rel_l2 2.610e-2  cosine 0.999659  max_abs 4.939e-1  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b24_ffn_out           rel_l2 4.193e-2  cosine 0.999122  max_abs 1.940e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b24_resid_msa         rel_l2 1.887e-2  cosine 0.999882  max_abs 1.520e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b47_adaln             rel_l2 1.829e-3  cosine 0.999998  max_abs 3.125e-2  n 19031040
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b47_attn_in           rel_l2 4.012e-1  cosine 0.919431  max_abs 4.265e1  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b47_attn_out          rel_l2 3.814e-1  cosine 0.927076  max_abs 2.388e3  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b47_ffn_in            rel_l2 3.882e-1  cosine 0.924540  max_abs 6.744e0  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b47_ffn_out           rel_l2 5.126e-1  cosine 0.868239  max_abs 1.050e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_b47_resid_msa         rel_l2 3.286e-1  cosine 0.945956  max_abs 2.137e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_0               rel_l2 1.595e-3  cosine 0.999999  max_abs 1.278e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_1               rel_l2 4.373e-3  cosine 0.999991  max_abs 8.812e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_2               rel_l2 4.496e-3  cosine 0.999990  max_abs 2.811e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_3               rel_l2 4.764e-3  cosine 0.999989  max_abs 2.210e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_4               rel_l2 4.836e-3  cosine 0.999988  max_abs 3.403e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_5               rel_l2 4.913e-3  cosine 0.999988  max_abs 2.983e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_6               rel_l2 4.977e-3  cosine 0.999988  max_abs 3.000e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_7               rel_l2 4.854e-3  cosine 0.999988  max_abs 2.910e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_8               rel_l2 5.054e-3  cosine 0.999987  max_abs 3.034e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_9               rel_l2 5.259e-3  cosine 0.999986  max_abs 6.022e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_10              rel_l2 5.403e-3  cosine 0.999985  max_abs 6.292e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_11              rel_l2 5.121e-3  cosine 0.999987  max_abs 3.201e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_12              rel_l2 5.374e-3  cosine 0.999986  max_abs 6.568e2  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_13              rel_l2 7.156e-3  cosine 0.999987  max_abs 4.787e3  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_14              rel_l2 7.855e-3  cosine 0.999985  max_abs 5.446e3  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_15              rel_l2 1.038e-2  cosine 0.999978  max_abs 7.874e3  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_16              rel_l2 1.127e-2  cosine 0.999975  max_abs 8.654e3  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_17              rel_l2 1.426e-2  cosine 0.999963  max_abs 1.137e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_18              rel_l2 1.564e-2  cosine 0.999917  max_abs 1.053e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_19              rel_l2 1.688e-2  cosine 0.999907  max_abs 1.241e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_20              rel_l2 1.793e-2  cosine 0.999899  max_abs 1.424e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_21              rel_l2 1.897e-2  cosine 0.999888  max_abs 1.585e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_22              rel_l2 1.969e-2  cosine 0.999879  max_abs 1.581e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_23              rel_l2 1.867e-2  cosine 0.999885  max_abs 1.498e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_24              rel_l2 1.766e-2  cosine 0.999891  max_abs 1.366e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_25              rel_l2 1.746e-2  cosine 0.999880  max_abs 1.183e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_26              rel_l2 2.012e-2  cosine 0.999833  max_abs 1.178e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_27              rel_l2 2.545e-2  cosine 0.999695  max_abs 1.308e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_28              rel_l2 2.687e-2  cosine 0.999650  max_abs 1.206e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_29              rel_l2 3.115e-2  cosine 0.999525  max_abs 1.196e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_30              rel_l2 3.784e-2  cosine 0.999291  max_abs 2.053e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_31              rel_l2 4.922e-2  cosine 0.998804  max_abs 2.159e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_32              rel_l2 6.585e-2  cosine 0.997838  max_abs 2.165e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_33              rel_l2 7.818e-2  cosine 0.996946  max_abs 2.146e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_34              rel_l2 9.521e-2  cosine 0.995471  max_abs 2.129e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_35              rel_l2 1.057e-1  cosine 0.994413  max_abs 1.305e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_36              rel_l2 1.100e-1  cosine 0.993953  max_abs 5.633e3  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_37              rel_l2 1.221e-1  cosine 0.992554  max_abs 7.659e3  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_38              rel_l2 1.479e-1  cosine 0.989071  max_abs 1.984e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_39              rel_l2 1.465e-1  cosine 0.989269  max_abs 1.901e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_40              rel_l2 1.735e-1  cosine 0.984919  max_abs 2.746e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_41              rel_l2 2.005e-1  cosine 0.979840  max_abs 2.347e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_42              rel_l2 2.100e-1  cosine 0.977906  max_abs 1.617e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_43              rel_l2 2.281e-1  cosine 0.973942  max_abs 2.296e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_44              rel_l2 2.509e-1  cosine 0.968541  max_abs 2.393e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_45              rel_l2 2.867e-1  cosine 0.958850  max_abs 2.240e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_46              rel_l2 3.218e-1  cosine 0.948212  max_abs 2.091e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_47              rel_l2 3.603e-1  cosine 0.935100  max_abs 2.637e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_48              rel_l2 4.067e-1  cosine 0.917345  max_abs 4.014e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_block_49              rel_l2 3.171e-1  cosine 0.949748  max_abs 4.184e4  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps step00_packed_in             rel_l2 2.836e-3  cosine 0.999996  max_abs 3.219e-1  n 3171840
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps text_hidden                  rel_l2 1.291e-2  cosine 0.999984  max_abs 1.889e2  n 235520
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps text_refined                 rel_l2 7.612e-3  cosine 0.999971  max_abs 1.258e0  n 247296
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_sigmas                 rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 5
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_step01                 rel_l2 6.239e-3  cosine 0.999981  max_abs 7.217e-2  n 3580416
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_step02                 rel_l2 2.284e-2  cosine 0.999739  max_abs 2.348e-1  n 3580416
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_step03                 rel_l2 7.771e-2  cosine 0.996982  max_abs 7.356e-1  n 3580416
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_step04                 rel_l2 4.084e-1  cosine 0.917051  max_abs 4.801e0  n 3580416
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_step00_in              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 3580416
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_timesteps              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 4
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_vel_step01             rel_l2 1.595e-1  cosine 0.987276  max_abs 2.670e0  n 3580416
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_vel_step02             rel_l2 2.758e-1  cosine 0.961965  max_abs 4.632e0  n 3580416
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_vel_step03             rel_l2 3.086e-1  cosine 0.952518  max_abs 5.129e0  n 3580416
+[oracle-fasth3-4step-vsa-f32-diff] compare-dumps video_vel_step04             rel_l2 3.271e-1  cosine 0.946582  max_abs 5.544e0  n 3580416
+[oracle-fasth3-4step-vsa-f32-diff] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (1.6s)
+[17:47:34] [oracle] ▶ oracle-fasth3-4step-vsa-bf16-vs-f32  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-dump-f32 --candidate /fvscratch/runs/oracle/664473b-1026171653-0fee/oracle-fasth3-4step-vsa-dump  (wall cap 3141s; 0=none)
+[17:47:36] [oracle] ok oracle-fasth3-4step-vsa-bf16-vs-f32  2s  
+[17:47:36] [oracle] ram oracle-fasth3-4step-vsa-bf16-vs-f32: ram 153 MiB of 89645 MiB, oom_kills 0
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_sigmas                 rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 5
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_step01                 rel_l2 4.349e-3  cosine 0.999991  max_abs 2.656e-2  n 13248
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_step02                 rel_l2 1.422e-2  cosine 0.999899  max_abs 7.422e-2  n 13248
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_step03                 rel_l2 8.872e-2  cosine 0.996064  max_abs 6.234e-1  n 13248
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_step04                 rel_l2 3.637e-1  cosine 0.933796  max_abs 2.077e0  n 13248
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_step00_in              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 13248
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_timesteps              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 4
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_vel_step01             rel_l2 3.763e-2  cosine 0.999295  max_abs 2.656e-1  n 13248
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_vel_step02             rel_l2 6.402e-2  cosine 0.997949  max_abs 4.414e-1  n 13248
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_vel_step03             rel_l2 1.870e-1  cosine 0.982689  max_abs 2.344e0  n 13248
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps audio_vel_step04             rel_l2 3.411e-1  cosine 0.941265  max_abs 3.759e0  n 13248
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps rope_cos                     rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 56640
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps rope_sin                     rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 56640
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b0_adaln              rel_l2 1.657e-3  cosine 0.999999  max_abs 3.906e-3  n 19031040
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b0_attn_in            rel_l2 5.355e-3  cosine 0.999986  max_abs 7.634e-2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b0_attn_out           rel_l2 4.150e-3  cosine 0.999991  max_abs 3.000e0  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b0_ffn_in             rel_l2 7.606e-3  cosine 0.999971  max_abs 6.774e-2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b0_ffn_out            rel_l2 2.344e-3  cosine 0.999997  max_abs 3.200e1  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b0_resid_msa          rel_l2 4.138e-3  cosine 0.999991  max_abs 2.731e0  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b1_adaln              rel_l2 1.720e-3  cosine 0.999999  max_abs 7.812e-3  n 19031040
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b1_attn_in            rel_l2 4.098e-3  cosine 0.999992  max_abs 1.941e-1  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b1_attn_out           rel_l2 1.716e-2  cosine 0.999853  max_abs 1.042e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b1_ffn_in             rel_l2 7.132e-3  cosine 0.999975  max_abs 2.114e-1  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b1_ffn_out            rel_l2 3.739e-3  cosine 0.999993  max_abs 2.560e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b1_resid_msa          rel_l2 5.762e-3  cosine 0.999984  max_abs 3.051e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b24_adaln             rel_l2 1.835e-3  cosine 0.999998  max_abs 7.812e-3  n 19031040
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b24_attn_in           rel_l2 3.332e-2  cosine 0.999446  max_abs 2.959e0  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b24_attn_out          rel_l2 3.744e-2  cosine 0.999300  max_abs 1.586e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b24_ffn_in            rel_l2 3.456e-2  cosine 0.999403  max_abs 1.231e0  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b24_ffn_out           rel_l2 4.942e-2  cosine 0.998780  max_abs 5.395e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b24_resid_msa         rel_l2 1.632e-2  cosine 0.999905  max_abs 1.111e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b47_adaln             rel_l2 1.829e-3  cosine 0.999998  max_abs 3.125e-2  n 19031040
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b47_attn_in           rel_l2 4.236e-1  cosine 0.910643  max_abs 8.451e1  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b47_attn_out          rel_l2 4.151e-1  cosine 0.914350  max_abs 5.136e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b47_ffn_in            rel_l2 4.136e-1  cosine 0.914960  max_abs 7.557e0  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b47_ffn_out           rel_l2 5.518e-1  cosine 0.849366  max_abs 1.254e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_b47_resid_msa         rel_l2 3.483e-1  cosine 0.939380  max_abs 2.193e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_0               rel_l2 1.552e-3  cosine 0.999999  max_abs 1.278e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_1               rel_l2 3.925e-3  cosine 0.999993  max_abs 8.812e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_2               rel_l2 4.175e-3  cosine 0.999991  max_abs 2.811e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_3               rel_l2 4.499e-3  cosine 0.999990  max_abs 2.039e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_4               rel_l2 4.585e-3  cosine 0.999990  max_abs 3.403e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_5               rel_l2 4.692e-3  cosine 0.999989  max_abs 2.983e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_6               rel_l2 4.779e-3  cosine 0.999989  max_abs 3.000e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_7               rel_l2 5.702e-3  cosine 0.999986  max_abs 1.988e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_8               rel_l2 5.685e-3  cosine 0.999985  max_abs 1.788e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_9               rel_l2 6.630e-3  cosine 0.999982  max_abs 2.650e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_10              rel_l2 6.747e-3  cosine 0.999981  max_abs 2.677e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_11              rel_l2 5.860e-3  cosine 0.999985  max_abs 1.981e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_12              rel_l2 6.624e-3  cosine 0.999982  max_abs 2.705e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_13              rel_l2 4.478e-3  cosine 0.999990  max_abs 6.912e2  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_14              rel_l2 4.839e-3  cosine 0.999989  max_abs 1.350e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_15              rel_l2 6.513e-3  cosine 0.999986  max_abs 3.778e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_16              rel_l2 7.332e-3  cosine 0.999984  max_abs 4.558e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_17              rel_l2 9.997e-3  cosine 0.999976  max_abs 7.269e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_18              rel_l2 1.053e-2  cosine 0.999967  max_abs 6.432e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_19              rel_l2 1.223e-2  cosine 0.999957  max_abs 8.312e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_20              rel_l2 1.368e-2  cosine 0.999947  max_abs 1.014e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_21              rel_l2 1.572e-2  cosine 0.999924  max_abs 1.175e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_22              rel_l2 1.630e-2  cosine 0.999918  max_abs 1.172e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_23              rel_l2 1.601e-2  cosine 0.999910  max_abs 1.088e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_24              rel_l2 1.521e-2  cosine 0.999912  max_abs 9.566e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_25              rel_l2 1.593e-2  cosine 0.999888  max_abs 7.731e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_26              rel_l2 1.794e-2  cosine 0.999857  max_abs 7.684e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_27              rel_l2 2.079e-2  cosine 0.999808  max_abs 8.988e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_28              rel_l2 2.443e-2  cosine 0.999714  max_abs 7.402e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_29              rel_l2 2.973e-2  cosine 0.999565  max_abs 7.866e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_30              rel_l2 3.622e-2  cosine 0.999355  max_abs 1.327e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_31              rel_l2 4.680e-2  cosine 0.998917  max_abs 1.650e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_32              rel_l2 6.163e-2  cosine 0.998100  max_abs 1.419e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_33              rel_l2 7.295e-2  cosine 0.997336  max_abs 1.466e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_34              rel_l2 8.775e-2  cosine 0.996148  max_abs 1.455e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_35              rel_l2 9.644e-2  cosine 0.995348  max_abs 8.782e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_36              rel_l2 1.034e-1  cosine 0.994658  max_abs 8.304e3  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_37              rel_l2 1.173e-1  cosine 0.993121  max_abs 1.130e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_38              rel_l2 1.419e-1  cosine 0.989915  max_abs 2.430e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_39              rel_l2 1.387e-1  cosine 0.990385  max_abs 2.010e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_40              rel_l2 1.658e-1  cosine 0.986285  max_abs 3.297e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_41              rel_l2 1.929e-1  cosine 0.981481  max_abs 4.730e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_42              rel_l2 2.023e-1  cosine 0.979588  max_abs 1.654e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_43              rel_l2 2.244e-1  cosine 0.974861  max_abs 2.799e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_44              rel_l2 2.503e-1  cosine 0.968654  max_abs 2.673e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_45              rel_l2 2.949e-1  cosine 0.956557  max_abs 2.832e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_46              rel_l2 3.384e-1  cosine 0.942727  max_abs 2.860e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_47              rel_l2 3.846e-1  cosine 0.926195  max_abs 2.957e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_48              rel_l2 4.444e-1  cosine 0.901243  max_abs 4.188e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_block_49              rel_l2 3.507e-1  cosine 0.938510  max_abs 3.932e4  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps step00_packed_in             rel_l2 1.580e-3  cosine 0.999999  max_abs 3.219e-1  n 3171840
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps text_hidden                  rel_l2 5.724e-4  cosine 1.000000  max_abs 1.029e0  n 235520
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps text_refined                 rel_l2 6.866e-3  cosine 0.999976  max_abs 1.070e0  n 247296
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_sigmas                 rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 5
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_step01                 rel_l2 7.376e-3  cosine 0.999973  max_abs 8.330e-2  n 3580416
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_step02                 rel_l2 2.472e-2  cosine 0.999695  max_abs 2.226e-1  n 3580416
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_step03                 rel_l2 8.381e-2  cosine 0.996486  max_abs 7.895e-1  n 3580416
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_step04                 rel_l2 4.297e-1  cosine 0.907362  max_abs 5.024e0  n 3580416
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_step00_in              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 3580416
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_timesteps              rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 4
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_vel_step01             rel_l2 1.886e-1  cosine 0.982222  max_abs 3.082e0  n 3580416
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_vel_step02             rel_l2 2.995e-1  cosine 0.955186  max_abs 4.312e0  n 3580416
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_vel_step03             rel_l2 3.279e-1  cosine 0.946033  max_abs 5.234e0  n 3580416
+[oracle-fasth3-4step-vsa-bf16-vs-f32] compare-dumps video_vel_step04             rel_l2 3.430e-1  cosine 0.941131  max_abs 5.406e0  n 3580416
+[oracle-fasth3-4step-vsa-bf16-vs-f32] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (2.7s)
+[17:47:36] [oracle] skip oracle-fasth3-4step-dense (no arm in FV_CELLS)
+[17:47:36] [oracle] skip oracle-h3-ref2va-4step (no arm in FV_CELLS)
+[17:47:36] [oracle] skip oracle-ltx25-512p (no arm in FV_CELLS)
+[17:47:36] [oracle] skip oracle-ltx25-512p-dense (no arm in FV_CELLS)
+[17:47:36] [oracle] skip oracle-ltx25-4k (no arm in FV_CELLS)
+[17:47:36] [oracle] skip oracle-ltx25-4k-dense (no arm in FV_CELLS)
+[17:47:36] [oracle] matrix done

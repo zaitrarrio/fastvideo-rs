@@ -1,0 +1,19 @@
+[17:56:53] [oracle] matrix start image=0ad49143bec3413b
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-ea319918-c3a7-153a-91fa-c2bc71796206)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[17:57:25] [oracle] oracle: fetching https://o3pc3w4jfxa3xg-8000.proxy.runpod.net/upstream/664473b-1026174958-11b7/oracle-ltx25-a2v-i2v/oracle-dump.tar
+curl: (22) The requested URL returned error: 404
+[17:57:25] [oracle] oracle: fetch of ltx25-a2v-i2v failed (attempt 1)
+curl: (22) The requested URL returned error: 404
+[17:57:35] [oracle] oracle: fetch of ltx25-a2v-i2v failed (attempt 2)
+curl: (22) The requested URL returned error: 404
+[17:57:45] [oracle] oracle: fetch of ltx25-a2v-i2v failed (attempt 3)
+[17:57:55] [oracle] oracle: fetching https://o3pc3w4jfxa3xg-8000.proxy.runpod.net/upstream/664473b-1026174958-11b7/oracle-ltx25-retake/oracle-dump.tar
+curl: (22) The requested URL returned error: 404
+[17:57:56] [oracle] oracle: fetch of ltx25-retake failed (attempt 1)
+curl: (22) The requested URL returned error: 404
+[17:58:06] [oracle] oracle: fetch of ltx25-retake failed (attempt 2)
+curl: (22) The requested URL returned error: 404
+[17:58:16] [oracle] oracle: fetch of ltx25-retake failed (attempt 3)
+[17:58:26] [oracle] matrix done
+matrix_exit=0

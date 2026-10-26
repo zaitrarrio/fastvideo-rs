@@ -70,6 +70,10 @@
           "format": "uint32",
           "minimum": 0
         },
+        "hub_token": {
+          "description": "The pod's `HF_TOKEN` as the Runpod secret reference\n`{{ RUNPOD_SECRET_fv_hf_token }}` (the owner's secret), never a value:\nfor a stack whose weight steps read gated Hub repositories (sol-ltx25:\n`Lightricks/LTX-2.5`). Default false: the pod env has no entry.",
+          "type": "boolean"
+        },
         "image": {
           "description": "The docker/upstream.Dockerfile target: the image\n`ghcr.io/zaitrarrio/fastvideo-rs-upstream-<image>:<tag>`.",
           "type": "string"

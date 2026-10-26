@@ -1,0 +1,5 @@
+{
+  "edit": "retake:/opt/fvrs-live/scripts/gpu/upstream/../fixtures/beach-push-768x512-24fps.mp4:1.5:3.5:av",
+  "process_s": 2.6299369190237485,
+  "arm": "dense"
+}

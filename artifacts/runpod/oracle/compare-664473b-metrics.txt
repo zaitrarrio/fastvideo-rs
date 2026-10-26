@@ -1,0 +1,6 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/oracle/664473b-1026174958-33ed artifacts/runpod/oracle/664473b-10261756
+same oracle-ltx25-a2v-i2v: {"exit":null,"skipped":"reference dump unavailable"}, no frames
+same oracle-ltx25-retake: {"exit":null,"skipped":"reference dump unavailable"}, no frames
+2 arm(s) the same (0 ran with byte-identical frames, 2 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+no arm ran with frames in both runs: nothing was compared
+exit 1

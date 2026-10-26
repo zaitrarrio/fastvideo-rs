@@ -1,0 +1,5 @@
+{
+  "a2v_audio": "/opt/fvrs-live/scripts/gpu/upstream/../fixtures/speech-flite-44k.flac",
+  "process_s": 5.904461210011505,
+  "arm": "dense"
+}

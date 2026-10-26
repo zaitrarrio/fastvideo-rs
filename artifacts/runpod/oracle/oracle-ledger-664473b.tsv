@@ -1,0 +1,12 @@
+2026-10-26T17:16:56Z	runpod-pod-created g0e1srbtwgor6r fv-lab-upstream-664473b-1026171653-1e64 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition image=ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo@sha256:50f54e99439c96d0b37e32781aa1bb24acb1054d52872a8ef245dd5c8bb85632 max_usd_per_hr=2.5 min_balance_usd=8 cap_s=7200 ready_timeout_s=600 ready_cycles=3
+2026-10-26T17:20:29Z	runpod-pod-ready g0e1srbtwgor6r after_s=212.5
+2026-10-26T17:30:01Z	runpod-pod-created e6l855vip3meed fv-lab-oracle-664473b-1026171653-0fee gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:c971e2ee04b8e976475a94e0cc719fea80fdc08765f7920a5d52d5fbea9c9406 max_usd_per_hr=2.5 min_balance_usd=8 cap_s=5400 ready_timeout_s=600 ready_cycles=3
+2026-10-26T17:30:29Z	runpod-pod-ready e6l855vip3meed after_s=28.6
+2026-10-26T17:48:14Z	runpod-pod-deleted e6l855vip3meed done
+2026-10-26T17:49:31Z	runpod-pod-deleted g0e1srbtwgor6r down
+2026-10-26T17:50:05Z	runpod-pod-created o3pc3w4jfxa3xg fv-lab-upstream-664473b-1026174958-11b7 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition image=ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25@sha256:f236d72f3bba697e17dbeadb2536551cf2b2210a9b63171ba82d162fa3d2003b max_usd_per_hr=2.5 min_balance_usd=8 cap_s=7200 ready_timeout_s=600 ready_cycles=3
+2026-10-26T17:53:06Z	runpod-pod-ready o3pc3w4jfxa3xg after_s=181.1
+2026-10-26T17:56:20Z	runpod-pod-created aab4l1pfdqzb4m fv-lab-oracle-664473b-1026174958-33ed gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition image=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:c971e2ee04b8e976475a94e0cc719fea80fdc08765f7920a5d52d5fbea9c9406 max_usd_per_hr=2.5 min_balance_usd=8 cap_s=3600 ready_timeout_s=600 ready_cycles=3
+2026-10-26T17:56:48Z	runpod-pod-ready aab4l1pfdqzb4m after_s=27.5
+2026-10-26T17:57:27Z	runpod-pod-deleted aab4l1pfdqzb4m done
+2026-10-26T17:59:35Z	runpod-pod-deleted o3pc3w4jfxa3xg down

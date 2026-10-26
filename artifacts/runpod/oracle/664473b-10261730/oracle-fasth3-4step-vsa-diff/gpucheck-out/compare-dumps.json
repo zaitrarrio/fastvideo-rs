@@ -1,0 +1,929 @@
+{
+  "checks": [],
+  "context": {
+    "cuda_feature": true,
+    "dumps": [
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "audio_sigmas",
+        "non_finite": 0,
+        "numel": 5,
+        "ref_norm": 1.619413460819891,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9999928651775534,
+        "max_abs": 0.031123578548431396,
+        "name": "audio_step01",
+        "non_finite": 0,
+        "numel": 13248,
+        "ref_norm": 104.71259069054211,
+        "rel_l2": 0.003777609019523164
+      },
+      {
+        "cosine": 0.9996442507890261,
+        "max_abs": 0.1917213595006615,
+        "name": "audio_step02",
+        "non_finite": 0,
+        "numel": 13248,
+        "ref_norm": 90.58267668086673,
+        "rel_l2": 0.026672919464161157
+      },
+      {
+        "cosine": 0.9895701359140281,
+        "max_abs": 1.0061385333538055,
+        "name": "audio_step03",
+        "non_finite": 0,
+        "numel": 13248,
+        "ref_norm": 70.84103816019491,
+        "rel_l2": 0.14455231162519272
+      },
+      {
+        "cosine": 0.8811021758496159,
+        "max_abs": 2.318925142288208,
+        "name": "audio_step04",
+        "non_finite": 0,
+        "numel": 13248,
+        "ref_norm": 63.919498828498206,
+        "rel_l2": 0.4882173476346954
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "audio_step00_in",
+        "non_finite": 0,
+        "numel": 13248,
+        "ref_norm": 114.88214714523858,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "audio_timesteps",
+        "non_finite": 0,
+        "numel": 4,
+        "ref_norm": 0.5678908387783449,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9994646604075492,
+        "max_abs": 0.31123578548431396,
+        "name": "audio_vel_step01",
+        "non_finite": 0,
+        "numel": 13248,
+        "ref_norm": 120.82597843236118,
+        "rel_l2": 0.03273825270385622
+      },
+      {
+        "cosine": 0.9924304787941638,
+        "max_abs": 1.2650655508041382,
+        "name": "audio_vel_step02",
+        "non_finite": 0,
+        "numel": 13248,
+        "ref_norm": 126.05218433925772,
+        "rel_l2": 0.12283867376627676
+      },
+      {
+        "cosine": 0.9564784901837035,
+        "max_abs": 4.06309849023819,
+        "name": "audio_vel_step03",
+        "non_finite": 0,
+        "numel": 13248,
+        "ref_norm": 129.21052545304656,
+        "rel_l2": 0.29604480444371006
+      },
+      {
+        "cosine": 0.9100974661129015,
+        "max_abs": 3.3946104049682617,
+        "name": "audio_vel_step04",
+        "non_finite": 0,
+        "numel": 13248,
+        "ref_norm": 122.40570383628834,
+        "rel_l2": 0.42458825830275665
+      },
+      {
+        "cosine": 0.9999994656307151,
+        "max_abs": 0.0019529461860656738,
+        "name": "rope_cos",
+        "non_finite": 0,
+        "numel": 56640,
+        "ref_norm": 203.72488536598604,
+        "rel_l2": 0.001043455275779975
+      },
+      {
+        "cosine": 0.9999990407955781,
+        "max_abs": 0.0019507408142089844,
+        "name": "rope_sin",
+        "non_finite": 0,
+        "numel": 56640,
+        "ref_norm": 123.08258838375559,
+        "rel_l2": 0.001385754274366063
+      },
+      {
+        "cosine": 0.9999999917256143,
+        "max_abs": 0.00390625,
+        "name": "step00_b0_adaln",
+        "non_finite": 0,
+        "numel": 19031040,
+        "ref_norm": 2148.3321680515824,
+        "rel_l2": 0.000128683412542083
+      },
+      {
+        "cosine": 0.9999908999308719,
+        "max_abs": 0.0625,
+        "name": "step00_b0_attn_in",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 494.69013068442393,
+        "rel_l2": 0.0042662758003829335
+      },
+      {
+        "cosine": 0.9999846185447026,
+        "max_abs": 3.0,
+        "name": "step00_b0_attn_out",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 22276.86141985236,
+        "rel_l2": 0.005546543725240932
+      },
+      {
+        "cosine": 0.9999804135619758,
+        "max_abs": 0.0390625,
+        "name": "step00_b0_ffn_in",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 181.3700452597926,
+        "rel_l2": 0.006272037160617444
+      },
+      {
+        "cosine": 0.999998405400744,
+        "max_abs": 32.0,
+        "name": "step00_b0_ffn_out",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 124171.01202373665,
+        "rel_l2": 0.001786813124002273
+      },
+      {
+        "cosine": 0.999983415852386,
+        "max_abs": 4.0,
+        "name": "step00_b0_resid_msa",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 11562.154318636765,
+        "rel_l2": 0.005763490038610545
+      },
+      {
+        "cosine": 0.9999999982459231,
+        "max_abs": 0.00390625,
+        "name": "step00_b1_adaln",
+        "non_finite": 0,
+        "numel": 19031040,
+        "ref_norm": 2001.8666736653345,
+        "rel_l2": 0.0000592437329843133
+      },
+      {
+        "cosine": 0.999983744055597,
+        "max_abs": 0.25,
+        "name": "step00_b1_attn_in",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 1362.5782526125145,
+        "rel_l2": 0.0057215386201957975
+      },
+      {
+        "cosine": 0.9997649746865569,
+        "max_abs": 112.25,
+        "name": "step00_b1_attn_out",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 83296.14773889689,
+        "rel_l2": 0.02168134202680686
+      },
+      {
+        "cosine": 0.9999750604871553,
+        "max_abs": 0.2255859375,
+        "name": "step00_b1_ffn_in",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 198.49580206601394,
+        "rel_l2": 0.007064373280060782
+      },
+      {
+        "cosine": 0.9999893910497611,
+        "max_abs": 128.0,
+        "name": "step00_b1_ffn_out",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 304782.2199114965,
+        "rel_l2": 0.004706410744235681
+      },
+      {
+        "cosine": 0.999975757471801,
+        "max_abs": 56.625,
+        "name": "step00_b1_resid_msa",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 143089.42567801868,
+        "rel_l2": 0.006964810667977129
+      },
+      {
+        "cosine": 0.9999999981267856,
+        "max_abs": 0.00390625,
+        "name": "step00_b24_adaln",
+        "non_finite": 0,
+        "numel": 19031040,
+        "ref_norm": 1556.1226148519445,
+        "rel_l2": 0.00006121333427156168
+      },
+      {
+        "cosine": 0.9993989994743836,
+        "max_abs": 2.69873046875,
+        "name": "step00_b24_attn_in",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 1270.1483878015636,
+        "rel_l2": 0.034675428019022694
+      },
+      {
+        "cosine": 0.9991747996486995,
+        "max_abs": 146.625,
+        "name": "step00_b24_attn_out",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 139277.22755532555,
+        "rel_l2": 0.04062156908142062
+      },
+      {
+        "cosine": 0.9993480700259386,
+        "max_abs": 1.171875,
+        "name": "step00_b24_ffn_in",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 519.3794630122057,
+        "rel_l2": 0.03610721030873122
+      },
+      {
+        "cosine": 0.9986134985789119,
+        "max_abs": 495.5,
+        "name": "step00_b24_ffn_out",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 285988.32966922666,
+        "rel_l2": 0.05264620060254476
+      },
+      {
+        "cosine": 0.9998819239192979,
+        "max_abs": 8192.0,
+        "name": "step00_b24_resid_msa",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 987527.9309816569,
+        "rel_l2": 0.015506552648675714
+      },
+      {
+        "cosine": 0.9999999971867934,
+        "max_abs": 0.03125,
+        "name": "step00_b47_adaln",
+        "non_finite": 0,
+        "numel": 19031040,
+        "ref_norm": 5860.101436018378,
+        "rel_l2": 0.0000750165364048233
+      },
+      {
+        "cosine": 0.9020153507418837,
+        "max_abs": 43.8125,
+        "name": "step00_b47_attn_in",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 6582.985915207192,
+        "rel_l2": 0.4433692311153755
+      },
+      {
+        "cosine": 0.9100413368599564,
+        "max_abs": 2992.0,
+        "name": "step00_b47_attn_out",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 860910.1919605522,
+        "rel_l2": 0.42481786298932456
+      },
+      {
+        "cosine": 0.9076201906476707,
+        "max_abs": 9.3046875,
+        "name": "step00_b47_ffn_in",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 1278.5846144732448,
+        "rel_l2": 0.4307637240508622
+      },
+      {
+        "cosine": 0.8400252093569024,
+        "max_abs": 12336.0,
+        "name": "step00_b47_ffn_out",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 3287418.6784712537,
+        "rel_l2": 0.567771651343209
+      },
+      {
+        "cosine": 0.9337573945075905,
+        "max_abs": 26880.0,
+        "name": "step00_b47_resid_msa",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 5454777.803710637,
+        "rel_l2": 0.36391583373924685
+      },
+      {
+        "cosine": 0.9999996644046046,
+        "max_abs": 16.0,
+        "name": "step00_block_0",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 121546.13682075494,
+        "rel_l2": 0.0008193150730492614
+      },
+      {
+        "cosine": 0.9999923314038195,
+        "max_abs": 128.0,
+        "name": "step00_block_1",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 479208.993969375,
+        "rel_l2": 0.0039175490383955664
+      },
+      {
+        "cosine": 0.9999900091862927,
+        "max_abs": 128.0,
+        "name": "step00_block_2",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 501578.2664261584,
+        "rel_l2": 0.004470105879324788
+      },
+      {
+        "cosine": 0.9999886642336561,
+        "max_abs": 128.0,
+        "name": "step00_block_3",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 512219.1246880179,
+        "rel_l2": 0.004761635847230828
+      },
+      {
+        "cosine": 0.9999887854880325,
+        "max_abs": 128.0,
+        "name": "step00_block_4",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 528439.3939669951,
+        "rel_l2": 0.004735963822658012
+      },
+      {
+        "cosine": 0.9999885123612636,
+        "max_abs": 192.0,
+        "name": "step00_block_5",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 541883.3783442732,
+        "rel_l2": 0.004793399156309882
+      },
+      {
+        "cosine": 0.9999881667799659,
+        "max_abs": 128.0,
+        "name": "step00_block_6",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 562119.2220957607,
+        "rel_l2": 0.004865217172180331
+      },
+      {
+        "cosine": 0.9999857683906794,
+        "max_abs": 2048.0,
+        "name": "step00_block_7",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 601320.2235230864,
+        "rel_l2": 0.005815746527355227
+      },
+      {
+        "cosine": 0.9999851264875415,
+        "max_abs": 2048.0,
+        "name": "step00_block_8",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 607110.4660072933,
+        "rel_l2": 0.005916818284285424
+      },
+      {
+        "cosine": 0.9999846324609198,
+        "max_abs": 2048.0,
+        "name": "step00_block_9",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 614261.2254722982,
+        "rel_l2": 0.005988737419700463
+      },
+      {
+        "cosine": 0.9999842413877086,
+        "max_abs": 2048.0,
+        "name": "step00_block_10",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 618402.1364061416,
+        "rel_l2": 0.006051248195347718
+      },
+      {
+        "cosine": 0.9999859753309072,
+        "max_abs": 2048.0,
+        "name": "step00_block_11",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 671617.3587661879,
+        "rel_l2": 0.005746385701326514
+      },
+      {
+        "cosine": 0.9999853831118948,
+        "max_abs": 2048.0,
+        "name": "step00_block_12",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 677074.7358736648,
+        "rel_l2": 0.005859287292749255
+      },
+      {
+        "cosine": 0.9999879264202661,
+        "max_abs": 4096.0,
+        "name": "step00_block_13",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 846858.317593587,
+        "rel_l2": 0.006380802134898922
+      },
+      {
+        "cosine": 0.9999872179739363,
+        "max_abs": 4096.0,
+        "name": "step00_block_14",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 847406.7263817438,
+        "rel_l2": 0.006485737128769687
+      },
+      {
+        "cosine": 0.9999862526506565,
+        "max_abs": 4096.0,
+        "name": "step00_block_15",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 848620.882081879,
+        "rel_l2": 0.0066274366827507
+      },
+      {
+        "cosine": 0.9999850292885948,
+        "max_abs": 4096.0,
+        "name": "step00_block_16",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 848641.2202708359,
+        "rel_l2": 0.006820714498775002
+      },
+      {
+        "cosine": 0.9999832825843534,
+        "max_abs": 4096.0,
+        "name": "step00_block_17",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 852192.3220023982,
+        "rel_l2": 0.007069617654012632
+      },
+      {
+        "cosine": 0.9999104971604859,
+        "max_abs": 8704.0,
+        "name": "step00_block_18",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 880684.8530760522,
+        "rel_l2": 0.013536184799191074
+      },
+      {
+        "cosine": 0.9999120210301765,
+        "max_abs": 8192.0,
+        "name": "step00_block_19",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 911677.4331501763,
+        "rel_l2": 0.013391510276404821
+      },
+      {
+        "cosine": 0.9999130850520807,
+        "max_abs": 8192.0,
+        "name": "step00_block_20",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 944981.6562502559,
+        "rel_l2": 0.013299864526741879
+      },
+      {
+        "cosine": 0.999901919908105,
+        "max_abs": 8192.0,
+        "name": "step00_block_21",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 973152.8860649093,
+        "rel_l2": 0.014111796776432805
+      },
+      {
+        "cosine": 0.9998919576057552,
+        "max_abs": 8192.0,
+        "name": "step00_block_22",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 950945.6233020418,
+        "rel_l2": 0.01480745667458198
+      },
+      {
+        "cosine": 0.9998865139121434,
+        "max_abs": 8192.0,
+        "name": "step00_block_23",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 980296.2079101661,
+        "rel_l2": 0.01518412786915113
+      },
+      {
+        "cosine": 0.9998854706040238,
+        "max_abs": 7680.0,
+        "name": "step00_block_24",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 1001221.2705709004,
+        "rel_l2": 0.015287993109456288
+      },
+      {
+        "cosine": 0.9998608618462139,
+        "max_abs": 7168.0,
+        "name": "step00_block_25",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 999896.8154271961,
+        "rel_l2": 0.016845757993211755
+      },
+      {
+        "cosine": 0.9998113966295374,
+        "max_abs": 7168.0,
+        "name": "step00_block_26",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 1014389.5050780475,
+        "rel_l2": 0.019553869325762866
+      },
+      {
+        "cosine": 0.9996191475371894,
+        "max_abs": 16384.0,
+        "name": "step00_block_27",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 1099345.56488357,
+        "rel_l2": 0.02761581139576987
+      },
+      {
+        "cosine": 0.9995064026605126,
+        "max_abs": 16384.0,
+        "name": "step00_block_28",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 1187845.2119359025,
+        "rel_l2": 0.03141951825916127
+      },
+      {
+        "cosine": 0.9993164004492525,
+        "max_abs": 16384.0,
+        "name": "step00_block_29",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 1369197.364140677,
+        "rel_l2": 0.036971758631749306
+      },
+      {
+        "cosine": 0.9988916570732742,
+        "max_abs": 33792.0,
+        "name": "step00_block_30",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 1712319.42380941,
+        "rel_l2": 0.04708332619933629
+      },
+      {
+        "cosine": 0.9982550153158259,
+        "max_abs": 35840.0,
+        "name": "step00_block_31",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 1880571.752244878,
+        "rel_l2": 0.059050185460749964
+      },
+      {
+        "cosine": 0.9969783808875877,
+        "max_abs": 35840.0,
+        "name": "step00_block_32",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 2058147.791143925,
+        "rel_l2": 0.07769972312097712
+      },
+      {
+        "cosine": 0.9959510588284316,
+        "max_abs": 35840.0,
+        "name": "step00_block_33",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 2282988.5227335687,
+        "rel_l2": 0.08994054985498656
+      },
+      {
+        "cosine": 0.9941802834047276,
+        "max_abs": 35840.0,
+        "name": "step00_block_34",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 2265539.8295417787,
+        "rel_l2": 0.10789037739659325
+      },
+      {
+        "cosine": 0.9931035861225342,
+        "max_abs": 7168.0,
+        "name": "step00_block_35",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 2206201.0964626498,
+        "rel_l2": 0.11745739751115516
+      },
+      {
+        "cosine": 0.9924928957512822,
+        "max_abs": 9216.0,
+        "name": "step00_block_36",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 2231899.205669151,
+        "rel_l2": 0.12253328821990205
+      },
+      {
+        "cosine": 0.9907803828723534,
+        "max_abs": 11264.0,
+        "name": "step00_block_37",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 2199910.9328063363,
+        "rel_l2": 0.1358174888943059
+      },
+      {
+        "cosine": 0.9869833958267311,
+        "max_abs": 18432.0,
+        "name": "step00_block_38",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 2347044.5358818,
+        "rel_l2": 0.16130099572107554
+      },
+      {
+        "cosine": 0.987690332825072,
+        "max_abs": 18944.0,
+        "name": "step00_block_39",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 2989707.7877614144,
+        "rel_l2": 0.15688646878016846
+      },
+      {
+        "cosine": 0.9827362431155485,
+        "max_abs": 28160.0,
+        "name": "step00_block_40",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 3111120.252667731,
+        "rel_l2": 0.18580910616888408
+      },
+      {
+        "cosine": 0.9771949695834352,
+        "max_abs": 42752.0,
+        "name": "step00_block_41",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 3165240.787555778,
+        "rel_l2": 0.2136582697703574
+      },
+      {
+        "cosine": 0.9749240272464841,
+        "max_abs": 16128.0,
+        "name": "step00_block_42",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 3137019.5460540117,
+        "rel_l2": 0.22398773380750192
+      },
+      {
+        "cosine": 0.969782513464073,
+        "max_abs": 25344.0,
+        "name": "step00_block_43",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 3335274.5563097284,
+        "rel_l2": 0.24584973542629726
+      },
+      {
+        "cosine": 0.9634965311186167,
+        "max_abs": 27904.0,
+        "name": "step00_block_44",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 3738438.899706664,
+        "rel_l2": 0.2701595842588764
+      },
+      {
+        "cosine": 0.9511471889627352,
+        "max_abs": 28480.0,
+        "name": "step00_block_45",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 4463893.912305776,
+        "rel_l2": 0.31254309113781376
+      },
+      {
+        "cosine": 0.9368729356106521,
+        "max_abs": 22272.0,
+        "name": "step00_block_46",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 5016155.616712571,
+        "rel_l2": 0.3552604940759827
+      },
+      {
+        "cosine": 0.9202213005146211,
+        "max_abs": 29696.0,
+        "name": "step00_block_47",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 5639680.612592703,
+        "rel_l2": 0.3998255754026109
+      },
+      {
+        "cosine": 0.8968385134592467,
+        "max_abs": 54784.0,
+        "name": "step00_block_48",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 8110766.152288844,
+        "rel_l2": 0.4543591684747911
+      },
+      {
+        "cosine": 0.9366158031162127,
+        "max_abs": 52224.0,
+        "name": "step00_block_49",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 13983588.670158975,
+        "rel_l2": 0.3561295015527143
+      },
+      {
+        "cosine": 0.9999947573877146,
+        "max_abs": 0.125,
+        "name": "step00_packed_in",
+        "non_finite": 0,
+        "numel": 3171840,
+        "ref_norm": 3829.0223214687326,
+        "rel_l2": 0.0032380905157806407
+      },
+      {
+        "cosine": 0.9999837957663207,
+        "max_abs": 188.572265625,
+        "name": "text_hidden",
+        "non_finite": 0,
+        "numel": 235520,
+        "ref_norm": 15452.191149004037,
+        "rel_l2": 0.012886586687603892
+      },
+      {
+        "cosine": 0.9999666699079912,
+        "max_abs": 1.5,
+        "name": "text_refined",
+        "non_finite": 0,
+        "numel": 247296,
+        "ref_norm": 1099.426558584036,
+        "rel_l2": 0.008168590096995342
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "video_sigmas",
+        "non_finite": 0,
+        "numel": 5,
+        "ref_norm": 1.8543860091520934,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9999739064145029,
+        "max_abs": 0.07918936014175415,
+        "name": "video_step01",
+        "non_finite": 0,
+        "numel": 3580416,
+        "ref_norm": 1842.065917056883,
+        "rel_l2": 0.007224154285154042
+      },
+      {
+        "cosine": 0.9996895979512163,
+        "max_abs": 0.26595360040664673,
+        "name": "video_step02",
+        "non_finite": 0,
+        "numel": 3580416,
+        "ref_norm": 1753.8374930443879,
+        "rel_l2": 0.02491756178822133
+      },
+      {
+        "cosine": 0.9964230991250365,
+        "max_abs": 0.8006579875946045,
+        "name": "video_step03",
+        "non_finite": 0,
+        "numel": 3580416,
+        "ref_norm": 1564.2963147302714,
+        "rel_l2": 0.0845776652617157
+      },
+      {
+        "cosine": 0.9056196832178057,
+        "max_abs": 6.036900281906128,
+        "name": "video_step04",
+        "non_finite": 0,
+        "numel": 3580416,
+        "ref_norm": 1929.207483557829,
+        "rel_l2": 0.43482470527552447
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "video_step00_in",
+        "non_finite": 0,
+        "numel": 3580416,
+        "ref_norm": 1891.7670491618976,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "video_timesteps",
+        "non_finite": 0,
+        "numel": 4,
+        "ref_norm": 0.2159805861847432,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9829420926697864,
+        "max_abs": 2.9300074577331543,
+        "name": "video_vel_step01",
+        "non_finite": 0,
+        "numel": 3580416,
+        "ref_norm": 2665.291404123649,
+        "rel_l2": 0.1847351189022313
+      },
+      {
+        "cosine": 0.954607077801509,
+        "max_abs": 5.181471109390259,
+        "name": "video_vel_step02",
+        "non_finite": 0,
+        "numel": 3580416,
+        "ref_norm": 2701.069297755695,
+        "rel_l2": 0.30135723015766985
+      },
+      {
+        "cosine": 0.9454986524631062,
+        "max_abs": 5.959315896034241,
+        "name": "video_vel_step03",
+        "non_finite": 0,
+        "numel": 3580416,
+        "ref_norm": 2697.5503997830083,
+        "rel_l2": 0.32991334188644383
+      },
+      {
+        "cosine": 0.9403235218198216,
+        "max_abs": 6.6578710079193115,
+        "name": "video_vel_step04",
+        "non_finite": 0,
+        "numel": 3580416,
+        "ref_norm": 2686.522755806363,
+        "rel_l2": 0.3456020987726924
+      }
+    ],
+    "mode": "exact"
+  },
+  "elapsed_s": 1.5614717150000001,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_DUMP_OPS": "0,1,24,47",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "compare-dumps",
+  "status": "pass"
+}

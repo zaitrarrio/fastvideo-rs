@@ -17,11 +17,12 @@ use fastvideo_deploy::provider::runpod::PodListing;
 use fastvideo_deploy::provider::{InstanceId, InstanceState, Provider};
 
 use crate::oracle::{
-    OracleOps, OraclePlan, RuntimePod, UpPod, UpState, UpstreamPlan, UPSTREAM_FAMILY,
-    UPSTREAM_FETCH_SKIP,
+    OracleOps, OraclePlan, RefState, RuntimePod, UpPod, UpState, UpstreamPlan, ORACLE_DUMP_TAR,
+    UPSTREAM_FAMILY, UPSTREAM_FETCH_SKIP,
 };
 use crate::pod::{
-    fetch_tree, name_taken, or_delete, run_dir, write_record, FetchSkip, PodRecord, TreeFetch,
+    fetch_tree, hrefs, name_taken, or_delete, run_dir, write_record, FetchSkip, PodRecord,
+    TreeFetch,
 };
 
 /// The binary's [`OracleOps`]. Fields are the seams; `child`, `exit` and
@@ -241,9 +242,40 @@ impl OracleOps for LiveOps<'_> {
         })
     }
 
-    fn reference_served(&mut self, pod: &UpPod, target: &str) -> bool {
-        self.get(&format!("{}/oracle-{target}/ORACLE_DONE", pod.base()), 30)
+    fn reference(&mut self, pod: &UpPod, target: &str) -> RefState {
+        let dir = format!("{}/oracle-{target}/", pod.base());
+        if !self
+            .get(&format!("{dir}ORACLE_DONE"), 30)
             .is_some_and(|(s, _)| s == 200)
+        {
+            return RefState::Pending;
+        }
+        // `ORACLE_DONE` is written after the tar's rename, so the listing is
+        // final; one that cannot be read is asked again at the next poll.
+        let Some(listing) = self
+            .get(&dir, 30)
+            .filter(|(s, _)| *s == 200)
+            .map(|(_, b)| String::from_utf8_lossy(&b).into_owned())
+        else {
+            return RefState::Pending;
+        };
+        if hrefs(&listing).iter().any(|h| h == ORACLE_DUMP_TAR) {
+            return RefState::Served;
+        }
+        let exit = match self
+            .get(&format!("{dir}cell.json"), 30)
+            .filter(|(s, _)| *s == 200)
+        {
+            None => "no cell.json".to_owned(),
+            Some((_, b)) => match serde_json::from_slice::<serde_json::Value>(&b) {
+                Err(_) => "cell.json malformed".to_owned(),
+                Ok(v) => match &v["exit"] {
+                    serde_json::Value::Null => "cell.json has no exit".to_owned(),
+                    e => format!("cell exit {e}"),
+                },
+            },
+        };
+        RefState::NoDump(format!("ORACLE_DONE without {ORACLE_DUMP_TAR}; {exit}"))
     }
 
     fn upstream_state(&mut self, pod: &UpPod) -> UpState {

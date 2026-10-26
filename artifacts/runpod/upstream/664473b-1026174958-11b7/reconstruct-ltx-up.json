@@ -1,0 +1,7 @@
+[
+  {
+    "path": "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+    "ok": false,
+    "error": "curl failed: https://huggingface.co/Lightricks/LTX-2.5/resolve/5e6e71018ee1756ed329b697a7b4aedc934dfce9/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors: curl: (22) The requested URL returned error: 401\n"
+  }
+]

@@ -1,0 +1,11 @@
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+cpus=256 mem=755G
+cgroup=v2 /sys/fs/cgroup pod_ram_limit_mib=89645 oom_kills=0
+mfs#euro.runpod.net:9421  2.3P  1.8P  524T  78% /workspace
+37M	/opt/upstream/bin
+6.6G	/opt/upstream/sol-ltx25
+65M	/opt/upstream/src
+59M	/opt/upstream/tools
+sol-ltx25: ltx2:fd4ded7f2d88d3da713abcdd4ad41ecc4a9314ca:sol:6c2f582ba9681dfe352ae4ca23b6f0030cf120cf:v2
+HF_HOME=/opt/upstream/hf
+HOME=/root

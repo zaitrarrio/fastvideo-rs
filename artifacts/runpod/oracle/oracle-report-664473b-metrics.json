@@ -1,0 +1,41 @@
+{
+  "upstream": [
+    {
+      "stack": "sol-ltx25",
+      "id": "o3pc3w4jfxa3xg",
+      "tag": "664473b-1026174958-11b7",
+      "released": "the runtime side ended; the hold is lifted",
+      "fetched": {
+        "Ok": null
+      },
+      "deleted": {
+        "Ok": null
+      }
+    }
+  ],
+  "served": [
+    "ltx25-a2v-i2v",
+    "ltx25-retake"
+  ],
+  "missing": [],
+  "runtime_cells": [
+    "oracle-ltx25-a2v-i2v",
+    "oracle-ltx25-a2v-i2v-diff",
+    "oracle-ltx25-a2v-i2v-ownaud",
+    "oracle-ltx25-a2v-i2v-ownaud-diff",
+    "oracle-ltx25-retake",
+    "oracle-ltx25-retake-diff",
+    "oracle-ltx25-retake-ownenc",
+    "oracle-ltx25-retake-ownenc-diff"
+  ],
+  "runtime_started": true,
+  "runtime_tag": "664473b-1026174958-33ed",
+  "runtime_pod": {
+    "id": "aab4l1pfdqzb4m",
+    "url": "https://aab4l1pfdqzb4m-8000.proxy.runpod.net",
+    "tag": "664473b-1026174958-33ed"
+  },
+  "runtime_ok": true,
+  "runtime_exit_code": 0,
+  "problems": []
+}

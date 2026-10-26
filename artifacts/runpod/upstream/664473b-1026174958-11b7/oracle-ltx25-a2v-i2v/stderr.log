@@ -1,0 +1,8 @@
+[oracle_dump] patched ltx_core.model.transformer.model
+[oracle_dump] patched ltx_core.text_encoders.gemma.encoders.base_encoder
+[oracle_dump] patched ltx_core.text_encoders.gemma.feature_extractor
+[oracle_dump] patched ltx_pipelines.utils.helpers
+[oracle_dump] patched ltx_pipelines.utils.blocks
+usage: ltx25-distilled [--distilled-checkpoint-path DISTILLED_CHECKPOINT_PATH]
+                       [--transformer-path TRANSFORMER_PATH]
+ltx25-distilled: error: Path not found: /root/upstream-weights/LTX-2.5/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors

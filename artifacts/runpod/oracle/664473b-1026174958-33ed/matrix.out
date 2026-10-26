@@ -1,0 +1,23 @@
+[17:56:47] [oracle] matrix start image=0ad49143bec3413b
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-567bdf21-28aa-36ef-bb83-3d4733a95ab5)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[17:56:47] [oracle] pod memory: cgroup v2 /sys/fs/cgroup, limit 89645 MiB, oom_kills 0
+[17:56:47] [oracle] skip oracle-fasth3-8step (no arm in FV_CELLS)
+[17:56:47] [oracle] skip oracle-fasth3-8step-vsa0 (no arm in FV_CELLS)
+[17:56:47] [oracle] skip oracle-fasth3-4step-vsa (no arm in FV_CELLS)
+[17:56:47] [oracle] skip oracle-fasth3-4step-dense (no arm in FV_CELLS)
+[17:56:47] [oracle] skip oracle-h3-ref2va-4step (no arm in FV_CELLS)
+[17:56:47] [oracle] skip oracle-ltx25-512p (no arm in FV_CELLS)
+[17:56:47] [oracle] skip oracle-ltx25-512p-dense (no arm in FV_CELLS)
+[17:56:47] [oracle] skip oracle-ltx25-4k (no arm in FV_CELLS)
+[17:56:47] [oracle] skip oracle-ltx25-4k-dense (no arm in FV_CELLS)
+[17:56:48] [oracle] oracle: fetching https://o3pc3w4jfxa3xg-8000.proxy.runpod.net/upstream/664473b-1026174958-11b7/oracle-ltx25-retake/oracle-dump.tar
+[17:56:48] [oracle] oracle: fetching https://o3pc3w4jfxa3xg-8000.proxy.runpod.net/upstream/664473b-1026174958-11b7/oracle-ltx25-a2v-i2v/oracle-dump.tar
+[17:56:48] [oracle] oracle: fetch of ltx25-retake failed (attempt 1)
+[17:56:48] [oracle] oracle: fetch of ltx25-a2v-i2v failed (attempt 1)
+[17:56:58] [oracle] oracle: fetch of ltx25-retake failed (attempt 2)
+[17:56:58] [oracle] oracle: fetch of ltx25-a2v-i2v failed (attempt 2)
+[17:57:08] [oracle] oracle: fetch of ltx25-retake failed (attempt 3)
+[17:57:08] [oracle] oracle: fetch of ltx25-a2v-i2v failed (attempt 3)
+[17:57:18] [oracle] matrix done
+matrix_exit=0

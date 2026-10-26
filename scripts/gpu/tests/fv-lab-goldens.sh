@@ -222,8 +222,11 @@ done
 #     UP_SHA fixed), and for the fastvideo stack FV_MIN_RAM_GB=192, which
 #     oracle.sh does not set but takes from its caller's environment (§15.7's
 #     command and docs/oracle.md "Upstream cells: host RAM" set it; fv-lab
-#     takes it from the stack's min_ram_gb). tests/oracle_driver.rs holds
-#     fv-lab's upstream pod body to them (the cap watchdog and `env {}` excepted).
+#     takes it from the stack's min_ram_gb). The sol-ltx25 body carries
+#     `env: {HF_TOKEN: "{{ RUNPOD_SECRET_fv_hf_token }}"}` (its weights:ltx25
+#     step; fv-lab's `hub_token = true`), the fastvideo body no env.
+#     tests/oracle_driver.rs holds fv-lab's upstream pod body to them (the cap
+#     watchdog and fv-lab's `env {}` where the script sends none excepted).
 UP_SHA_GOLDEN=1234567890abcdef1234567890abcdef12345678
 upstream_golden() { # <stack> [K=V …]
   local stack="$1"

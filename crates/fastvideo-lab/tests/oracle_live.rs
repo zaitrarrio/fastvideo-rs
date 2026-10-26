@@ -4,7 +4,7 @@
 //! the runtime side. What the review of #216 asked to hold: a pod whose
 //! records cannot be written is deleted; a stopped runtime side gets SIGTERM
 //! and is waited for; a failed one's pod is deleted; a reused tag is refused;
-//! the URL and hold files.
+//! the URL and hold files; a reference served only with its dump.
 #![cfg(unix)]
 
 use std::cell::RefCell;
@@ -22,7 +22,7 @@ use fastvideo_deploy::provider::{
     OfferQuery, Probe, Provider, ProviderError, ProviderKind, Reach, ReachOptions,
 };
 use fastvideo_lab::oracle::{
-    plan_oracle, OracleOps, OraclePlan, OracleRequest, Stacks, UpPod, STOCK_WAIT_S,
+    plan_oracle, OracleOps, OraclePlan, OracleRequest, RefState, Stacks, UpPod, STOCK_WAIT_S,
 };
 use fastvideo_lab::oracle_live::LiveOps;
 use fastvideo_lab::plan::Lab;
@@ -519,10 +519,78 @@ fn references_and_the_upstream_run_through_the_proxy() {
     };
     let base = "https://up1-8000.proxy.runpod.net/upstream/t1";
     let mut http = FakeHttp::default();
+    // fasth3-4step-vsa: done with its dump (fv-gpucheck serve's listing).
     http.answers.insert(
         format!("{base}/oracle-fasth3-4step-vsa/ORACLE_DONE"),
-        (200, String::new()),
+        (200, "done\n".into()),
     );
+    http.answers.insert(
+        format!("{base}/oracle-fasth3-4step-vsa/"),
+        (
+            200,
+            listing(&[
+                "ORACLE_DONE",
+                "cell.json",
+                "dump.ls",
+                "oracle-dump.tar",
+                "oracle_meta.json",
+            ]),
+        ),
+    );
+    // ltx25-retake: ORACLE_DONE without a dump (the 2026-10-26 run, its
+    // cell exited 2): missing, with the cell's exit.
+    http.answers.insert(
+        format!("{base}/oracle-ltx25-retake/ORACLE_DONE"),
+        (200, "done\n".into()),
+    );
+    http.answers.insert(
+        format!("{base}/oracle-ltx25-retake/"),
+        (
+            200,
+            listing(&["ORACLE_DONE", "cell.json", "mem.log", "stderr.log"]),
+        ),
+    );
+    http.answers.insert(
+        format!("{base}/oracle-ltx25-retake/cell.json"),
+        (
+            200,
+            r#"{"cell":"oracle-ltx25-retake","exit":2,"seconds":3}"#.into(),
+        ),
+    );
+    // ltx25-a2v-i2v: no dump and no cell.json; a partial name is no tar.
+    http.answers.insert(
+        format!("{base}/oracle-ltx25-a2v-i2v/ORACLE_DONE"),
+        (200, "done\n".into()),
+    );
+    http.answers.insert(
+        format!("{base}/oracle-ltx25-a2v-i2v/"),
+        (200, listing(&["ORACLE_DONE", "oracle-dump.tar.part"])),
+    );
+    // ltx25-i2v: no dump, cell.json not JSON; ltx25-kf: no dump, its exit
+    // null (a cell killed before it wrote one).
+    for (t, cell) in [
+        ("ltx25-i2v", "{\"cell\":"),
+        ("ltx25-kf", r#"{"cell":"oracle-ltx25-kf","exit":null}"#),
+    ] {
+        http.answers.insert(
+            format!("{base}/oracle-{t}/ORACLE_DONE"),
+            (200, "done\n".into()),
+        );
+        http.answers.insert(
+            format!("{base}/oracle-{t}/"),
+            (200, listing(&["ORACLE_DONE", "cell.json"])),
+        );
+        http.answers
+            .insert(format!("{base}/oracle-{t}/cell.json"), (200, cell.into()));
+    }
+    // ltx25-512p: ORACLE_DONE but the listing not answered (a proxy 502):
+    // asked again at the next poll.
+    http.answers.insert(
+        format!("{base}/oracle-ltx25-512p/ORACLE_DONE"),
+        (200, "done\n".into()),
+    );
+    http.answers
+        .insert(format!("{base}/oracle-ltx25-512p/"), (502, String::new()));
     http.answers
         .insert(format!("{base}/DONE"), (200, "done t1\n".into()));
     let prov = FakeProvider::default();
@@ -535,8 +603,27 @@ fn references_and_the_upstream_run_through_the_proxy() {
         None,
         None,
         |o| {
-            assert!(o.reference_served(&pod, "fasth3-4step-vsa"));
-            assert!(!o.reference_served(&pod, "fasth3-8step"));
+            assert_eq!(o.reference(&pod, "fasth3-4step-vsa"), RefState::Served);
+            assert_eq!(o.reference(&pod, "fasth3-8step"), RefState::Pending);
+            assert_eq!(
+                o.reference(&pod, "ltx25-retake"),
+                RefState::NoDump("ORACLE_DONE without oracle-dump.tar; cell exit 2".into())
+            );
+            assert_eq!(
+                o.reference(&pod, "ltx25-a2v-i2v"),
+                RefState::NoDump("ORACLE_DONE without oracle-dump.tar; no cell.json".into())
+            );
+            assert_eq!(o.reference(&pod, "ltx25-512p"), RefState::Pending);
+            assert_eq!(
+                o.reference(&pod, "ltx25-i2v"),
+                RefState::NoDump("ORACLE_DONE without oracle-dump.tar; cell.json malformed".into())
+            );
+            assert_eq!(
+                o.reference(&pod, "ltx25-kf"),
+                RefState::NoDump(
+                    "ORACLE_DONE without oracle-dump.tar; cell.json has no exit".into()
+                )
+            );
             assert_eq!(
                 o.upstream_state(&pod),
                 fastvideo_lab::oracle::UpState::Finished
@@ -544,8 +631,20 @@ fn references_and_the_upstream_run_through_the_proxy() {
             o.keepalive(&pod);
         },
     );
-    assert!(http
-        .asked
-        .borrow()
-        .contains(&"https://up1-8000.proxy.runpod.net/keepalive.bin".to_owned()));
+    let asked = http.asked.borrow();
+    assert!(asked.contains(&"https://up1-8000.proxy.runpod.net/keepalive.bin".to_owned()));
+    // The dump is looked up in the directory's listing, never downloaded.
+    assert!(!asked.iter().any(|u| u.ends_with("/oracle-dump.tar")));
+    // A target without ORACLE_DONE is not asked further.
+    assert!(!asked.iter().any(|u| u.ends_with("/oracle-fasth3-8step/")));
+}
+
+/// A directory listing as `fv-gpucheck serve` writes it.
+fn listing(names: &[&str]) -> String {
+    let mut s = String::from("<!DOCTYPE html>\n<html><body><ul>\n");
+    for n in names {
+        s.push_str(&format!("<li><a href=\"{n}\">{n}</a></li>\n"));
+    }
+    s.push_str("</ul></body></html>\n");
+    s
 }
