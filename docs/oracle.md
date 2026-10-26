@@ -80,8 +80,8 @@ the floor the Rust-vs-Python profile is judged against.
 Results: `artifacts/runpod/oracle/<tag>/oracle-<target>-diff/` (the stderr
 table and `gpucheck-out/*.json`); the dumps themselves stay on the pods.
 
-**With fv-lab** (ADR-0019 §19 and §20, proposed until their GPU checks
-pass): the same run on fv-deploy's guards, for the targets that are cells of
+**With fv-lab** (ADR-0019 §19 and §20, proposed; §19.7's GPU check passed
+on `664473b`, §20.7's is to be re-run once the Hub token secret exists): the same run on fv-deploy's guards, for the targets that are cells of
 the `oracle` tier: the nine tensor-diff targets, and the ten LTX clip-metric
 targets (`ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,retake,retake-v,retake-a,extend,a2v-guided}`,
 the tier's extra cells, run when `--cells` names their arms; their ffmpeg /
@@ -99,8 +99,12 @@ e.g. `oracle-fasth3-4step-vsa,oracle-fasth3-4step-vsa-diff,…`). It brings up
 one upstream pod per stack of `lab/upstream.toml` that makes a selected
 target (the stack's image at `--upstream-image-tag`, default `latest`
 pinned to its digest; its host-RAM floor, 192 GB for the FastVideo stack,
-below), waits for every selected reference's `ORACLE_DONE` (keeping the
-pods alive with `keepalive.bin`), then runs the tier's runtime pod (`fv-lab
+below), waits for every selected reference (keeping the pods alive with
+`keepalive.bin`): a reference is served when its `ORACLE_DONE` **and**
+`oracle-dump.tar` exist; `ORACLE_DONE` alone (the cell ended without a dump)
+makes the target missing at once, with its `cell.json` exit, and when no
+reference is served the upstream pods are released, no runtime pod is made and
+the run fails. Then it runs the tier's runtime pod (`fv-lab
 pod up --wait` with `FV_ORACLE_URL` set to the serving pods) and fetches and
 deletes the upstream pods when the runtime pod has every reference, when no
 runtime pod is ready within `--stock-wait-s` (2,100 s), 1,800 s after the runtime
@@ -110,6 +114,14 @@ Results: `artifacts/runpod/oracle/<tag>/` as above and
 `artifacts/runpod/upstream/<tag>/` (the reference run, without dumps or
 clips). `--url-file` / `--hold-upstream` let another reader (the GPU check's
 script side) use the same reference.
+**The LTX references need a Hub token.** `weights:ltx25` / `weights:ltx25-dev`
+range-read the gated `Lightricks/LTX-2.5`; the `sol-ltx25` pod gets `HF_TOKEN`
+as the Runpod secret reference `{{ RUNPOD_SECRET_fv_hf_token }}` (`hub_token =
+true` in `lab/upstream.toml`; `runpod-http.sh upstream` does the same for those
+steps). The owner creates that secret once: a read token of an account that
+accepted the LTX-2.5 licence (docs/ops/runpod-secrets.md). Without it every
+LTX reference is missing (ADR-0019 §20.7, "First attempt"); the upstream
+`box.txt` line `hf_token=…` says where the pod's token came from.
 For a clip-metric target add `--fetch-tree --fetch-skip '/frames/'`: the
 report and the clip copies (`ours.mp4`, `own*.mp4`, `reference.mp4`) are files
 of the run directory, not of the default fetch's summaries; the report is in

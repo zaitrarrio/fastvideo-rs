@@ -629,7 +629,8 @@ tree from the R2 weights store onto the container disk, right before the first a
   skipped as `wall cap near`, so `DONE` is written, and `pod up --wait` stops waiting 15 min before the cap and
   fetches what is there.
 - The R2 key is two Runpod secret references in the pod's env (`fv_r2_access_key_id`, `fv_r2_secret_access_key`, filled
-  in by Runpod); `fv-lab run` gives it to the plan step only. Nothing to set locally.
+  in by Runpod); `fv-lab run` gives it to the plan step only. Nothing to set locally. The secrets the pods reference
+  (and the upstream pods' `fv_hf_token`): docs/ops/runpod-secrets.md.
 - `fv-lab run gold --all --dry-run …` prints the plan: one `dry-run weights …` line (18 trees, 530.74 GB, at most
   147.86 GB at once) and a `dry-run r2 <arm>: drop …; fetch …` line before each arm that fetches. The gold tier's
   container disk (300 GB) holds the largest arm (`h3-8step`, 147.86 GB) plus the 120 GB every volume tier has
