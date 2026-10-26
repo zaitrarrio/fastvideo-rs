@@ -35,7 +35,8 @@
 # After the pod script is deleted (once its tier's GPU check has passed), it
 # is read from the parent of the commit that deleted it when the history holds
 # that commit; otherwise (CI's shallow clone) the fixtures are kept as they are
-# and the script says so. No network, no GPU; needs bash, sed and python3.
+# and the script says so. No network, no GPU; needs bash, awk (gawk, mawk or
+# busybox: plain-string matches only) and python3.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -62,13 +63,28 @@ source_of() {
   echo "$TMP/history/$rel"
 }
 
-# cut <file> <first-line ERE> <last-line ERE>: the lines from the first match
-# of the first pattern to the next match of the second, inclusive; empty is an
-# error (the script changed shape).
+# cut_block <file> <start> <how> [<end>]: the lines from the first line that
+# starts with <start> through the line that ends the block, inclusive: <how>
+# `line` (the start line alone), `exact` (the next line equal to <end>) or
+# `suffix` (the next line ending in <end>). Plain strings, no regular
+# expressions, handed to awk through the environment (`-v` would read
+# backslash escapes), so gawk, mawk and busybox awk cut the same lines. Empty
+# is an error (the script changed shape).
 cut_block() {
   local out
-  out="$(awk -v a="$2" -v b="$3" 'go == 0 && $0 ~ a { go = 1 } go == 1 { print; if ($0 ~ b) exit }' "$1")"
-  [[ -n "$out" ]] || { echo "fv-lab-experiment-goldens: no block /$2/ … /$3/ in $1" >&2; return 1; }
+  out="$(CUT_START="$2" CUT_HOW="$3" CUT_END="${4:-}" awk '
+    BEGIN { a = ENVIRON["CUT_START"]; how = ENVIRON["CUT_HOW"]; b = ENVIRON["CUT_END"] }
+    go == 0 && substr($0, 1, length(a)) == a {
+      go = 1; print
+      if (how == "line" || (how == "suffix" && length($0) >= length(b) && substr($0, length($0) - length(b) + 1) == b)) exit
+      next
+    }
+    go == 1 {
+      print
+      if (how == "exact" && $0 == b) exit
+      if (how == "suffix" && length($0) >= length(b) && substr($0, length($0) - length(b) + 1) == b) exit
+    }' "$1")"
+  [[ -n "$out" ]] || { echo "fv-lab-experiment-goldens: no block from [$2] ($3 [${4:-}]) in $1" >&2; return 1; }
   printf '%s\n' "$out"
 }
 
@@ -84,7 +100,10 @@ fi
 
 # 1. The prep step's prompt sets: its own Python, on its own input.
 mkdir -p "$TMP/fvw" "$TMP/srv" "$TMP/stub" "$TMP/new"
-awk '/^  "\$PY" - "\$G\/prompts-hd5.json" "\$L" <<'"'"'PYEOF'"'"'$/ { go = 1; next } go && /^PYEOF$/ { exit } go { print }' \
+# The heredoc's body: the lines between its opening line (matched as a plain
+# string, through the environment as in cut_block) and `PYEOF`.
+PREP_OPEN="  \"\$PY\" - \"\$G/prompts-hd5.json\" \"\$L\" <<'PYEOF'" \
+  awk 'BEGIN { o = ENVIRON["PREP_OPEN"] } go == 0 && $0 == o { go = 1; next } go && $0 == "PYEOF" { exit } go { print }' \
   "$src" >"$TMP/prep.py"
 [[ -s "$TMP/prep.py" ]] || { echo "fv-lab-experiment-goldens: no prep Python in $POD" >&2; exit 2; }
 env -i PATH="/usr/local/bin:/usr/bin:/bin" HOME="$TMP" LC_ALL=C \
@@ -95,14 +114,14 @@ cp "$TMP/fvw/prompts-trace-768p.json" "$TMP/new/prompts-h3-graphs-trace-768p.jso
 # 2. The trace and cells steps' commands.
 {
   echo 'set -u'
-  cut_block "$src" '^ARMS="' '^ARMS="'
-  cut_block "$src" '^CKS="' '^CKS="'
-  cut_block "$src" '^COMMON=\(' '\)$'
-  cut_block "$src" '^arm_env\(\) \{' '^\}$'
-  cut_block "$src" '^ck_args\(\) \{' '^\}$'
-  cut_block "$src" '^gen\(\) \{' '^\}$'
-  cut_block "$src" '^if want trace; then$' '^fi$'
-  cut_block "$src" '^if want cells; then$' '^fi$'
+  cut_block "$src" 'ARMS="' line
+  cut_block "$src" 'CKS="' line
+  cut_block "$src" 'COMMON=(' suffix ')'
+  cut_block "$src" 'arm_env() {' exact '}'
+  cut_block "$src" 'ck_args() {' exact '}'
+  cut_block "$src" 'gen() {' exact '}'
+  cut_block "$src" 'if want trace; then' exact 'fi'
+  cut_block "$src" 'if want cells; then' exact 'fi'
 } >"$TMP/steps.sh"
 # The stand-in for env(1): the process's directory and its arguments, which
 # must hold no whitespace (the fixture is space-separated).
@@ -128,7 +147,12 @@ if grep -rl 'argument with whitespace' "$TMP/srv" >/dev/null 2>&1; then
   echo "fv-lab-experiment-goldens: an argument holds whitespace: $(grep -rh 'argument with whitespace' "$TMP/srv" | head -1)" >&2
   exit 2
 fi
-sed -e "s#^$TMP/srv#/srv#" -e "s#$TMP/srv#/srv#g" -e "s#$TMP/fvw#/fvw#g" "$TMP/calls.txt" >"$TMP/new/h3-graphs-script.txt"
+# Plain-string replacement (the temp dir may hold `.`, which sed reads as any character).
+python3 -I -c '
+import sys
+tmp, src, dst = sys.argv[1:]
+text = open(src).read().replace(tmp + "/srv", "/srv").replace(tmp + "/fvw", "/fvw")
+open(dst, "w").write(text)' "$TMP" "$TMP/calls.txt" "$TMP/new/h3-graphs-script.txt"
 
 # 3. Write or compare.
 mkdir -p "$OUT"
