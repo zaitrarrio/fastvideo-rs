@@ -131,7 +131,8 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         Some(TierWeights::VolumeR2)
     );
     // Only the gold tier asks for a host-RAM floor (its 14B arm's host load,
-    // lab/tiers.toml); every other tier's pod has Runpod's default.
+    // lab/tiers.toml); every other tier's pod has Runpod's default. 256 GB
+    // since the 7e580e5 gold run measured that arm's peak (ADR-0019 §16.10).
     assert_eq!(floors, 1, "one tier with min_ram_gb (gold)");
-    assert_eq!(lab.tier("gold").and_then(|t| t.min_ram_gb), Some(192));
+    assert_eq!(lab.tier("gold").and_then(|t| t.min_ram_gb), Some(256));
 }

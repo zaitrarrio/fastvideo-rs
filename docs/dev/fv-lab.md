@@ -485,8 +485,10 @@ tree from the R2 weights store onto the container disk, right before the first a
   `fv-lab run gold --all --work /workspace --scratch /fvscratch`; without it (the scratch disk is then the work
   directory), or with a scratch under `/workspace`, the run is refused (exit 2).
 - The idle watchdog of a `volume+r2` pod waits 85 minutes at 0 % GPU (a fetch uses none), not 10.
-- The gold tier's pod asks for at least 192 GB of host RAM (`min_ram_gb = 192`, Runpod `minRAMPerGPU`): its 14B arm
-  copies the f32 DiT and text encoder onto the host (about 80 GB) right after fetching 84 GB of trees. A tier
+- The gold tier's pod asks for at least 256 GB of host RAM (`min_ram_gb = 256`, Runpod `minRAMPerGPU`): its 14B arm
+  peaked at 156,004 MiB of process memory at `7e580e5` (the f32 DiT and text encoder, each held twice on the host)
+  right after fetching 84 GB of trees, and Runpod's GB are 10^9 bytes (ADR-0019 §16.10 "Raised to 256"). Fewer hosts
+  qualify; a create none can place is fv-deploy's `no capacity` (nothing created, nothing billed). A tier
   without `min_ram_gb` gets Runpod's default floor (8 GB per GPU) and the host's share. `pod up` logs the floor, the
   pod's `ram=…GB vcpu=…` from Runpod's answer, and records them in `pod.json` (ADR-0019 §16.10).
 - Any pod's run gets `FV_RUN_DEADLINE` from `pod up` (the cap less 20 min): arms that could not finish by then are

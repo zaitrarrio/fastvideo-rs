@@ -1991,3 +1991,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §16.7 "Result", §16.10; docs/adr/0023-lab-report-and-ci-bridge.md "What a gold run then does"
 - Verification: `fv-lab report tiers --check`, `fv-lab gold check` (28 validated, 0 errors), `fv-lab gold cells --check` (fv-lab 0.1.68 built at `7e580e5`), every cited path, JSON key and run record present (the checks of `tests/gold_files.rs`), `fv-lab-goldens.sh`, `fv-lab-experiment-goldens.sh`, `fv-lab-report-goldens.sh`, `fv-lab-restored-goldens.sh` with `--check`, `scripts/gpu/lint.sh`
+
+### FVID · 2026-10-26 · FVID-2026-10-26-gold-min-ram-256
+- Trigger: the gold run at `7e580e5` (ADR-0019 §16.7 "Result"): `wan14b-plug-4step` peaked at 156,004 MiB of process memory against the gold tier's 192 GB floor, which is 183,105 MiB (Runpod's GB are 10^9 bytes), with pages of its 84.09 GB fetch not yet written back charged to the same cgroup; §16.7 made raising the floor (or cutting the loader's host copies) a prerequisite of the next gold run (plan D3, follow-up a)
+- Options: 256 GB; 283 GB (what Runpod gave both pods); keep 192 and cut the Wan plug loader's host copies (store an f32 `RawTensor` once; upload an eager DiT map before the text encoder)
+- Decision: (coordinator's request, executed by the agent) `min_ram_gb = 256` for the gold tier: 244,140 MiB, 88,136 MiB above the measured peak, more than the whole fetch (80,195 MiB) even if none of it were written back; the loader is unchanged here, its two cuts described (ADR-0019 §16.10 "Raised to 256") and left to their own change with a GPU byte-identity check
+- Reason: the peak is about twice item 5's estimate because `fastvideo_loader::RawTensor` holds an f32 tensor as both bytes and an f32 vector (the merged DiT about 2 x 57 GB, the UMT5 map about 2 x 23 GB at once); a floor below 283 keeps the hosts the run landed on; each loader cut touches code every model or the MoE plan shares
+- Reversibility: high (one tier value and its golden)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §16.10 "Raised to 256"
+- Verification: `tests/payload_golden.rs` (gold's body `minRAMPerGPU: 256`, equal to `FV_MIN_RAM_GB=256 runpod-http.sh plan`), `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`; UNVERIFIED: how many EU-RO-1 PRO 6000 hosts give 256 GB (both gold pods got 283 GB)
