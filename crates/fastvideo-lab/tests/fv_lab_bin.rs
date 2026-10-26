@@ -870,8 +870,8 @@ fn report_summary_and_table_print_the_scripts_output() {
 
 /// `report tiers --runs` with several runs of one tier and commit (ADR-0019
 /// §16.7: a gold run split with `--cells`): repeated or comma separated, one
-/// table naming both, `--check` finds both again; runs of two tiers, or an
-/// arm that ran in both, are refused.
+/// table naming both, `--check` finds both again; an empty `--runs`, runs of
+/// two tiers, or an arm that passed in both, are refused.
 #[test]
 fn report_tiers_renders_several_runs_as_one() {
     let fx = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/tiers");
@@ -920,7 +920,14 @@ fn report_tiers_renders_several_runs_as_one() {
     stdout(&mut tiers(&["--out", out_s, "--runs", a, "--runs", b]));
     assert_eq!(std::fs::read_to_string(&out).unwrap(), comma);
     stdout(&mut tiers(&["--check", "--out", out_s]));
-    // Refused: another tier; an arm that ran in both runs.
+    // `--runs` naming no directory is refused, not rendered as no run set.
+    for empty in ["", ",", " , "] {
+        let (code, _, err) = out_err(&mut tiers(&["--out", out_s, "--runs", empty]));
+        assert_eq!(code, Some(1), "{empty:?}: {err}");
+        assert!(err.contains("names no run directory"), "{err}");
+    }
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), comma);
+    // Refused: another tier; an arm that passed in both runs.
     let other = "artifacts/runpod/rtx6000/1234567-1026200000-cccc";
     copy("extra-arm", other);
     let (code, _, err) = out_err(&mut tiers(&["--stdout", "--runs", &format!("{a},{other}")]));
@@ -930,7 +937,7 @@ fn report_tiers_renders_several_runs_as_one() {
     let (code, _, err) = out_err(&mut tiers(&["--stdout", "--runs", a, "--runs", b]));
     assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.contains("arm `demo-h3-turbo` ran in more than one run"),
+        err.contains("arm `demo-h3-turbo` passed in more than one run"),
         "{err}"
     );
     let _ = std::fs::remove_dir_all(&root);

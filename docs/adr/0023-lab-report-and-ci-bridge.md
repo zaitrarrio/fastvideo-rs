@@ -57,12 +57,15 @@ canvas, a skipped arm, a failed arm, an arm of no gold variant, a variant with n
 to `fixtures/tiers/tiers.md` (`tests/tiers_report.rs`), which also checks the committed `docs/perf/tiers.md`.
 
 **Several runs as one run set** (2026-10-26, ADR-0019 §16.7: a `gold` run split in two with `--cells` to fit the wall
-cap). `--runs` takes several run directories, comma separated or repeated (`report::Runs`). They must be of one tier,
-and of one commit where `pod.json` or the tag names it (a short sha agrees with a longer one it begins), each given
-once; an arm may be in several runs only when every copy but at most one was skipped, and the table shows the copy
-that ran (all skipped: the first in `--runs` order); an arm that ran in two runs, passed or failed, is refused. Each
-row reads its arm's own run, so its GPU fallback and `$/clip` price are that run's `pod.json`. The header line becomes
-`` Run set: `<a>`, `<b>` `` and the run line a list of the runs (tag, arm count, end, GPU, price) under the shared
+cap). `--runs` takes several run directories, comma separated or repeated (`report::Runs`; a directory must not
+contain a comma). They must be of one tier and one commit, which each run must name (`report::known_commit`: the
+`pod.json` sha, else the tag's head, at least 7 hex digits, compared lowercased; a short sha agrees with a longer one
+it begins), each directory given once (compared by path components). An arm that passed (exit 0) in more than one run
+is refused; otherwise an arm in several runs is shown from the copy that passed, else the last that failed, else the
+last skipped (in `--runs` order), so a failed arm rerun in a later run shows the rerun. Each row reads its arm's own
+run: its GPU fallback and `$/clip` price are that run's `pod.json`, and its validation age counts to that run's end (a
+row without an arm, to the last end of all). The header line becomes `` Run set: `<a>`, `<b>` `` and the run line a
+list of the runs (tag, arms shown from it, end, GPU, price, and its copies shown from another run) under the shared
 commit and last end; one run renders byte for byte as before, so the golden and `docs/perf/tiers.md` are unchanged.
 
 **Seeded with no run set.** No committed run set measured a gold variant's cell: the only arm named like a variant is

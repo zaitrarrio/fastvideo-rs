@@ -249,29 +249,87 @@ impl RunSet {
 /// [`Runs::new`], which refuses what would not be one run set:
 ///
 /// - runs of different tiers;
-/// - runs of different commits, where both are known ([`RunSet::commit`];
-///   a short sha and a longer one agree when one is the other's prefix);
-/// - the same directory twice;
-/// - an arm that ran in more than one run. An arm may be in several runs
-///   only when every copy but at most one was skipped (`skipped` in its
-///   `summary.json`, e.g. `wall cap near` in the first run, then run in the
-///   second): the arm is the copy that ran, or the first copy in `--runs`
-///   order when all were skipped. A failed copy ran.
+/// - with several runs, a run whose commit is not known, or runs of
+///   different commits ([`known_commit`]: the `pod.json` sha, else the
+///   tag's head, each only when it is at least 7 hex digits; compared
+///   lowercased, a short sha and a longer one agree when one begins the
+///   other);
+/// - the same directory twice (paths compared by their components, so
+///   `./a` and `a/` are `a`);
+/// - an arm that passed (`exit` 0, not skipped) in more than one run.
+///
+/// An arm in several runs is shown from one copy ([`Runs::arm`]): the
+/// copy that passed; else the last copy that ran and failed (no `skipped`,
+/// `exit` not 0), in `--runs` order; else the last skipped copy. So a failed
+/// arm rerun in a later run shows the rerun, and an arm skipped as `wall cap
+/// near` and run in the second run shows the second run's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Runs {
     sets: Vec<RunSet>,
+    /// Per arm name, the index in `sets` of the copy shown.
+    shown: BTreeMap<String, usize>,
 }
 
 impl From<RunSet> for Runs {
     fn from(set: RunSet) -> Runs {
-        Runs { sets: vec![set] }
+        let shown = set.arms.keys().map(|k| (k.clone(), 0)).collect();
+        Runs {
+            sets: vec![set],
+            shown,
+        }
     }
 }
 
-/// Two commits agree when one is the other's prefix (a 7-digit tag field and
-/// a 40-digit `pod.json` sha).
+/// A copy's rank in choosing the one shown: passed, then ran and failed,
+/// then skipped.
+fn copy_rank(a: &ArmRecord) -> u8 {
+    match (&a.skipped, a.exit) {
+        (Some(_), _) => 0,
+        (None, Some(0)) => 2,
+        (None, _) => 1,
+    }
+}
+
+/// What a copy that is not shown did, in words.
+fn copy_words(a: &ArmRecord) -> String {
+    match (&a.skipped, a.exit) {
+        (Some(why), _) => format!("skipped here: {why}"),
+        (None, Some(e)) => format!("failed here: exit {e}"),
+        (None, None) => "no exit recorded here".to_owned(),
+    }
+}
+
+/// The commit a run names, when it names one: its `pod.json` sha, else its
+/// tag's first field ([`RunSet::commit`]), lowercased, and only when it is at
+/// least 7 hex digits.
+pub fn known_commit(r: &RunSet) -> Option<String> {
+    let ok = |c: &String| c.len() >= 7 && c.bytes().all(|b| b.is_ascii_hexdigit());
+    r.sha
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .filter(ok)
+        .or_else(|| {
+            let head = r.tag.split('-').next()?.to_ascii_lowercase();
+            (head.len() == 7).then_some(head).filter(ok)
+        })
+}
+
+/// Two known commits agree when one begins the other (a 7-digit tag field
+/// and a 40-digit `pod.json` sha).
 fn same_commit(a: &str, b: &str) -> bool {
     a.starts_with(b) || b.starts_with(a)
+}
+
+/// A run directory as given, compared by its components (`./a`, `a/` and
+/// `a//` are `a`).
+fn same_dir(a: &str, b: &str) -> bool {
+    let norm = |p: &str| -> std::path::PathBuf {
+        Path::new(p)
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect()
+    };
+    norm(a) == norm(b)
 }
 
 impl Runs {
@@ -287,32 +345,45 @@ impl Runs {
                     first.label, first.tier, r.label, r.tier
                 ));
             }
-            if sets[..i].iter().any(|o| o.label == r.label) {
-                return Err(format!("`{}` is given twice", r.label));
-            }
-        }
-        let commits: Vec<(&str, String)> = sets
-            .iter()
-            .filter_map(|r| r.commit().map(|c| (r.label.as_str(), c)))
-            .collect();
-        for (i, (la, ca)) in commits.iter().enumerate() {
-            if let Some((lb, cb)) = commits[i + 1..].iter().find(|(_, cb)| !same_commit(ca, cb)) {
+            if let Some(o) = sets[..i].iter().find(|o| same_dir(&o.label, &r.label)) {
                 return Err(format!(
-                    "the runs are of different commits: `{la}` ran `{ca}`, `{lb}` ran `{cb}`; one table renders one commit's runs"
+                    "`{}` and `{}` are the same run directory",
+                    o.label, r.label
                 ));
             }
         }
-        let mut ran: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        if sets.len() > 1 {
+            let mut commits: Vec<(&str, String)> = Vec::new();
+            for r in &sets {
+                let c = known_commit(r).ok_or_else(|| {
+                    format!(
+                        "`{}`: its commit is not known (no `pod.json` sha and no commit heading its tag, of at least 7 hex digits); several runs are rendered as one only when each names its commit",
+                        r.label
+                    )
+                })?;
+                if let Some((l, o)) = commits.iter().find(|(_, o)| !same_commit(o, &c)) {
+                    return Err(format!(
+                        "the runs are of different commits: `{l}` ran `{o}`, `{}` ran `{c}`; one table renders one commit's runs",
+                        r.label
+                    ));
+                }
+                commits.push((r.label.as_str(), c));
+            }
+        }
+        let mut passed: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for r in &sets {
             for (name, a) in &r.arms {
-                if a.skipped.is_none() {
-                    ran.entry(name.as_str()).or_default().push(r.label.as_str());
+                if copy_rank(a) == 2 {
+                    passed
+                        .entry(name.as_str())
+                        .or_default()
+                        .push(r.label.as_str());
                 }
             }
         }
-        if let Some((name, labels)) = ran.iter().find(|(_, l)| l.len() > 1) {
+        if let Some((name, labels)) = passed.iter().find(|(_, l)| l.len() > 1) {
             return Err(format!(
-                "arm `{name}` ran in more than one run ({}); an arm may be in several runs only when every copy but one was skipped",
+                "arm `{name}` passed in more than one run ({}); one table shows one measurement per arm: leave one of those runs out",
                 labels
                     .iter()
                     .map(|l| format!("`{l}`"))
@@ -320,7 +391,19 @@ impl Runs {
                     .join(", ")
             ));
         }
-        Ok(Runs { sets })
+        let mut shown: BTreeMap<String, usize> = BTreeMap::new();
+        for (i, r) in sets.iter().enumerate() {
+            for (name, a) in &r.arms {
+                let keep = shown
+                    .get(name)
+                    .and_then(|&j| sets[j].arms.get(name))
+                    .is_some_and(|b| copy_rank(b) > copy_rank(a));
+                if !keep {
+                    shown.insert(name.clone(), i);
+                }
+            }
+        }
+        Ok(Runs { sets, shown })
     }
 
     /// The run sets, in the order given.
@@ -333,33 +416,48 @@ impl Runs {
         self.sets.first().map_or("", |r| r.tier.as_str())
     }
 
-    /// The arm of this name and the run it is from: the copy that ran, else
-    /// the first (skipped) copy.
+    /// The arm of this name and the run it is from: the copy shown (see
+    /// [`Runs`]).
     pub fn arm(&self, name: &str) -> Option<(&RunSet, &ArmRecord)> {
-        let mut copies = self
-            .sets
+        let r = self.sets.get(*self.shown.get(name)?)?;
+        Some((r, r.arms.get(name)?))
+    }
+
+    /// Whether some arm is in more than one run.
+    pub fn has_duplicates(&self) -> bool {
+        self.sets.iter().map(|r| r.arms.len()).sum::<usize>() > self.shown.len()
+    }
+
+    /// The arms of run `i` shown from it.
+    pub fn shown_from(&self, i: usize) -> usize {
+        self.shown.values().filter(|&&j| j == i).count()
+    }
+
+    /// The arms of run `i` not shown from it: each with the run it is shown
+    /// from.
+    pub fn not_shown_from(&self, i: usize) -> Vec<(&str, &ArmRecord, &RunSet)> {
+        let Some(r) = self.sets.get(i) else {
+            return Vec::new();
+        };
+        r.arms
             .iter()
-            .filter_map(|r| r.arms.get(name).map(|a| (r, a)));
-        let first = copies.next()?;
-        if first.1.skipped.is_none() {
-            return Some(first);
-        }
-        Some(copies.find(|(_, a)| a.skipped.is_none()).unwrap_or(first))
+            .filter_map(|(name, a)| {
+                let j = *self.shown.get(name)?;
+                (j != i).then(|| (name.as_str(), a, &self.sets[j]))
+            })
+            .collect()
     }
 
     /// Every arm name of every run.
     pub fn arm_names(&self) -> BTreeSet<&str> {
-        self.sets
-            .iter()
-            .flat_map(|r| r.arms.keys().map(String::as_str))
-            .collect()
+        self.shown.keys().map(String::as_str).collect()
     }
 
-    /// The commit the runs ran: the longest one known.
+    /// The commit the runs ran: the longest one known ([`known_commit`]).
     pub fn commit(&self) -> Option<String> {
         self.sets
             .iter()
-            .filter_map(RunSet::commit)
+            .filter_map(known_commit)
             .max_by_key(String::len)
     }
 
@@ -457,7 +555,7 @@ pub fn render(golds: &[Gold], runs: Option<&Runs>) -> String {
         "One row per gold file (`lab/gold/<variant>.toml`, ADR-0009). A variant is measured by the arm of the same name in the run set (`fv-lab run gold --all` names its arms by variant id); every value is read from that arm's files (`summary.json`, `benchmark.json` or `gpucheck-out/engine.json`) and the run's `pod.json`, and `$/clip` is the run's own `usd_per_hr` times its own wall time. A variant without an arm, with a skipped or failed arm, or without a timing record is not measured: nothing is filled in from elsewhere. A variant counts as measured only by its gold cell: an arm of a `gold` run set, or an arm whose engine report ran that variant; a same-named arm of another tier is not. Wall time `gen` is one warm `generate()` (text, denoise, decode, MP4; load excluded), `job` a serve-engine job from submit to MP4; `decode s` is the decode through the finished MP4 in both (for `job`, the engine's `video_decode` plus its `encode`). `vs gold` compares the measured canvas, frames and steps with the gold file's `[workload]`. Design: docs/adr/0023-lab-report-and-ci-bridge.md.\n\n",
     );
     match runs {
-        Some(Runs { sets }) if sets.len() == 1 => {
+        Some(Runs { sets, .. }) if sets.len() == 1 => {
             let r = &sets[0];
             let commit = r.commit().unwrap_or_else(|| "unknown".to_owned());
             let (gpu, price) = pod_words(r);
@@ -472,27 +570,50 @@ pub fn render(golds: &[Gold], runs: Option<&Runs>) -> String {
             let commit = all.commit().unwrap_or_else(|| "unknown".to_owned());
             let date = all.date().unwrap_or_else(|| "unknown".to_owned());
             s.push_str(&format!(
-                "Tier `{}`, commit `{commit}`, ended {date}: {} runs rendered as one run set (ADR-0019 §16.7). An arm in more than one run is the copy that ran; the others were skipped.\n\n",
+                "Tier `{}`, commit `{commit}`, ended {date}: {} runs rendered as one run set (ADR-0019 §16.7).",
                 all.tier(),
                 sets.len()
             ));
-            for r in sets {
+            if all.has_duplicates() {
+                s.push_str(" An arm in more than one run is shown from the copy that passed, else the last that failed, else the last skipped (in this order of runs); its other copies are listed under their run.");
+            }
+            s.push_str("\n\n");
+            for (i, r) in sets.iter().enumerate() {
                 let (gpu, price) = pod_words(r);
                 let date = r.date().unwrap_or_else(|| "unknown".to_owned());
-                let n = r.arms.len();
+                let n = all.shown_from(i);
                 s.push_str(&format!(
-                    "- `{}`: tag `{}`, {n} {}, ended {date}; pod GPU {}, {price}.\n",
+                    "- `{}`: tag `{}`, {n} {} shown from it, ended {date}; pod GPU {}, {price}.",
                     r.label,
                     r.tag,
                     if n == 1 { "arm" } else { "arms" },
                     cell_text(&gpu)
                 ));
+                let other = all.not_shown_from(i);
+                if !other.is_empty() {
+                    s.push_str(&format!(
+                        " Also here, shown from another run: {}.",
+                        other
+                            .iter()
+                            .map(|(name, a, from)| format!(
+                                "`{name}` ({}; shown from `{}`)",
+                                cell_text(&copy_words(a)),
+                                from.label
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                s.push('\n');
             }
             s.push('\n');
         }
         None => s.push_str("No run set yet: every variant is not measured. The gold runs (`fv-lab run gold --all` on the `gold` tier, the `gold-run` workflow) fill this table; the numbers the repository already holds are in each gold file and the documents it cites.\n\n"),
     }
-    let run_day = runs.and_then(Runs::date).and_then(|d| day_number(&d).ok());
+    // Validation ages count to the day the row's arm's run ended; a row
+    // without an arm, to the last day of the run set.
+    let day = |d: Option<String>| d.and_then(|d| day_number(&d).ok());
+    let set_day = day(runs.and_then(Runs::date));
     let mut families: BTreeMap<String, Vec<&Gold>> = BTreeMap::new();
     for g in golds {
         families
@@ -507,8 +628,12 @@ pub fn render(golds: &[Gold], runs: Option<&Runs>) -> String {
         for g in gs {
             let v = &g.model.variant;
             let tier = g.tier.name.map_or("-", |t| t.as_str());
-            let lv = last_validated(g, run_day);
             let arm = runs.and_then(|r| r.arm(v.as_str()));
+            let run_day = match arm {
+                Some((r, _)) => day(r.date()),
+                None => set_day,
+            };
+            let lv = last_validated(g, run_day);
             let not = |why: String| {
                 let why = cell_text(&why);
                 format!("| `{v}` | {tier} | not measured ({why}) | - | - | - | - | - | - | - | - | - | - | {lv} |\n")
@@ -691,51 +816,118 @@ mod tests {
                 ("r2-arm", None, Some(0), T1),
                 ("late-arm", Some("wall cap near"), None, T1),
                 ("never-ran", Some("weights incomplete"), None, T1),
+                ("rerun", None, Some(101), T1),
+                ("fails", None, Some(101), T1),
             ],
         );
         let b = run(
             "gold",
             "1234567-1026200000-bbbb",
-            // A full sha agrees with the other run's short one.
-            Some("1234567890abcdef1234567890abcdef12345678"),
+            // A full sha, in capitals, agrees with the other run's short one.
+            Some("1234567890ABCDEF1234567890ABCDEF12345678"),
             &[
                 ("volume-arm", None, Some(101), T2),
                 ("late-arm", None, Some(0), T2),
                 ("never-ran", Some("wall cap near"), None, T2),
+                ("fails", None, None, T2),
             ],
         );
-        let runs = Runs::new(vec![a.clone(), b.clone()]).expect("one run set");
+        let c = run(
+            "gold",
+            "1234567-1026230000-cccc",
+            None,
+            &[
+                ("rerun", None, Some(0), T2),
+                ("fails", Some("wall cap near"), None, T2),
+            ],
+        );
+        let runs = Runs::new(vec![a.clone(), b.clone(), c.clone()]).expect("one run set");
         assert_eq!(runs.tier(), "gold");
         assert_eq!(
             runs.arm_names().into_iter().collect::<Vec<_>>(),
-            ["late-arm", "never-ran", "r2-arm", "volume-arm"]
+            [
+                "fails",
+                "late-arm",
+                "never-ran",
+                "r2-arm",
+                "rerun",
+                "volume-arm"
+            ]
         );
+        let from = |name: &str| {
+            let (r, arm) = runs.arm(name).expect(name);
+            (r.tag.clone(), arm.exit, arm.skipped.clone())
+        };
         // Each arm comes with its own run.
-        let (r, arm) = runs.arm("r2-arm").expect("r2-arm");
-        assert_eq!((r.tag.as_str(), arm.exit), (a.tag.as_str(), Some(0)));
-        let (r, _) = runs.arm("volume-arm").expect("volume-arm");
-        assert_eq!(r.tag, b.tag);
-        // Skipped in the first run, ran in the second: the copy that ran.
-        let (r, arm) = runs.arm("late-arm").expect("late-arm");
+        assert_eq!(from("r2-arm"), (a.tag.clone(), Some(0), None));
+        assert_eq!(from("volume-arm"), (b.tag.clone(), Some(101), None));
+        // Skipped in the first run, passed in the second: the pass.
+        assert_eq!(from("late-arm"), (b.tag.clone(), Some(0), None));
+        // Failed in the first run, passed in a rerun: the pass.
+        assert_eq!(from("rerun"), (c.tag.clone(), Some(0), None));
+        // Failed twice, then skipped: the last failed copy.
+        assert_eq!(from("fails"), (b.tag.clone(), None, None));
+        // Skipped in both: the last skipped copy.
         assert_eq!(
-            (r.tag.as_str(), arm.skipped.as_deref()),
-            (b.tag.as_str(), None)
-        );
-        // Skipped in both: the first copy in the order given.
-        let (r, arm) = runs.arm("never-ran").expect("never-ran");
-        assert_eq!(
-            (r.tag.as_str(), arm.skipped.as_deref()),
-            (a.tag.as_str(), Some("weights incomplete"))
+            from("never-ran"),
+            (b.tag.clone(), None, Some("wall cap near".to_owned()))
         );
         assert!(runs.arm("absent").is_none());
+        assert!(runs.has_duplicates());
+        assert_eq!(
+            (runs.shown_from(0), runs.shown_from(1), runs.shown_from(2)),
+            (1, 4, 1)
+        );
+        let not_a: Vec<(&str, &str)> = runs
+            .not_shown_from(0)
+            .into_iter()
+            .map(|(n, _, r)| (n, r.tag.as_str()))
+            .collect();
+        assert_eq!(
+            not_a,
+            [
+                ("fails", b.tag.as_str()),
+                ("late-arm", b.tag.as_str()),
+                ("never-ran", b.tag.as_str()),
+                ("rerun", c.tag.as_str()),
+            ]
+        );
         assert_eq!(runs.date().as_deref(), Some("2026-10-27"));
         assert_eq!(
             runs.commit().as_deref(),
             Some("1234567890abcdef1234567890abcdef12345678")
         );
-        // A run of unknown commit joins either.
-        let c = run("gold", "nocommit", None, &[("other", None, Some(0), T1)]);
-        assert!(Runs::new(vec![a, c]).is_ok());
+        // One run alone: every arm shown from it, none duplicated.
+        let one = Runs::from(a.clone());
+        assert!(!one.has_duplicates());
+        assert_eq!(one.shown_from(0), a.arms.len());
+        assert!(Runs::new(vec![a]).is_ok());
+    }
+
+    #[test]
+    fn commits_are_known_only_as_seven_or_more_hex_digits() {
+        let r = |sha: Option<&str>, tag: &str| run("gold", tag, sha, &[]);
+        assert_eq!(
+            known_commit(&r(Some("ABCDEF0"), "x")).as_deref(),
+            Some("abcdef0")
+        );
+        assert_eq!(
+            known_commit(&r(None, "ABCDEF0-1-a")).as_deref(),
+            Some("abcdef0")
+        );
+        // Too short, empty or not hex: the tag's head, else not known.
+        assert_eq!(
+            known_commit(&r(Some(""), "1234567-1-a")).as_deref(),
+            Some("1234567")
+        );
+        assert_eq!(known_commit(&r(Some("123456"), "x-1")), None);
+        assert_eq!(known_commit(&r(Some("123456g"), "nocommit")), None);
+        assert_eq!(known_commit(&r(None, "12345678-1-a")), None);
+        assert_eq!(known_commit(&r(None, "")), None);
+        assert!(!same_commit("1234567", "7654321"));
+        assert!(same_commit("1234567", "1234567890"));
+        assert!(same_dir("./a/gold/x/", "a//gold/x"));
+        assert!(!same_dir("a/gold/x", "a/gold/y"));
     }
 
     #[test]
@@ -760,19 +952,38 @@ mod tests {
         assert!(err(vec![a.clone(), sha.clone()]).contains("different commits"));
         sha.sha = None;
         assert!(Runs::new(vec![a.clone(), sha]).is_ok());
-        let e = err(vec![a.clone(), a.clone()]);
-        assert!(e.contains("given twice"), "{e}");
-        // An arm that ran in two runs, whether it passed or failed there.
-        for exit in [Some(0), Some(1), None] {
-            let twice = run("gold", "1234567-1-d", None, &[("x", None, exit, T2)]);
-            let e = err(vec![a.clone(), twice]);
-            assert!(
-                e.contains("arm `x` ran in more than one run")
-                    && e.contains(
-                        "`artifacts/runpod/gold/1234567-1-a`, `artifacts/runpod/gold/1234567-1-d`"
-                    ),
-                "{e}"
-            );
+        // With several runs, every run names its commit: an empty or short
+        // sha, or a tag without one, is refused, not joined to any set.
+        for (sha, tag) in [
+            (Some(""), "nocommit"),
+            (Some("12345"), "x-1"),
+            (None, "nocommit"),
+        ] {
+            let unknown = run("gold", tag, sha, &[("z", None, Some(0), T1)]);
+            let e = err(vec![a.clone(), unknown.clone()]);
+            assert!(e.contains("its commit is not known"), "{e}");
+            // Alone it renders, as one run always has.
+            assert!(Runs::new(vec![unknown]).is_ok());
+        }
+        // The same directory, however written.
+        let mut again = a.clone();
+        again.label = format!("./{}/", a.label);
+        let e = err(vec![a.clone(), again]);
+        assert!(e.contains("are the same run directory"), "{e}");
+        // An arm that passed in two runs.
+        let twice = run("gold", "1234567-1-d", None, &[("x", None, Some(0), T2)]);
+        let e = err(vec![a.clone(), twice]);
+        assert!(
+            e.contains("arm `x` passed in more than one run")
+                && e.contains(
+                    "`artifacts/runpod/gold/1234567-1-a`, `artifacts/runpod/gold/1234567-1-d`"
+                ),
+            "{e}"
+        );
+        // A pass beside failed or skipped copies is one run set.
+        for (skipped, exit) in [(None, Some(1)), (None, None), (Some("wall cap near"), None)] {
+            let other = run("gold", "1234567-1-d", None, &[("x", skipped, exit, T2)]);
+            assert!(Runs::new(vec![a.clone(), other]).is_ok());
         }
     }
 
@@ -782,12 +993,17 @@ mod tests {
             "gold",
             "1234567-1-a",
             Some("1234567"),
+            &[("x", None, Some(0), T1), ("y", None, Some(101), T1)],
+        );
+        let mut b = run(
+            "gold",
+            "1234567-1-b",
+            None,
             &[
-                ("x", None, Some(0), T1),
-                ("y", Some("wall cap near"), None, T1),
+                ("y", None, Some(0), T2),
+                ("z", Some("wall cap near"), None, T2),
             ],
         );
-        let mut b = run("gold", "1234567-1-b", None, &[("y", None, Some(3), T2)]);
         b.usd_per_hr = None;
         let one = render(&[], Some(&Runs::from(a.clone())));
         assert!(
@@ -805,17 +1021,25 @@ mod tests {
             "{two}"
         );
         assert!(two.contains(
-            "Tier `gold`, commit `1234567`, ended 2026-10-27: 2 runs rendered as one run set (ADR-0019 §16.7)."
+            "Tier `gold`, commit `1234567`, ended 2026-10-27: 2 runs rendered as one run set (ADR-0019 §16.7). An arm in more than one run is shown from the copy that passed"
         ), "{two}");
         assert!(two.contains(
-            "- `artifacts/runpod/gold/1234567-1-a`: tag `1234567-1-a`, 2 arms, ended 2026-10-26; pod GPU GPU of 1234567-1-a, $2.00/hr.\n"
+            "- `artifacts/runpod/gold/1234567-1-a`: tag `1234567-1-a`, 1 arm shown from it, ended 2026-10-26; pod GPU GPU of 1234567-1-a, $2.00/hr. Also here, shown from another run: `y` (failed here: exit 101; shown from `artifacts/runpod/gold/1234567-1-b`).\n"
         ), "{two}");
         assert!(two.contains(
-            "- `artifacts/runpod/gold/1234567-1-b`: tag `1234567-1-b`, 1 arm, ended 2026-10-27; pod GPU GPU of 1234567-1-b, no price recorded.\n"
+            "- `artifacts/runpod/gold/1234567-1-b`: tag `1234567-1-b`, 2 arms shown from it, ended 2026-10-27; pod GPU GPU of 1234567-1-b, no price recorded.\n"
         ), "{two}");
         assert!(!two.contains("Tier `gold`, tag"), "{two}");
-        assert!(two.contains("not shown): `x`, `y`."), "{two}");
-        assert_eq!(run_set_of(&two).unwrap(), vec![a.label, b.label]);
+        assert!(two.contains("not shown): `x`, `y`, `z`."), "{two}");
+        assert_eq!(run_set_of(&two).unwrap(), vec![a.label.clone(), b.label]);
+        // No arm in two runs: no sentence about copies.
+        let c = run("gold", "1234567-1-c", None, &[("w", None, Some(0), T2)]);
+        let two = render(&[], Some(&Runs::new(vec![a, c]).expect("one run set")));
+        assert!(
+            two.contains("2 runs rendered as one run set (ADR-0019 §16.7).\n\n"),
+            "{two}"
+        );
+        assert!(!two.contains("Also here"), "{two}");
     }
 
     #[test]

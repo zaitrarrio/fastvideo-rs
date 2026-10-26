@@ -1894,13 +1894,15 @@ time left as their cap. So the runner ends and the start command writes `DONE` b
 whatever the run holds (judged failed when there is no `DONE`), while the pod still lives. If the smoke run's per-arm
 times project past about 3.5 h, splitting the full run in two with `--cells` (the 21 arms that read R2 trees, then the
 11 others; about 10 min of boot more) still measures every arm, and `report tiers` renders the two run directories
-as one run set: `--runs` takes several, comma separated or repeated. It refuses runs of different tiers or (where
-`pod.json` or the tag names it) different commits, the same directory twice, and an arm that ran in more than one
-run; an arm may be in several runs only when every copy but at most one was skipped (e.g. `wall cap near` in the
-first run), and the table shows the copy that ran (all skipped: the first in `--runs` order). Each row reads its
-arm's own run (its `pod.json` GPU and price); the header names every run, and a single run renders as before.
-`report tiers` writes no gold file: `[last_validated]` is written by hand (ADR-0023 "What a gold run then does"),
-and its `run` is the directory that variant's arm came from.
+as one run set: `--runs` takes several, comma separated or repeated (a run directory must not contain a comma). It
+refuses runs of different tiers, a run whose commit is not known (no `pod.json` sha and no tag head of at least 7 hex
+digits), runs of different commits, the same directory twice (however written), and an arm that passed (exit 0) in
+more than one run. An arm in several runs is shown from the copy that passed, else the last copy that failed, else
+the last skipped copy (in `--runs` order), so a failed or `wall cap near` arm rerun in a later run shows the rerun;
+the run it was not shown from lists it. Each row reads its arm's own run (its `pod.json` GPU and price, and the end
+its validation age counts to); the header names every run, and a single run renders as before. `report tiers` writes
+no gold file: `[last_validated]` is written by hand (ADR-0023 "What a gold run then does"), and its `run` is the
+directory that variant's arm came from.
 
 #### 16.8 Differences, and what stays
 

@@ -187,11 +187,11 @@ enum ReportCmd {
     Tiers {
         /// The run set, relative to the root (artifacts/runpod/<tier>/<tag>);
         /// several runs of one tier and one commit, repeated or comma
-        /// separated, are rendered as one (an arm in more than one run only
-        /// when every copy but one was skipped); with --check, default the
-        /// runs the committed file names.
+        /// separated (so a run directory must not contain a comma), are
+        /// rendered as one (an arm that passed in more than one run is
+        /// refused); with --check, default the runs the committed file names.
         #[arg(long, value_delimiter = ',')]
-        runs: Vec<String>,
+        runs: Option<Vec<String>>,
         /// Fail when the committed file differs from the rendering.
         #[arg(long)]
         check: bool,
@@ -1640,11 +1640,26 @@ fn cmd_report(c: &ReportCmd) -> Result<ExitCode, String> {
             } else {
                 None
             };
-            let labels: Vec<String> = match (runs.as_slice(), &committed) {
-                ([], Some(text)) => {
+            let labels: Vec<String> = match (runs, &committed) {
+                (None, Some(text)) => {
                     report::run_set_of(text).map_err(|e| format!("{}: {e}", out.display()))?
                 }
-                (r, _) => r.iter().filter(|l| !l.is_empty()).cloned().collect(),
+                (None, None) => Vec::new(),
+                (Some(r), _) => {
+                    let l: Vec<String> = r
+                        .iter()
+                        .map(|l| l.trim())
+                        .filter(|l| !l.is_empty())
+                        .map(str::to_owned)
+                        .collect();
+                    if l.is_empty() {
+                        return Err(format!(
+                            "--runs {:?} names no run directory (without --runs the table is rendered with no run set)",
+                            r.join(",")
+                        ));
+                    }
+                    l
+                }
             };
             let set = if labels.is_empty() {
                 None

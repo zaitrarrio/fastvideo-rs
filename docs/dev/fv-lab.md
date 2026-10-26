@@ -427,11 +427,14 @@ tier names its arms by variant id), with every value read from that arm's `summa
 
 `--runs` takes several run directories (comma separated or repeated) of one tier and one commit, e.g. a gold run
 split in two with `--cells` ([ADR-0019 §16.7](../adr/0019-fv-lab.md#167-the-gpu-check-the-coordinators)), and
-renders them as one run set: the arms are merged, each row reads its own run's `pod.json`, and the header names every
-run (its tag, end, GPU and price). Refused: runs of different tiers or commits (where `pod.json` or the tag names
-one), the same directory twice, and an arm that ran in more than one run. An arm may be in several runs only when
-every copy but at most one was skipped; the copy that ran is shown (all skipped: the first in `--runs` order).
-`--check` reads the runs back from the header (`` Run set: `a`, `b` ``). One run renders exactly as before.
+renders them as one run set: the arms are merged, each row reads its own run's `pod.json` and counts its validation
+age to that run's end, and the header names every run (its tag, the arms shown from it, end, GPU and price, and the
+copies shown from another run). Run directories must not contain commas, since `--runs` splits on them. Refused:
+runs of different tiers; with several runs, a run whose commit is not known (no `pod.json` sha and no tag head of at
+least 7 hex digits) or runs of different commits; the same directory twice (`./a` is `a`); an arm that passed (exit
+0) in more than one run; and a `--runs` that names no directory. An arm in several runs is shown from the copy that
+passed, else the last that failed, else the last skipped, in `--runs` order: a failed arm rerun in a later run shows
+the rerun. `--check` reads the runs back from the header (`` Run set: `a`, `b` ``). One run renders exactly as before.
 
 Workflows: `gold-check.yml` runs the three checks on lab, family and lab-crate changes; `gold-run.yml`
 (`workflow_dispatch`, input `confirm: spend`) runs `pod up --family gold --yes --wait` and renders the table as an

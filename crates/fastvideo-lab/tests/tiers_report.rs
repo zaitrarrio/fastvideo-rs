@@ -198,8 +198,13 @@ fn a_split_run_set_renders_as_one() {
         run_set_of(&text).unwrap(),
         vec![SPLIT_A.to_owned(), SPLIT_B.to_owned()]
     );
+    // `demo-h3-max`, skipped in both, is shown from the last run and listed
+    // under the first.
     assert!(text.contains(&format!(
-        "- `{SPLIT_A}`: tag `1234567-1026080000-aaaa`, 2 arms, ended 2026-10-24; pod GPU NVIDIA RTX PRO 6000 Blackwell Server Edition, $2.49/hr.\n"
+        "- `{SPLIT_A}`: tag `1234567-1026080000-aaaa`, 1 arm shown from it, ended 2026-10-24; pod GPU NVIDIA RTX PRO 6000 Blackwell Server Edition, $2.49/hr. Also here, shown from another run: `demo-h3-max` (skipped here: weights incomplete; shown from `{SPLIT_B}`).\n"
+    )), "{text}");
+    assert!(text.contains(&format!(
+        "- `{SPLIT_B}`: tag `1234567-1026200000-bbbb`, 4 arms shown from it, ended 2026-10-24; pod GPU NVIDIA RTX PRO 6000 Blackwell Server Edition, $2.49/hr.\n"
     )), "{text}");
 
     // Each row reads its own run's pod: the second run at another price.
@@ -231,14 +236,66 @@ fn a_split_run_set_renders_as_one() {
     assert_ne!(ltx, ltx_single, "the second run's price is its own");
     assert!(text.contains("$3.60/hr.\n"), "{text}");
 
-    // An arm that ran in both runs is refused.
+    // Validation ages count to the end of the row's own run: the second run
+    // ends later, the first run's `demo-h3-turbo` keeps its 10 days, and a
+    // variant without an arm counts to the last end of all.
+    let summary = root.join(SPLIT_B).join("extra-arm/summary.json");
+    let late = std::fs::read_to_string(&summary)
+        .expect("summary.json")
+        .replace("2026-10-24T12:13:00Z", "2026-10-30T01:00:00Z");
+    std::fs::write(&summary, late).expect("write summary.json");
+    let mut golds = fixture_golds();
+    let wan = golds
+        .iter_mut()
+        .find(|g| g.model.variant.as_str() == "demo-wan-stream")
+        .expect("demo-wan-stream");
+    wan.last_validated.commit = Some("abcdef1".into());
+    wan.last_validated.date = Some("2026-10-14".into());
+    let split = Runs::new(vec![load(SPLIT_A), load(SPLIT_B)]).expect("one run set");
+    let text = render(&golds, Some(&split));
+    let row = |v: &str| {
+        text.lines()
+            .find(|l| l.starts_with(&format!("| `{v}` |")))
+            .unwrap_or_else(|| panic!("no row {v}"))
+            .to_owned()
+    };
+    assert!(
+        row("demo-h3-turbo").contains("2026-10-14 `abcdef1`, 10 d before the run set"),
+        "{text}"
+    );
+    assert!(
+        row("demo-wan-stream").contains("2026-10-14 `abcdef1`, 16 d before the run set"),
+        "{text}"
+    );
+
+    // A failed arm rerun in a later run: the pass is shown.
+    let ltx_a = root.join(SPLIT_A).join("demo-ltx-turbo");
+    std::fs::create_dir_all(&ltx_a).expect("mkdir");
+    std::fs::write(
+        ltx_a.join("summary.json"),
+        r#"{"cell":"demo-ltx-turbo","family":"gold","exit":101,"seconds":30,"ended":"2026-10-24T12:00:00Z"}"#,
+    )
+    .expect("write summary.json");
+    let split = Runs::new(vec![load(SPLIT_A), load(SPLIT_B)]).expect("one run set");
+    let text = render(&fixture_golds(), Some(&split));
+    let ltx = text
+        .lines()
+        .find(|l| l.starts_with("| `demo-ltx-turbo` |"))
+        .expect("ltx row");
+    assert!(ltx.contains("| measured |"), "{ltx}");
+    assert!(
+        text.contains("`demo-ltx-turbo` (failed here: exit 101; shown from"),
+        "{text}"
+    );
+
+    // An arm that passed in both runs is refused.
     copy_dir(
         &repo_root().join(FIXTURE_RUNS).join("demo-h3-turbo"),
         &root.join(SPLIT_B).join("demo-h3-turbo"),
     );
     let e = Runs::new(vec![load(SPLIT_A), load(SPLIT_B)]).expect_err("refused");
     assert!(
-        e.contains("arm `demo-h3-turbo` ran in more than one run"),
+        e.contains("arm `demo-h3-turbo` passed in more than one run"),
         "{e}"
     );
     let _ = std::fs::remove_dir_all(&root);
