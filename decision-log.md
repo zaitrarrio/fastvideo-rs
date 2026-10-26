@@ -2121,3 +2121,25 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ), PR #219
 - ADR: docs/adr/0019-fv-lab.md §21.8, §21.7
 - Verification: `scripts/gpu/tests/runpod-r2.test.sh` (refusals, unset = the `oracle` golden, no key leakage, `r2-stage.sh` on fakes; seven mutations caught), `tests/payload_golden.rs::the_script_side_r2_pod_reads_its_trees_as_the_oracle_r2_tier`, golden `runpod-http-oracle-sfwan13-r2.json`, `fv-lab-goldens.sh --check`
+
+### FVID · 2026-10-26 · FVID-2026-10-26-d1-remaining
+- Trigger: ADR-0019 §22 (#221) proposed what happens to the fifteen `runpod-matrix.sh` families left besides `oracle`. An independent review of #221 checked every claim: the dry-run counts, tree sizes, the `{tae}` refusal and six families held, and it corrected `mmaudio`, `hd`, `serve-engine`, `cold`, `eval`, `ltxoffload`, the sol families and the costs
+- Options: per family, (a) a tier now, (b) a tier after a schema addition, (c) retire with no tier, (d) an owner decision. For the TAE paths: `{tae}` without a TAE gate, a cell-level `export`, or `{weights}/auxiliary/tae`
+- Decision (coordinator, 2026-10-26):
+  - (c), retire with no tier: `sfquality`, `headline`, `speechtest`, `cold`, `eval`, `ltxoffload`, `solbench`, `sol-lingbot`, `sol-cosmos3`. `sfwan` retires with `oracle`. `sol-bench-pod.sh` stays as it is.
+  - (a), tier now: `hd`, with the Lanczos / post-script / keyframe step dropped, its orphans updated, and a GPU check including `max-1080p`; `serve-engine`, with `--tae-dir` dropped in lockstep.
+  - (b), tier after §22.4 (`{tae}` without a TAE gate, with per-arm `FASTVIDEO_TAE_DIR` `env` entries): `wan`, `sfstream`, and a small `mmaudio` tier (`wan13-audio`, `sfwan13-audio`, and `ours-v2a` if it fits; no upstream parity).
+  - `wan`'s two oracle cells are in its GPU check only if the balance allows it at run time.
+  - Slice order: S1 the nine retirements, with stale docs updated; S2 `hd`; S3 `serve-engine`; S4 §22.4 + `sfstream`; S5 `mmaudio`; S6 `wan`; S7 delete the branches of S2-S6 after their checks; S8 `sfwan` with `oracle` (blocked on the owner's `fv_hf_token`).
+- Reason:
+  - The retired families are finished measurements, have no recorded result, or are covered by another tier or script. What each loses is stated in §22.3.
+  - `hd`, `serve-engine`, `wan`, `sfstream` and `mmaudio` are the only pod checks of a served or user-reachable path: the 1080P `sol-h3` canvas and its time and memory; engine-vs-CLI byte identity; the Wan kernels and parity; `wan stream` parity; the `--audio mmaudio` sidecar.
+  - `{tae}` without a gate is the smallest addition that keeps the dry runs, and so the goldens, holding the TAE paths.
+- Reversibility: high. Nothing is done yet; each slice is its own PR, and a branch leaves the script only after its own GPU check (§8).
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ), PR #221 (docs only)
+- ADR: docs/adr/0019-fv-lab.md §22
+- Verification: the review of #221. GPU checks in S2-S6, about $10.2 in all, or about $12.8 with `wan`'s oracle cells (§22.5); all estimates.
+- Open (owner):
+  - whether the `mmaudio` knob stays offered (catalog `FASTVIDEO_WAN_AUDIO`, the CLI's `--audio mmaudio`, GCP staging);
+  - whether `sol-bench-pod.sh` moves to fv-lab;
+  - the total spend, within the standing "provision as needed" permission.
