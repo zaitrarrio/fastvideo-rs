@@ -1,0 +1,4 @@
+[ltx25-1080p-25fps] [PASS] ltx2/gen.sink_frames_identical {"audio_matches_wav":true,"audio_rate":48000,"audio_samples":230880,"chunks":16,"frames":121,"mismatched_frames":0,"png_frames":121,"unreadable_pngs":0} (limits {"frames":121,"mismatched_frames":0})
+[ltx25-1080p-25fps] [PASS] ltx2/gen.sink_audio {"audio_matches_wav":true,"audio_rate":48000,"audio_samples":230880,"chunks":16,"frames":121,"mismatched_frames":0,"png_frames":121,"unreadable_pngs":0} (limits {"audio_matches_wav":true})
+[ltx25-1080p-25fps] [PASS] ltx2/gen.mp4_frames_and_rate {"audio":{"channels":2,"codec_name":"aac","duration":"4.810000","sample_rate":"48000"},"avg_frame_rate":"25/1","ffprobe":true,"has_audio":true,"height":1088,"path":"/fvscratch/runs/ltxfps/b0d0bb8-1025165407-831d/ltx25-1080p-25fps/frames/output.mp4","r_frame_rate":
+[ltx25-1080p-25fps] [PASS] ltx2/gen.frames {"frames":121} (limits {"frames":121})

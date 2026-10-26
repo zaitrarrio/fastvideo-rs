@@ -1,0 +1,12 @@
+## cells
+turbo-768p missing
+turbo-1080p missing
+turbo-768p-v missing
+turbo-1080p-v missing
+max-768p missing
+max-1080p missing
+turbo-1080p-10s missing
+max-1080p-10s missing
+## compare reports
+## keyframe sharpness (grayscale, at 1920x1088 / 1088x1920)
+## streams

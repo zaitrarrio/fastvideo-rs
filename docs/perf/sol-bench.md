@@ -79,7 +79,7 @@ Every cell ran on an RTX PRO 6000 Blackwell Server (96 GB, sm_120, driver 595.91
 "Ours / theirs" below 1 means our run took less time. The hardware differs in every row, so the ratio is context, not a speedup claim. Raw data:
 
 - `artifacts/runpod/sol-bench/2026-10-06/{a1-h3-ltx,a3-h3-bf16,a2-wan}/<cell>/benchmark.json`
-- `results.json` and `RESULTS.md` in the same directory, made with `scripts/gpu/sol_bench_table.py`.
+- `results.json` and `RESULTS.md` in the same directory, made with `scripts/gpu/sol_bench_table.py` (since D1c `fv-lab report table --kind sol-bench`, docs/dev/fv-lab.md).
 
 Sample clips: `<cell>/frames/output.mp4`. These are gitignored and kept with the run's scratch clips.
 
@@ -190,7 +190,7 @@ Pairing (two pods in parallel):
 - (b2 LTX-2.3) on its own.
 - (b3 LingBot) with (b4 Cosmos3).
 
-Each cell writes a `benchmark.json` (`total_s` excludes load) and an `output.mp4`. Generate the table with `scripts/gpu/sol_bench_table.py` after adding each cell's published number to its `PUBLISHED` map. Cost bound: about $2.26 per pod-hour cap.
+Each cell writes a `benchmark.json` (`total_s` excludes load) and an `output.mp4`. Generate the table with `fv-lab report table --kind sol-bench` (it replaced `scripts/gpu/sol_bench_table.py` in D1c) after adding each cell's published number to its `PUBLISHED` map (`crates/fastvideo-lab/src/table.rs`). Cost bound: about $2.26 per pod-hour cap.
 
 Launch, one line per pod, from a host that reaches `*.runpod.io` over HTTPS. Look up the current main image digest with the GHCR manifest API first:
 
@@ -208,7 +208,7 @@ FV_AVOID_MACHINES="s3p8exc9lcvi lkyvy1sgj4rc" FV_FETCH_TREE=1 FV_FETCH_SKIP='\.p
 Then:
 
 ```bash
-python3 scripts/gpu/sol_bench_table.py artifacts/runpod/sol-bench/<date>/*
+fv-lab report table --kind sol-bench artifacts/runpod/sol-bench/<date>/*
 ```
 
 ## Phase B run plan (2026-10-06, planned before renting)
@@ -452,7 +452,7 @@ Phase B2 left five cells blocked: the three PISA arms (`wan5b-opt`, `a14b-sol-fu
 
 **GPU, region, pins:** as phase B2. RTX PRO 6000 only, EUR-IS-1, EU volume `jg48s6o1w0`, `FV_AVOID_MACHINES="s3p8exc9lcvi lkyvy1sgj4rc"`. Wan arms pin `FASTVIDEO_WAN_QUANT=off`, Diffusers UniPC sigmas and the full VAE (phase A's `wan5b-opt` did not; B3's does). `FASTVIDEO_FP8` off. LTX-2.3 fullopt keeps NVFP4 (sol-engine `fullopt.toml`).
 
-**LingBot baseline does not fit one pod.** Phase B2 measured the base stage at 12.8 s per step (40 steps, 514.6 s) after about 550 s of load and text. The 1080p refiner runs 8 steps × CFG at 253k tokens with dense attention: at the base stage's attention throughput that is about 2.5k s, so load + base + refiner is about 3.6k s, over the 55-min cell budget. The baseline therefore runs the refiner with `--refiner-steps 1`, which gives 3 of the 8 official sigmas (0.85 plus the 2 tail steps). Every baseline refiner step costs the same (dense, CFG every step, no cache), so `sol_bench_table.py` scales the refiner denoise by 8/3, as phase A did for `wan14-720p-base-s15`. The cell is `lingbot-baseline-rs3`.
+**LingBot baseline does not fit one pod.** Phase B2 measured the base stage at 12.8 s per step (40 steps, 514.6 s) after about 550 s of load and text. The 1080p refiner runs 8 steps × CFG at 253k tokens with dense attention: at the base stage's attention throughput that is about 2.5k s, so load + base + refiner is about 3.6k s, over the 55-min cell budget. The baseline therefore runs the refiner with `--refiner-steps 1`, which gives 3 of the 8 official sigmas (0.85 plus the 2 tail steps). Every baseline refiner step costs the same (dense, CFG every step, no cache), so `sol_bench_table.py` (now `fv-lab report table --kind sol-bench`) scales the refiner denoise by 8/3, as phase A did for `wan14-720p-base-s15`. The cell is `lingbot-baseline-rs3`.
 
 | Pod set | Image | Cells (in order) | Theirs | Est. cell wall |
 |---|---|---|---|---|

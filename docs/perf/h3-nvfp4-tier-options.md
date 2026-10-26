@@ -41,7 +41,7 @@ The gate's **performance** section asks for at least 1.03x on `denoise_s`. A dec
 untouched (1.00x), so every decoder-only pair below reads "fail" overall. **The quality column is the verdict that
 matters for options 5 and 6.**
 
-Scripts: `scripts/gpu/experiments/h3-tier-options-{validate,pod}.sh` and `h3-tier-options-summary.py`. Raw results are in
+Scripts: `scripts/gpu/experiments/h3-tier-options-{validate,pod}.sh` and `h3-tier-options-summary.py` (since D1c `fv-lab report summary --kind h3-tier-options DIR --json OUT`). Raw results are in
 `artifacts/perf/h3-nvfp4-tier-options/` (`summary.md`, per-cell `benchmark.json` and logs, compare / gate reports,
 middle-frame sheets `frame062-480p-*.jpg`).
 

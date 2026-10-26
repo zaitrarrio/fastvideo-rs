@@ -1,0 +1,24 @@
+{
+  "stage": "parity-wan",
+  "status": "fail",
+  "elapsed_s": 300,
+  "checks": [
+    {
+      "name": "step0",
+      "values": {
+        "seconds": 0.0042,
+        "rel_l2": 0.00123
+      }
+    },
+    {
+      "name": "broken",
+      "values": "not an object"
+    },
+    {
+      "name": "never",
+      "values": {
+        "seconds": 1
+      }
+    }
+  ]
+}

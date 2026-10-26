@@ -1,0 +1,53 @@
+{
+  "stage": "model-wan",
+  "status": "pass",
+  "elapsed_s": 123.456,
+  "checks": [
+    {
+      "name": "video/t2v",
+      "ok": true,
+      "values": {
+        "mp4": "/root/fv/gpucheck-out/model-wan/t2v.mp4"
+      }
+    },
+    {
+      "name": "t2v/finite",
+      "ok": true,
+      "values": {
+        "seconds": 12.3456,
+        "rel_l2": 0.0123,
+        "psnr_db": 38.123456
+      }
+    },
+    {
+      "name": "i2v",
+      "ok": true,
+      "values": {
+        "seconds": 7.5
+      }
+    },
+    {
+      "name": "video/i2v",
+      "ok": false,
+      "values": {
+        "error": "ffmpeg failed"
+      }
+    },
+    {
+      "name": "latents/finite",
+      "ok": true,
+      "values": {
+        "seconds": 1.25,
+        "rel_l2": 0.5,
+        "psnr_db": 21
+      }
+    },
+    {
+      "name": "load",
+      "ok": true,
+      "values": {
+        "mem_used_mib": 1024
+      }
+    }
+  ]
+}

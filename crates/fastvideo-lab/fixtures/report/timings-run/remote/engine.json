@@ -1,0 +1,355 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"fastwan22-ti2v-5b\")): PoolEntry { executor: 0, model: ModelId(\"fastwan22-ti2v-5b\"), warm: true, state: Resident }} }",
+        "readiness": "Ready",
+        "seconds": 109.655372097
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "first_step_s": 2.97853332,
+        "load_s": 109.655372097,
+        "metrics": {
+          "build_rtf": 1.0128055838677685,
+          "inference_s": 5.106228152,
+          "peak_memory_mb": null,
+          "stage_durations": {
+            "denoise": 5.106228152,
+            "encode": 1.128052488,
+            "text": 0.796816061,
+            "video_decode": 13.809679917
+          }
+        },
+        "stages": [
+          {
+            "at_s": 0.037333746,
+            "stage": "text"
+          },
+          {
+            "at_s": 0.834155717,
+            "stage": "denoise"
+          },
+          {
+            "at_s": 5.940930329,
+            "stage": "video_decode"
+          }
+        ],
+        "submit_to_mp4_s": 20.19893021
+      }
+    },
+    {
+      "limits": {
+        "steps": 3
+      },
+      "name": "progress",
+      "ok": true,
+      "values": {
+        "events": 3,
+        "last": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "limits": {
+        "audio": false,
+        "frames": 121,
+        "height": 704,
+        "width": 1280
+      },
+      "name": "mp4",
+      "ok": true,
+      "values": {
+        "audio_rate": null,
+        "bytes": 4064982,
+        "duration_s": 5.042,
+        "fps": 24.0,
+        "frames": 121,
+        "height": 704,
+        "path": "/fvscratch/runs/wan/9b2c963-09282019/engine-fw22/out/6f27472d-e935-4655-b744-2818c5f13555/output.mp4",
+        "width": 1280
+      }
+    },
+    {
+      "limits": {
+        "frames": 121
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "frames_sha256": "e46b7b2ce2afa34fc72270649c078b2dedd21b0ea7ff40630a72a7301be4ad46",
+        "pngs": 121
+      }
+    },
+    {
+      "limits": {
+        "identical": true
+      },
+      "name": "identical_to_cli",
+      "ok": true,
+      "values": {
+        "cli_dir": "/fvscratch/runs/wan/9b2c963-09282019/cli-fw22/frames",
+        "cli_frames": 121,
+        "cli_sha256": "e46b7b2ce2afa34fc72270649c078b2dedd21b0ea7ff40630a72a7301be4ad46",
+        "engine_frames": 121,
+        "engine_sha256": "e46b7b2ce2afa34fc72270649c078b2dedd21b0ea7ff40630a72a7301be4ad46",
+        "first_differing_frame": null
+      }
+    },
+    {
+      "limits": {
+        "end": "cancelled",
+        "steps_after_cancel_max": 1
+      },
+      "name": "cancel",
+      "ok": true,
+      "values": {
+        "cancel_at_s": 1.57725917,
+        "cancel_to_end_s": 1.644858121,
+        "cancelled_at_step": 1,
+        "end": "cancelled",
+        "end_s": 3.222117291,
+        "leftover_frames_dir": null,
+        "pool_used_after": 27728053279,
+        "pool_used_before": 27728053279,
+        "steps_after_cancel": 1
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": null,
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 901120,
+        "multiple": 32,
+        "pad_and_crop": false,
+        "short_edges": [
+          704,
+          576,
+          480
+        ]
+      },
+      "family": "wan",
+      "fps": {
+        "allowed": [
+          24,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60
+        ],
+        "container_only": true,
+        "default": 24
+      },
+      "frames": {
+        "default": 121,
+        "max": 161,
+        "min": 9,
+        "offset": 1,
+        "step": 4
+      },
+      "id": "fastwan22-ti2v-5b",
+      "knobs": {
+        "flow_shift": true,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "seed": true,
+        "steps": true
+      },
+      "recipe": "fastwan22-ti2v-5b-dmd3",
+      "refs": {
+        "audio": 0,
+        "images": 0,
+        "total": 0,
+        "videos": 0
+      },
+      "resident": true,
+      "served_names": [
+        "fastwan22-ti2v-5b",
+        "FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 6.708333492279053,
+          "min_s": 0.375
+        }
+      },
+      "tasks": [
+        "t2v",
+        "i2v"
+      ],
+      "tier": "turbo"
+    },
+    "cuda_feature": true,
+    "job": {
+      "audio": {
+        "plan": "none"
+      },
+      "audio_in": null,
+      "fps": 24,
+      "height": 704,
+      "keyframes": [],
+      "model": "fastwan22-ti2v-5b",
+      "negative_prompt": "",
+      "num_frames": 121,
+      "post": {
+        "crop": null,
+        "drop_audio": false
+      },
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "recipe": "fastwan22-ti2v-5b-dmd3",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 1024,
+      "task": "t2v",
+      "tier": "turbo",
+      "width": 1280
+    },
+    "mode": "fast",
+    "model": {
+      "id": "fastwan22-ti2v-5b",
+      "recipe": {
+        "decoder": "full",
+        "default": [
+          1280,
+          704,
+          121,
+          24
+        ],
+        "family": "wan",
+        "flow_shift": 5.0,
+        "frames_max": 161,
+        "i2v": true,
+        "max_area": 901120,
+        "multiple": 32,
+        "negative": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+        "preset": "fast_wan_2_2_ti2v_5b",
+        "sampler": {
+          "kind": "dmd",
+          "steps": 3
+        },
+        "short_edges": [
+          704,
+          576,
+          480
+        ],
+        "tae_dir": "/workspace/weights/auxiliary/tae",
+        "vsa": false,
+        "weights": "/workspace/weights/fastwan22-ti2v-5b"
+      },
+      "recipe_name": "fastwan22-ti2v-5b-dmd3",
+      "resident": true,
+      "served_names": [
+        "fastwan22-ti2v-5b",
+        "FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers"
+      ],
+      "tier": "turbo"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {
+        "FASTVIDEO_VSA": "0"
+      },
+      "profile": null,
+      "settings": {}
+    },
+    "recipe": {
+      "attention": "dense",
+      "name": "fastwan22-ti2v-5b-dmd3",
+      "steps": 3,
+      "summary": "fast_wan_2_2_ti2v_5b DMD 3-step, full decode",
+      "vae": "full"
+    }
+  },
+  "elapsed_s": 135.26892773,
+  "env": {
+    "FASTVIDEO_TAE_DIR": "/workspace/weights/auxiliary/tae",
+    "FASTVIDEO_VSA": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "engine",
+  "status": "pass"
+}

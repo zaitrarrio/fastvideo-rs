@@ -1,0 +1,4 @@
+[ltx25-4k5s-gen] [fastvideo] ltx2 video decode 13.38s: vae 12.20s, rgb 0.73s, push 1.91s, wait 1.30s
+[ltx25-4k5s-gen] [fastvideo] ltx2 video decode + mp4 14.05s (mp4 tail 0.67s); png frames after it 0.88s
+[ltx25-4k5s-gen-streaming] [fastvideo] ltx2 video decode 28.52s: vae 28.39s, rgb 0.77s, push 0.00s, wait 0.15s
+[ltx25-4k5s-gen-streaming] ltx2 vae-bench streaming: decode 28.52s (vae 28.39s, rgb 0.77s, push 0.00s, wait 0.15s, mp4 tail 0.00s), png frames after 0.90s, peak Some(16706) MiB

@@ -1,0 +1,9 @@
+{
+  "status": "pass",
+  "exit_code": 0,
+  "instance": "31415926",
+  "dph": 0.52,
+  "wall_minutes": 42,
+  "est_cost_usd": 0.364,
+  "stages": []
+}

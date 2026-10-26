@@ -100,14 +100,15 @@ sm_100 / sm_120: the tier is the PRO 6000, as the mode was.
 
 `runpod-http.sh run [sha]` with `FV_FAMILY` (default `rtx6000`) set to a retired tier runs
 `fv-lab pod up --sha <sha> --family <tier> --root <repo> [--cells …] [--baseline-sha …] [--extra-env …] [--lpips] --yes --wait`
-instead of its own pod, mapping `FV_CELLS`, `FV_BASELINE_SHA`, `FV_EXTRA_ENV` and `FV_LPIPS=1` across; `plan [sha]
+instead of its own pod, mapping `FV_CELLS`, `FV_BASELINE_SHA`, `FV_EXTRA_ENV`, `FV_LPIPS=1` and the tree fetch
+(`FV_FETCH_TREE=1` → `--fetch-tree`, `FV_FETCH_SKIP` → `--fetch-skip`, `FV_FETCH_MAX_MB` → `--fetch-max-mb`; `run` only) across; `plan [sha]
 [tag]` prints fv-lab's plan (no `--yes`). The other families keep the script path. `FV_POD_CAP_S` below the tier's
 `wall_cap_s` maps to `pod up --wall-cap-s` (a cap is lowered, never raised). Every other setting of the script path
 that fv-lab would not honour is refused, not dropped, unless fv-lab does the same thing anyway:
 
 - no equivalent, refused when set: `FV_POD_FILES`, `FV_POD_SCRIPT`, `FV_POD_FILE`, `FV_PROMPTS`, `FV_PROMPT`,
-  `FV_SEED`, `FV_AVOID_MACHINES`, `FV_CREATE_WAIT_S`, `FV_FETCH_SKIP`, `FV_FETCH_MAX_MB`, `RUNPOD_ALLOWED_CUDA`,
-  `FV_KEEP_POD=1`, `FV_FETCH_TREE=1`, `RUNPOD_NO_VOLUME=1`, and the retired pair selectors `FV_TECH_CELLS`,
+  `FV_SEED`, `FV_AVOID_MACHINES`, `FV_CREATE_WAIT_S`, `RUNPOD_ALLOWED_CUDA`,
+  `FV_KEEP_POD=1`, `RUNPOD_NO_VOLUME=1`, `FV_FETCH_SKIP` / `FV_FETCH_MAX_MB` without `FV_FETCH_TREE=1`, and the retired pair selectors `FV_TECH_CELLS`,
   `FV_B6_CELLS`, `FV_B4A_CELLS` (select by arm with `FV_CELLS`);
 - refused unless equal to the tier's value in `lab/tiers.toml`: `FV_GEN_TIMEOUT_S` (`cell_timeout_s`),
   `FV_CONTAINER_DISK_GB`, `RUNPOD_CLOUD_TYPE`, `RUNPOD_GPU_TYPE`, `FV_SKIP_TAE=1` on a `tae = true` tier, and
@@ -282,6 +283,12 @@ Both use GraphQL `podTerminate`: the pod-scoped key gets HTTP 403 on a REST DELE
 After an interrupted `up` (its pod record is only written once the pod is ready), `pod down --from-ledger` deletes
 what the ledger shows created and not deleted.
 
+`fetch` (and `up --wait`) take the summaries as `runpod-http.sh` does; with `--fetch-tree` the whole run directory
+instead (`FV_FETCH_TREE=1`: frames, mp4s, wavs, every file), less what `--fetch-skip` matches (paths
+`<tier>/<tag>/…`; an ERE of alternatives of literal text, `.`, `\`-escaped punctuation, `^` and `$`, e.g.
+`'/frames/'` or `'\.png$|\.cache$'`; anything else is refused before the pod is created) and files above
+`--fetch-max-mb` MiB (default 400, 0 no limit). `up` takes them only with `--wait` (ADR-0019 §13.3).
+
 `fetch` (and `up --wait`) fail (exit 1) unless the fetched `DONE` says `done <tag>` and `matrix.out` holds
 `matrix_exit=0`, and when the host's driver was too old; the files fetched so far are kept. `--down` and `up --wait`
 delete the pod whatever happened, then report.
@@ -299,6 +306,29 @@ pod up --sha <7> --family rtx6000 --yes --wait` and one `runpod-http.sh run <7>`
 ([ADR-0019 §8](../adr/0019-fv-lab.md)). The commit must be one whose runtime image carries fv-lab and the frames record:
 the final head of PR #171 or later. ADR-0019 §9.5 has the D1b families' runs: the cheapest cells per family and their
 cost.
+
+## Reports: `fv-lab report summary` and `report table`
+
+What the report scripts printed, read from a fetched run directory's files (ADR-0019 §13); no GPU, no network.
+
+```sh
+./fv-lab report summary artifacts/runpod/b6/<tag>        # the lines b6's script branch copied into live.log
+./fv-lab report summary artifacts/runpod/<dir> --family h3arms   # the tier when the parent is not its name
+./fv-lab report summary --kind hd artifacts/runpod/hd/<tag> [--jpg-out DIR]  # hd_report.py, without keyframe sharpness
+./fv-lab report summary --kind h3-graphs DIR             # was experiments/h3-graphs-summary.py
+./fv-lab report summary --kind h3-tier-options DIR --json OUT   # was h3-tier-options-summary.py
+./fv-lab report summary --kind h3-trim-nvfp4 DIR --json OUT     # was h3-trim-nvfp4-summary.py
+./fv-lab report summary --kind fasth3-nvfp4 DIR --json OUT      # was fasth3-nvfp4-summary.py
+./fv-lab report table --kind sol-bench artifacts/runpod/sol-bench/<date>/*   # was sol_bench_table.py; results.json beside them (--json F, --stdout)
+./fv-lab report table --kind timings <validate.sh run dir>     # timings.sh: <run>/timings.md, printed (--out F, --stdout)
+```
+
+`--kind tier` (the default) prints, for `techniques`, `b6`, `b4a`, `h3arms`, `trace`, `ltxfps`, `ltxvae` and
+`ltxvae-gen`, the summary lines their `runpod-matrix.sh` branches wrote into `live.log` (compare fields, arm timings,
+load-stage lines, reuse counts, gate verdicts, the `/gpu_trace` line, sink checks, decode lines), without the
+`[HH:MM:SS] [family] ` stamp, for runs of either runner. The other tiers' branches printed none. `hd_report.py`
+(the keyframe sharpness needs numpy) and `timings.sh` (`validate.sh` calls it) stay; `sol_bench_table.py` and the four
+experiment `*-summary.py` are deleted (ADR-0019 §13.5).
 
 ## The gold files: CI and the tier table
 
@@ -333,7 +363,14 @@ artifact. It needs the `RUNPOD_API_KEY` repository secret, which is the owner's 
 ```sh
 bash scripts/gpu/tests/fv-lab-goldens.sh           # regenerate crates/fastvideo-lab/fixtures/ from the scripts
 bash scripts/gpu/tests/fv-lab-goldens.sh --check   # CI (control.yml)
+bash scripts/gpu/tests/fv-lab-report-goldens.sh [--check]   # the reports' fixtures (fixtures/report/, ADR-0019 §13.2)
 ```
+
+The report goldens are the report scripts' output on committed run directories (`python3 -I`, `env -i`,
+`LC_ALL=C`); `tests/report.rs` compares fv-lab with each byte for byte. The retired scripts run from `f9e57ea2` when
+the history has it (a full clone); in a shallow clone their fixtures are kept as frozen. The deleted branches' summary
+lines are frozen in `fixtures/report/summary-script.sh`, each block checked against `runpod-matrix.sh` at `5987e6a4`
+when the history has it, and every line of the script-side runs is checked to be in that run's `live.log`.
 
 For every tier of `lab/tiers.toml`, the fixtures are the script's dry run (`<tier>-dry-run.txt`), its weight gates
 (`<tier>-gates.tsv`: the cells the dry run gated, with their `verify-weights.sh --list` needs) and `runpod-http.sh

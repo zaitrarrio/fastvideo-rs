@@ -787,6 +787,227 @@ pub fn fetch_run(
     Ok(cells)
 }
 
+/// `FV_FETCH_SKIP`: the relative paths `runpod-http.sh fetch_tree` leaves out
+/// (`grep -qE "$FV_FETCH_SKIP" <<<"$rel$e"`), in the subset of extended
+/// regular expressions fv-lab reads without a regex engine: alternatives
+/// (`|`), each of literal characters (a backslash makes the next
+/// non-alphanumeric character literal), `.` for any character, `^` at an
+/// alternative's start and `$` at its end. Brackets, groups, repetition,
+/// back-references and the GNU escapes (`\d`, `\w`, `\b`, …) are refused, so
+/// a pattern either means what grep would match or is an error before any pod
+/// exists (docs/adr/0019-fv-lab.md §13). Every skip the repository's scripts
+/// and docs pass is in the subset (`/frames/`, `\.cache$`, `png`,
+/// `oracle-dump\.tar|/dump/|\.mp4$`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchSkip {
+    alts: Vec<SkipAlt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkipAlt {
+    start: bool,
+    end: bool,
+    /// `None`: `.`, any byte.
+    atoms: Vec<Option<u8>>,
+}
+
+impl FetchSkip {
+    /// Parse a pattern; refuse what the subset does not cover.
+    pub fn parse(pattern: &str) -> Result<FetchSkip, String> {
+        let refuse = |why: &str| {
+            Err(format!(
+                "fetch skip `{pattern}`: {why} (fv-lab reads alternatives of literal text, `.`, `\\`-escapes of punctuation, `^` and `$`; docs/dev/fv-lab.md)"
+            ))
+        };
+        let b = pattern.as_bytes();
+        let mut alts = Vec::new();
+        let mut cur = SkipAlt {
+            start: false,
+            end: false,
+            atoms: Vec::new(),
+        };
+        let mut i = 0;
+        let mut at_start = true;
+        while let Some(&c) = b.get(i) {
+            match c {
+                b'|' => {
+                    if cur.atoms.is_empty() && !cur.start && !cur.end {
+                        return refuse("an empty alternative matches every path");
+                    }
+                    alts.push(std::mem::replace(
+                        &mut cur,
+                        SkipAlt {
+                            start: false,
+                            end: false,
+                            atoms: Vec::new(),
+                        },
+                    ));
+                    at_start = true;
+                    i += 1;
+                    continue;
+                }
+                _ if cur.end => return refuse("`$` is only read at the end of an alternative"),
+                b'^' if at_start => cur.start = true,
+                b'^' => return refuse("`^` is only read at the start of an alternative"),
+                b'$' => {
+                    if b.get(i + 1).is_some_and(|n| *n != b'|') {
+                        return refuse("`$` is only read at the end of an alternative");
+                    }
+                    cur.end = true;
+                }
+                b'.' => cur.atoms.push(None),
+                b'\\' => {
+                    let Some(&n) = b.get(i + 1) else {
+                        return refuse("a trailing backslash");
+                    };
+                    if n.is_ascii_alphanumeric() {
+                        return refuse(
+                            "a backslash before a letter or digit is a GNU class or back-reference",
+                        );
+                    }
+                    cur.atoms.push(Some(n));
+                    i += 1;
+                }
+                b'[' | b']' | b'(' | b')' | b'{' | b'}' | b'*' | b'+' | b'?' => {
+                    return refuse("brackets, groups and repetition are not read");
+                }
+                c => cur.atoms.push(Some(c)),
+            }
+            at_start = false;
+            i += 1;
+        }
+        if cur.atoms.is_empty() && !cur.start && !cur.end {
+            return refuse("an empty alternative matches every path");
+        }
+        alts.push(cur);
+        Ok(FetchSkip { alts })
+    }
+
+    /// Whether grep -E would match `path` (one line, as bytes).
+    pub fn matches(&self, path: &str) -> bool {
+        let p = path.as_bytes();
+        self.alts.iter().any(|a| {
+            let n = a.atoms.len();
+            let starts: Vec<usize> = if a.start {
+                vec![0]
+            } else {
+                (0..=p.len()).collect()
+            };
+            starts.into_iter().any(|s| {
+                s + n <= p.len()
+                    && (!a.end || s + n == p.len())
+                    && a.atoms
+                        .iter()
+                        .zip(&p[s..s + n])
+                        .all(|(atom, c)| atom.is_none_or(|x| x == *c) && *c != b'\n')
+            })
+        })
+    }
+}
+
+/// `runpod-http.sh fetch_tree`'s options: `FV_FETCH_SKIP` and
+/// `FV_FETCH_MAX_MB` (default 400; 0: no limit, as curl reads it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeFetch {
+    pub skip: Option<FetchSkip>,
+    pub max_mb: u64,
+}
+
+impl Default for TreeFetch {
+    fn default() -> Self {
+        TreeFetch {
+            skip: None,
+            max_mb: 400,
+        }
+    }
+}
+
+/// `printf '%b' "${e//%/\\x}"`: a listing's href as a file name (`%HH` decoded).
+fn href_name(e: &str) -> String {
+    let b = e.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = b
+                .get(i + 1..i + 3)
+                .and_then(|h| std::str::from_utf8(h).ok())
+                .and_then(|h| u8::from_str_radix(h, 16).ok());
+            if let Some(v) = hex {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `FV_FETCH_TREE=1`: `runpod-http.sh fetch_tree`, the whole run directory
+/// mirrored from the pod's listing (`<family>/<tag>/`), recursively. Entries
+/// `../`, absolute and query hrefs are passed over; a path (`<family>/<tag>/…`,
+/// as the listing spells it) that `skip` matches is not fetched; a
+/// subdirectory keeps the listing's spelling, a file its decoded name; a file
+/// over `max_mb` MiB, or one whose download fails, is left out (`curl --fail
+/// --max-filesize … || rm -f`). Returns the number of files written.
+pub fn fetch_tree(
+    http: &dyn Http,
+    base: &str,
+    family: &str,
+    tag: &str,
+    dest: &Path,
+    opts: &TreeFetch,
+    log: &dyn LogSink,
+) -> Result<usize, PodError> {
+    let n = tree_dir(http, base, &format!("{family}/{tag}/"), dest, opts)?;
+    log.line(&format!("[fv-lab] results -> {}", dest.display()));
+    Ok(n)
+}
+
+fn tree_dir(
+    http: &dyn Http,
+    base: &str,
+    rel: &str,
+    dest: &Path,
+    opts: &TreeFetch,
+) -> Result<usize, PodError> {
+    std::fs::create_dir_all(dest).map_err(|e| PodError::Io {
+        path: dest.to_path_buf(),
+        why: e.to_string(),
+    })?;
+    let listing = get_text(http, &format!("{base}/{rel}")).unwrap_or_default();
+    let mut n = 0;
+    for e in hrefs(&listing) {
+        if e.is_empty() || e == "../" || e.starts_with('/') || e.starts_with('?') {
+            continue;
+        }
+        let path = format!("{rel}{e}");
+        if opts.skip.as_ref().is_some_and(|s| s.matches(&path)) {
+            continue;
+        }
+        if let Some(dir) = e.strip_suffix('/') {
+            n += tree_dir(http, base, &path, &dest.join(dir), opts)?;
+            continue;
+        }
+        let file = dest.join(href_name(&e));
+        let limit = (opts.max_mb > 0).then_some(opts.max_mb << 20);
+        let ok = match get(http, &format!("{base}/{path}"), Duration::from_secs(900)) {
+            Ok(body) if limit.is_none_or(|l| body.len() as u64 <= l) => {
+                std::fs::write(&file, body).is_ok()
+            }
+            _ => false,
+        };
+        if ok {
+            n += 1;
+        } else {
+            let _ = std::fs::remove_file(&file);
+        }
+    }
+    Ok(n)
+}
+
 /// A file of the verdict step (`plan::Verdict`) the fetch takes: in the run
 /// directory (`top`) a verdict (`*.verdict.json`), an evidence diff (`*.diff`)
 /// or the run's arm selection (`*.arms.json`); in an arm's directory an
@@ -1307,6 +1528,32 @@ cells = ["c"]
         assert!(!dest.join("a/other.log").exists());
         assert!(judge_run(&dest, "t1").is_empty());
         let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn the_fetch_skip_is_greps_ere_subset() {
+        let m = |pat: &str, path: &str| FetchSkip::parse(pat).unwrap().matches(path);
+        assert!(m("/frames/", "b4a/t1/arm/frames/"));
+        assert!(!m("/frames/", "b4a/t1/arm/frames.sha256.json"));
+        assert!(m(r"\.cache$", "h3/t1/a/h3.cache"));
+        assert!(!m(r"\.cache$", "h3/t1/a/h3.cache.json"));
+        assert!(m("png", "x/t/a/frames/f.png"));
+        let o = r"oracle-dump\.tar|/dump/|\.mp4$";
+        assert!(m(o, "o/t/oracle-dump.tar"));
+        assert!(!m(o, "o/t/oracle-dumpXtar"));
+        assert!(m(o, "o/t/a/dump/"));
+        assert!(m(o, "o/t/a/out.mp4"));
+        assert!(!m(o, "o/t/a/out.mp4.json"));
+        assert!(m("^fam/", "fam/t/x"));
+        assert!(!m("^am/", "fam/t/x"));
+        assert!(m("a.c", "xabcx"));
+        assert!(!m("a.c", "ac"));
+        for bad in [
+            "", "a|", "|a", "[ab]", "a*", "(a)", "a+", "a?", "a{2}", r"\d", "a$b", "a^b", "a\\",
+        ] {
+            assert!(FetchSkip::parse(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(href_name("my%20file%2"), "my file%2");
     }
 
     #[test]

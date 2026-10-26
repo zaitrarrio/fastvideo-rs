@@ -1,0 +1,1 @@
+compare-clips-b4a-h3-fullopt-prof-base--b4a-h3-fullopt-prof-pr.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "failed" "status": "failed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 

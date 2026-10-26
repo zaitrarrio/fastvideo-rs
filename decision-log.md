@@ -1801,3 +1801,13 @@ Project code: FVID
 - Executed by: coordinator (GPU run, pods `wgzwvt5mjcn1nv`, `ymrchzi0z3eixy`, `64opofps1163h8`, `kxhdp1v19w151y`, all deleted); recorded by Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §12 "Result"
 - Verification: `artifacts/runpod/ltxvae-gen/compare-8b18d89.txt`, `artifacts/runpod/precision-nvfp4/compare-8b18d89.txt` and the four run directories under `artifacts/runpod/{ltxvae-gen,ltxvae,precision-nvfp4,precision}/`
+
+### FVID · 2026-10-26 · FVID-2026-10-26-fv-lab-report
+- Trigger: plan D1c (ADR-0019 §8): `fv-lab report {summary,table}` replacing the `*-summary.py`, `hd_report.py`, `sol_bench_table.py`, `timings.sh`, and the `FV_FETCH_TREE` mirror; the retired families' `live.log` summary lines had no reader since §10
+- Options: reports as new Rust tables of our own choosing; ports equal to the scripts line for line with goldens from the scripts; for `--fetch-skip`: a regex dependency, `grep -E` as a process, or an ERE subset refused outside it; for the replaced scripts: delete all, keep all, delete those nothing calls
+- Decision: line-for-line ports (`report summary --kind tier|hd|h3-graphs|h3-tier-options|h3-trim-nvfp4|fasth3-nvfp4`, `report table --kind sol-bench|timings`) held to fixtures the scripts write on committed run directories (`fv-lab-report-goldens.sh`, `tests/report.rs`), Python's JSON and number spelling in `pyfmt.rs` (no dependency); the deleted branches' summary lines frozen verbatim in `fixtures/report/summary-script.sh`; `pod up --wait` / `pod fetch --fetch-tree [--fetch-skip] [--fetch-max-mb]` with an ERE subset and `runpod-http.sh` mapping `FV_FETCH_TREE=1` across; `sol_bench_table.py` and the four experiment `*-summary.py` deleted (no caller), `hd_report.py` (keyframe sharpness needs numpy) and `timings.sh` (`validate.sh` calls it) kept until their callers move
+- Reason: equality with the scripts is what lets a script be deleted; the fixtures are the scripts' bytes, and every summary line of the frozen version's script runs is in that run's `live.log`; every skip pattern the repository uses is in the subset, and a pattern outside it fails before a pod exists
+- Reversibility: high (the scripts are in git history at `f9e57ea2`; the reports are additive)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §13
+- Verification: CPU: `tests/report.rs` (52 fixtures byte for byte), `tests/fetch_tree.rs` (the script's own `fetch_tree` against a fake `curl`, four cases, trees byte-identical), `tests/fv_lab_bin.rs` (the commands, refusals), `fv-lab-report-goldens.sh --check` (CI: `control.yml`), `fv-lab-route.test.sh`; no GPU (the reports read files)

@@ -1,0 +1,13 @@
+{
+  "stage": "probe-wan14",
+  "status": "pass",
+  "elapsed_s": 2.5,
+  "context": {
+    "projection": {
+      "total_s": 1234.56789,
+      "dit_forward_s": 12.3456789,
+      "target_tokens": 75600,
+      "peak_mib": 81234.5
+    }
+  }
+}

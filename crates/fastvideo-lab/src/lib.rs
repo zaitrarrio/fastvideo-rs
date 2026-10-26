@@ -26,6 +26,11 @@
 //!   cell generated from its gold file (`fv-lab run gold --all`).
 //! - [`report`]: `fv-lab report tiers`, `docs/perf/tiers.md` from the gold
 //!   files and one run set (plan D3).
+//! - [`summary`], [`table`], [`experiments`]: `fv-lab report summary` and
+//!   `report table`, what the replaced report scripts printed (the retired
+//!   families' `live.log` summary lines, `hd_report.py`, `sol_bench_table.py`,
+//!   `timings.sh`, the experiments' `*-summary.py`), from a run directory's
+//!   files; [`pyfmt`] spells values as Python and jq did.
 //! - [`knobs`]: the script settings no tier reads (the retired families'
 //!   mode knobs, the restored modes' settings), refused by `fv-lab run` and
 //!   `pod up --extra-env` instead of ignored.
@@ -37,6 +42,7 @@
 //! processes. The binary needs the `cli` feature (its command line and the
 //! HTTP client of `fastvideo-deploy`).
 
+pub mod experiments;
 pub mod gold;
 pub mod goldcell;
 pub mod goldcheck;
@@ -44,10 +50,13 @@ pub mod knobs;
 pub mod plan;
 pub mod pod;
 pub mod profiles;
+pub mod pyfmt;
 pub mod quote;
 pub mod report;
 pub mod run;
 pub mod schema;
+pub mod summary;
+pub mod table;
 
 pub use gold::{
     check_date, load_dir, Cost, Gap, Gold, GoldError, LastValidated, Latency, Measures, Model,

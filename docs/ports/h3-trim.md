@@ -194,7 +194,7 @@ Low-nibble-first or a row-major scale reading gives 0.72-1.45; `fc1` read in the
 | `crates/fastvideo-engine-service/src/cuda/caps.rs`, `configs/serve/runpod-h3-trim-nvfp4.toml` | catalog `fasth3-trim-nvfp4` (untiered, T2V only, served `h3-trim-nvfp4`); the worker config |
 | `control/` | preset `fasth3-trim-nvfp4` (weights `fasth3-trim-8step`, `fasth3-trim-8step-nvfp4`, `h3-base`; prequant `h3-base/text_encoder_fp8`; R2 by default), `RECIPE_TREES["h3-trim-nvfp4"]`, catalog / serverless tables, Brev tree size, `scripts/serve/variants.sh` |
 | `fv-gpucheck` | `h3 gen --nvfp4-dit`; `kernels --groups nvfp4_linear` check `nvfp4_published_stack_matches_host` |
-| `scripts/gpu/experiments/h3-trim-nvfp4-{validate,pod}.sh`, `h3-trim-nvfp4-plan.py`, `h3-trim-nvfp4-summary.py` | §5.4 |
+| `scripts/gpu/experiments/h3-trim-nvfp4-{validate,pod}.sh`, `h3-trim-nvfp4-plan.py`, `h3-trim-nvfp4-summary.py` (since D1c `fv-lab report summary --kind h3-trim-nvfp4`) | §5.4 |
 
 **Hardware.** The GEMM is cuBLASLt `VEC16_UE4M3`, which exists on sm_100 / sm_120 only. On any other GPU (or a CPU
 build) the load fails with "the published NVFP4 DiT runs only on NVFP4 tensor cores ... No bf16 fallback"; the
@@ -223,7 +223,7 @@ image; the R2 plan from the read-only key passed in the pod's env, nothing stage
 only), the two Trim trees from R2 (54 GB in 51 s). The bf16 text encoder streamed once per prompt, then from the
 conditioning cache, so every arm runs on bit-identical text (`text_hidden` / `text_refined` rel-L2 0). Arms: **bf16**
 (`FASTVIDEO_H3_QUANT=off`), **MXFP8** (the served default: blocks 2-38), **NVFP4** (`--h3-recipe trim-8step-nvfp4`:
-all 42 blocks). Results: `artifacts/ports/h3-trim/nvfp4/` (`summary.md` from `scripts/gpu/experiments/h3-trim-nvfp4-summary.py`).
+all 42 blocks). Results: `artifacts/ports/h3-trim/nvfp4/` (`summary.md` from `scripts/gpu/experiments/h3-trim-nvfp4-summary.py`, now `fv-lab report summary --kind h3-trim-nvfp4 DIR --json OUT`).
 
 There is no upstream NVFP4 reference to compare with: FastVideo does not load this ComfyUI file (its pipeline reads the
 diffusers bf16 checkpoint; the file targets ComfyUI's comfy-kitchen kernels), and running ComfyUI was out of scope. So

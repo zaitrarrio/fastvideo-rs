@@ -1,0 +1,5 @@
+[ltxvae-4k5s-fast] [INFO] ltx2/vae_check {"fast_s":0.179144052,"max_abs":0.0673828125,"rel_l2":0.007250080597422458,"same_shape":true,"streaming_s":0.514784356,"tile":[1,128,10,14,24]}
+[ltxvae-4k5s-fast] [fastvideo] ltx2 video decode 12.15s: vae 12.00s, rgb 0.77s, push 0.00s, wait 0.15s
+[ltxvae-4k5s-fast] ltx2 vae-bench fast: decode 12.15s (vae 12.00s, rgb 0.77s, push 0.00s, wait 0.15s, mp4 tail 0.00s), png frames after 1.11s, peak Some(16496) MiB
+[ltxvae-4k5s-streaming] [fastvideo] ltx2 video decode 29.50s: vae 29.23s, rgb 1.16s, push 0.00s, wait 0.21s
+[ltxvae-4k5s-streaming] ltx2 vae-bench streaming: decode 29.50s (vae 29.23s, rgb 1.16s, push 0.00s, wait 0.21s, mp4 tail 0.00s), png frames after 1.10s, peak Some(16304) MiB

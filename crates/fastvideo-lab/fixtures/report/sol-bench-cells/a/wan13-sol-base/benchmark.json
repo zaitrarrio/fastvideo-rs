@@ -1,0 +1,14 @@
+{
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 95,
+  "decode_s": 6.5,
+  "warm_steady_state": false,
+  "text_cache": "miss",
+  "env": {
+    "FASTVIDEO_X": "15"
+  },
+  "e2e_seconds": 92.5,
+  "peak_memory_mb": 1234,
+  "hardware": "RTX PRO 6000"
+}

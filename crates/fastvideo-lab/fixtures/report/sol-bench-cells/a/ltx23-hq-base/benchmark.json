@@ -1,0 +1,14 @@
+{
+  "total_s": 237.75,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 99,
+  "decode_s": 6.5,
+  "warm_steady_state": true,
+  "text_cache": "miss",
+  "max_device_memory_used_mib": 50019,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+    "FASTVIDEO_X": "19"
+  }
+}
