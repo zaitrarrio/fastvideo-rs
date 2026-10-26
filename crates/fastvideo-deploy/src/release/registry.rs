@@ -352,8 +352,9 @@ impl<'a> Registry<'a> {
     }
 
     /// Fills `digest` from the image and `git_sha` / `variant` / `channel`
-    /// from the releases (`_fv_enrich`).
-    pub fn enrich(&self, mut f: Fields) -> Fields {
+    /// from the releases (`_fv_enrich`); `channel` (the script's
+    /// `FV_RELEASE_CHANNEL`) is the channel the deployment follows, when known.
+    pub fn enrich(&self, mut f: Fields, channel: Option<&str>) -> Fields {
         let img = get_str(&f, "image").to_owned();
         if get_str(&f, "digest").is_empty() && img.contains("@sha256:") {
             if let Some((_, d)) = img.rsplit_once('@') {
@@ -373,8 +374,8 @@ impl<'a> Registry<'a> {
                 f = merge(front, f);
             }
         }
-        if let Some(c) = &self.release_channel {
-            f = merge(vec![("channel".into(), Value::from(c.as_str()))], f);
+        if let Some(c) = channel.filter(|c| !c.is_empty()) {
+            f = merge(vec![("channel".into(), Value::from(c))], f);
         }
         f
     }
@@ -422,10 +423,24 @@ impl<'a> Registry<'a> {
         pairs: &[(&str, &str)],
         who: Option<&str>,
     ) -> Result<(), D1Error> {
+        let ch = self.release_channel.clone();
+        self.created_on(kind, rid, pairs, who, ch.as_deref())
+    }
+
+    /// [`Registry::created`] for a deployment that follows `channel` (a
+    /// launch's own `FV_RELEASE_CHANNEL`, not this process's).
+    pub fn created_on(
+        &self,
+        kind: &str,
+        rid: &str,
+        pairs: &[(&str, &str)],
+        who: Option<&str>,
+        channel: Option<&str>,
+    ) -> Result<(), D1Error> {
         if !self.on()? {
             return Ok(());
         }
-        let f = self.enrich(kv(pairs));
+        let f = self.enrich(kv(pairs), channel);
         let by = format!("{}/{}", who.unwrap_or(&self.actor), self.program);
         let (sql, params) = self.upsert_statement(kind, rid, f, &by);
         self.d1.query(&sql, &params).map(|_| ())
@@ -569,6 +584,15 @@ pub fn created_fields(launch: &Launch, inst: &Instance) -> Vec<(&'static str, St
     if let Some(r) = &launch.placement.region {
         f.push(("region", r.clone()));
     }
+    // The channel the launch follows (`up --channel`: its FV_RELEASE_CHANNEL);
+    // a field given wins over the releases' guess (`_fv_enrich`).
+    if let Some(c) = launch
+        .env
+        .get("FV_RELEASE_CHANNEL")
+        .filter(|c| !c.is_empty())
+    {
+        f.push(("channel", c.clone()));
+    }
     meta.insert("config".into(), json!(config));
     meta.insert("guards".into(), launch.guards.ledger_view());
     f.push(("meta", Value::Object(meta).to_string()));
@@ -588,8 +612,10 @@ impl Recorder for D1Recorder<'_> {
         };
         let f = created_fields(launch, inst);
         let pairs: Vec<(&str, &str)> = f.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        // The launch's channel is a field of the row (created_fields), not
+        // this process's FV_RELEASE_CHANNEL.
         self.registry
-            .created(kind, &rid, &pairs, None)
+            .created_on(kind, &rid, &pairs, None, None)
             .map_err(|e| e.to_string())
     }
 

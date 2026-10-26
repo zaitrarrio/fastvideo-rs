@@ -42,7 +42,7 @@ use serde_json::{json, Value};
 use fastvideo_deploy::boot::env::BootEnv;
 use fastvideo_deploy::boot::http::ReqwestHttp;
 use fastvideo_deploy::boot::sys::{Clock, Http, LogSink, RealClock, RealSpawner, StderrLog};
-use fastvideo_deploy::guard::{self, run_backstop, DetachedBackstop};
+use fastvideo_deploy::guard::{self, DetachedBackstop};
 use fastvideo_deploy::launch::{self, PresetRequest, Repo, KEY_HASH_PLACEHOLDER};
 use fastvideo_deploy::lifecycle::{smoke, Deployer, Ledger, Recorder, SmokeOptions, UpOptions};
 use fastvideo_deploy::provider::gcp::{
@@ -858,7 +858,7 @@ fn deployments_d1<'a>(
     if !kind.is_runpod() || ctx.env.raw("FV_REGISTRY") == Some("0") {
         return None;
     }
-    let sql = std::fs::read_to_string(root.join("deploy/d1/registry.sql")).ok();
+    let sql = std::fs::read_to_string(release::registry_sql_path(&ctx.env, root)).ok();
     let d = D1::from_env(ctx.http.as_ref(), &ctx.env, sql);
     if d.is_none() {
         log.line("[fv-deploy] no D1 token (FV_CF_API_TOKEN): the deployments ledger is not written (docs/serve/releases.md)");
@@ -895,7 +895,13 @@ fn id_kind(
 /// root (its token script), which `up` may have taken from elsewhere.
 fn backstop_env(ctx: &Ctx, l: &Launch, budget: Option<f64>) -> Vec<(String, String)> {
     if l.provider != ProviderKind::Gcp {
-        return Vec::new();
+        // Runpod: the repository root, where the backstop finds
+        // deploy/d1/registry.sql for its ledger write (C3d).
+        return ctx
+            .root
+            .iter()
+            .map(|r| (ROOT_VAR.to_owned(), r.display().to_string()))
+            .collect();
     }
     let mut v = vec![(
         "GCP_ZONE".to_owned(),
@@ -1100,12 +1106,19 @@ fn run() -> Result<bool, String> {
                 guard::report_armed(f).map_err(|e| format!("{}: {e}", f.display()))?;
             }
             eprintln!("[backstop] armed (pid {})", std::process::id());
-            run_backstop(
+            // The delete at the deadline goes to the deployments ledger too
+            // (D1, Runpod kinds, when a token is set; warn-only).
+            let root = ctx.root.clone().unwrap_or_else(|| PathBuf::from("."));
+            let d1 = deployments_d1(&ctx, &root, kind, &StderrLog);
+            let reg = d1.as_ref().map(|d| Registry::new(d, clock, &ctx.env));
+            let rec = reg.as_ref().map(|r| D1Recorder { registry: r });
+            guard::run_backstop_recorded(
                 p.as_ref(),
                 &InstanceId::new(id),
                 deadline,
                 clock,
                 &StderrLog,
+                rec.as_ref().map(|r| r as &dyn Recorder),
             )
             .map(|_| true)
             .map_err(|e| e.to_string())

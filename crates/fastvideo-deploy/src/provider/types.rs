@@ -209,6 +209,7 @@ pub struct Guards {
     /// instance billed above it is deleted at once. `null`: not checked by
     /// this launcher.
     #[schemars(required, schema_with = "nullable_double")]
+    #[serde(deserialize_with = "present")]
     pub max_usd_per_hr: Option<f64>,
     /// Balance floor: nothing is created while the account balance is below
     /// it (CLAUDE.md: $8).
@@ -217,22 +218,36 @@ pub struct Guards {
     /// many seconds after its creation, whatever happens to the CLI. `null`:
     /// not checked by this launcher.
     #[schemars(required, schema_with = "nullable_uint64")]
+    #[serde(deserialize_with = "present")]
     pub cap_s: Option<u64>,
     /// An instance not ready (`/ping` 200) this long (s) after its creation
     /// is deleted and replaced (the owner's rule: 600 s). `null`: not checked
     /// by this launcher.
     #[schemars(required, schema_with = "nullable_uint64")]
+    #[serde(deserialize_with = "present")]
     pub ready_timeout_s: Option<u64>,
     /// At most this many instances are created for one `up` (the owner's
     /// rule: 3), then it gives up. Every create counts, a GPU-type fallback
     /// after a billed-over-cap delete included. `null`: not checked by this
     /// launcher.
     #[schemars(required, schema_with = "nullable_uint32")]
+    #[serde(deserialize_with = "present")]
     pub ready_cycles: Option<u32>,
     /// Lifts the upper bounds (cap ≤ 4 h, ≤ 3 cycles, ≤ 600 s readiness;
     /// `--force-guards`). The $8 floor is never lifted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force: bool,
+}
+
+/// A guard: the key must be there, its value a number or `null` (serde would
+/// read a missing `Option` field as `None`, which here means "not checked":
+/// a launcher that forgets a guard must not pass as one that states it).
+fn present<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d)
 }
 
 // A guard's schema: required, a number or `null` (schemars would make an

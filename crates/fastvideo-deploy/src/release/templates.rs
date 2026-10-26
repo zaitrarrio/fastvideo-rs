@@ -56,7 +56,8 @@ fn unknown_image(ctx: &Ctx<'_>, id: &str) -> ReleaseError {
 /// Every template of the account (`GET /templates`).
 pub fn all(api: &RunpodApi<'_>) -> Result<Vec<Value>, ReleaseError> {
     let v = api.rest(Method::Get, "/templates", None, "GET templates")?;
-    Ok(v.as_array().cloned().unwrap_or_default())
+    // Not a listing: an error (read as empty, `sync` would create duplicates).
+    super::listing(v, "GET templates")
 }
 
 /// The template named `name` (`fv_template_get`).

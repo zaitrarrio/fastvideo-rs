@@ -33,12 +33,11 @@ pub struct Account {
 
 /// `fetch_runpod`.
 pub fn fetch(api: &RunpodApi<'_>) -> Result<Account, ReleaseError> {
+    // A listing that is not one (an error object, an id-less entry) is an
+    // error, never "nothing": read as empty it would mark every row gone.
     let list = |p: &str| -> Result<Vec<Value>, ReleaseError> {
-        Ok(api
-            .rest(Method::Get, p, None, &format!("Runpod: {}", &p[1..]))?
-            .as_array()
-            .cloned()
-            .unwrap_or_default())
+        let what = format!("Runpod: {}", &p[1..]);
+        super::listing(api.rest(Method::Get, p, None, &what)?, &what)
     };
     Ok(Account {
         pods: list("/pods")?,

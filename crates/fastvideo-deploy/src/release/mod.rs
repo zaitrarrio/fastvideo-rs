@@ -86,6 +86,15 @@ pub fn release_keys(images: &[ServeImage]) -> Vec<String> {
         .collect()
 }
 
+/// `deploy/d1/registry.sql`, the deployments and releases schema
+/// (`FV_REGISTRY_SQL`, else under the repository root; `registry.sh`'s
+/// lookup): every D1 writer of fv-deploy reads it from here.
+pub fn registry_sql_path(env: &BootEnv, root: &std::path::Path) -> PathBuf {
+    env.get("FV_REGISTRY_SQL")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("deploy/d1/registry.sql"))
+}
+
 /// What every command runs on.
 pub struct Ctx<'a> {
     pub http: &'a dyn Http,
@@ -115,10 +124,7 @@ impl<'a> Ctx<'a> {
         log: &'a dyn LogSink,
         out: &'a dyn LogSink,
     ) -> Self {
-        let registry_sql = env
-            .get("FV_REGISTRY_SQL")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| repo.root.join("deploy/d1/registry.sql"));
+        let registry_sql = registry_sql_path(env, &repo.root);
         Self {
             http,
             spawner,
@@ -164,6 +170,25 @@ impl<'a> Ctx<'a> {
             .unwrap_or("stable")
             .to_owned()
     }
+}
+
+/// A Runpod REST v1 listing (`GET /pods`, `/endpoints`, `/templates`): an
+/// array of objects, each with a string `id`. Anything else (an error object,
+/// `null`, an entry without an id) is an error, never an empty list: a
+/// reconcile would mark every live row gone, a template sync would create
+/// duplicates.
+pub fn listing(v: serde_json::Value, what: &str) -> Result<Vec<serde_json::Value>, ReleaseError> {
+    let serde_json::Value::Array(items) = v else {
+        return Err(refused(format!("{what}: the answer is not a list")));
+    };
+    if let Some(bad) = items
+        .iter()
+        .find(|x| x.get("id").and_then(serde_json::Value::as_str).is_none())
+    {
+        let shown: String = bad.to_string().chars().take(120).collect();
+        return Err(refused(format!("{what}: an entry without an id: {shown}")));
+    }
+    Ok(items)
 }
 
 /// The first 7 characters of a sha (`short`).
@@ -235,6 +260,95 @@ mod tests {
             assert!(check_channel(bad, &imgs()).is_err(), "{bad}");
         }
         assert_eq!(release_keys(&imgs()), ["debug", "cuda", "cpu"]);
+    }
+
+    #[test]
+    fn a_listing_that_is_not_one_is_an_error() {
+        use serde_json::json;
+        assert_eq!(
+            listing(json!([{"id": "a"}, {"id": "b", "name": "x"}]), "GET pods")
+                .map(|v| v.len())
+                .ok(),
+            Some(2)
+        );
+        assert!(listing(json!([]), "GET pods").is_ok_and(|v| v.is_empty()));
+        for bad in [
+            json!({"error": "rate limited"}),
+            json!(null),
+            json!("x"),
+            json!([{"name": "no id"}]),
+            json!([{"id": 3}]),
+        ] {
+            assert!(listing(bad.clone(), "GET pods").is_err(), "{bad}");
+        }
+    }
+
+    /// A Runpod that answers every GET with an error object (HTTP 200) and
+    /// records the other requests.
+    struct ErrorListing(std::cell::RefCell<Vec<String>>);
+
+    impl crate::boot::sys::Http for ErrorListing {
+        fn send(
+            &self,
+            req: &crate::boot::sys::Request,
+        ) -> Result<crate::boot::sys::Response, crate::boot::sys::SysError> {
+            if req.method != crate::boot::sys::Method::Get {
+                self.0
+                    .borrow_mut()
+                    .push(format!("{:?} {}", req.method, req.url));
+            }
+            Ok(crate::boot::sys::Response {
+                status: 200,
+                body: br#"{"error":"temporarily unavailable"}"#.to_vec(),
+            })
+        }
+        fn download(
+            &self,
+            url: &str,
+            _d: &std::path::Path,
+            _t: std::time::Duration,
+        ) -> Result<u64, crate::boot::sys::SysError> {
+            Err(crate::boot::sys::SysError::Http {
+                url: url.into(),
+                why: "no".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn reconcile_and_sync_stop_on_an_answer_that_is_not_a_listing() {
+        let http = ErrorListing(Default::default());
+        let clock = crate::boot::sys::RealClock;
+        let api = RunpodApi::new(
+            &http,
+            &clock,
+            "k",
+            crate::provider::runpod::RunpodUrls::default(),
+        );
+        assert!(reconcile::fetch(&api).is_err());
+        let env = BootEnv::default();
+        let (log, out) = (crate::boot::sys::StderrLog, crate::boot::sys::StderrLog);
+        let ctx = Ctx {
+            http: &http,
+            spawner: &crate::boot::sys::RealSpawner,
+            clock: &clock,
+            env: &env,
+            images: imgs(),
+            registry_sql: None,
+            log: &log,
+            out: &out,
+        };
+        let e = templates::sync(&ctx, &api, "cuda", "r@sha256:1", Some("stable"));
+        assert!(
+            e.as_ref()
+                .is_err_and(|e| e.to_string().contains("not a list")),
+            "{e:?}"
+        );
+        assert!(
+            http.0.borrow().is_empty(),
+            "no write: {:?}",
+            http.0.borrow()
+        );
     }
 
     #[test]

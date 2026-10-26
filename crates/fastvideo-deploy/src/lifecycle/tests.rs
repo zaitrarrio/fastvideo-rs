@@ -640,6 +640,30 @@ fn not_checked_guards_are_refused_and_shown() {
     .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(old, crate::guard::default_guards());
     assert!(crate::guard::check_guards(&old).is_ok());
+    // A guard key left out is an error at parse (not "not checked"): every
+    // launcher states each guard, a number or null.
+    let missing = serde_json::from_value::<crate::provider::Guards>(json!({
+        "max_usd_per_hr": 2.5, "min_balance_usd": 8, "ready_timeout_s": 600, "ready_cycles": 3
+    }));
+    assert!(
+        missing
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("cap_s")),
+        "{missing:?}"
+    );
+    let mut launch = serde_json::to_value(eu_pod_launch()).unwrap_or(Value::Null);
+    if let Some(g) = launch["guards"].as_object_mut() {
+        g.remove("cap_s");
+    }
+    assert!(serde_json::from_value::<Launch>(launch).is_err());
+    let nulls: crate::provider::Guards = serde_json::from_value(json!({
+        "max_usd_per_hr": null, "min_balance_usd": 8, "cap_s": null, "ready_timeout_s": null, "ready_cycles": null
+    }))
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        nulls.not_checked(),
+        ["max_usd_per_hr", "cap_s", "ready_timeout_s", "ready_cycles"]
+    );
 }
 
 /// Records what the D1 ledger would be told.
@@ -701,4 +725,88 @@ fn the_recorder_sees_create_ready_and_delete() {
         .borrow()
         .iter()
         .any(|l| l.contains("could not record") && l.contains("D1 down")));
+}
+
+/// Records whether the backstop was armed for an instance when the ledger
+/// was told of its creation.
+struct OrderRecorder<'a> {
+    bs: &'a RecBackstop,
+    events: RefCell<Vec<String>>,
+}
+
+impl Recorder for OrderRecorder<'_> {
+    fn created(&self, _l: &Launch, i: &Instance) -> Result<(), String> {
+        let armed = self.bs.0.borrow().iter().any(|(_, id, _)| *id == i.id);
+        self.events
+            .borrow_mut()
+            .push(format!("created {} armed={armed}", i.id));
+        Ok(())
+    }
+    fn ready(&self, i: &Instance) -> Result<(), String> {
+        self.events.borrow_mut().push(format!("ready {}", i.id));
+        Ok(())
+    }
+    fn deleted(&self, _k: ProviderKind, id: &InstanceId, status: &str) -> Result<(), String> {
+        self.events.borrow_mut().push(format!("{status} {id}"));
+        Ok(())
+    }
+}
+
+/// Review fix (#199): the D1 write (minutes at worst) comes after the
+/// backstop is armed and the billed price is checked, as `runpod-pod.sh`
+/// orders them; an instance deleted at once for its billed price gets no row.
+#[test]
+fn the_ledger_hears_of_a_create_only_after_its_backstop_and_price_check() {
+    for over_cap in [false, true] {
+        let clock = FakeClock::at(100.0);
+        let p = FakeProvider::new(&clock);
+        if over_cap {
+            p.billed.set(Some(Some(9.0)));
+        }
+        let (log, bs) = (Lines::default(), RecBackstop::default());
+        let rec = OrderRecorder {
+            bs: &bs,
+            events: RefCell::new(Vec::new()),
+        };
+        let d = Deployer {
+            provider: &p,
+            clock: &clock,
+            log: &log,
+            backstop: &bs,
+            ledger: None,
+            recorder: Some(&rec),
+            interrupted: &never,
+            leaks: &no_leak,
+            poll: Duration::from_secs(5),
+        };
+        let r = d.up(&eu_pod_launch(), &smoke_up());
+        let ev = rec.events.borrow().clone();
+        if over_cap {
+            assert!(r.is_err());
+            assert!(!ev.iter().any(|e| e.starts_with("created")), "{ev:?}");
+            assert!(ev.iter().any(|e| e.starts_with("deleted")), "{ev:?}");
+        } else {
+            let id = r
+                .ok()
+                .and_then(|r| r.instance)
+                .map(|i| i.id.to_string())
+                .unwrap_or_default();
+            assert_eq!(ev[0], format!("created {id} armed=true"), "{ev:?}");
+        }
+    }
+}
+
+/// Review fix (#199): a delete by the detached backstop at the deadline is
+/// recorded in the deployments ledger too (warn-only); an instance already
+/// gone is not recorded again.
+#[test]
+fn the_backstop_records_its_delete() {
+    let clock = FakeClock::at(0.0);
+    let p = FakeProvider::new(&clock);
+    let i = p.create(&eu_pod_launch()).expect("create");
+    let (log, rec) = (Lines::default(), RecRecorder::default());
+    let out = crate::guard::run_backstop_recorded(&p, &i.id, 1800.0, &clock, &log, Some(&rec))
+        .expect("backstop");
+    assert_eq!(out, BackstopOutcome::Deleted);
+    assert_eq!(*rec.0.borrow(), [format!("deleted {}", i.id)]);
 }

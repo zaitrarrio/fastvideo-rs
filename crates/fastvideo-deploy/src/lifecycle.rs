@@ -572,10 +572,8 @@ impl Deployer<'_> {
                         l.image,
                         l.guards.ledger_line()
                     ));
-                    if let Some(r) = self.recorder {
-                        self.recorded(&inst.id.to_string(), r.created(&l, &inst));
-                    }
-                    // The backstop first: nothing below may leave it unguarded.
+                    // The backstop first: nothing below may leave it unguarded
+                    // (the D1 ledger's write can take minutes: after it).
                     self.arm_or_delete(&inst, g.cap_s)?;
                     if self.provider.bills_at_create() {
                         if let Err(e) = guard::check_billed(&inst, cap) {
@@ -589,6 +587,13 @@ impl Deployer<'_> {
                             notes.push(e.to_string());
                             continue;
                         }
+                    }
+                    // The D1 row once the instance is backstopped and within
+                    // the cap (as runpod-pod.sh: create, backstop, row). An
+                    // instance deleted at once (no backstop, billed over the
+                    // cap) gets no row; its delete's update matches none.
+                    if let Some(r) = self.recorder {
+                        self.recorded(&inst.id.to_string(), r.created(&l, &inst));
                     }
                     self.say(&format!(
                         "{} {} on {label}{}",

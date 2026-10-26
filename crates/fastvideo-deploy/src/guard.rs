@@ -535,6 +535,39 @@ pub fn run_backstop(
     clock: &dyn Clock,
     log: &dyn LogSink,
 ) -> Result<BackstopOutcome, ProviderError> {
+    run_backstop_recorded(p, id, deadline, clock, log, None)
+}
+
+/// [`run_backstop`], telling the deployments ledger (D1, C3d) when it
+/// deleted the instance at the deadline (warn-only, as every ledger write:
+/// a failure is a log line). An instance already gone was recorded by
+/// whoever deleted it.
+pub fn run_backstop_recorded(
+    p: &dyn Provider,
+    id: &InstanceId,
+    deadline: f64,
+    clock: &dyn Clock,
+    log: &dyn LogSink,
+    recorder: Option<&dyn crate::lifecycle::Recorder>,
+) -> Result<BackstopOutcome, ProviderError> {
+    let out = backstop_body(p, id, deadline, clock, log)?;
+    if let (BackstopOutcome::Deleted, Some(r)) = (&out, recorder) {
+        if let Err(e) = r.deleted(p.kind(), id, "deleted") {
+            log.line(&format!(
+                "[backstop] WARNING: the deployments ledger (D1) could not record the delete of {id}: {e}"
+            ));
+        }
+    }
+    Ok(out)
+}
+
+fn backstop_body(
+    p: &dyn Provider,
+    id: &InstanceId,
+    deadline: f64,
+    clock: &dyn Clock,
+    log: &dyn LogSink,
+) -> Result<BackstopOutcome, ProviderError> {
     log.line(&format!(
         "[backstop] {} {id}: deleting at {deadline:.0} (in {:.0} s)",
         p.kind(),
