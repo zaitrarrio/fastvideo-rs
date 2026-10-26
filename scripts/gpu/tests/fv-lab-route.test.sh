@@ -303,7 +303,7 @@ for fam in $retired_18 $retired_22; do
   else
     bad "$fam: why '$why', retired to fv-lab: $(fv_lab_retired "$fam" && echo yes), a tier: $(grep -qx "$fam" <<<"$tiers" && echo yes)"
   fi
-  msg="runpod-http: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): $why"
+  msg="runpod-http: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18, §22): $why"
   dry "$fam: dry run refused, no tier" 2 "$msg" FV_FAMILY="$fam"
   expect "$fam: run refused without a key" 2 "$msg" -- FV_FAMILY="$fam" bash "$HTTP" run abc1234
   # No key: a regression past the refusal stops at the key check, never at the API.

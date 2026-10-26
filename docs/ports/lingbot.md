@@ -161,7 +161,8 @@ prompts; knobs `FV_LINGBOT_RESIDENCY`, `FV_LINGBOT_PROMPTS`, `FV_LINGBOT_ARMS`,
 `FV_FAMILY=sol-lingbot runpod-http.sh run` is refused (exit 2). The benchmark
 runs `scripts/gpu/sol-bench-pod.sh` (`docs/perf/sol-bench.md`), whose LingBot
 sets run `lingbot-router` and the two arms on one prompt; LingBot on three
-prompts is lost (never recorded). The family's commands are in
+prompts and the B200 path with both resident (`FV_LINGBOT_RESIDENCY=both`;
+`sol-bench-pod.sh` hard-codes `--residency swap`) are lost (never recorded). The family's commands are in
 `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`. Estimates in
 docs/perf/sol-lingbot-cosmos3-plan.md.
 

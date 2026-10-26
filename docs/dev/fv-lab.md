@@ -465,7 +465,7 @@ lost; their commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
 | `cold` | nothing: no result was recorded | the page-cache-cold end-to-end time with load included (sol-engine's e2e) |
 | `eval` | `precision`'s f32act / bf16act pairs with lossy gates, `fuse`'s `exact` gates with an OFF arm, prompt sets in cells, `--lpips` on any run | the combination in one run, the `BF16_ACT=0` OFF-identity gate, the five-prompt LPIPS pairs, the LPIPS self-test on a pod (by hand: `fv-gpucheck lpips --weights <dir>`) |
 | `ltxoffload` | nothing: its numbers are in `docs/ports/ltx25.md`; `b6-ltx25-offload-cpu` still checks `--offload cpu` across builds | LTX `cpu`-against-resident identity, the 4K `cpu` peaks |
-| `solbench`, `sol-lingbot`, `sol-cosmos3` | `scripts/gpu/sol-bench-pod.sh`, which the sol-engine benchmark runs (`docs/perf/sol-bench.md`) | per-arm compares and lossy gates, `wan13-sol-easycache`, `wan13-sol-attn`, `a14b-sol-mxfp8`, LingBot on three prompts (none ever recorded) |
+| `solbench`, `sol-lingbot`, `sol-cosmos3` | `scripts/gpu/sol-bench-pod.sh`, which the sol-engine benchmark runs (`docs/perf/sol-bench.md`) | per-arm compares and lossy gates, `wan13-sol-easycache`, `wan13-sol-attn`, `a14b-sol-mxfp8`, LingBot on three prompts, LingBot's B200 `FV_LINGBOT_RESIDENCY=both` path (`sol-bench-pod.sh` hard-codes `--residency swap`) (none ever recorded) |
 
 ## On a GPU box: `fv-lab run`
 

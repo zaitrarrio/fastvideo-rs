@@ -9,9 +9,9 @@
 # fv-lab-retired.sh (rtx6000, techniques, b6, rtx5090, fastvideo, h3arms,
 # trace, ltxfps, ltxvae, precision; b4a, with its verdict step, §11.6;
 # det-short and determinism, with their [repeats] hashes, §15.10; fuse, attn3
-# and ltx, D1f's, §17.6) passed their GPU gate and their branches are gone; they are tiers of lab/ (`fv-lab run <tier>` on the box,
-# `runpod-http.sh run` / `fv-lab pod up` from a host). This script refuses
-# them (exit 2). Two
+# and ltx, D1f's, §17.6) passed their GPU gate and their branches are gone;
+# they are tiers of lab/ (`fv-lab run <tier>` on the box, `runpod-http.sh run`
+# / `fv-lab pod up` from a host). This script refuses them (exit 2). Two
 # modes of them are fv-lab tiers too (§12, FV_LAB_RESTORED):
 # FV_PRECISION_ARM=ltx-nvfp4 is `precision-nvfp4`, FV_VAE_GEN=1 `ltxvae-gen`;
 # the refusal names the tier.

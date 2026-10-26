@@ -630,7 +630,7 @@ rp_has_branch() {
 rp_family_cmd() {
   local family="$1"
   if fv_script_retired "$family"; then
-    die "$family is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): nothing runs it on the pod; $(fv_script_retired_why "$family")"
+    die "$family is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18, §22): nothing runs it on the pod; $(fv_script_retired_why "$family")"
   elif fv_lab_retired "$family"; then
     printf '%s' "bash -c 'lab=/opt/fastvideo-rs/target/release/fv-lab; [ -x \"\$lab\" ] || { echo \"FATAL: no fv-lab in this image (\$lab): $family is fv-lab only; fv-lab pod up --family $family from a host\" >&2; exit 2; }; exec env FV_WORK=/workspace \"\$lab\" run $family'"
   elif rp_has_branch "$family"; then

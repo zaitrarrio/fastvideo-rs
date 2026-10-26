@@ -157,7 +157,8 @@ else
   bad "plan with an unknown family: exit $rc: $(cat "$TMP/plan-bad/out")"
 fi
 
-# 5. A family nothing can run stops gpu / matrix before the key and any pod.
+# 5. A family nothing can run stops gpu / matrix before the key and any pod,
+#    and fails `plan gpu|matrix` with nothing printed for it.
 #    A family retired with no tier (§18, and §22's S1 nine) says so and names
 #    what replaces it. The retired families are named here, not read from the
 #    list, so one dropped from FV_SCRIPT_RETIRED fails (it would be refused as
@@ -166,14 +167,15 @@ no_tier="h3 hunyuan sana-video b200 writer precision-debug identity b4b b4c b4c2
 no_tier+=" sfquality headline speechtest cold eval ltxoffload solbench sol-lingbot sol-cosmos3"
 [[ "$FV_SCRIPT_RETIRED" == "$no_tier" ]] && ok "FV_SCRIPT_RETIRED: the families named here" \
   || bad "FV_SCRIPT_RETIRED: $FV_SCRIPT_RETIRED"
-for mode in gpu matrix; do
-  v=RP_GPU_FAMILIES; [[ "$mode" == matrix ]] && v=RP_MATRIX_FAMILIES
+for mode in gpu matrix plan-gpu plan-matrix; do
+  v=RP_GPU_FAMILIES; [[ "$mode" == *matrix ]] && v=RP_MATRIX_FAMILIES
+  run="cmd_$mode"; [[ "$mode" == plan-* ]] && run="cmd_plan ${mode#plan-}"
   for fam in gold h3-graphs nope $no_tier; do
-    rc=0; drive "$mode-$fam" "$v=(ltx $fam); cmd_$mode" || rc=$?
+    rc=0; drive "$mode-$fam" "$v=(ltx $fam); $run" || rc=$?
     d="$TMP/$mode-$fam"
     want="FATAL: $fam is neither a runpod-matrix.sh family nor a retired one"
-    [[ " $no_tier " == *" $fam "* ]] && want="FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): nothing runs it on the pod; $(fv_script_retired_why "$fam")"
-    if [[ "$rc" == 2 && "$(cat "$d/out")" == *"$want"* \
+    [[ " $no_tier " == *" $fam "* ]] && want="FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18, §22): nothing runs it on the pod; $(fv_script_retired_why "$fam")"
+    if [[ "$rc" == 2 && "$(cat "$d/out")" == *"$want"* && "$(cat "$d/out")" != *$'\t'* \
       && ! -s "$d/pods.log" && ! -s "$d/ssh.log" && ! -s "$d/local.log" ]]; then
       ok "$mode: $fam refused before the key or a pod"
     else
