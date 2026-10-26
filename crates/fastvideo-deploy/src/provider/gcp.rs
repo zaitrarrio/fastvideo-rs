@@ -627,6 +627,16 @@ fn config_and_env(l: &Launch) -> Result<(String, Value), ProviderError> {
     Ok((text, Value::Object(env)))
 }
 
+/// The wall-clock cap of a GCP launch: `maxRunDuration` needs one, so a
+/// launch whose cap is not checked (`null`) cannot be built.
+fn cap_of(l: &Launch) -> Result<u64, ProviderError> {
+    l.guards.cap_s.ok_or_else(|| {
+        ProviderError::Unsupported(
+            "GCP: the launch's cap_s is not checked (null): maxRunDuration needs a cap".into(),
+        )
+    })
+}
+
 /// The instance insert of a launch (`vm.sh instance_payload`,
 /// `fixtures/deploy/gcp-instance.json`); `deadline` is the `fv-deadline`
 /// label (unix seconds: creation + the cap).
@@ -642,6 +652,7 @@ pub fn instance_body(
             "GCP: startup.sh runs the image's own entrypoint with --config <fv-config>; a launch entrypoint or arguments cannot be sent".into(),
         ));
     }
+    let cap_s = cap_of(l)?;
     let machine = machine_of(l)?;
     let zone = zone_of(l);
     let (config, env) = config_and_env(l)?;
@@ -695,7 +706,7 @@ pub fn instance_body(
             "onHostMaintenance": "TERMINATE", "automaticRestart": false,
             "provisioningModel": provisioning(machine, o.spot),
             "instanceTerminationAction": "DELETE",
-            "maxRunDuration": {"seconds": l.guards.cap_s.to_string()},
+            "maxRunDuration": {"seconds": cap_s.to_string()},
         },
         "disks": disks,
         "networkInterfaces": [{
@@ -867,7 +878,7 @@ impl<'a> GcpVm<'a> {
     }
 
     fn deadline(&self, l: &Launch) -> u64 {
-        (self.api.clock.now() + l.guards.cap_s as f64)
+        (self.api.clock.now() + l.guards.cap_s.unwrap_or(0) as f64)
             .ceil()
             .max(0.0) as u64
     }
@@ -992,7 +1003,8 @@ impl Provider for GcpVm<'_> {
         // Unknown (it was quoted, so not expected): the cap counts instead.
         self.committed_usd.set(
             self.committed_usd.get()
-                + price.unwrap_or(launch.guards.max_usd_per_hr) * launch.guards.cap_s as f64
+                + price.unwrap_or(launch.guards.max_usd_per_hr.unwrap_or(f64::INFINITY))
+                    * launch.guards.cap_s.unwrap_or(0) as f64
                     / 3600.0,
         );
         Ok(Instance {

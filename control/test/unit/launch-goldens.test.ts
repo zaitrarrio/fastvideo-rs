@@ -541,9 +541,10 @@ describe("a launch that fails the schema", () => {
     expect(calls.filter((u) => u.includes("runpod"))).toEqual([]);
     expect(log.join("\n")).toMatch(/h3-turbo: no pod: launch fv-ctl-bad-.* does not match fv-deploy's Launch schema: disk\.container_gb/);
   });
-  it("serverless guards: the fields fv-control does not check carry fv-deploy's fail-closed values, and are named", () => {
-    expect(endpointGuards({ deadline_min: 120 })).toEqual({ max_usd_per_hr: 0, min_balance_usd: 8, cap_s: 7200, ready_timeout_s: 0, ready_cycles: 1 });
-    expect(endpointGuards({ deadline_min: null }).cap_s).toBe(0);
+  it("serverless guards: the fields fv-control does not check are null (not checked by this launcher), and are named", () => {
+    expect(endpointGuards({ deadline_min: 120 })).toEqual({ max_usd_per_hr: null, min_balance_usd: 8, cap_s: 7200, ready_timeout_s: null, ready_cycles: 1 });
+    expect(endpointGuards({ deadline_min: null }).cap_s).toBeNull();
     expect([...SLS_GUARDS_NOT_CHECKED]).toEqual(["max_usd_per_hr", "ready_timeout_s"]);
+    for (const k of SLS_GUARDS_NOT_CHECKED) expect(endpointGuards({ deadline_min: 120 })[k]).toBeNull();
   });
 });

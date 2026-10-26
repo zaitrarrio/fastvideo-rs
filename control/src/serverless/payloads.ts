@@ -73,21 +73,19 @@ const bootFields = (spec: EndpointSpec) => {
 };
 
 /**
- * The rules fv-control holds a serverless endpoint to, as a Launch's guards (ADR-0018 §7.2, §7.3).
+ * The rules fv-control holds a serverless endpoint to, as a Launch's guards (ADR-0018 §7.2, §10.4).
  *
- * READ THIS BEFORE CONSUMING THESE GUARDS (a ledger, a plan printout, fv-deploy's guard code): fv-control checks no
- * serverless price (Runpod reports none at create: fv-deploy's own known gap, ADR-0018 §5.3) and no worker readiness
- * (Runpod starts and replaces the workers). Launch v1 has no way to say "not checked" (every guard is a required
- * number; ADR-0018 §7.3 proposes `null` for it), so those fields carry the FAIL-CLOSED values of fv-deploy's own
- * semantics: `max_usd_per_hr` 0 (no offer is under it: fv-deploy would create nothing), `ready_timeout_s` 0. Never
- * show them as a price cap or a timeout; `SLS_GUARDS_NOT_CHECKED` names them. What is real: `ready_cycles` 1 (one
- * endpoint per create; fv-control never replaces it), `min_balance_usd` 8 (the least of what create, scale-up and
- * invoke need: the account floor plus the serverless margin, ops.ts assertFloor), `cap_s` = deadline_min (the cron's
- * backstop: scale to 0 or delete; 0 without one).
+ * fv-control checks no serverless price (Runpod reports none at create: fv-deploy's own known gap, ADR-0018 §5.3)
+ * and no worker readiness (Runpod starts and replaces the workers), so those guards are `null`: "not checked by this
+ * launcher" (Launch v1 §10.4; before C3d they carried fv-deploy's fail-closed 0). fv-deploy's own `up` refuses a
+ * launch with a `null` guard, and a ledger shows it as "not checked". `SLS_GUARDS_NOT_CHECKED` names them. What is
+ * checked: `ready_cycles` 1 (one endpoint per create; fv-control never replaces it), `min_balance_usd` 8 (the least
+ * of what create, scale-up and invoke need: the account floor plus the serverless margin, ops.ts assertFloor),
+ * `cap_s` = deadline_min (the cron's backstop: scale to 0 or delete; `null` without a deadline: not checked).
  */
 export const SLS_GUARDS_NOT_CHECKED = ["max_usd_per_hr", "ready_timeout_s"] as const;
 export function endpointGuards(spec: Pick<EndpointSpec, "deadline_min">): Guards {
-  return { max_usd_per_hr: 0, min_balance_usd: 8, cap_s: (spec.deadline_min ?? 0) * 60, ready_timeout_s: 0, ready_cycles: 1 };
+  return { max_usd_per_hr: null, min_balance_usd: 8, cap_s: spec.deadline_min ? spec.deadline_min * 60 : null, ready_timeout_s: null, ready_cycles: 1 };
 }
 
 /** A GPU endpoint as fv-deploy's Launch (plan C3c, docs/adr/0018-fv-deploy.md §7), without its template's image and

@@ -168,12 +168,15 @@
       ]
     },
     "Guards": {
-      "description": "The money and readiness guards of one launch (docs/adr/0018-fv-deploy.md §5).",
+      "description": "The money and readiness guards of one launch (docs/adr/0018-fv-deploy.md §5).\n\n`null` (Rust `None`) in `max_usd_per_hr`, `cap_s`, `ready_timeout_s` or\n`ready_cycles` means **not checked by the launcher that wrote this\nlaunch** (§10.4): fv-control's serverless endpoints check no serverless\nprice and no worker readiness, a Runpod template launches nothing. It is\nnever a cap or a timeout: fv-deploy's own `up` refuses a launch with any\nof them `null` ([`Guards::checked`]), and a ledger shows them as \"not\nchecked\". The balance floor is always checked (CLAUDE.md: $8). Every\nfield stays required in the schema: a launcher states each guard, a\nnumber or `null`.",
       "type": "object",
       "properties": {
         "cap_s": {
-          "description": "Wall-clock cap: the detached backstop deletes the instance this many\nseconds after its creation, whatever happens to the CLI.",
-          "type": "integer",
+          "description": "Wall-clock cap (s): the detached backstop deletes the instance this\nmany seconds after its creation, whatever happens to the CLI. `null`:\nnot checked by this launcher.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
           "minimum": 0
         },
@@ -182,8 +185,11 @@
           "type": "boolean"
         },
         "max_usd_per_hr": {
-          "description": "Price cap: an offer quoted above it is never created; a created\ninstance billed above it is deleted at once.",
-          "type": "number",
+          "description": "Price cap ($/hr): an offer quoted above it is never created; a created\ninstance billed above it is deleted at once. `null`: not checked by\nthis launcher.",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double"
         },
         "min_balance_usd": {
@@ -192,14 +198,20 @@
           "format": "double"
         },
         "ready_cycles": {
-          "description": "At most this many instances are created for one `up` (the owner's\nrule: 3), then it gives up. Every create counts, a GPU-type fallback\nafter a billed-over-cap delete included.",
-          "type": "integer",
+          "description": "At most this many instances are created for one `up` (the owner's\nrule: 3), then it gives up. Every create counts, a GPU-type fallback\nafter a billed-over-cap delete included. `null`: not checked by this\nlauncher.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint32",
           "minimum": 0
         },
         "ready_timeout_s": {
-          "description": "An instance not ready (`/ping` 200) this long after its creation is\ndeleted and replaced (the owner's rule: 600 s).",
-          "type": "integer",
+          "description": "An instance not ready (`/ping` 200) this long (s) after its creation\nis deleted and replaced (the owner's rule: 600 s). `null`: not checked\nby this launcher.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
           "minimum": 0
         }

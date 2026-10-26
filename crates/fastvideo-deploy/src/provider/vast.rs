@@ -254,7 +254,7 @@ pub fn offer_query(l: &Launch) -> Value {
         &l.gpu.types,
         l.gpu.count,
         Some(l.disk.container_gb),
-        Some(l.guards.max_usd_per_hr),
+        l.guards.max_usd_per_hr,
         OFFER_LIMIT,
     )
 }
@@ -444,12 +444,18 @@ impl Provider for Vast<'_> {
     /// disk included), rent the cheapest offer. The billed price is that
     /// offer's `dph_total`.
     fn create(&self, launch: &Launch) -> Result<Instance, ProviderError> {
+        // The price cap is the search's own filter: never search without one.
+        let Some(cap) = launch.guards.max_usd_per_hr else {
+            return Err(ProviderError::Unsupported(
+                "Vast: the launch's price cap is not checked (null); the offer search needs one"
+                    .into(),
+            ));
+        };
         let body = create_body(launch)?;
         let offers = self.api.search(&offer_query(launch))?;
         let Some(o) = offers.first() else {
             return Err(ProviderError::NoCapacity(format!(
-                "no Vast offer under ${}/hr with a direct port and CUDA >= {MIN_CUDA} ({})",
-                launch.guards.max_usd_per_hr,
+                "no Vast offer under ${cap}/hr with a direct port and CUDA >= {MIN_CUDA} ({})",
                 if launch.gpu.types.is_empty() {
                     "any GPU".to_owned()
                 } else {
