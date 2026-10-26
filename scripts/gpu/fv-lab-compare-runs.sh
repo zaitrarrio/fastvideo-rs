@@ -45,19 +45,24 @@
 # Control arms (ADR-0019 §15.7): an arm a cell lists in `[repeats] controls`
 # is reported, not judged, as fv-lab's verdict does (repeats.rs judges only
 # `judged`): the timed-pick control (FASTVIDEO_SDPA_AUTO=timed) is not
-# reproducible across processes (docs/perf/determinism.md). Such an arm must
-# still exist in both runs and agree on summary.json `exit` / `skipped` (and
-# benchmark.json's presence), but its frames.sha256.json, compare-dumps lines
-# and per-arm verdict files (hashes.txt, hashes.json, *-evidence.log) are
-# reported on a `control <arm>:` line and are neither differences nor
-# verdict files (they count neither toward nor against --expect-verdicts);
-# the run's determinism.txt and hashes.txt are compared without the control
-# arms' lines (a line whose first field is `<arm>`, `<arm>:` or `<arm>/...`)
-# and still count. The controls come from the cells (both runs are of the
-# checkout's commit): every name in a `[repeats] controls` of DIR/*.toml
-# (--cells, default the checkout's lab/cells), less any name another cell
-# declares as an `[[arm]]` it does not list as a control (that arm stays
-# judged). A control arm does not count toward the arms that ran.
+# reproducible across processes (docs/perf/determinism.md): it changes the
+# frames' bytes, not their number. Such an arm must still exist in both runs,
+# agree on summary.json `exit` / `skipped` and benchmark.json's presence, and
+# have a readable frames.sha256.json with the same frame count in both or in
+# neither; but its frames' bytes, compare-dumps lines and per-arm verdict
+# files (hashes.txt, hashes.json, *-evidence.log) are reported on a
+# `control <arm>:` line and are neither differences nor verdict files (they
+# count neither toward nor against --expect-verdicts). The run's
+# determinism.txt and hashes.txt are compared without the control arms' lines
+# (a line whose first field is `<arm>`, `<arm>:` or `<arm>/...`) and still
+# count, unless nothing but control lines is left in both (then neither
+# compared nor counted); an unreadable one is a difference. The controls
+# come from the cells (both runs are of the checkout's commit): every name in
+# a `[repeats] controls` of DIR/*.toml (--cells, default the checkout's
+# lab/cells), less any name another cell declares as an `[[arm]]` it does not
+# list as a control (that arm stays judged); a name outside fv-lab's arm-name
+# grammar is a usage error (exit 2). A control arm does not count toward the
+# arms that ran.
 # Exit 0 when the runs agree and at least one arm ran (exit 0) with
 # byte-identical frames in both; 1 otherwise (one line per difference). An
 # unreadable summary, frames record or report is a difference; arms skipped or
@@ -84,11 +89,14 @@ B="${2:?$USAGE}"
 # headers, `name = "..."` in an `[[arm]]`, and a `controls = [...]` array of
 # plain strings in `[repeats]`, on one line or several.
 [[ -d "$CELLS_DIR" ]] || { echo "fv-lab-compare-runs: no cells directory $CELLS_DIR (--cells)" >&2; exit 2; }
-NAME_RE='^[A-Za-z0-9._/:-]+$'
-listed="" judged_elsewhere=""
+# fv-lab's arm-name grammar (plan.rs is_name): [a-z0-9][a-z0-9._-]*, at most 64 bytes.
+NAME_RE='^[a-z0-9][a-z0-9._-]*$'
+name_ok() { [[ "$1" =~ $NAME_RE ]] && (( ${#1} <= 64 )); }
+in_list() { local x="$1" y; shift; for y in "$@"; do [[ "$y" == "$x" ]] && return 0; done; return 1; }
+LISTED=() JUDGED=()
 for f in "$CELLS_DIR"/*.toml; do
   [[ -f "$f" ]] || { echo "fv-lab-compare-runs: no cell files in $CELLS_DIR" >&2; exit 2; }
-  table="" arms_f="" ctl_f="" acc="" in_ctl=0
+  table="" acc="" in_ctl=0 ARMS_F=() CTL_F=()
   while IFS= read -r l || [[ -n "$l" ]]; do
     if (( in_ctl )); then
       acc+=" ${l%%#*}"
@@ -96,7 +104,9 @@ for f in "$CELLS_DIR"/*.toml; do
       table="${l%%#*}"; table="${table//[[:space:]]/}"
       continue
     elif [[ "$table" == '[[arm]]' && "$l" =~ ^[[:space:]]*name[[:space:]]*=[[:space:]]*\"([^\"]*)\" ]]; then
-      arms_f+=" ${BASH_REMATCH[1]}"
+      n="${BASH_REMATCH[1]}"
+      name_ok "$n" || { echo "fv-lab-compare-runs: $f: arm \`$n\` is not an arm name" >&2; exit 2; }
+      ARMS_F+=("$n")
       continue
     elif [[ "$table" == '[repeats]' && "$l" =~ ^[[:space:]]*controls[[:space:]]*= ]]; then
       acc="${l#*=}"; acc="${acc%%#*}"; in_ctl=1
@@ -107,31 +117,31 @@ for f in "$CELLS_DIR"/*.toml; do
     in_ctl=0
     acc="${acc%%]*}"; acc="${acc#*\[}"
     while [[ "$acc" =~ ^[[:space:],]*\"([^\"]*)\"(.*)$ ]]; do
-      ctl_f+=" ${BASH_REMATCH[1]}"; acc="${BASH_REMATCH[2]}"
+      n="${BASH_REMATCH[1]}"; acc="${BASH_REMATCH[2]}"
+      name_ok "$n" || { echo "fv-lab-compare-runs: $f: control \`$n\` is not an arm name" >&2; exit 2; }
+      CTL_F+=("$n")
     done
     [[ "$acc" =~ ^[[:space:],]*$ ]] || { echo "fv-lab-compare-runs: $f: unreadable [repeats] controls" >&2; exit 2; }
   done <"$f"
   (( in_ctl == 0 )) || { echo "fv-lab-compare-runs: $f: [repeats] controls has no closing ]" >&2; exit 2; }
-  for c in $ctl_f; do
-    [[ "$c" =~ $NAME_RE ]] || { echo "fv-lab-compare-runs: $f: control \`$c\` is not an arm name" >&2; exit 2; }
-    listed+=" $c"
-  done
-  for a in $arms_f; do
-    [[ " $ctl_f " == *" $a "* ]] || judged_elsewhere+=" $a"
+  LISTED+=(${CTL_F[@]+"${CTL_F[@]}"})
+  for a in ${ARMS_F[@]+"${ARMS_F[@]}"}; do
+    in_list "$a" ${CTL_F[@]+"${CTL_F[@]}"} || JUDGED+=("$a")
   done
 done
-CONTROLS=" "
-for c in $listed; do
-  [[ " $judged_elsewhere " == *" $c "* || "$CONTROLS" == *" $c "* ]] || CONTROLS+="$c "
+CONTROLS=()
+for c in ${LISTED[@]+"${LISTED[@]}"}; do
+  in_list "$c" ${JUDGED[@]+"${JUDGED[@]}"} ${CONTROLS[@]+"${CONTROLS[@]}"} || CONTROLS+=("$c")
 done
-is_control() { [[ "$CONTROLS" == *" $1 "* ]]; }
-# A file without the lines of the control arms (determinism.txt, hashes.txt).
+is_control() { in_list "$1" ${CONTROLS[@]+"${CONTROLS[@]}"}; }
+# A file without the lines of the control arms (determinism.txt, hashes.txt),
+# then `.` (so trailing newlines survive $(...)); fails on an unreadable file.
 without_controls() {
   local l f
   while IFS= read -r l || [[ -n "$l" ]]; do
     f="${l%% *}"; f="${f%:}"; f="${f%%/*}"
     is_control "$f" || printf '%s\n' "$l"
-  done <"$1"
+  done <"$1" && echo .
 }
 
 arms() { (cd "$1" && for s in */summary.json; do [[ -f "$s" ]] && dirname "$s"; done) | LC_ALL=C sort; }
@@ -154,11 +164,15 @@ while IFS= read -r arm; do
     [[ -f "$A/$arm/benchmark.json" ]] && ba=1
     [[ -f "$B/$arm/benchmark.json" ]] && bb=1
     [[ "$ba" == "$bb" ]] || { say "DIFF $arm: benchmark.json in one run only"; continue; }
-    if [[ ! -f "$fa" && ! -f "$fb" ]]; then frames="no frames"
-    elif [[ ! -f "$fa" || ! -f "$fb" ]]; then frames="frames.sha256.json in one run only"
-    elif ! jq -e .count "$fa" >/dev/null 2>&1 || ! jq -e .count "$fb" >/dev/null 2>&1; then frames="frames.sha256.json unreadable"
-    elif cmp -s "$fa" "$fb"; then frames="$(jq -r .count "$fa") frames byte-identical"
-    else frames="frames differ ($(jq -r .count "$fa") vs $(jq -r .count "$fb") frames)"
+    # Its frames' bytes may differ (the timed pick); their presence and
+    # count may not.
+    frames="no frames"
+    if [[ -f "$fa" || -f "$fb" ]]; then
+      if [[ ! -f "$fa" || ! -f "$fb" ]]; then say "DIFF $arm: frames.sha256.json in one run only"; continue; fi
+      na="$(jq -er .count "$fa" 2>/dev/null || echo unreadable)" nb="$(jq -er .count "$fb" 2>/dev/null || echo unreadable)"
+      if [[ "$na" == unreadable || "$nb" == unreadable ]]; then say "DIFF $arm: frames.sha256.json unreadable"; continue; fi
+      [[ "$na" == "$nb" ]] || { say "DIFF $arm: a control with $na vs $nb frames"; continue; }
+      if cmp -s "$fa" "$fb"; then frames="$na frames byte-identical"; else frames="frames differ ($na vs $nb frames)"; fi
     fi
     da="$(grep -a '^compare-dumps ' "$A/$arm/stderr.log" 2>/dev/null || true)"
     db="$(grep -a '^compare-dumps ' "$B/$arm/stderr.log" 2>/dev/null || true)"
@@ -231,12 +245,17 @@ while IFS= read -r r; do
   fi
   if [[ ! -f "$A/$r" ]]; then say "DIFF $r: only in the runpod-http run"; continue; fi
   if [[ ! -f "$B/$r" ]]; then say "DIFF $r: only in the fv-lab run"; continue; fi
-  if [[ "$CONTROLS" != " " && ( "$r" == determinism.txt || "$r" == hashes.txt ) ]] && ! cmp -s "$A/$r" "$B/$r"; then
-    # The run's hash report: the same once the control arms' lines are out.
-    if ! cmp -s <(without_controls "$A/$r") <(without_controls "$B/$r"); then
-      say "DIFF $r: differs without the control arms' lines (diff the two files)"; continue
+  if [[ -n "${CONTROLS[*]+x}" ]] && [[ "$r" == determinism.txt || "$r" == hashes.txt ]]; then
+    # The run's hash report, compared without the control arms' lines.
+    if [[ ! -r "$A/$r" || ! -r "$B/$r" ]] \
+      || ! wa="$(without_controls "$A/$r" 2>/dev/null)" || ! wb="$(without_controls "$B/$r" 2>/dev/null)"; then
+      say "DIFF $r: unreadable"; continue
     fi
-    echo "same $r (without the control arms' lines)"
+    if [[ "$wa" == . && "$wb" == . ]]; then
+      echo "$r: only control lines (not compared, not counted)"; continue
+    fi
+    [[ "$wa" == "$wb" ]] || { say "DIFF $r: differs without the control arms' lines (diff the two files)"; continue; }
+    if cmp -s "$A/$r" "$B/$r"; then echo "same $r"; else echo "same $r (without the control arms' lines)"; fi
     nver=$((nver + 1))
     continue
   fi

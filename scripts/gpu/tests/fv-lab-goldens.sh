@@ -282,12 +282,15 @@ for bad in dc dd de; do
 done
 # Control arms (ADR-0019 §15.7): an arm a cell lists in `[repeats] controls`
 # (the timed-pick control) is reported, not judged. Cells of their own
-# (--cells): r1 and r2 judged, tc a control (a multi-line array), tj a control
-# of one cell but an arm another judges (so judged). Runs: equal ones pass;
-# a control's frames, hashes.json and lines of determinism.txt / hashes.txt
-# differing pass, with those two files still counted (5 = the two and the
-# judged arms' hashes.json: r1, r2, tj); a judged arm's frames differing, a control in
-# one run only, another control exit, or `tj` differing fail.
+# (--cells): r1, r2 and tcx judged, tc a control (a multi-line array), tj a
+# control of one cell but an arm another judges (so judged). Runs: equal ones
+# pass; a control's frame bytes, hashes.json and lines of determinism.txt /
+# hashes.txt (`tc/run1 ...`, `tc: no run1 hashes`) differing pass, with those
+# two files still counted (6 = the two and the judged arms' hashes.json: r1,
+# r2, tcx, tj). Fail: a judged arm's frames differing (kd), a control in one
+# run only (ke), another control exit (kf), `tj` differing (kg), tcx's lines
+# differing with equal frames (kt: `tc` is no prefix match), a control's
+# frame count differing (kq).
 mkdir -p "$TMP/kcells"
 cat >"$TMP/kcells/k.toml" <<'EOF'
 name = "k"
@@ -301,40 +304,62 @@ name = "r2"
 [[arm]]
 name = "tc"
 [[arm]]
+name = "tcx"
+[[arm]]
 name = "tj"
 [repeats]
 hash = "arm"
 reference = "r1"
-judged = ["r1", "r2"]
+judged = ["r1", "r2", "tcx"]
 controls = [
   "tc", # the timed pick
   "tj",
 ]
 EOF
 printf '%s\n' 'name = "j"' '[[arm]]' 'name = "tj"' >"$TMP/kcells/j.toml"
-kmk() { # dir tc-byte tj-byte r2-byte
+kmk() { # dir tc-byte tj-byte r2-byte [tcx's hash in the two reports]
   local a b
-  for a in r1 tc tj r2; do
+  for a in r1 tc tcx tj r2; do
     case "$a" in tc) b="$2" ;; tj) b="$3" ;; r2) b="$4" ;; *) b=x ;; esac
     mk "$1" "$a" 0 "$b"
     echo "{\"cell\":\"$a\",\"frames\":1,\"frames_sha256\":\"$b\"}" >"$1/$a/hashes.json"
+    [[ "$a" == tcx ]] && b="${5:-x}"
     echo "$a frames=1 frames_sha256=$b audio_sha256=none" >>"$1/hashes.txt"
     echo "$a/run1 frames IDENTICAL $b" >>"$1/determinism.txt"
   done
 }
 kmk "$TMP/ka" x x x; kmk "$TMP/kb" x x x; kmk "$TMP/kc" y x x; kmk "$TMP/kd" x x y; kmk "$TMP/kg" x y x
+kmk "$TMP/kt" x x x z
+echo 'tc: no run1 hashes' >>"$TMP/kc/determinism.txt"
 cp -a "$TMP/kb" "$TMP/ke"; rm -rf "$TMP/ke/tc"
 cp -a "$TMP/kb" "$TMP/kf"; mk "$TMP/kf" tc 3 x
+cp -a "$TMP/kb" "$TMP/kq"; printf x >"$TMP/kq/tc/frames/frame-001.png"; (. "$TMP/digest.sh" && frames_digest "$TMP/kq/tc" tc)
 for good in kb kc; do
-  clean bash "$CMP" --cells "$TMP/kcells" --expect-verdicts 5 "$TMP/ka" "$TMP/$good" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on runs whose control arm alone differs ($good)" >&2; rc=1; }
+  clean bash "$CMP" --cells "$TMP/kcells" --expect-verdicts 6 "$TMP/ka" "$TMP/$good" >/dev/null || { echo "fv-lab-goldens: compare-runs failed on runs whose control arm alone differs ($good)" >&2; rc=1; }
 done
 out="$(clean bash "$CMP" --cells "$TMP/kcells" "$TMP/ka" "$TMP/kc" || true)"
 grep -qx 'control tc: reported, not judged ({"exit":0,"skipped":null}, frames differ (1 vs 1 frames))' <<<"$out" \
   || { echo "fv-lab-goldens: compare-runs did not report the control arm's frames" >&2; rc=1; }
-if clean bash "$CMP" --cells "$TMP/kcells" --expect-verdicts 6 "$TMP/ka" "$TMP/kc" >/dev/null; then echo "fv-lab-goldens: compare-runs counted a control's hashes.json as a verdict file" >&2; rc=1; fi
-for bad in kd ke kf kg; do
+if clean bash "$CMP" --cells "$TMP/kcells" --expect-verdicts 7 "$TMP/ka" "$TMP/kc" >/dev/null; then echo "fv-lab-goldens: compare-runs counted a control's hashes.json as a verdict file" >&2; rc=1; fi
+for bad in kd ke kf kg kt kq; do
   if clean bash "$CMP" --cells "$TMP/kcells" "$TMP/ka" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a difference beside a control arm ($bad)" >&2; rc=1; fi
 done
+# A determinism.txt of control lines only, in both runs: neither the same nor
+# counted (no verdict file at all, so --expect-verdicts 1 fails).
+for r in ko kp; do mk "$TMP/$r" r1 0 x; done
+mk "$TMP/ko" tc 0 x; mk "$TMP/kp" tc 0 y
+echo 'tc/run1 frames IDENTICAL x' >"$TMP/ko/determinism.txt"; echo 'tc/run1 frames DIFFERENT y' >"$TMP/kp/determinism.txt"
+out="$(clean bash "$CMP" --cells "$TMP/kcells" "$TMP/ko" "$TMP/kp" || echo FAILED)"
+{ grep -qx 'determinism.txt: only control lines (not compared, not counted)' <<<"$out" && ! grep -q FAILED <<<"$out"; } \
+  || { echo "fv-lab-goldens: compare-runs mishandled a determinism.txt of control lines only" >&2; rc=1; }
+if clean bash "$CMP" --cells "$TMP/kcells" --expect-verdicts 1 "$TMP/ko" "$TMP/kp" >/dev/null; then echo "fv-lab-goldens: compare-runs counted a determinism.txt of control lines only" >&2; rc=1; fi
+# An unreadable determinism.txt on both sides is a difference, as without
+# controls (only where mode 000 stops a read: not as root).
+cp -a "$TMP/ka" "$TMP/kua"; cp -a "$TMP/kb" "$TMP/kub"; chmod 000 "$TMP/kua/determinism.txt" "$TMP/kub/determinism.txt"
+if [[ ! -r "$TMP/kua/determinism.txt" ]] && clean bash "$CMP" --cells "$TMP/kcells" "$TMP/kua" "$TMP/kub" >/dev/null 2>&1; then
+  echo "fv-lab-goldens: compare-runs passed two unreadable determinism.txt" >&2; rc=1
+fi
+chmod 644 "$TMP/kua/determinism.txt" "$TMP/kub/determinism.txt"
 # Without --cells the checkout's lab/cells decide: det-short-h3's h3-timed is a control.
 for r in ha hb; do mk "$TMP/$r" h3-r1 0 x; done
 mk "$TMP/ha" h3-timed 0 x; mk "$TMP/hb" h3-timed 0 y
@@ -343,6 +368,10 @@ clean bash "$CMP" "$TMP/ha" "$TMP/hb" >/dev/null || { echo "fv-lab-goldens: comp
 mkdir -p "$TMP/kbad"; printf '%s\n' '[repeats]' 'controls = ["tc"' >"$TMP/kbad/k.toml"
 clean bash "$CMP" --cells "$TMP/kbad" "$TMP/ka" "$TMP/kb" >/dev/null 2>&1 && st=0 || st=$?
 [[ "$st" == 2 ]] || { echo "fv-lab-goldens: compare-runs exited $st (not 2) on an unclosed controls array" >&2; rc=1; }
+# So is a name outside fv-lab's arm-name grammar.
+mkdir -p "$TMP/kname"; printf '%s\n' '[repeats]' 'controls = ["a b"]' >"$TMP/kname/k.toml"
+clean bash "$CMP" --cells "$TMP/kname" "$TMP/ka" "$TMP/kb" >/dev/null 2>&1 && st=0 || st=$?
+[[ "$st" == 2 ]] || { echo "fv-lab-goldens: compare-runs exited $st (not 2) on a control named 'a b'" >&2; rc=1; }
 for bad in rc rd re rf rh ri; do
   if clean bash "$CMP" "$TMP/ra" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a difference ($bad)" >&2; rc=1; fi
 done

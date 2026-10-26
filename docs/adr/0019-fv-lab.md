@@ -1645,11 +1645,13 @@ bash scripts/gpu/fv-lab-compare-runs.sh $L $S
 between the two sides of that run while r1-r3 were byte-identical and both `fv-lab gate --check` passed. So
 `fv-lab-compare-runs.sh` treats every arm a cell lists in `[repeats] controls` as fv-lab's verdict does: reported, not
 judged. It reads the controls from the checkout's `lab/cells/*.toml` (`--cells DIR` for another directory; a name
-another cell declares as an arm it does not list as a control stays judged). A control arm must still exist in both
-runs and agree on `summary.json` `exit` / `skipped`; its frames, `compare-dumps` lines and own `hashes.txt`,
-`hashes.json` and evidence logs are printed on a `control <arm>:` line and are neither differences nor verdict files;
-the run's `determinism.txt` and `hashes.txt` are compared without the control arms' lines and still count. Hence 5
-and 3 for `--expect-verdicts` above, not 6 and 4.
+another cell declares as an arm it does not list as a control stays judged; a name outside fv-lab's arm-name grammar
+exits 2). A control arm must still exist in both runs, agree on `summary.json` `exit` / `skipped`, and have the same
+frame count in both (the timed pick changes bytes, not counts); its frame bytes, `compare-dumps` lines and own
+`hashes.txt`, `hashes.json` and evidence logs are printed on a `control <arm>:` line and are neither differences nor
+verdict files. The run's `determinism.txt` and `hashes.txt` are compared without the control arms' lines and still
+count, unless only control lines are left in both (then neither compared nor counted); an unreadable one is a
+difference. Hence 5 and 3 for `--expect-verdicts` above, not 6 and 4.
 
 Pass, for each family: `fv-lab-compare-runs.sh` exits 0 and both pods end `matrix_exit=0`:
 
