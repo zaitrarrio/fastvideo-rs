@@ -109,3 +109,16 @@ impl Restored {
         format!("fv-lab-{}-{rest}", self.tier)
     }
 }
+
+/// `FV_LAB_EXPERIMENTS` of `scripts/gpu/fv-lab-retired.sh`: the tiers made
+/// from a port one-off (docs/adr/0019-fv-lab.md §14), never script families.
+pub fn experiments() -> Vec<String> {
+    let p = repo_root().join("scripts/gpu/fv-lab-retired.sh");
+    let t = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let line = t
+        .lines()
+        .find_map(|l| l.strip_prefix("FV_LAB_EXPERIMENTS=\""))
+        .and_then(|l| l.strip_suffix('"'))
+        .expect("FV_LAB_EXPERIMENTS=\"…\"");
+    line.split_whitespace().map(str::to_owned).collect()
+}

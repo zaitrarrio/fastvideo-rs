@@ -8,15 +8,16 @@
   `e82b6b7` and `b4a` is retired from the script like the ten (§11.6). Two dropped modes are tiers again, frozen
   from the script at `5987e6a4` (§12, accepted; GPU check passed on `8b18d89`).
   D1c (§13: `fv-lab report summary` and `report table`, the `FV_FETCH_TREE` mirror; CPU only, no GPU gate) is
-  accepted. The rest of D1d (`oracle`) and the retirement of the rest of `runpod-matrix.sh`, `runpod-http.sh` and the
-  port one-offs follow (§8)
+  accepted. D1e (§14: the port one-offs, one kept as the tier `h3-graphs`, nine deleted; `runpod-http.sh`'s callers
+  listed) is proposed, its GPU check (§14.4) the coordinator's. The rest of D1d (`oracle`) and the retirement of the
+  rest of `runpod-matrix.sh` and `runpod-http.sh` follow (§8, §14.6)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
   `scripts/gpu/fv-lab-compare-runs.sh` (the GPU gate's comparison); fv-lab in the tools release's `gpucheck` set;
   schemas `crates/fastvideo-lab/schemas/{tiers,cell}.v1.json`; data `lab/tiers.toml`, `lab/cells/*.toml` (D1a
   `rtx6000-*`, D1b `techniques-*`, `b6-*`, `rtx5090-*`, `fastvideo-*`, `h3arms-*`, `trace-*`, `ltxfps-*`, `ltxvae-*`,
-  `precision-*`; D1d `b4a-*`, §11);
+  `precision-*`; D1d `b4a-*`, §11; D1e `h3-graphs-*`, §14);
   goldens `crates/fastvideo-lab/fixtures/*` (written by `scripts/gpu/tests/fv-lab-goldens.sh`, frozen for the tiers of
   `scripts/gpu/fv-lab-retired.sh`, §10); one seam in
   `fastvideo-deploy` (`runpod::Pod::list`, §6)
@@ -273,7 +274,9 @@ Pass: exit 0, every arm `same`, `fasth3-8step` skipped (`weights incomplete`) in
   the verdict step, `b4a` as a tier, `fv-lab gate` (the promotion gate aliased: `fv-gpucheck gate` driven offline);
   `b4a`'s branch deleted after its GPU gate (§11.6).
 - **D1e**: the 24 port one-offs in `scripts/gpu/experiments/` (F1) become cells or are deleted; `runpod-http.sh`
-  is deleted once nothing calls it (`upstream` mode moves with D1d).
+  is deleted once nothing calls it (`upstream` mode moves with D1d). Done (§14): `h3-graphs` (its h3-turbo cells) is a tier,
+  its scripts kept until its GPU check (§14.4); the other nine experiments are deleted; what still calls
+  `runpod-http.sh` is §14.6.
 
 ### 9. D1b: nine more families, four schema additions
 
@@ -1058,6 +1061,11 @@ script's `fetch_tree` on a fake pod), `tests/fv_lab_bin.rs::report_summary_and_t
 `::the_tree_fetch_is_checked_before_any_pod_exists`, `bash scripts/gpu/tests/fv-lab-report-goldens.sh --check`,
 `fv-lab-route.test.sh`; no GPU.
 
+§14 (D1e), CPU: `tests/experiment_tiers.rs` (the `h3-graphs` arms equal the pod script's turbo commands under the §14.3
+mapping; its dry run equals its golden; the compares), `bash scripts/gpu/tests/fv-lab-experiment-goldens.sh --check`
+(the script's commands and prompt sets), `tests/dry_run.rs`, `tests/payload_golden.rs`, `fv-lab-goldens.sh --check`,
+`fv-lab-route.test.sh`, `self-delete.test.sh`; GPU: §14.4.
+
 §10, CPU: `bash scripts/gpu/tests/fv-lab-goldens.sh --check` (frozen fixtures present, branches gone),
 `tests/dry_run.rs::retired_families_are_frozen_tiers_without_a_branch`, `tests/fv_lab_bin.rs::runs_dir_replaces_the_run_directory`,
 `FV_DRY_RUN=1 runpod-http.sh run` for a retired and a script family, and every remaining family's
@@ -1214,3 +1222,186 @@ byte identity of every checkpoint / prompt / canvas group (`hashes.tsv`, `MISMAT
 quality windows applied to the parity clip (`gate_hard_quality`), and h3arms' reuse count (already a `[[verdict.count]]`
 in b4a). `report` prints them as the scripts did; D1d gives them a type (a frames-hash equality list and a compare-
 report window rule under `[verdict]`), so `fv-lab gate` can re-evaluate them offline.
+
+### 14. D1e: the port one-offs, kept as a tier or deleted
+
+Status: proposed 2026-10-26 (CPU part done; the kept tier's GPU check, §14.4, is the coordinator's). Decision-id
+FVID-2026-10-26-fv-lab-one-offs. §8 left D1e two things: the port one-offs F1 moved to `scripts/gpu/experiments/`
+(ten experiments: twenty pod / launcher scripts, two `*-plan.py`; their four `*-summary.py` went in D1c, §13.5), and
+`runpod-http.sh`, deleted once nothing calls it.
+
+#### 14.1 The rule
+
+An experiment is **kept** as fv-lab cells and a tier only when it still measures something a gold file
+(`lab/gold/`), a served variant (`families/*.toml`) or an open item depends on, and fv-lab can run it: every tree on
+the EU volume (`weights = "volume"`, §4; the registry's `hydrate` is not there yet), no upstream Python stack (that
+is the oracle's, D1d), no step the cell schema lacks. Otherwise it is **deleted**: a finished experiment whose result
+is in `docs/ports/*.md` / `docs/perf/*.md`, its evidence in `artifacts/` (both stay). What the deleted ones measured
+for the served variants is re-measured by other means: latency by the `gold` tier (one serve-engine cell per gold
+file, ADR-0023 §3, once its trees are reachable), byte identity of a change by `techniques` / `b6` / `b4a`
+(baseline vs this build), kernels by `fv-gpucheck kernels`, upstream parity by the oracle (D1d). A deleted
+script stays readable in git: `git show 22a5fd7b:scripts/gpu/experiments/<file>`.
+
+#### 14.2 The decisions
+
+| experiment (scripts) | what it measured; where it is recorded | trees / stack | decision, and why |
+|---|---|---|---|
+| `fasth3-nvfp4` (`-validate.sh`, `-pod.sh`, `-plan.py`) | FastH3 V2 / 4-step NVFP4 apples to apples with upstream FastVideo on one pod: upstream's timings, parity on injected noise, our NVFP4 arms, phase profile (2026-10-14). `docs/ports/fasth3-nvfp4.md` §4-§8, `artifacts/ports/fasth3-nvfp4/run-2026-10-14/`, `fv-lab report summary --kind fasth3-nvfp4` | NVFP4 trees R2-only; the upstream image `fastvideo-rs-upstream-fastvideo-nvfp4` | **delete**: finished port proof; its recommendation (sparse FP4 attention) was carried out (`fasth3-sparse-fp4-attn.md`). Upstream parity is the oracle's (D1d); the served variants' latency is the `gold` tier's (`gold-fasth3-v2-nvfp4`, `gold-fasth3-4step-vsa-nvfp4`) |
+| `h3-fp4attn` (`-validate.sh`, `-pod.sh`) | sparse FP4 VSA attention against bf16 VSA on the NVFP4 checkpoints: kernel checks, 768p / 480p traces, parity, timings (2026-10-14). `docs/ports/fasth3-sparse-fp4-attn.md` §3, `artifacts/ports/fasth3-sparse-fp4-attn/` | NVFP4 trees R2-only | **delete**: the owner decided the default on these numbers (2026-10-14); the kernel checks are `fv-gpucheck kernels --groups h3_fp4_attn` (`runpod-http.sh kernels`); the served NVFP4 tier is the `gold` tier's. The five-prompt gate it did not run is a measurement of a served variant, i.e. a gold run, not a reason to keep a one-off |
+| `h3-glue` (`-validate.sh`, `-pod.sh`) | the H3 block glue fusions: base vs new binary, `FASTVIDEO_H3_GLUE=0`, kernel checks, byte-identical clips (2026-10-14). `docs/perf/h3-glue-fusion.md`, `artifacts/perf/h3-glue-fusion/` | V2-NVFP4 R2-only; h3-turbo on the volume | **delete**: merged and proven bit-exact; §4 there closes the remaining candidates (under the 2 % bar). A later change to the block is a `techniques` / `b6` byte-identity run (baseline vs this build), kernels `fv-gpucheck kernels --groups dit_fusion,nvfp4_linear` |
+| `h3-graphs` (`-validate.sh`, `-pod.sh`) | lazy step events (default) and the opt-in CUDA graphs of the H3 denoise steps: CUPTI traces, sync / lazy / graphs timings, byte identity over 72 clips (2026-10-14, V2-NVFP4 and 4-step NVFP4). `docs/perf/h3-denoise-graphs.md`, `artifacts/perf/h3-denoise-graphs/run-2026-10-14/`, `fv-lab report summary --kind h3-graphs` | NVFP4 trees R2-only; **h3-turbo all on the EU volume** | **keep, as the tier `h3-graphs` (h3-turbo cells only)**: §5 there leaves an open item, "h3-turbo (MXFP8, 768p) was not measured" (no EU-RO-1 stock then), on the default served H3 tier (`fasth3-4step-vsa`, served `h3-turbo`), whose lazy step clock is the default; the graph cache's `MAX_KEYS` was "set after this run and not re-measured". The vdn-h3 gold file cites the doc. Its NVFP4 cells stay out until `hydrate` (§14.3) |
+| `h3-tier-options` (`-validate.sh`, `-pod.sh`) | three options for the H3 NVFP4 tier (TAEH3, the published NVFP4 VAE, Trim NVFP4 ± FP4 attention), five prompts, compares and gates (2026-10-14). `docs/perf/h3-nvfp4-tier-options.md`, `artifacts/perf/h3-nvfp4-tier-options/`, `report summary --kind h3-tier-options` | V2-NVFP4, Trim, Trim NVFP4 R2-only | **delete**: the owner decided on these numbers and they shipped ("Decisions (2026-10-14)"). Six gold files take latency or quality numbers from the doc (`fasth3-v2-nvfp4{,-taeh3}`, `fasth3-trim-nvfp4{,-fast}`, `fasth3-4step-vsa{,-480p}-taeh3`; 32 cite its price): their latency is what the `gold` tier re-measures, their `quality.*` values are dated sources (ADR-0009), and no open decision rests on re-running the comparison |
+| `h3-tier-ship` (`-validate.sh`, `-pod.sh`) | smoke of what shipped: main vs branch, the NVFP4 VAE default, `FASTVIDEO_H3_VAE_NVFP4=0` byte-identical to main, preview, Trim fastest (2026-10-14). `docs/perf/h3-nvfp4-tier-options.md` "GPU smoke", `artifacts/perf/h3-nvfp4-tier-ship/` | R2-only | **delete**: a one-time smoke of a merged change; the served variants are the `gold` tier's |
+| `h3-trim` (`-validate.sh`, `-pod.sh`) | the Trim port against upstream FastVideo (injected parity, `av_psnr.py`) and its timing against V2 (2026-10-13). `docs/ports/h3-trim.md` §6, `artifacts/ports/h3-trim/` | `fasth3-trim-8step`, `h3-8step` R2-only; an upstream uv stack | **delete**: finished port proof; parity is the oracle's (D1d), `gold-fasth3-trim-8step` the served variant's latency. Its §7 open item "MXFP8 versus bf16 speed would decide the default" was measured on one pod by `h3-trim-nvfp4` (§5.4 there: MXFP8 1.30x / 1.27x faster, gate pass); `h3-trim.md` §7 now says so |
+| `h3-trim-nvfp4` (`-validate.sh`, `-pod.sh`, `-plan.py`) | the published Trim NVFP4 file against bf16 / MXFP8: kernel check, parity, speed, compares and gates (2026-10-14). `docs/ports/h3-trim.md` §5.4, `artifacts/ports/h3-trim/nvfp4/`, `report summary --kind h3-trim-nvfp4` | R2-only | **delete**: finished; served opt-in (`fasth3-trim-nvfp4`, its gold file cites the tier-options run) |
+| `h3-turbo-loras` (`-validate.sh`, `-pod.sh`) | larry / lightx2v LoRAs against the Space's own stack (merged-weight and injected parity), speed and quality (2026-10-14, two runs). `docs/ports/h3-turbo-loras.md` §6-§7, `artifacts/ports/h3-turbo-loras/` | LoRA trees R2-only; the Space's Python stack | **delete**: finished port proof; parity is the oracle's (D1d), the three served variants' latency the `gold` tier's |
+| `vdn-h3` (`-validate.sh`, `-pod.sh`) | VDN-H3 (50-step and 8-step) against the upstream diffusers component (`oracle_vdn.py`), kernel checks, timings (2026-10-14). `docs/ports/vdn-h3.md` §5, §6, §8, `artifacts/ports/vdn-h3/` | VDN trees R2-only; an upstream uv stack | **delete**: finished port proof; `kernels --groups vdn` stays in fv-gpucheck, parity is the oracle's (D1d), `gold-vdn-h3` / `gold-vdn-h3-8step` the latency |
+
+One kept (two scripts, until §14.4 passes), nine deleted (eighteen scripts and two `*-plan.py`).
+
+#### 14.3 `h3-graphs` as a tier
+
+`lab/tiers.toml` `h3-graphs` (the `rtx6000` tier's pod: PRO 6000, EU volume, 4 h cap, 3600 s per arm, the TAE fetch)
+with two cells, in the pod script's order:
+
+| cell | arm | env | what |
+|---|---|---|---|
+| `h3-graphs-turbo-trace` | `h3-graphs-turbo-trace-768p` | `FASTVIDEO_H3_GRAPHS=1 FASTVIDEO_GPU_TRACE=1` | the script's `trace` step for `turbo 768p`: a spark-mountain-lake warm-up request, then h3-demo eager / captured / replayed, one traced step each (no `--warm`) |
+| `h3-graphs-turbo` | `h3-graphs-turbo-sync` | `FASTVIDEO_H3_STEP_SYNC=1` | the `cells` step, arm `sync`: a synchronize per step |
+| | `h3-graphs-turbo-lazy` | none (`env = []`) | arm `lazy`: the default |
+| | `h3-graphs-turbo-graphs` | `FASTVIDEO_H3_GRAPHS=1` | arm `graphs` |
+| | compares | | `lazy -> sync` and `lazy -> graphs`, `--off-identity`, one report per request directory (`compare_cells`), 6 each |
+
+Every arm: `--mode fast --techniques h3/fasth3_4step_vsa --out <arm>/report h3 gen --weights {weights}/h3-base
+--h3-recipe 4step-vsa --adaln-cache … --height 768 --width 1344 --text-encoder streamed --text-weights
+{weights}/h3-base --text-cache … --no-mp4 --num-frames 124 --prompt unused --prompts <set> --clip-dir <arm>/frames`,
+the three timed arms with `--warm`; gate `fasth3-4step-vsa` (h3-base, its `transformer_prequant_4step-vsa_mxfp8`, the
+LoRA: the script's `TURBO_OK`), all on `bz0ofkfx45`. The prompt sets are the script's own prep output:
+`scripts/gpu/prompts-h3-graphs-768.json` (h3-demo and spark-mountain-lake at 768p, three requests each, seed 1024)
+and `scripts/gpu/prompts-h3-graphs-trace-768p.json`, both from `scripts/gpu/prompts-hd5.json`.
+
+**Equality, from the pod script itself.** The script cannot dry-run, so `scripts/gpu/tests/fv-lab-experiment-goldens.sh
+[--check]` (CI: `control.yml`) cuts its `ARMS`, `CKS`, `COMMON`, `arm_env`, `ck_args`, `gen`, the prep Python and the
+`trace` / `cells` blocks out of `h3-graphs-pod.sh` and runs them under `env -i` with `env(1)` stood in by a stub that
+records each process's directory and argv: `fixtures/experiments/h3-graphs-script.txt`, every process of every
+checkpoint (v2, 4s, turbo; 12 lines). It runs the prep Python on `prompts-hd5.json` and holds the two prompt files to
+its output byte for byte. `tests/experiment_tiers.rs::h3_graphs_runs_the_pod_scripts_commands` takes the script's
+four turbo lines and finds each equal to the arm's command word for word after this mapping, and only it:
+
+| the pod script | the tier | why |
+|---|---|---|
+| `timeout 2400` before the binary | the runner's `timeout … 3600` (the tier's `cell_timeout_s`) | every tier's per-arm cap; 2400 s was the script's own |
+| `/srv/cells/turbo-<arm>`, `/srv/trace/turbo-768p` (cwd, `--out …/report`) | `{runs}/h3-graphs-turbo-<arm>`, `{runs}/h3-graphs-turbo-trace-768p` | the run directory |
+| `--clip-dir …/clip` | `--clip-dir …/frames` | where the frames record and `compare_cells` look |
+| `/fvw/adaln-turbo.cache` | `{runs}/h3-graphs-turbo-adaln.cache` | the script's scratch file, shared by the four processes as there |
+| `/fvw/text-cache` | `{scratch}/h3-graphs-text-cache` | likewise |
+| `/fvw/prompts-768.json`, `/fvw/prompts-trace-768p.json` | `{root}/scripts/gpu/prompts-h3-graphs-768.json`, `…-trace-768p.json` | the same bytes, committed |
+
+The tier's own dry run is its golden (`fixtures/h3-graphs-dry-run.txt`, `h3_graphs_dry_run_is_its_golden`), frozen from
+the start as §12's were; `tests/dry_run.rs` leaves the experiment tiers out of the script families, as it leaves
+`gold`. `FV_LAB_EXPERIMENTS` (`scripts/gpu/fv-lab-retired.sh`) lists them: `fv-lab-goldens.sh` writes only their pod
+body (`runpod-http-h3-graphs.json`, held by `tests/payload_golden.rs` like every tier's) and checks that each is a
+tier, not retired and without a `runpod-matrix.sh` branch; `runpod-http.sh run` / `all` refuse them and name the
+fv-lab command, as for `gold` (`fv-lab-route.test.sh`). When the pod script is deleted (§14.4), the goldens script
+reads it from the parent of the deleting commit, and keeps the fixtures in a shallow clone.
+
+**Differences from the experiment, and why.**
+
+| | the experiment | the tier | why |
+|---|---|---|---|
+| checkpoints | `v2`, `4s` (NVFP4, from R2, composed folders with Hub configs) and `turbo` | `turbo` only | the NVFP4 trees are R2-only and the folders are built at run time; they come back as cells with `hydrate` (§4), `--h3-recipe v2-nvfp4` on the tree as `h3-tier-ship` ran it |
+| canvases | V2 / 4-step at 480p and 768p | 768p | h3-turbo ran 768p only in the script too |
+| byte identity | sha256 of each request's PNGs and WAV (`hashes.tsv`), then the PNGs deleted | `--off-identity` compares (pixels, frame count) per request, and each arm's `frames.sha256.json` | the runner's identity tools; the WAV is not compared (no fv-lab tool reads audio); the frames stay on the pod's 120 GB disk (~7 GB) |
+| the pod | its own launcher: uv Python, a presigned R2 plan PUT to the pod, 160 GB disk, `nvsmi.csv` sampled every second, a busy-GPU self-delete | fv-lab's (§6): the runtime image, the EU volume, `nvidia-smi` at each arm's start and end, an empty GPU checked before each arm | fv-deploy's guards; the peak is `benchmark.json`'s device maximum |
+| report | `fv-lab report summary --kind h3-graphs` on `cells/`, `trace/`, `hashes.tsv` | the run directory's layout (§5); the timings in each arm's `benchmark.json`, the graph lines (`h3 graphs: N steps: R replayed, C captured, E eager`) in its `stderr.log` | the summary reads the experiment's layout; a tier kind for it is a later `report` change |
+
+#### 14.4 The GPU check (the coordinator's)
+
+On one commit whose runtime image is published (`fastvideo-rs-runtime:sha-<7>`: this PR's head or its merge; the
+image carries `lab/cells/h3-graphs-*` and `scripts/gpu/prompts-h3-graphs-*.json`), from the repository root with
+`fv-lab` built on the build pod:
+
+```sh
+SHA=<7>
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family h3-graphs --wall-cap-s 3600 \
+  --fetch-tree --fetch-skip '/frames/|\.cache$' --yes --wait
+#   -> artifacts/runpod/h3-graphs/$SHA-<MMDDHHMMSS>-<hex>/   (the pod is deleted at the end)
+R=artifacts/runpod/h3-graphs/$SHA-<MMDDHHMMSS>-<hex>
+for a in h3-graphs-turbo-trace-768p h3-graphs-turbo-sync h3-graphs-turbo-lazy h3-graphs-turbo-graphs; do
+  jq -e '.exit == 0' "$R/$a/summary.json"; done
+ls "$R"/compare/compare-clips-h3-graphs-turbo-lazy--h3-graphs-turbo-{sync,graphs}-*.json | wc -l      # 12
+for f in "$R"/compare/compare-clips-h3-graphs-turbo-lazy--*.json; do
+  jq -e '.status != "skipped" and ([.checks[] | select(.name | startswith("off_identity")) | .ok] | length == 2 and all)' "$f"
+done
+grep -cE 'h3 graphs: [0-9]+ steps: [1-9][0-9]* replayed' "$R/h3-graphs-turbo-graphs/stderr.log"        # >= 1
+```
+
+Pass: `pod up --wait` exits 0 (`DONE`, `matrix_exit=0`), the four arms exit 0, the twelve compare reports exist and
+are byte-identical (sync = lazy = graphs on every request, as on the NVFP4 checkpoints), and the graphs arm replayed
+at least one request (h3-demo's third, spark's third). Record in `docs/perf/h3-denoise-graphs.md` §5 the h3-turbo
+768p denoise per arm (each arm's `benchmark.json`) against the expectation there (lazy about 1.4 % under sync, a
+replay 0.6-0.7 % more) and the graph pool high water; then delete `h3-graphs-{validate,pod}.sh` and
+`scripts/gpu/experiments/` with them (the goldens script then reads the history). A failing compare is a finding
+about the lazy clock or the graphs on h3-turbo, not a run failure: report it and keep the scripts.
+
+Cost: one RTX PRO 6000 Blackwell Server Edition in EU-RO-1 on `bz0ofkfx45` at about $2.49/hr. Boot and preflight
+~5 min; the trace arm streams the bf16 text encoder for its two prompts (up to ~4 min each from the volume, as
+`h3-tier-options` measured) and makes four 768p requests; each timed arm loads (~16 s) and makes seven (~28 s each,
+`docs/ports/h3-turbo-loras.md` §7); twelve frame compares: **~35 min, about $1.45**, bounded at $2.49 by
+`--wall-cap-s 3600`. No other pod, no new tree, no download.
+
+#### 14.5 Deleted, and the references
+
+Deleted: `scripts/gpu/experiments/{fasth3-nvfp4,h3-fp4attn,h3-glue,h3-tier-options,h3-tier-ship,h3-trim-nvfp4,h3-trim,
+h3-turbo-loras,vdn-h3}-{validate,pod}.sh`, `{fasth3-nvfp4,h3-trim-nvfp4}-plan.py`. References fixed: each doc that
+named one says it was deleted here and where it is in git (`docs/perf/{h3-glue-fusion,h3-nvfp4-tier-options}.md`,
+`docs/ports/{fasth3-nvfp4,fasth3-sparse-fp4-attn,h3-trim,h3-turbo-loras,vdn-h3}.md`, `docs/ops/r2-weights.md`,
+ADR-0023 §4), `docs/perf/h3-denoise-graphs.md` §5-§6 points at the tier, `README.md` and
+`scripts/gpu/experiments/README.md` describe the one left, `scripts/gpu/tests/self-delete.test.sh` drops the nine
+launchers (its floors now 34 inline copies and 3 launchers), `docs/ports/CHECKLIST.md` sends a port's GPU runs to
+fv-lab cells. No Taskfile task or workflow named a deleted file. The committed run directories, the
+`report summary --kind fasth3-nvfp4|h3-tier-options|h3-trim-nvfp4|h3-graphs` ports and their fixtures stay (they
+read `artifacts/`). `artifacts/perf/h3-trim-vae-mxfp8/driver/launch.sh` names the Trim scripts; it is evidence and
+stays as committed.
+
+Left without a caller by the deletion, and **not** deleted here (the upstream references are the oracle's, D1d):
+`scripts/gpu/upstream/{oracle_vdn,bench_fasth3_nvfp4,h3_turbo_lora_ref,merged_parity,av_psnr}.py` (the parity
+references of `vdn-h3`, `fasth3-nvfp4`, `h3-turbo-loras`, `h3-trim`) and `docker/upstream.Dockerfile`'s
+`fastvideo-nvfp4` target (built on dispatch only by `upstream-images.yml`).
+
+#### 14.6 `runpod-http.sh`: what still calls it
+
+Not deleted: it still has callers. At this commit:
+
+| mode | callers | after |
+|---|---|---|
+| `run` (script path) | every family with a `runpod-matrix.sh` branch: `mmaudio`, `speechtest`, `sfwan`, `sfstream`, `sfquality`, `headline`, `identity`, `cold`, `h3`, `ltx`, `hunyuan`, `sana-video`, `wan`, `b200`, `precision-debug`, `attn3`, `fuse`, `eval`, `b4b`, `b4c`, `b4c2`, `h3attn`, `determinism`, `det-short`, `oracle`, `writer`, `ltxoffload`, `solbench`, `hd`, `serve-engine`, `sol-lingbot`, `sol-cosmos3` (32); `oracle.sh` (`FV_FAMILY=oracle`, `FV_ORACLE_RUN_MODE`, `FV_KEEP_POD`, `FV_POD_FILE`); `FV_POD_FILES` / `FV_POD_SCRIPT=sol-bench-pod.sh` (`docs/perf/sol-bench.md`; `hd-upscaler.sh` ships by it) | goes with `runpod-matrix.sh` (each family a tier or retired) and the sol-bench pod script |
+| `run` (fv-lab route, §10) | the 13 retired tiers; the Taskfile's `rtx6000` task | the Taskfile calls `fv-lab pod up` directly |
+| `run` / `all` refused | `gold`, the experiment tiers (§14.3) | — |
+| `plan` | `fv-lab-goldens.sh` (every script family's, `gold`'s and `h3-graphs`'s pod body: `fixtures/runpod-http-*.json`), `fv-lab-restored-goldens.sh` (at `5987e6a4`), the route test | the bodies freeze as the families' fixtures did (§10 item 3) |
+| `kernels`, `all` | by hand (`README.md`; `kernels.rs`'s `FV_EXTRA_ENV` groups) | an fv-lab kernels tier once an arm may have no weight gate (§9.1) |
+| `weights` | by hand | `fv-lab pod up` of any tier writes `weights.log` |
+| `upstream` | `oracle.sh` (the reference pods, `UP_IMAGE_TARGET`), `scripts/gpu/upstream/pod.sh` (its start command) | moves with D1d's `oracle` |
+| `attach`, `status`, `down` | `oracle.sh` (`down` of its reference pods); by hand | `fv-lab pod status` / `down` for fv-lab pods |
+
+Its functions are read by tests: `tests/fetch_tree.rs` (cuts `proxy` and `fetch_tree`), `tests/knobs.rs`
+(`FV_LAB_NOT_READ`), `self-delete.test.sh` (its start command's self-delete), `fv-lab-route.test.sh`; its usage text by
+the route test. The scripts that only name it in a message: `runpod.sh`, `runpod-matrix.sh`. It is deleted when the
+last row above has moved; the tests that cut it then freeze their copy, as `tests/verdict.rs` froze `b4a`'s branch.
+
+#### 14.7 The `runpod-matrix.sh` families §9.1 marks "D1e or retired"
+
+They are script families, not port one-offs, and stay in `runpod-matrix.sh` for now: D1d edits that file in
+parallel, and a branch is deleted only with the remaining families' dry runs compared before and after (§10 item 1).
+Proposed, for the slice that retires the script (not decided here):
+
+| family | what keeps it from a tier today | proposal |
+|---|---|---|
+| `hunyuan`, `sana-video` | a `--help` probe that ends the family; trees not on the EU volume | retire: the gold files and served variants decide what runs |
+| `b200` | the US volume is gone; TAE / Spark probes | retire with the US volume (CLAUDE.md) |
+| `mmaudio`, `speechtest` | Python venvs, upstream clones, Whisper | the oracle's (D1d) or retired |
+| `sfstream`, `sfquality` | `sfwan` trees R2-only; TAEHV fetch; run lists from the environment | a tier with `hydrate` |
+| `h3attn` | one process runs many `--arm`s; FP8 arms dropped on a kernel FAIL | retire unless an attention arm is an open item (`docs/techniques.md`) |
+| `writer` | sysinfo, a sampler, `dd` throughput | retire (a one-time measurement, `docs/perf`) |
+| `precision-debug`, `identity` | dump-dependent compares, cases from the environment | retire; `precision` and the identity tiers cover them |
+| `solbench`, `sol-lingbot`, `sol-cosmos3` | per-arm timeouts, routers, prompts from files; trees not on the volume | tiers with `hydrate` and a prompt-file arm, or retired |
