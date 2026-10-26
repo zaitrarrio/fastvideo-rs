@@ -83,7 +83,10 @@ const bootFields = (spec: EndpointSpec) => {
  * of what create, scale-up and invoke need: the account floor plus the serverless margin, ops.ts assertFloor),
  * `cap_s` = deadline_min (the cron's backstop: scale to 0 or delete; `null` without a deadline: not checked).
  */
+/** Always `null` on a serverless endpoint. `cap_s` is also `null` (not checked) when the endpoint has no deadline:
+ * `SLS_GUARDS_NOT_CHECKED_WITHOUT_DEADLINE`. */
 export const SLS_GUARDS_NOT_CHECKED = ["max_usd_per_hr", "ready_timeout_s"] as const;
+export const SLS_GUARDS_NOT_CHECKED_WITHOUT_DEADLINE = ["cap_s"] as const;
 export function endpointGuards(spec: Pick<EndpointSpec, "deadline_min">): Guards {
   return { max_usd_per_hr: null, min_balance_usd: 8, cap_s: spec.deadline_min ? spec.deadline_min * 60 : null, ready_timeout_s: null, ready_cycles: 1 };
 }

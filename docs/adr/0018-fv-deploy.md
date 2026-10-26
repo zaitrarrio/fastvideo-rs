@@ -288,14 +288,14 @@ same fields, the same "left out when empty" rules, and `checkLaunch` (the schema
 for a cluster or standalone pod `max_usd_per_hr` = the spec's `max_gpu_dph` (a pod billed above it is deleted after
 create), `min_balance_usd` = `balance_floor`, `cap_s` = `cap_s` (the cron and the in-pod watchdog), `ready_timeout_s`
 360 (the pull deadline after which a pod is replaced, `podlogs.ts`) and `ready_cycles` 3 (one pod plus `MAX_REPLACE`
-2, `cluster/do.ts`); for a serverless endpoint `cap_s` = `deadline_min` × 60 (0: none), `min_balance_usd` 8 (the
+2, `cluster/do.ts`); for a serverless endpoint `cap_s` = `deadline_min` × 60 (~~0: none~~ `null` without a
+deadline since C3d, §10.4), `min_balance_usd` 8 (the
 least of `assertFloor`'s floor + margin) and `ready_cycles` 1 (one endpoint per create, never replaced by
 fv-control). **fv-control checks no serverless price and no worker readiness** (Runpod reports no serverless price,
-§5.3's known gap; Runpod starts and replaces the workers), and Launch v1 cannot say "not checked": so
-`max_usd_per_hr` and `ready_timeout_s` carry 0, fv-deploy's fail-closed values (no offer is under a $0 cap: fv-deploy
-would create nothing), named in `serverless/payloads.ts SLS_GUARDS_NOT_CHECKED` with a warning at `endpointGuards`.
-A consumer (the C3d ledger, a plan printout) must not show them as a cap or a timeout; §7.3 proposes `null` for
-"not checked". `source` is not set (a standalone pod's pool no longer names its preset; the stored spec is
+§5.3's known gap; Runpod starts and replaces the workers). **Superseded by §10.4 (C3d):** those guards are now
+`null`, "not checked by this launcher" (`serverless/payloads.ts SLS_GUARDS_NOT_CHECKED`, and `cap_s` without a
+deadline: `SLS_GUARDS_NOT_CHECKED_WITHOUT_DEADLINE`). Before C3d, when every guard was a required number and Launch v1
+could not say "not checked", `max_usd_per_hr` and `ready_timeout_s` carried fv-deploy's fail-closed 0. `source` is not set (a standalone pod's pool no longer names its preset; the stored spec is
 fv-control's record).
 
 A `Launch` that fails the schema never fails inside an operation: `poolLaunchIssues` checks every Runpod GPU pool of a
@@ -334,11 +334,11 @@ additive changes only, in the crate). So these keep their own shapes, from the s
 - **The REST v2 envelope** of load-balancer and CPU endpoints (`type`, `gpu.pools`, `workers`, `scaling`): LB mode is
   an open owner decision (§1, plan §1); its fields come from the `Launch` (§7.2), the envelope does not.
 - **Build pods** (`buildpods.ts`): CPU pods of the build service, not serve launches.
-- **"Not checked" guards.** Every `Guards` field is a required number, so a launcher that does not check one (fv-control:
-  the serverless price and readiness, §7.2) can only write a value fv-deploy would read as a rule. Proposal (a Rust
-  schema change, with C3b / C3d): `max_usd_per_hr`, `ready_timeout_s` and `ready_cycles` become `Option`, `null`
-  meaning "not checked by this launcher", which fv-deploy's own `up` refuses (it always checks) and a ledger shows as
-  such. Until then fv-control writes fv-deploy's fail-closed 0 and names those fields (`SLS_GUARDS_NOT_CHECKED`).
+- **"Not checked" guards.** *Superseded by §10.4 (C3d): done.* At C3c every `Guards` field was a required number, so a
+  launcher that does not check one (fv-control: the serverless price and readiness, §7.2) could only write a value
+  fv-deploy would read as a rule; the proposal here (`null` = "not checked by this launcher", refused by fv-deploy's
+  own `up`, shown as such by a ledger) is what §10.4 implements, for `max_usd_per_hr`, `cap_s`, `ready_timeout_s` and
+  `ready_cycles`. The fail-closed 0 fv-control wrote until then is gone.
 - fv-control's `providers.ts` `Offer` / `InstanceState` / `ProviderInstance` describe GMI / Brev for the planner and the
   views (stock, stoppable, deploy time; `starting | running | stopped | failed`); they are not duplicates of the
   schema's `Offer` / `InstanceState` (other fields and states) and are API response shapes, so they stay. No API
@@ -608,8 +608,11 @@ retag command.
 reads it (`control/src/releases.ts registry()`, the Releases page) and `reconcile` matches it against the account.
 fv-deploy now writes the same rows with the same statements and columns (`release::registry`: the upsert's column
 order is jq's, the `kv` filters are `_fv_kv_json`'s, the enrichment from `releases` is `_fv_enrich`'s), through the
-lifecycle's new `Recorder` seam (`D1Recorder`): `created` after every create, `ready` when `/ping` is 200, `deleted`
-after every delete (a replacement, the exit, a sweep, `down`). Best effort, as `registry.sh`: a D1 failure is a
+lifecycle's new `Recorder` seam (`D1Recorder`): `created` once the instance is backstopped and its billed price
+checked (as `runpod-pod.sh`: create, backstop, row; the write can take minutes and must never delay the backstop; an
+instance deleted at once for a failed backstop or its billed price gets no row), `ready` when `/ping` is 200,
+`deleted` after every delete (a replacement, the exit, a sweep, `down`, and the detached backstop's delete at the
+deadline, `run_backstop_recorded`). Best effort, as `registry.sh`: a D1 failure is a
 warning, never a failed deploy; without a Cloudflare token (`FV_CF_API_TOKEN`, `CLOUDFLARE_API_TOKEN`,
 `CLOUDFLARE_API_KEY`) nothing is written, and `FV_REGISTRY=0` turns it off. Only Runpod pods and endpoints are
 recorded (`kind` `pod` / `endpoint`, the endpoint's id without its template): the table's `runpod_id` is matched
@@ -621,6 +624,7 @@ A row of `fv-deploy up` differs from the script's for the same instance only in 
 |---|---|---|
 | `created_by` | `<actor>/fv-deploy` | `<actor>/runpod-pod.sh` (`/runpod-endpoint.sh`, `/release.sh`) |
 | `region` | `eu` (the launch's region) | not set |
+| `channel` | the launch's `FV_RELEASE_CHANNEL` (`up --channel`), as a field | the releases naming the digest (`FV_RELEASE_CHANNEL` only when no release names it) |
 | `meta` | the script's keys plus `guards`: the launch's guards, each number or `"not checked"` | the script's keys |
 
 The local ledger (`ledger.tsv`) also gains the guards on every `created` line (`max_usd_per_hr=… cap_s=…`,
@@ -647,7 +651,7 @@ fields. No body changes: guards are not in any Runpod payload, and the payload c
 
 `scripts/serve/tests/fv-deploy-goldens.sh` (CI `control.yml`, `--check`) now also writes
 `fixtures/deploy/serve-templates.json` (`runpod-templates.sh plan` of the CUDA and CPU images) and
-`fixtures/deploy/release.json`: `fv-deploy-release-goldens.sh` runs 26 scenarios of `release.sh`,
+`fixtures/deploy/release.json`: `fv-deploy-release-goldens.sh` runs 28 scenarios of `release.sh`,
 `runpod-templates.sh sync` and `registry.sh` against `mock_api.py` (D1 on SQLite, Runpod REST, a GHCR-like registry,
 GitHub dispatch) and records per scenario whether it succeeded, its stdout, the retags, the Runpod writes, the D1
 writes and the dispatches (digests as `<build.image>`, times as `<now>`). `mock_api.py` gained a request log
@@ -687,6 +691,27 @@ fv-control shows the first three); fv-control writing its own launches into `dep
 pods and endpoints live in its own tables, so `reconcile` reports fv-control's serve pods as `unknown`, as
 `release.sh` does today); the serverless quote (§5.3).
 
+#### 10.7 Review fixes (#199)
+
+- The D1 `created` write moved after the backstop and the billed-price check (`lifecycle.rs`; pinned by
+  `the_ledger_hears_of_a_create_only_after_its_backstop_and_price_check`).
+- A Runpod listing that is not an array of objects with an id (`GET /pods`, `/endpoints`, `/templates`) is an error,
+  never "nothing" (`release::listing`): read as empty, `reconcile` would mark every row gone and `templates sync` would
+  create duplicates (`a_listing_that_is_not_one_is_an_error`, `reconcile_and_sync_stop_on_an_answer_that_is_not_a_listing`).
+- The goldens pin the order of the effects: the mock logs the docker stub's retags in its request log, one global
+  sequence, and every scenario records `order` (retag, Runpod write, D1 write, dispatch); two partial failures run on
+  both sides: a template PATCH answering 500 after the retags (no release row) and the release INSERT answering 500
+  after the retags ("the images moved but the release was not recorded").
+- A guard key left out of a `Launch` is an error at parse (`deserialize_with`: serde reads a missing `Option` as
+  `None`, which would pass as "not checked"); `null` must be written.
+- `tests/release_goldens.rs` fails instead of skipping without python3 when `CI` is set.
+- The row's `channel` is the launch's (`up --channel`), not the process's `FV_RELEASE_CHANNEL`.
+- The detached backstop records its delete at the deadline (warn-only); its environment names the repository root
+  so it finds `registry.sql`, looked up as `release::registry_sql_path` (`FV_REGISTRY_SQL`, else under the root) by
+  every D1 writer.
+- fv-control names `cap_s` as unchecked without a deadline (`SLS_GUARDS_NOT_CHECKED_WITHOUT_DEADLINE`); §7.2 / §7.3's
+  "fail-closed 0" text is marked superseded by §10.4.
+
 ## Consequences
 
 - One Rust path for a Runpod launch, with the guards in one place and testable without a network; the scripts stay
@@ -714,7 +739,7 @@ pods and endpoints live in its own tables, so `reconcile` reports fv-control's s
   by itself; `up --yes` below the floor makes no create; `plan` and a dry `up` make no request and never print the
   key; the US volume is refused), `scripts/serve/tests/fv-deploy-goldens.sh --check` in `control.yml`.
 
-- C3d is pinned by `tests/release_goldens.rs` (26 scenarios against the scripts' mock), `payload_goldens.rs`
+- C3d is pinned by `tests/release_goldens.rs` (28 scenarios against the scripts' mock), `payload_goldens.rs`
   `serve_templates_equal_runpod_templates_sh`, `fv-deploy-goldens.sh --check` (`serve-templates.json`,
   `release.json`), the `release` unit tests and the guards' tests; fv-control's `launch-goldens.test.ts` (serverless
   guards `null`).

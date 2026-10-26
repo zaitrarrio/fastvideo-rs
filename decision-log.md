@@ -1810,4 +1810,14 @@ Project code: FVID
 - Reversibility: high (code; the schema change is additive; the scripts stay until the live gates)
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0018-fv-deploy.md §10
-- Verification: `tests/release_goldens.rs` (26 scenarios against `mock_api.py`, mutation-checked), `payload_goldens` `serve_templates_equal_runpod_templates_sh`, `fv_deploy_bin` `templates_plan_and_release_refusals_make_no_request`, `lifecycle::tests` `not_checked_guards_are_refused_and_shown`, `the_recorder_sees_create_ready_and_delete`, the `release` unit tests, `fv-deploy-goldens.sh --check` (jq 1.6 and 1.7), `release.test.sh` (50), control `launch-goldens.test.ts`; live gates pending the owner (§10.6)
+- Verification: `tests/release_goldens.rs` (28 scenarios against `mock_api.py` with the effects' order and two partial failures, mutation-checked), `payload_goldens` `serve_templates_equal_runpod_templates_sh`, `fv_deploy_bin` `templates_plan_and_release_refusals_make_no_request`, `lifecycle::tests` `not_checked_guards_are_refused_and_shown`, `the_recorder_sees_create_ready_and_delete`, the `release` unit tests, `fv-deploy-goldens.sh --check` (jq 1.6 and 1.7), `release.test.sh` (50), control `launch-goldens.test.ts`; live gates pending the owner (§10.6)
+
+### FVID · 2026-10-26 · FVID-2026-10-26-fv-deploy-c3d-review
+- Trigger: the coordinator's review of #199 (one blocking finding, nine more)
+- Options: fix each in #199 with a test; or defer the non-blocking ones
+- Decision: (coordinator, executed by the C3d agent) fix all in #199. The D1 `created` write comes after the backstop and the billed-price check (a pod deleted at once gets no row); a Runpod listing that is not one fails closed; the goldens pin the effects' order (retags logged in the mock's sequence) and two partial failures (template PATCH 500, release INSERT 500, after the retags); a guard key missing from a `Launch` fails at parse; the python-backed goldens fail in CI without python3; the row's channel is the launch's; the detached backstop records its delete; one `registry.sql` lookup; fv-control names `cap_s` as unchecked without a deadline; ADR §7.2 / §7.3 marked superseded by §10.4
+- Reason: the backstop must never wait on a ledger write; an unreadable listing must never read as "nothing"; the goldens must catch reordering and partial failure
+- Reversibility: high (code only)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0018-fv-deploy.md §10.3, §10.4, §10.7
+- Verification: `the_ledger_hears_of_a_create_only_after_its_backstop_and_price_check`, `the_backstop_records_its_delete`, `a_listing_that_is_not_one_is_an_error`, `reconcile_and_sync_stop_on_an_answer_that_is_not_a_listing`, `not_checked_guards_are_refused_and_shown` (missing key), `release_goldens` (28 scenarios, order, the launch channel), `fv-deploy-goldens.sh --check` (jq 1.6 and 1.7), control `launch-goldens.test.ts`

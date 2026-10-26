@@ -19,7 +19,7 @@ import { checkLaunch, DEFAULT_SERVERLESS, FV_DEPLOY_DEFAULT_GUARDS, LAUNCH_SCHEM
 import { clusterGuards, EDGE_WORKER_BOOT, MAX_REPLACE, PULL_DEADLINE_S, WATCHDOG_WORKER_BOOT, WORKER_BOOT, workerCreatePayload, workerLaunch, workerPlacements, workerSystemEnv, type EnvCtx } from "../../src/cluster/payloads";
 import { defaultSpec, migrateSpec, normalizeSpec, POOL_PRESETS, presetPool, TEMPLATES, type ClusterSpec } from "../../src/cluster/spec";
 import { standaloneSpec } from "../../src/standalone";
-import { endpointCreatePayload, endpointGuards, endpointLaunch, endpointUpdatePayload, SLS_BOOT, SLS_GUARDS_NOT_CHECKED, templateCreatePayload } from "../../src/serverless/payloads";
+import { endpointCreatePayload, endpointGuards, endpointLaunch, endpointUpdatePayload, SLS_BOOT, SLS_GUARDS_NOT_CHECKED, SLS_GUARDS_NOT_CHECKED_WITHOUT_DEADLINE, templateCreatePayload } from "../../src/serverless/payloads";
 import { normalizeEndpointSpec, type EndpointSpec } from "../../src/serverless/spec";
 import { SLS_PRESETS } from "../../src/serverless/presets";
 import { specOf, type SlsRow } from "../../src/serverless/ops";
@@ -546,5 +546,7 @@ describe("a launch that fails the schema", () => {
     expect(endpointGuards({ deadline_min: null }).cap_s).toBeNull();
     expect([...SLS_GUARDS_NOT_CHECKED]).toEqual(["max_usd_per_hr", "ready_timeout_s"]);
     for (const k of SLS_GUARDS_NOT_CHECKED) expect(endpointGuards({ deadline_min: 120 })[k]).toBeNull();
+    expect([...SLS_GUARDS_NOT_CHECKED_WITHOUT_DEADLINE]).toEqual(["cap_s"]);
+    for (const k of SLS_GUARDS_NOT_CHECKED_WITHOUT_DEADLINE) expect(endpointGuards({ deadline_min: null })[k]).toBeNull();
   });
 });
