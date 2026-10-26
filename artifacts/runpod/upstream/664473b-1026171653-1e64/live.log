@@ -1,0 +1,11 @@
+[17:20:22] pod.sh start steps: info:box weights:h3-diffusers oracle:fasth3-4step-vsa
+[17:20:22] ▶ step info:box
+[17:20:22] ok step info:box  0s
+[17:20:22] ▶ step weights:h3-diffusers
+[17:20:25] ok step weights:h3-diffusers  3s
+[17:20:25] ▶ step oracle:fasth3-4step-vsa
+[17:20:25] ▶ cell oracle-fasth3-4step-vsa
+[17:29:26] ok oracle-fasth3-4step-vsa 541s peak 86171MiB ram 144542 MiB of 269889 MiB
+1.3G	/root/runs/upstream/664473b-1026171653-1e64/oracle-fasth3-4step-vsa/dump
+[17:29:26] ok step oracle:fasth3-4step-vsa  541s
+[17:29:26] pod.sh done

@@ -1,0 +1,15 @@
+{
+  "id": "e6l855vip3meed",
+  "name": "fv-lab-oracle-664473b-1026171653-0fee",
+  "family": "oracle",
+  "tag": "664473b-1026171653-0fee",
+  "sha": "664473b",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:c971e2ee04b8e976475a94e0cc719fea80fdc08765f7920a5d52d5fbea9c9406",
+  "url": "https://e6l855vip3meed-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793035801.3771899,
+  "cap_s": 5400,
+  "memory_gb": 94.0,
+  "vcpus": 32.0
+}

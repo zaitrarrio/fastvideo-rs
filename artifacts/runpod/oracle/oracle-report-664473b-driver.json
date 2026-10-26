@@ -1,0 +1,37 @@
+{
+  "upstream": [
+    {
+      "stack": "fastvideo",
+      "id": "g0e1srbtwgor6r",
+      "tag": "664473b-1026171653-1e64",
+      "released": "the runtime side ended; the hold is lifted",
+      "fetched": {
+        "Ok": null
+      },
+      "deleted": {
+        "Ok": null
+      }
+    }
+  ],
+  "served": [
+    "fasth3-4step-vsa"
+  ],
+  "missing": [],
+  "runtime_cells": [
+    "oracle-fasth3-4step-vsa",
+    "oracle-fasth3-4step-vsa-diff",
+    "oracle-fasth3-4step-vsa-f32",
+    "oracle-fasth3-4step-vsa-f32-diff",
+    "oracle-fasth3-4step-vsa-bf16-vs-f32"
+  ],
+  "runtime_started": true,
+  "runtime_tag": "664473b-1026171653-0fee",
+  "runtime_pod": {
+    "id": "e6l855vip3meed",
+    "url": "https://e6l855vip3meed-8000.proxy.runpod.net",
+    "tag": "664473b-1026171653-0fee"
+  },
+  "runtime_ok": true,
+  "runtime_exit_code": 0,
+  "problems": []
+}

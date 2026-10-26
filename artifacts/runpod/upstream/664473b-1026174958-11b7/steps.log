@@ -1,0 +1,43 @@
+uv 0.13.1 (x86_64-unknown-linux-gnu)
+[17:53:01] 72 source tensors
+[17:53:32] latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors: FAILED curl failed: https://huggingface.co/Lightricks/LTX-2.5/resolve/5e6e71018ee1756ed329b697a7b4aedc934dfce9/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors: curl: (22) The requested URL returned error: 401
+
+[17:53:32] 0/1 files verified
+[17:53:32] 170 source tensors
+[17:54:03] vae/ltx-2.5-video-vae-conv-bf16.safetensors: FAILED curl failed: https://huggingface.co/Lightricks/LTX-2.5/resolve/5e6e71018ee1756ed329b697a7b4aedc934dfce9/vae/ltx-2.5-video-vae-conv-bf16.safetensors: curl: (22) The requested URL returned error: 401
+
+[17:54:03] 0/1 files verified
+[17:54:03] 1329 source tensors
+[17:54:34] vae/ltx-2.5-audio-vae-bf16.safetensors: FAILED curl failed: https://huggingface.co/Lightricks/LTX-2.5/resolve/5e6e71018ee1756ed329b697a7b4aedc934dfce9/vae/ltx-2.5-audio-vae-bf16.safetensors: curl: (22) The requested URL returned error: 401
+
+[17:54:34] 0/1 files verified
+[17:54:34] 939 source tensors
+[17:55:05] text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors: FAILED curl failed: https://huggingface.co/Lightricks/LTX-2.5/resolve/5e6e71018ee1756ed329b697a7b4aedc934dfce9/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors: curl: (22) The requested URL returned error: 401
+
+[17:55:05] 0/1 files verified
+[17:55:06] 4353 source tensors
+[17:55:36] diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors: FAILED curl failed: https://huggingface.co/Lightricks/LTX-2.5/resolve/5e6e71018ee1756ed329b697a7b4aedc934dfce9/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors: curl: (22) The requested URL returned error: 401
+
+[17:55:36] 0/1 files verified
+[17:55:39] ▶ cell oracle-ltx25-a2v-i2v
+[17:55:46] FAIL oracle-ltx25-a2v-i2v 7s exit=2 ram 507 MiB of 89645 MiB, oom_kills=0
+[oracle_dump] patched ltx_core.model.transformer.model
+[oracle_dump] patched ltx_core.text_encoders.gemma.encoders.base_encoder
+[oracle_dump] patched ltx_core.text_encoders.gemma.feature_extractor
+[oracle_dump] patched ltx_pipelines.utils.helpers
+[oracle_dump] patched ltx_pipelines.utils.blocks
+usage: ltx25-distilled [--distilled-checkpoint-path DISTILLED_CHECKPOINT_PATH]
+                       [--transformer-path TRANSFORMER_PATH]
+ltx25-distilled: error: Path not found: /root/upstream-weights/LTX-2.5/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors
+[17:55:46] oracle oracle-ltx25-a2v-i2v: no dump written
+[17:55:46] ▶ cell oracle-ltx25-retake
+[17:55:49] FAIL oracle-ltx25-retake 3s exit=2 ram 490 MiB of 89645 MiB, oom_kills=0
+[oracle_dump] patched ltx_core.model.transformer.model
+[oracle_dump] patched ltx_core.text_encoders.gemma.encoders.base_encoder
+[oracle_dump] patched ltx_core.text_encoders.gemma.feature_extractor
+[oracle_dump] patched ltx_pipelines.utils.helpers
+[oracle_dump] patched ltx_pipelines.utils.blocks
+usage: ltx25-distilled [--distilled-checkpoint-path DISTILLED_CHECKPOINT_PATH]
+                       [--transformer-path TRANSFORMER_PATH]
+ltx25-distilled: error: Path not found: /root/upstream-weights/LTX-2.5/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors
+[17:55:49] oracle oracle-ltx25-retake: no dump written

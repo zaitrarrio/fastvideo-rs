@@ -1,0 +1,16 @@
+{
+  "id": "g0e1srbtwgor6r",
+  "name": "fv-lab-upstream-664473b-1026171653-1e64",
+  "family": "upstream",
+  "tag": "664473b-1026171653-1e64",
+  "sha": "664473b",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo@sha256:50f54e99439c96d0b37e32781aa1bb24acb1054d52872a8ef245dd5c8bb85632",
+  "url": "https://g0e1srbtwgor6r-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793035016.922955,
+  "cap_s": 7200,
+  "min_ram_gb": 192,
+  "memory_gb": 283.0,
+  "vcpus": 28.0
+}
