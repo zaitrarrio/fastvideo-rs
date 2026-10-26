@@ -2428,9 +2428,9 @@ compared. Expected summary lines:
   two unselected compares `skipped` on both.
 - `ltx`: "3 arm(s) the same (1 ran with byte-identical frames, 2 skipped in both, 0 failed in both; …), … 0 report(s)
   the same, 0 verdict file(s) the same, 0 difference(s)": `ltx25-two-stage` about 242 frames (as the D1a gate's), the
-  other two `skipped: weights incomplete` on both (each with its `<arm>.weights.log`). The LTX-2.5 arm cannot be
-  left out to save its ~9 min: without it no arm runs, and `fv-lab-compare-runs.sh` exits 1 ("no arm ran with
-  frames in both runs: nothing was compared").
+  other two `skipped: weights incomplete` on both (the `SKIP … weights incomplete` lines in both `live.log`; neither
+  fetch keeps the pod's `<arm>.weights.log`). The LTX-2.5 arm cannot be left out to save its ~9 min: without it no
+  arm runs, and `fv-lab-compare-runs.sh` exits 1 ("no arm ran with frames in both runs: nothing was compared").
 
 A compare verdict that fails on both sides (a fused path no longer bit-equal, cuDNN off by a bit) is a finding about
 the build, not a runner difference: report it and keep the branch until it is understood.
@@ -2525,5 +2525,14 @@ as §15.10 did for `det-short` and `determinism`:
   fv-lab in the image the pod's line stops with exit 2 and names `fv-lab pod up --family ltx`. A family with a
   `runpod-matrix.sh` branch (`h3`, `hunyuan`, `wan`) runs the script as before; anything else (an experiment tier,
   `gold`, an unknown name) stops `gpu` / `matrix` before the key is read or a pod is created
-  (`rp_check_families` at the top of both). `runpod.sh plan gpu|matrix` prints each pod's command;
-  `scripts/gpu/tests/runpod-plan.test.sh` (in `control.yml`) holds it: `ltx` never reaches `runpod-matrix.sh`.
+  (`rp_check_families` at the top of both). The family lists are constants (`RP_GPU_FAMILIES`, `RP_MATRIX_FAMILIES`):
+  `gpu` creates and starts one pod per family of its list, and `runpod.sh plan gpu|matrix` prints each pod's command
+  from the same lists (and fails on a family nothing can run). `scripts/gpu/tests/runpod-plan.test.sh` (in
+  `control.yml`) sources the script (`FV_SOURCE_ONLY=1`, as `docker.sh` and `validate.sh`) with its Runpod, ssh and
+  rsync calls stubbed and drives the real `cmd_gpu` and `cmd_matrix`: `ltx`'s command is `fv-lab run ltx` and no
+  recorded command, over ssh or local, starts `runpod-matrix.sh` for a retired family, while `h3`, `hunyuan` and
+  `wan` start it as before. *Per-arm cap:* `gpu`'s `ltx` arms ran under `run_cell`'s default 300 s (no
+  `FV_GEN_TIMEOUT_S` on that path) and now under the tier's `cell_timeout_s = 3600`, a fix: `ltx25-two-stage` takes
+  about 540 s. `matrix` exports `FV_GEN_TIMEOUT_S=300`, which fv-lab reads as its per-arm cap and which would kill
+  `ltx25-two-stage`, so `matrix` leaves it out for a retired family (the tier's cap applies) and keeps it for the
+  script families.
