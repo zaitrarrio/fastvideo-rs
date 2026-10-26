@@ -20,6 +20,10 @@
 //!   lpips-fetch.log             (FV_LPIPS=1)
 //!   <family>-<cell>.verdict.json, <family>.verdict.json, <cell>.<diff>,
 //!   <arm>/<evidence file>       (a cell's [verdict], D1d: b4a's files)
+//!   <prompt file>.json          (a cell's [[prompt_file]], D1d §15)
+//!   hashes.txt, determinism.txt, <arm>/hashes.{json,txt}, <arm>/digests.txt
+//!                               (a cell's [repeats], D1d §15)
+//!   ORACLE_REFS_DONE            (every [reference] of the run fetched, D1d §15)
 //! ```
 //!
 //! [`Runner::regate`] is `fv-lab gate`: the same gates and verdicts evaluated
@@ -37,13 +41,19 @@ use std::io::Write as _;
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use fastvideo_deploy::boot::sys::utc_hms;
 use fastvideo_deploy::launch::utc_iso;
 
-use crate::plan::{GateKind, Paths, Step, Verdict};
+use crate::plan::{
+    line_matches, log_lines, GateKind, Paths, RepeatHash, RepeatsCell, Step, Verdict,
+};
 use crate::quote::printf_q_line;
+use crate::repeats;
 
 /// `runpod-matrix.sh`'s default binary.
 pub const DEFAULT_GPUCHECK: &str = "/opt/fastvideo-rs/target/release/fv-gpucheck";
@@ -108,6 +118,39 @@ pub struct RunConfig {
     pub aux_dir: Option<PathBuf>,
     /// `FV_TAE_DIR` (default: `<aux>/tae` when complete, else `<scratch>/tae`).
     pub tae_dir: Option<PathBuf>,
+    /// `FV_ORACLE_URL`: the upstream pods' base URLs a `[reference]` is
+    /// fetched from (space or comma separated; the first that has the target).
+    pub oracle_urls: Vec<String>,
+    /// `FV_ORACLE_WAIT_S`: how long a reference may take upstream (10800).
+    pub oracle_wait_s: u64,
+    /// The pause between `ORACLE_DONE` polls (30 s) and between download
+    /// attempts (10 s), as the script's.
+    pub oracle_poll: Duration,
+    pub oracle_retry: Duration,
+    /// `curl` (a test points it at a fake).
+    pub curl: String,
+    /// Also take `file://` reference URLs (tests only: no flag or variable of
+    /// the binary sets it; a run reads `http(s)://` only, [`oracle_url_ok`]).
+    pub allow_file_urls: bool,
+}
+
+/// Whether `url` is a base URL a reference may come from: `http://` or
+/// `https://` (the upstream pods' proxy), or with `allow_file` also
+/// `file://` (the tests' fake upstream).
+pub fn oracle_url_ok(url: &str, allow_file: bool) -> bool {
+    let rest = ["http://", "https://"]
+        .iter()
+        .chain(if allow_file {
+            &["file://"][..]
+        } else {
+            &[][..]
+        })
+        .find_map(|p| url.strip_prefix(p));
+    rest.is_some_and(|r| {
+        !r.is_empty()
+            && r.bytes()
+                .all(|b| b.is_ascii_graphic() && !matches!(b, b'\'' | b'"' | b'\\' | b'`'))
+    })
 }
 
 impl RunConfig {
@@ -130,6 +173,12 @@ impl RunConfig {
             baseline_sha: None,
             aux_dir: None,
             tae_dir: None,
+            oracle_urls: Vec::new(),
+            oracle_wait_s: 10800,
+            oracle_poll: Duration::from_secs(30),
+            oracle_retry: Duration::from_secs(10),
+            curl: "curl".into(),
+            allow_file_urls: false,
         }
     }
 
@@ -266,6 +315,29 @@ fn dry_run_steps(cfg: &RunConfig, steps: &[Step], out: &mut Vec<String>) {
                 selected_cells(cfg, cells).join(" "),
                 cfg.runs().join(format!("{family}.verdict.json")).display()
             )),
+            // The script's dry `oracle_fetch` (D1d §15): the reference named,
+            // nothing fetched, the target's commands logged.
+            Step::Reference {
+                cell,
+                target,
+                dir,
+                arms,
+                steps,
+                ..
+            } => {
+                if !verdict_selected(cfg, arms) {
+                    out.push(format!("[{f}] skip {cell} (no arm in FV_CELLS)"));
+                    continue;
+                }
+                out.push(format!(
+                    "[{f}] dry-run reference {target}: {}",
+                    dir.join("dump").display()
+                ));
+                dry_run_steps(cfg, steps, out);
+            }
+            // Written or computed on a real run only; the script's dry run
+            // logs none of them.
+            Step::PromptFile { .. } | Step::Hash { .. } | Step::RepeatsReport { .. } => {}
         }
     }
 }
@@ -370,7 +442,14 @@ pub fn outputs(steps: &[Step]) -> Vec<String> {
                 }
             }
             Step::FamilyVerdict { family, .. } => out.push(format!("{family}.verdict.json")),
-            Step::Arm { .. } | Step::Compare { .. } => {}
+            Step::RepeatsReport { hash, .. } => {
+                out.extend(repeats::top_files(*hash).iter().map(|f| (*f).to_owned()));
+            }
+            Step::Arm { .. }
+            | Step::Compare { .. }
+            | Step::Reference { .. }
+            | Step::PromptFile { .. }
+            | Step::Hash { .. } => {}
         }
     }
     out
@@ -481,6 +560,8 @@ pub struct Runner {
     offline: bool,
     /// Every gate and verdict decided, in order.
     outcomes: Vec<Outcome>,
+    /// The references being fetched in the background, by target.
+    prefetch: BTreeMap<String, JoinHandle<bool>>,
 }
 
 impl Runner {
@@ -496,6 +577,7 @@ impl Runner {
             tae_fetched: false,
             offline: false,
             outcomes: Vec::new(),
+            prefetch: BTreeMap::new(),
         }
     }
 
@@ -532,12 +614,22 @@ impl Runner {
 
     /// One line to stdout and `live.log` as is (`tee -a "$LOG"`).
     fn raw(&self, line: &str) {
-        // Never a panic on a closed stdout (`println!` would): the line still
-        // reaches live.log.
-        let _ = writeln!(std::io::stdout().lock(), "{line}");
-        let Some(log) = &self.log_path else { return };
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log) {
-            let _ = writeln!(f, "{line}");
+        raw_line(self.log_path.as_deref(), line);
+    }
+
+    /// What a background reference fetch needs of the runner.
+    fn fetcher(&self) -> Fetcher {
+        Fetcher {
+            family: self.cfg.family.clone(),
+            log_path: self.log_path.clone(),
+            env: self.env.clone(),
+            urls: self.cfg.oracle_urls.clone(),
+            wait_s: self.cfg.oracle_wait_s,
+            poll: self.cfg.oracle_poll,
+            retry: self.cfg.oracle_retry,
+            curl: self.cfg.curl.clone(),
+            allow_file_urls: self.cfg.allow_file_urls,
+            fetch_log: self.cfg.scratch.join("oracle-ref"),
         }
     }
 
@@ -734,6 +826,7 @@ impl Runner {
         }
         self.clear_verdicts(steps);
         self.write_selection(steps);
+        self.start_prefetch(steps);
         for s in steps {
             self.step(s);
         }
@@ -753,21 +846,63 @@ impl Runner {
     /// evaluated: no arm or compare runs.
     fn step(&mut self, s: &Step) {
         match s {
-            Step::Arm { .. } | Step::Compare { .. } if self.offline => {}
+            Step::Arm { .. }
+            | Step::Compare { .. }
+            | Step::PromptFile { .. }
+            | Step::Hash { .. }
+                if self.offline => {}
             Step::Arm {
                 name,
                 gate,
                 command,
-                tae: Some(file),
+                tae,
+                fresh,
+                requires,
+                echo,
                 ..
-            } => self.tae_gated_cell(name, file, gate, command),
-            Step::Arm {
-                name,
-                gate,
-                command,
-                tae: None,
-                ..
-            } => self.gated_cell(name, gate, command),
+            } => {
+                // oracle_run's `rm -rf "$dump"`, before the selection check.
+                for f in fresh {
+                    remove_path(f);
+                }
+                // oracle_diff: nothing to compare without both dumps.
+                if !requires.iter().all(|d| d.is_dir()) {
+                    return;
+                }
+                match (tae, gate) {
+                    (Some(file), Some(g)) => self.tae_gated_cell(name, file, g, command),
+                    (None, Some(g)) => self.gated_cell(name, g, command),
+                    (_, None) => self.run_cell(name, command),
+                }
+                if !echo.is_empty() {
+                    self.echo(name, echo);
+                }
+            }
+            Step::Reference {
+                cell,
+                target,
+                dir,
+                arms,
+                steps,
+                remove,
+            } => self.reference_cell(cell, target, dir, arms, steps, remove),
+            Step::PromptFile { path, text } => {
+                if let Some(d) = path.parent() {
+                    let _ = fs::create_dir_all(d);
+                }
+                let _ = fs::write(path, text);
+            }
+            Step::Hash {
+                arm,
+                hash,
+                keep,
+                cell_arms,
+            } => {
+                if cell_arms.iter().any(|a| self.cfg.selected(a)) {
+                    self.hash_arm(arm, *hash, keep);
+                }
+            }
+            Step::RepeatsReport { hash, cells } => self.repeats_report(*hash, cells),
             Step::Compare {
                 baseline,
                 candidate,
@@ -803,6 +938,202 @@ impl Runner {
                 steps,
             } => self.verdict_cell(cell, verdict, steps),
             Step::FamilyVerdict { family, cells } => self.family_verdict(family, cells),
+        }
+    }
+
+    /// `grep -h <pattern> <arm>/stderr.log | sed "s/^/[<arm>] /" | tee -a
+    /// "$LOG"` for the arm's `echo` patterns.
+    fn echo(&self, arm: &str, patterns: &[String]) {
+        let text = fs::read(self.runs.join(arm).join("stderr.log")).unwrap_or_default();
+        for l in log_lines(&text) {
+            if patterns.iter().any(|p| line_matches(l, p)) {
+                self.raw(&format!("[{arm}] {}", String::from_utf8_lossy(l)));
+            }
+        }
+    }
+
+    /// The script's prefetch: every selected reference fetched in the
+    /// background from the start, so an upstream pod whose dump is ready can
+    /// go before this run reaches its cell; `ORACLE_REFS_DONE` in the run
+    /// directory once all are here (what `oracle.sh` waits for to delete the
+    /// upstream pods).
+    fn start_prefetch(&mut self, steps: &[Step]) {
+        let targets: Vec<(String, PathBuf)> = Step::flatten(steps)
+            .into_iter()
+            .filter_map(|s| match s {
+                Step::Reference {
+                    target, dir, arms, ..
+                } if verdict_selected(&self.cfg, arms) => Some((target.clone(), dir.clone())),
+                _ => None,
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        let left = Arc::new(AtomicUsize::new(targets.len()));
+        for (target, dir) in targets {
+            let f = self.fetcher();
+            let left = Arc::clone(&left);
+            let done = self.runs.join("ORACLE_REFS_DONE");
+            let t = target.clone();
+            let h = std::thread::spawn(move || {
+                let ok = f.fetch(&t, &dir);
+                if ok && left.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    let _ = fs::write(&done, format!("{}\n", Runner::now_iso()));
+                }
+                ok
+            });
+            self.prefetch.insert(target, h);
+        }
+    }
+
+    /// A cell with a reference (the script's `oracle` loop body): the
+    /// reference (fetched by the prefetch), the cell's steps, then the dumps
+    /// removed. An unavailable reference skips the cell, recorded on its
+    /// first arm.
+    fn reference_cell(
+        &mut self,
+        cell: &str,
+        target: &str,
+        dir: &Path,
+        arms: &[String],
+        steps: &[Step],
+        remove: &[PathBuf],
+    ) {
+        if !verdict_selected(&self.cfg, arms) {
+            self.log(&format!("skip {cell} (no arm in FV_CELLS)"));
+            return;
+        }
+        if self.offline {
+            for s in steps {
+                self.step(s);
+            }
+            return;
+        }
+        let ok = match self.prefetch.remove(target) {
+            Some(h) => h.join().unwrap_or(false),
+            None => self.fetcher().fetch(target, dir),
+        };
+        if !ok {
+            if let Some(first) = arms.first() {
+                self.skipped(first, "reference dump unavailable");
+            }
+            return;
+        }
+        for s in steps {
+            self.step(s);
+        }
+        // "The dumps are hundreds of MB each; the report keeps the numbers."
+        for p in remove.iter().map(PathBuf::as_path).chain([dir]) {
+            remove_path(p);
+        }
+    }
+
+    /// After an arm of a `[repeats]` cell: its hashes (the script's `sh_hash`
+    /// or `det_hash`), then its frames pruned to `keep`.
+    fn hash_arm(&self, arm: &str, hash: RepeatHash, keep: &[String]) {
+        let cell = self.runs.join(arm);
+        match hash {
+            RepeatHash::Arm => {
+                // The script hashes every arm of a group it runs; an arm that
+                // did not run has an empty directory (its `mkdir -p`).
+                let _ = fs::create_dir_all(&cell);
+                let (n, fh, ah) = repeats::arm_hashes(&cell);
+                self.write_raw(
+                    &cell.join("hashes.json"),
+                    &repeats::hashes_json(arm, n, &fh, &ah),
+                );
+                let line = repeats::hashes_line(arm, n, &fh, &ah);
+                if let Ok(mut f) = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(self.runs.join("hashes.txt"))
+                {
+                    let _ = f.write_all(line.as_bytes());
+                }
+                self.raw(line.trim_end_matches('\n'));
+                repeats::prune(&cell, keep);
+            }
+            RepeatHash::Run => {
+                // det_hash needs the arm directory (an unselected arm has
+                // none; the script then stops the family, fv-lab goes on).
+                if !cell.is_dir() {
+                    return;
+                }
+                let (text, runs) = repeats::run_hashes(&cell);
+                self.write_raw(&cell.join("hashes.txt"), &text);
+                for d in &runs {
+                    repeats::prune(d, keep);
+                }
+                let err = fs::read(cell.join("stderr.log")).unwrap_or_default();
+                let _ = fs::write(cell.join("digests.txt"), repeats::digests(&err));
+                for l in text.lines() {
+                    self.raw(&format!("[{arm}] {l}"));
+                }
+            }
+        }
+    }
+
+    fn write_raw(&self, dest: &Path, text: &str) {
+        let _ = fs::write(dest, text);
+    }
+
+    /// `<runs>/determinism.txt` over the `[repeats]` cells that ran, and
+    /// their verdicts (fv-lab's: the script only reports). Offline the
+    /// `det-short` `hashes.txt` is rebuilt first from each arm's
+    /// `hashes.json`, which both fetches take.
+    fn repeats_report(&mut self, hash: RepeatHash, cells: &[RepeatsCell]) {
+        let ran_cells: Vec<&RepeatsCell> = cells
+            .iter()
+            .filter(|c| c.arms.iter().any(|a| self.cfg.selected(a)))
+            .collect();
+        let _ = fs::create_dir_all(&self.out);
+        let ran = |a: &str| self.arm_ran(a);
+        let (text, verdicts) = match hash {
+            RepeatHash::Arm => {
+                let hashes = if self.offline {
+                    let mut t = String::new();
+                    for a in ran_cells.iter().flat_map(|c| &c.arms) {
+                        let p = self.runs.join(a).join("hashes.json");
+                        if let Some(l) = fs::read_to_string(&p)
+                            .ok()
+                            .and_then(|j| repeats::line_from_json(&j))
+                        {
+                            t.push_str(&l);
+                        }
+                    }
+                    self.write_raw(&self.out.join("hashes.txt"), &t);
+                    t
+                } else {
+                    fs::read_to_string(self.runs.join("hashes.txt")).unwrap_or_default()
+                };
+                repeats::report_arm(&hashes, &ran_cells, &ran)
+            }
+            RepeatHash::Run => {
+                let read = |a: &str| fs::read_to_string(self.runs.join(a).join("hashes.txt")).ok();
+                repeats::report_run(&read, &ran_cells, &ran)
+            }
+        };
+        self.write_raw(&self.out.join("determinism.txt"), &text);
+        for l in text.lines() {
+            self.raw(l);
+        }
+        for v in verdicts {
+            let (decision, word) = match v.pass {
+                Some(true) => (Decision::Pass, "pass"),
+                Some(false) => (Decision::Fail, "fail"),
+                None => (Decision::Skipped, "skipped (its reference arm did not run)"),
+            };
+            let shown = if v.why.is_empty() || v.pass.is_none() {
+                String::new()
+            } else {
+                format!(" ({})", v.why)
+            };
+            self.log(&format!("repeats {}: {word}{shown}", v.cell));
+            self.outcomes.push(Outcome {
+                what: format!("repeats {}", v.cell),
+                decision,
+            });
         }
     }
 
@@ -1530,6 +1861,193 @@ impl Runner {
     }
 }
 
+/// One line to stdout and the log file, as is (`tee -a "$LOG"`). Never a
+/// panic on a closed stdout (`println!` would): the line still reaches the
+/// log.
+fn raw_line(log: Option<&Path>, line: &str) {
+    let _ = writeln!(std::io::stdout().lock(), "{line}");
+    let Some(log) = log else { return };
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log) {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// `rm -rf <p>`.
+fn remove_path(p: &Path) {
+    match fs::symlink_metadata(p) {
+        Ok(m) if m.is_dir() => {
+            let _ = fs::remove_dir_all(p);
+        }
+        Ok(_) => {
+            let _ = fs::remove_file(p);
+        }
+        Err(_) => {}
+    }
+}
+
+/// A reference fetch (the script's `oracle_fetch`), on its own thread.
+#[derive(Debug, Clone)]
+struct Fetcher {
+    family: String,
+    log_path: Option<PathBuf>,
+    env: Vec<(String, String)>,
+    urls: Vec<String>,
+    wait_s: u64,
+    poll: Duration,
+    retry: Duration,
+    curl: String,
+    allow_file_urls: bool,
+    /// `<scratch>/oracle-ref`: `<target>.fetch.log` holds curl's and tar's
+    /// messages.
+    fetch_log: PathBuf,
+}
+
+impl Fetcher {
+    fn log(&self, msg: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        raw_line(
+            self.log_path.as_deref(),
+            &format!("[{}] [{}] {msg}", utc_hms(now), self.family),
+        );
+    }
+
+    fn quiet(&self, program: &str, args: &[&str], log: Option<&Path>) -> bool {
+        let mut c = Command::new(program);
+        c.args(args).stdin(Stdio::null()).stdout(Stdio::null());
+        for (k, v) in &self.env {
+            c.env(k, v);
+        }
+        match log.and_then(|p| OpenOptions::new().create(true).append(true).open(p).ok()) {
+            Some(f) => c.stderr(f),
+            None => c.stderr(Stdio::null()),
+        };
+        c.status().is_ok_and(|s| s.success())
+    }
+
+    /// Wait until one base URL has `oracle-<target>/ORACLE_DONE` (polling
+    /// every `poll`, at most `wait_s`), then download its `oracle-dump.tar`
+    /// into `dir` and unpack it (`dir/dump`), three attempts; logged as the
+    /// script logs it.
+    fn fetch(&self, target: &str, dir: &Path) -> bool {
+        if self.urls.is_empty() {
+            self.log("oracle: FV_ORACLE_URL unset");
+            return false;
+        }
+        if let Some(u) = self
+            .urls
+            .iter()
+            .find(|u| !oracle_url_ok(u, self.allow_file_urls))
+        {
+            self.log(&format!(
+                "oracle: FV_ORACLE_URL entry `{u}` is not an http(s):// URL; nothing fetched"
+            ));
+            return false;
+        }
+        // curl reads only these protocols, redirects included, and the URL is
+        // an argument of --url, never an option.
+        let proto = if self.allow_file_urls {
+            "=http,https,file"
+        } else {
+            "=http,https"
+        };
+        let _ = fs::create_dir_all(&self.fetch_log);
+        let flog = self.fetch_log.join(format!("{target}.fetch.log"));
+        let t0 = Instant::now();
+        let base = loop {
+            let found = self.urls.iter().find(|u| {
+                let url = format!("{u}/oracle-{target}/ORACLE_DONE");
+                self.quiet(
+                    &self.curl,
+                    &[
+                        "-sS",
+                        "--proto",
+                        proto,
+                        "--proto-redir",
+                        proto,
+                        "--max-time",
+                        "30",
+                        "--fail",
+                        "-o",
+                        "/dev/null",
+                        "--url",
+                        &url,
+                    ],
+                    None,
+                )
+            });
+            if let Some(u) = found {
+                break format!("{u}/oracle-{target}");
+            }
+            if t0.elapsed().as_secs() >= self.wait_s {
+                self.log(&format!(
+                    "oracle: {target} not finished upstream after {}s",
+                    self.wait_s
+                ));
+                return false;
+            }
+            std::thread::sleep(self.poll);
+        };
+        self.log(&format!("oracle: fetching {base}/oracle-dump.tar"));
+        remove_path(dir);
+        let _ = fs::create_dir_all(dir);
+        let tar = dir.join("dump.tar");
+        let tar_s = tar.display().to_string();
+        let dir_s = dir.display().to_string();
+        let url = format!("{base}/oracle-dump.tar");
+        for attempt in 1..=3 {
+            let ok = self.quiet(
+                &self.curl,
+                &[
+                    "-sS",
+                    "--proto",
+                    proto,
+                    "--proto-redir",
+                    proto,
+                    "--fail",
+                    "--retry",
+                    "3",
+                    "--max-time",
+                    "3600",
+                    "-o",
+                    &tar_s,
+                    "--url",
+                    &url,
+                ],
+                Some(&flog),
+            ) && self.quiet("tar", &["-xf", &tar_s, "-C", &dir_s], Some(&flog))
+                && dir.join("dump").is_dir();
+            if ok {
+                let _ = fs::remove_file(&tar);
+                let size = Command::new("du")
+                    .arg("-sh")
+                    .arg(dir.join("dump"))
+                    .stderr(Stdio::null())
+                    .output()
+                    .ok()
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .split('\t')
+                            .next()
+                            .unwrap_or("")
+                            .trim_end()
+                            .to_owned()
+                    })
+                    .unwrap_or_default();
+                self.log(&format!("oracle: {target} reference {size}"));
+                return true;
+            }
+            self.log(&format!(
+                "oracle: fetch of {target} failed (attempt {attempt})"
+            ));
+            std::thread::sleep(self.retry);
+        }
+        false
+    }
+}
+
 /// `p` with its longest existing ancestor canonicalized (symlinks, `..`)
 /// and the rest appended: where `p` is or would be created.
 fn resolved(p: &Path) -> PathBuf {
@@ -1709,6 +2227,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reference_urls_are_http_only_unless_a_test_allows_files() {
+        for (u, http, file) in [
+            ("https://abc-8000.proxy.runpod.net/upstream/t", true, true),
+            ("http://10.0.0.1:8000/upstream/t", true, true),
+            ("file:///tmp/up", false, true),
+            ("-o/etc/passwd", false, false),
+            ("https://", false, false),
+            ("ftp://x/y", false, false),
+            ("https://x/$(id)'", false, false),
+            ("https://x/a b", false, false),
+        ] {
+            assert_eq!(oracle_url_ok(u, false), http, "{u}");
+            assert_eq!(oracle_url_ok(u, true), file, "{u}");
+        }
+    }
+
+    #[test]
     fn fail_tail_drops_progress_and_keeps_twelve() {
         let mut s = String::new();
         for i in 0..30 {
@@ -1809,19 +2344,25 @@ mod tests {
         let steps = vec![
             Step::Arm {
                 name: "a".into(),
-                gate: "g".into(),
+                gate: Some("g".into()),
                 trees: vec![],
                 command: vec!["/nonexistent/fv".into(), "x y".into()],
                 tae: None,
                 baseline: false,
+                fresh: vec![],
+                requires: vec![],
+                echo: vec![],
             },
             Step::Arm {
                 name: "b".into(),
-                gate: "g".into(),
+                gate: Some("g".into()),
                 trees: vec![],
                 command: vec!["/nonexistent/fv".into()],
                 tae: Some("/nonexistent/tae/t.safetensors".into()),
                 baseline: true,
+                fresh: vec![],
+                requires: vec![],
+                echo: vec![],
             },
             Step::Compare {
                 baseline: "a".into(),

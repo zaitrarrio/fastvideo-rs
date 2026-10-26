@@ -1,0 +1,60 @@
+# runpod-matrix.sh `det-short` (docs/perf/determinism.md "Results"; docs/adr/0019-fv-lab.md §15):
+# the h3 arm group, run three times (r1, r2, r3) in a fresh process each with its own caches (FASTVIDEO_CACHE and
+# XDG_CACHE_HOME under the arm), then once more with FASTVIDEO_SDPA_AUTO=timed (the old per-process timed pick: the speed
+# baseline, reported, not judged); every arm's frames hashed after it (sh_hash, `[repeats]`
+# hash = "arm"), the report in <runs>/determinism.txt. Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "det-short-h3"
+description = "FastH3 4-step dense, 768x1344 5 s, three fresh processes and the timed-pick control: byte identity across processes"
+
+[workload]
+model = "h3"
+prompt = "A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field"
+seed = 7
+seconds = 5
+note = "the recipe's 768x1344 canvas (self-attention 56 x 37 710: the rule picks cuDNN); FV_DET_PROMPT's default"
+
+[lists]
+det = [
+  "--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-dense", "--seconds",
+  "{seconds}", "--prompt", "{prompt}", "--seed", "{seed}", "--text-encoder", "resident-fp8",
+  "--text-weights", "{weights}/h3-base", "--no-text-cache", "--adaln-cache", "{runs}/{arm}/adaln.cache",
+  "--clip-dir", "{runs}/{arm}/frames"
+]
+
+[[arm]]
+name = "h3-r1"
+gate = "fasth3-4step-dense"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache"]
+argv = ["{@det}"]
+
+[[arm]]
+name = "h3-r2"
+gate = "fasth3-4step-dense"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache"]
+argv = ["{@det}"]
+
+[[arm]]
+name = "h3-r3"
+gate = "fasth3-4step-dense"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache"]
+argv = ["{@det}"]
+
+[[arm]]
+name = "h3-timed"
+gate = "fasth3-4step-dense"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = [
+  "FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache", "FASTVIDEO_SDPA_AUTO=timed"
+]
+argv = ["{@det}"]
+
+[repeats]
+hash = "arm"
+reference = "h3-r1"
+judged = ["h3-r1", "h3-r2", "h3-r3"]
+controls = ["h3-timed"]
+keep = ["frame-000.png"]

@@ -1,0 +1,15 @@
+arm	h3-r1	fasth3-4step-dense	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+arm	h3-r2	fasth3-4step-dense	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+arm	h3-r3	fasth3-4step-dense	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+arm	h3-timed	fasth3-4step-dense	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors
+arm	wan-r1	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	wan-r2	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	wan-r3	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	wan-timed	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	ltx-r1	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx-r2	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx-r3	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx-timed	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx-sage-r1	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx-sage-r2	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	ltx-sage-r3	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer

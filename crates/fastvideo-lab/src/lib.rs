@@ -17,6 +17,8 @@
 //!   `scripts/gpu/runpod-matrix.sh`'s frame, and a cell's verdict step) and
 //!   its `--dry-run`; `fv-lab gate`, a finished run's gates and verdicts
 //!   evaluated again offline.
+//! - [`repeats`]: the frame hashes, `determinism.txt` and the typed verdict
+//!   of the determinism families' `[repeats]` cells (ADR-0019 §15).
 //! - [`pod`]: `fv-lab pod`, a tier's Runpod pod on fv-deploy's `Provider`
 //!   trait, guards and lifecycle.
 //! - [`goldcheck`]: `fv-lab gold check`, the CI bridge (plan D4): every
@@ -52,6 +54,7 @@ pub mod pod;
 pub mod profiles;
 pub mod pyfmt;
 pub mod quote;
+pub mod repeats;
 pub mod report;
 pub mod run;
 pub mod schema;

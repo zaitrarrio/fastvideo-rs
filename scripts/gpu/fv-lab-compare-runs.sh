@@ -29,6 +29,15 @@
 #     are compared as sets: fv-lab lists the cells in the tier's order, the
 #     script in FV_B4A_CELLS's (ADR-0019 §11.5; a script run of b4a from
 #     before its branch was deleted, §11.6).
+# and for every file of the determinism families' hashes (D1d, ADR-0019 §15:
+# the run's determinism.txt and hashes.txt, each arm's hashes.txt and
+# hashes.json; `det-short`, `determinism`) of either run:
+#   - the file exists in both and is byte-identical (pure functions of the
+#     frames; an arm's digests.txt is not compared: it is read from stderr);
+# and for every arm whose stderr.log holds `compare-dumps` lines (the
+# `oracle` tier's tensor diffs against one upstream reference) in either run:
+#   - those lines are the same in both (they follow from the dumps, which
+#     follow from the frames' computation; timings are on other lines).
 # (`fv-lab pod fetch` takes these; on the runpod-http.sh side they need
 # FV_FETCH_TREE=1.) --expect-verdicts N fails unless at least N verdict files
 # compared the same: a tier with verdict cells whose files never arrived
@@ -51,7 +60,7 @@ B="${2:?$USAGE}"
 [[ -d "$A" && -d "$B" ]] || { echo "fv-lab-compare-runs: not a directory: $A or $B" >&2; exit 2; }
 
 arms() { (cd "$1" && for s in */summary.json; do [[ -f "$s" ]] && dirname "$s"; done) | LC_ALL=C sort; }
-diffs=0 same=0 ran=0 skipped=0 failed=0
+diffs=0 same=0 ran=0 skipped=0 failed=0 ndumps=0
 say() { echo "$*"; diffs=$((diffs + 1)); }
 # {exit, skipped} of a summary.json, or `unreadable` (a difference even when
 # both sides are unreadable: nothing was compared).
@@ -73,6 +82,12 @@ while IFS= read -r arm; do
   [[ -f "$A/$arm/benchmark.json" ]] && ba=1
   [[ -f "$B/$arm/benchmark.json" ]] && bb=1
   [[ "$ba" == "$bb" ]] || { say "DIFF $arm: benchmark.json in one run only"; continue; }
+  da="$(grep -a '^compare-dumps ' "$A/$arm/stderr.log" 2>/dev/null || true)"
+  db="$(grep -a '^compare-dumps ' "$B/$arm/stderr.log" 2>/dev/null || true)"
+  if [[ -n "$da$db" ]]; then
+    [[ "$da" == "$db" ]] || { say "DIFF $arm: compare-dumps lines differ (diff the two stderr.log)"; continue; }
+    ndumps=$((ndumps + 1))
+  fi
   frames="no frames"
   [[ -f "$fa" ]] && frames="$na frames byte-identical"
   echo "same $arm: $ea, $frames"
@@ -104,7 +119,7 @@ while IFS= read -r r; do
   echo "same $r: $va"
   nrep=$((nrep + 1))
 done < <({ reports "$A"; reports "$B"; } | LC_ALL=C sort -u)
-vfiles() { (cd "$1" && for r in *.verdict.json *.diff */*-evidence.log; do [[ -f "$r" ]] && echo "$r"; done) | LC_ALL=C sort; }
+vfiles() { (cd "$1" && for r in *.verdict.json *.diff */*-evidence.log determinism.txt hashes.txt */hashes.txt */hashes.json; do [[ -f "$r" ]] && echo "$r"; done) | LC_ALL=C sort; }
 nver=0
 while IFS= read -r r; do
   if [[ ! -f "$A/$r" ]]; then say "DIFF $r: only in the runpod-http run"; continue; fi
@@ -118,7 +133,7 @@ while IFS= read -r r; do
   echo "same $r"
   nver=$((nver + 1))
 done < <({ vfiles "$A"; vfiles "$B"; } | LC_ALL=C sort -u)
-echo "$same arm(s) the same ($ran ran with byte-identical frames, $skipped skipped in both, $failed failed in both), $nrep report(s) the same, $nver verdict file(s) the same, $diffs difference(s)"
+echo "$same arm(s) the same ($ran ran with byte-identical frames, $skipped skipped in both, $failed failed in both; $ndumps with the same compare-dumps lines), $nrep report(s) the same, $nver verdict file(s) the same, $diffs difference(s)"
 if (( nver < EXPECT_VERDICTS )); then
   echo "expected at least $EXPECT_VERDICTS verdict file(s) the same, found $nver"
   exit 1

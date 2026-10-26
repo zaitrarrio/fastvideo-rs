@@ -1,0 +1,76 @@
+# runpod-matrix.sh `oracle`, target h3-ref2va-4step (docs/oracle.md; docs/adr/0019-fv-lab.md §15): the upstream
+# reference's dump (scripts/gpu/upstream/oracle.sh on an upstream pod, served under FV_ORACLE_URL) fetched
+# into {ref}, its noise and text conditioning injected into our run (FASTVIDEO_INJECT_DIR), our run dumped
+# the same way (FASTVIDEO_DUMP_DIR, blocks 0,1,24,47) and the two compared tensor by tensor (compare-dumps,
+# ungated, only when both dumps exist; its lines echoed into the log). The Ref2VA control: the reference's condition
+# rows injected as well (FASTVIDEO_INJECT_COND=1), so only the DiT (and the text, when its token count
+# matches) differs. After the cell the dumps and
+# the reference are removed. The references run bf16 without FP8: FASTVIDEO_H3_QUANT=off pins our H3
+# default (MXFP8) off.
+schema = 1
+name = "oracle-h3-ref2va-4step"
+description = "Oracle diff of MiniMax-H3 Ref2VA (base-4step, dense, one image reference) against FastVideo's Ref2VA pipeline"
+
+[workload]
+model = "h3"
+prompt = "The camera glides slowly forward along the shoreline of the beach in <Picture 1>, turquoise waves rolling in and breaking into white foam, bright sunny day, the sound of the surf and a light wind."
+seed = 1024
+seconds = 5
+note = "transformer_ref from h3-ref2va; `base-<N>step` is the reference's --steps N+1; prompt and image as scripts/gpu/upstream/oracle.sh oracle_ref2va (FV_REF2VA_PROMPT's default)"
+
+[reference]
+target = "h3-ref2va-4step"
+
+[lists]
+h3_oracle = [
+  "--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "streamed",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base"
+]
+
+[[arm]]
+name = "oracle-h3-ref2va-4step"
+gate = "h3-ref2va"
+trees = ["h3-ref2va", "h3-base"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-h3-ref2va-4step-dump"
+]
+argv = [
+  "--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--ref-root", "{weights}/h3-ref2va",
+  "--h3-recipe", "base-4step", "--dense", "--ref", "{root}/scripts/gpu/fixtures/ti2v-beach-832x480.jpg",
+  "{@h3_oracle}", "--clip-dir", "{runs}/{arm}/frames", "--adaln-cache",
+  "{runs}/oracle-h3-ref2va-4step-adaln.cache"
+]
+fresh = ["{runs}/oracle-h3-ref2va-4step-dump"]
+
+[[arm]]
+name = "oracle-h3-ref2va-4step-diff"
+argv = [
+  "compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-h3-ref2va-4step-dump"
+]
+requires = ["{ref}", "{runs}/oracle-h3-ref2va-4step-dump"]
+echo = ["compare-dumps"]
+
+[[arm]]
+name = "oracle-h3-ref2va-4step-cond"
+gate = "h3-ref2va"
+trees = ["h3-ref2va", "h3-base"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-h3-ref2va-4step-dump-cond", "FASTVIDEO_INJECT_COND=1"
+]
+argv = [
+  "--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--ref-root", "{weights}/h3-ref2va",
+  "--h3-recipe", "base-4step", "--dense", "--ref", "{root}/scripts/gpu/fixtures/ti2v-beach-832x480.jpg",
+  "{@h3_oracle}", "--clip-dir", "{runs}/{arm}/frames", "--adaln-cache",
+  "{runs}/oracle-h3-ref2va-4step-adaln.cache"
+]
+fresh = ["{runs}/oracle-h3-ref2va-4step-dump-cond"]
+
+[[arm]]
+name = "oracle-h3-ref2va-4step-cond-diff"
+argv = [
+  "compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-h3-ref2va-4step-dump-cond"
+]
+requires = ["{ref}", "{runs}/oracle-h3-ref2va-4step-dump-cond"]
+echo = ["compare-dumps"]

@@ -1,0 +1,69 @@
+# runpod-matrix.sh `det-short` (docs/perf/determinism.md "Results"; docs/adr/0019-fv-lab.md §15):
+# the ltx arm group, run three times (r1, r2, r3) in a fresh process each with its own caches (FASTVIDEO_CACHE and
+# XDG_CACHE_HOME under the arm), then once more with FASTVIDEO_SDPA_AUTO=timed (the old per-process timed pick: the speed
+# baseline, reported, not judged); every arm's frames hashed after it (sh_hash, `[repeats]`
+# hash = "arm"), the report in <runs>/determinism.txt. Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "det-short-ltx"
+description = "LTX-2.5 distilled two-stage, dense stage 2, bf16 attention, 1088x1920x97, three fresh processes and the timed-pick control"
+
+[workload]
+model = "ltx2"
+prompt = "A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field"
+seed = 7
+frames = 97
+width = 1920
+height = 1088
+note = "FASTVIDEO_ATTN_SAGE=0 (bf16 attention); stage 2 32 x 26 520 (the rule picks cuDNN)"
+
+[lists]
+det = [
+  "--mode", "fast", "--techniques", "ltx2/ltx25_distill_dense", "ltx2", "gen", "--model-version", "2.5",
+  "--weights", "{weights}/ltx25", "--dit", "{weights}/ltx25", "--two-stage", "--dense-stage2", "--height",
+  "{height}", "--width", "{width}", "--num-frames", "{frames}", "--frame-rate", "24", "--text", "streamed",
+  "--no-text-cache", "--prompt", "{prompt}", "--seed", "{seed}", "--clip", "{runs}/{arm}/frames"
+]
+
+[[arm]]
+name = "ltx-r1"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache", "FASTVIDEO_ATTN_SAGE=0"
+]
+argv = ["{@det}"]
+
+[[arm]]
+name = "ltx-r2"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache", "FASTVIDEO_ATTN_SAGE=0"
+]
+argv = ["{@det}"]
+
+[[arm]]
+name = "ltx-r3"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache", "FASTVIDEO_ATTN_SAGE=0"
+]
+argv = ["{@det}"]
+
+[[arm]]
+name = "ltx-timed"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_CACHE={runs}/{arm}/cache", "XDG_CACHE_HOME={runs}/{arm}/cache", "FASTVIDEO_SDPA_AUTO=timed",
+  "FASTVIDEO_ATTN_SAGE=0"
+]
+argv = ["{@det}"]
+
+[repeats]
+hash = "arm"
+reference = "ltx-r1"
+judged = ["ltx-r1", "ltx-r2", "ltx-r3"]
+controls = ["ltx-timed"]
+keep = ["frame-000.png"]

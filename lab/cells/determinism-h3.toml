@@ -1,0 +1,67 @@
+# runpod-matrix.sh `determinism` (docs/perf/determinism.md; docs/adr/0019-fv-lab.md §15): FastH3 4-step VSA at 1088x1920 5 s (without the text cache, so its second
+# run re-encodes after `auto` released the resident encoder),
+# run twice in one process (prompt set h3-ab.json: run1, run2), once in a second process (h3-c.json:
+# run3) and once more with FASTVIDEO_SDPA_AUTO=timed (the old per-process timed pick, on h3-ab.json: the
+# speed baseline, reported, not judged), all with FASTVIDEO_DIGEST=1 (stage digests in stderr, into
+# <arm>/digests.txt). After each arm its runs' frames and audio are hashed (det_hash, `[repeats]` hash =
+# "run") and pruned to three keyframes; <runs>/determinism.txt reports every run against h3-ab/run1.
+# The prompt sets are written as the script's det_set writes them (`[[prompt_file]]`).
+schema = 1
+name = "determinism-h3"
+description = "FastH3 4-step VSA 1088x1920 5 s: two runs in one process, one in another, and the timed-pick control: byte identity"
+
+[workload]
+model = "h3"
+prompt = "A red fox trots through fresh snow at dawn in a pine forest, its breath visible in the cold air, soft golden light, the camera tracks alongside at ground level, cinematic, shallow depth of field"
+seed = 7
+seconds = 5
+width = 1920
+height = 1088
+note = "the oversize canvas; one AdaLN cache file shared by the three arms ({runs}/h3-det-adaln.cache), as the script's"
+
+[[prompt_file]]
+file = "h3-ab.json"
+names = ["run1", "run2"]
+
+[[prompt_file]]
+file = "h3-c.json"
+names = ["run3"]
+
+[lists]
+before = [
+  "--mode", "fast", "--techniques", "h3/fasth3_4step_vsa", "h3", "gen", "--weights", "{weights}/h3-base",
+  "--h3-recipe", "4step-vsa", "--height", "{height}", "--width", "{width}", "--oversize-canvas", "--seconds",
+  "{seconds}", "--prompt", "{prompt}", "--seed", "{seed}"
+]
+after = [
+  "--text-encoder", "auto", "--no-text-cache", "--text-weights", "{weights}/h3-base", "--adaln-cache",
+  "{runs}/h3-det-adaln.cache", "--clip-dir", "{runs}/{arm}/frames"
+]
+
+[[arm]]
+name = "h3-ab"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_DIGEST=1"]
+argv = ["{@before}", "--prompts", "{runs}/h3-ab.json", "{@after}"]
+
+[[arm]]
+name = "h3-c"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_DIGEST=1"]
+argv = ["{@before}", "--prompts", "{runs}/h3-c.json", "{@after}"]
+
+[[arm]]
+name = "h3-timed"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_DIGEST=1", "FASTVIDEO_SDPA_AUTO=timed"]
+argv = ["{@before}", "--prompts", "{runs}/h3-ab.json", "{@after}"]
+
+[repeats]
+hash = "run"
+reference = "h3-ab/run1"
+judged = ["h3-ab", "h3-c"]
+controls = ["h3-timed"]
+keep = ["frame-000.png", "frame-072.png", "frame-120.png"]
