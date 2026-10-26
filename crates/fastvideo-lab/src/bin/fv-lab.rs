@@ -27,8 +27,9 @@
 //!                 commit exists (git), and the per-variant validation age (Markdown)
 //! fv-lab gold cells [--write | --check]
 //!                 the `gold` tier's cells, generated from lab/gold/ and families/
-//! fv-lab report tiers [--runs artifacts/runpod/<tier>/<tag>] [--check] [--out F]
-//!                 docs/perf/tiers.md from the gold files and one run set
+//! fv-lab report tiers [--runs artifacts/runpod/<tier>/<tag>[,<tag dir>…]] [--check] [--out F]
+//!                 docs/perf/tiers.md from the gold files and one run set (several
+//!                 runs of one tier and commit, e.g. a gold run split with --cells, as one)
 //! fv-lab report summary <run dir> [--kind tier|hd|h3-graphs|h3-tier-options|h3-trim-nvfp4|fasth3-nvfp4]
 //!                 [--family T] [--json OUT]
 //!                 what a run's summary scripts printed, from its files (the retired
@@ -185,9 +186,12 @@ enum ReportCmd {
     /// docs/perf/tiers.md: the gold variants as one run set measured them.
     Tiers {
         /// The run set, relative to the root (artifacts/runpod/<tier>/<tag>);
-        /// with --check, default the one the committed file names.
-        #[arg(long)]
-        runs: Option<String>,
+        /// several runs of one tier and one commit, repeated or comma
+        /// separated (so a run directory must not contain a comma), are
+        /// rendered as one (an arm that passed in more than one run is
+        /// refused); with --check, default the runs the committed file names.
+        #[arg(long, value_delimiter = ',')]
+        runs: Option<Vec<String>>,
         /// Fail when the committed file differs from the rendering.
         #[arg(long)]
         check: bool,
@@ -1636,17 +1640,36 @@ fn cmd_report(c: &ReportCmd) -> Result<ExitCode, String> {
             } else {
                 None
             };
-            let label = match (runs, &committed) {
-                (Some(r), _) => Some(r.clone()),
+            let labels: Vec<String> = match (runs, &committed) {
                 (None, Some(text)) => {
                     report::run_set_of(text).map_err(|e| format!("{}: {e}", out.display()))?
                 }
-                (None, None) => None,
+                (None, None) => Vec::new(),
+                (Some(r), _) => {
+                    let l: Vec<String> = r
+                        .iter()
+                        .map(|l| l.trim())
+                        .filter(|l| !l.is_empty())
+                        .map(str::to_owned)
+                        .collect();
+                    if l.is_empty() {
+                        return Err(format!(
+                            "--runs {:?} names no run directory (without --runs the table is rendered with no run set)",
+                            r.join(",")
+                        ));
+                    }
+                    l
+                }
             };
-            let set = label
-                .as_deref()
-                .map(|l| report::RunSet::load(&root, l))
-                .transpose()?;
+            let set = if labels.is_empty() {
+                None
+            } else {
+                let sets = labels
+                    .iter()
+                    .map(|l| report::RunSet::load(&root, l))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Some(report::Runs::new(sets)?)
+            };
             let text = report::render(&golds, set.as_ref());
             if let Some(committed) = committed {
                 return Ok(match report::first_difference(&committed, &text) {
@@ -1658,7 +1681,11 @@ fn cmd_report(c: &ReportCmd) -> Result<ExitCode, String> {
                         eprintln!(
                             "[fv-lab] {} differs from `fv-lab report tiers` at line {line}:\n  committed: {ours}\n  rendered:  {theirs}\nrerun `fv-lab report tiers{}` and commit it",
                             out.display(),
-                            label.map(|l| format!(" --runs {l}")).unwrap_or_default()
+                            if labels.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" --runs {}", labels.join(","))
+                            }
                         );
                         ExitCode::FAILURE
                     }

@@ -56,6 +56,18 @@ in the message). The golden is a fixture run set (`fixtures/tiers/runs/gold/…`
 canvas, a skipped arm, a failed arm, an arm of no gold variant, a variant with no arm) and fixture gold files, rendered
 to `fixtures/tiers/tiers.md` (`tests/tiers_report.rs`), which also checks the committed `docs/perf/tiers.md`.
 
+**Several runs as one run set** (2026-10-26, ADR-0019 §16.7: a `gold` run split in two with `--cells` to fit the wall
+cap). `--runs` takes several run directories, comma separated or repeated (`report::Runs`; a directory must not
+contain a comma). They must be of one tier and one commit, which each run must name (`report::known_commit`: the
+`pod.json` sha, else the tag's head, at least 7 hex digits, compared lowercased; a short sha agrees with a longer one
+it begins), each directory given once (compared by path components). An arm that passed (exit 0) in more than one run
+is refused; otherwise an arm in several runs is shown from the copy that passed, else the last that failed, else the
+last skipped (in `--runs` order), so a failed arm rerun in a later run shows the rerun. Each row reads its arm's own
+run: its GPU fallback and `$/clip` price are that run's `pod.json`, and its validation age counts to that run's end (a
+row without an arm, to the last end of all). The header line becomes `` Run set: `<a>`, `<b>` `` and the run line a
+list of the runs (tag, arms shown from it, end, GPU, price, and its copies shown from another run) under the shared
+commit and last end; one run renders byte for byte as before, so the golden and `docs/perf/tiers.md` are unchanged.
+
 **Seeded with no run set.** No committed run set measured a gold variant's cell: the only arm named like a variant is
 `sol-h3` in `artifacts/runpod/rtx6000/492e28a-*`, and that is the `rtx6000` family's CLI arm (`h3 gen --h3-recipe
 sol-h3` without the variant's technique profile, at 1344x768, not the gold 832x480), not the served variant. Showing it
@@ -279,9 +291,10 @@ gold runs go through `fv-lab pod up --family gold` by hand as every GPU run does
 
 ### What a gold run then does (not automated here)
 
-Commit the fetched run set, `fv-lab report tiers --runs artifacts/runpod/gold/<tag>` and the table; then, per measured
+Commit the fetched run set, `fv-lab report tiers --runs artifacts/runpod/gold/<tag>` and the table (a run split in two
+with `--cells`: `--runs <first>,<second>`, ADR-0019 §16.7); then, per measured
 variant, update the gold file by ADR-0009's rules (the run record as the `[[source]]`, `[last_validated]` with the
-commit, run and date, gaps closed only for fields the run measured). Writing gold files automatically is a later step
+commit, run and date, gaps closed only for fields the run measured; for a split run, the run its arm came from). Writing gold files automatically is a later step
 with its own review: it changes the files' numbers.
 
 ## Consequences

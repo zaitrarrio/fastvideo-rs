@@ -1868,6 +1868,11 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --cells h3-larry-tur
 RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --yes --wait
 #   -> artifacts/runpod/gold/$SHA-<MMDDHHMMSS>-<hex>/   (the pod is deleted at the end)
 ./fv-lab report tiers --runs artifacts/runpod/gold/$SHA-<MMDDHHMMSS>-<hex>
+# Or split in two (below: when one run would not fit the wall cap), two pods at the same $SHA:
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --cells <the 21 arms that read R2 trees> --yes --wait
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --cells <the 11 others> --yes --wait
+#   -> two run directories; one table from both (also `--runs <first> --runs <second>`):
+./fv-lab report tiers --runs artifacts/runpod/gold/$SHA-<first>,artifacts/runpod/gold/$SHA-<second>
 ```
 
 Pass: `DONE` and `matrix_exit=0`; `live.log` has the line `weights /fvscratch/weights: 10 volume trees linked from
@@ -1890,7 +1895,16 @@ time left as their cap. So the runner ends and the start command writes `DONE` b
 --wait`, `pod fetch --wait`) stops waiting at the cap less `FETCH_RESERVE_S` (15 min, `pod::wait_limit_s`) and fetches
 whatever the run holds (judged failed when there is no `DONE`), while the pod still lives. If the smoke run's per-arm
 times project past about 3.5 h, splitting the full run in two with `--cells` (the 21 arms that read R2 trees, then the
-11 others; about 10 min of boot more) still measures every arm.
+11 others; about 10 min of boot more) still measures every arm, and `report tiers` renders the two run directories
+as one run set: `--runs` takes several, comma separated or repeated (a run directory must not contain a comma). It
+refuses runs of different tiers, a run whose commit is not known (no `pod.json` sha and no tag head of at least 7 hex
+digits), runs of different commits, the same directory twice (however written), and an arm that passed (exit 0) in
+more than one run. An arm in several runs is shown from the copy that passed, else the last copy that failed, else
+the last skipped copy (in `--runs` order), so a failed or `wall cap near` arm rerun in a later run shows the rerun;
+the run it was not shown from lists it. Each row reads its arm's own run (its `pod.json` GPU and price, and the end
+its validation age counts to); the header names every run, and a single run renders as before. `report tiers` writes
+no gold file: `[last_validated]` is written by hand (ADR-0023 "What a gold run then does"), and its `run` is the
+directory that variant's arm came from.
 
 #### 16.8 Differences, and what stays
 

@@ -868,6 +868,93 @@ fn report_summary_and_table_print_the_scripts_output() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `report tiers --runs` with several runs of one tier and commit (ADR-0019
+/// §16.7: a gold run split with `--cells`): repeated or comma separated, one
+/// table naming both, `--check` finds both again; an empty `--runs`, runs of
+/// two tiers, or an arm that passed in both, are refused.
+#[test]
+fn report_tiers_renders_several_runs_as_one() {
+    let fx = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/tiers");
+    let run = fx.join("runs/gold/1234567-1024120000-abcd");
+    let root = std::env::temp_dir().join(format!("fv-lab-bin-tiers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let copy = |arm: &str, to: &str| {
+        let dest = root.join(to);
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::copy(run.join("pod.json"), dest.join("pod.json")).unwrap();
+        copy_tree(&run.join(arm), &dest.join(arm));
+    };
+    let (a, b) = (
+        "artifacts/runpod/gold/1234567-1026080000-aaaa",
+        "artifacts/runpod/gold/1234567-1026200000-bbbb",
+    );
+    for arm in ["demo-h3-turbo", "demo-h3-max"] {
+        copy(arm, a);
+    }
+    for arm in ["demo-ltx-turbo", "demo-ltx-max", "extra-arm"] {
+        copy(arm, b);
+    }
+    let tiers = |extra: &[&str]| {
+        let mut c = fv_lab();
+        c.args(["report", "tiers", "--root"])
+            .arg(&root)
+            .arg("--gold")
+            .arg(fx.join("gold"))
+            .args(extra);
+        c
+    };
+    let comma = stdout(&mut tiers(&["--stdout", "--runs", &format!("{a},{b}")]));
+    let repeated = stdout(&mut tiers(&["--stdout", "--runs", a, "--runs", b]));
+    assert_eq!(comma, repeated);
+    assert!(
+        comma.contains(&format!("Run set: `{a}`, `{b}`\n")),
+        "{comma}"
+    );
+    assert!(comma.contains("2 runs rendered as one run set"), "{comma}");
+    assert!(comma
+        .lines()
+        .any(|l| l.starts_with("| `demo-ltx-turbo` |") && l.contains("| measured |")));
+    // Written, then checked against the runs its header names.
+    let out = root.join("tiers.md");
+    let out_s = out.to_str().unwrap();
+    stdout(&mut tiers(&["--out", out_s, "--runs", a, "--runs", b]));
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), comma);
+    stdout(&mut tiers(&["--check", "--out", out_s]));
+    // `--runs` naming no directory is refused, not rendered as no run set.
+    for empty in ["", ",", " , "] {
+        let (code, _, err) = out_err(&mut tiers(&["--out", out_s, "--runs", empty]));
+        assert_eq!(code, Some(1), "{empty:?}: {err}");
+        assert!(err.contains("names no run directory"), "{err}");
+    }
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), comma);
+    // Refused: another tier; an arm that passed in both runs.
+    let other = "artifacts/runpod/rtx6000/1234567-1026200000-cccc";
+    copy("extra-arm", other);
+    let (code, _, err) = out_err(&mut tiers(&["--stdout", "--runs", &format!("{a},{other}")]));
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("different tiers"), "{err}");
+    copy("demo-h3-turbo", b);
+    let (code, _, err) = out_err(&mut tiers(&["--stdout", "--runs", a, "--runs", b]));
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("arm `demo-h3-turbo` passed in more than one run"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        if e.path().is_dir() {
+            copy_tree(&e.path(), &to.join(e.file_name()));
+        } else {
+            std::fs::copy(e.path(), to.join(e.file_name())).unwrap();
+        }
+    }
+}
+
 #[test]
 fn the_tree_fetch_is_checked_before_any_pod_exists() {
     // A skip pattern fv-lab cannot read, and a tree fetch without --wait
