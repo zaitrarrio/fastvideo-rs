@@ -31,8 +31,7 @@ p50_s = 5.27
 fps = 15.18
 ttff_s = 0.43
 peak_gib = 26.7
-load_s = 28.9
-note = "Steady fps median 15.18 (15.14-15.24); block p50 0.782 s for 12 frames; about 5 % short of real time on sm_120, matching the 15.22 fps of docs/serve/e2e/wan.md. MXFP8 changes nothing (15.16 fps). H100 SXM: 23.8 frames/s, block p50 about 0.51 s, about 3.4 s per 5 s of video (another GPU). load_s is the gold run's serve job (7e580e5, 2026-10-26; its [[source]]), not this measurement's."
+note = "Steady fps median 15.18 (15.14-15.24); block p50 0.782 s for 12 frames; about 5 % short of real time on sm_120, matching the 15.22 fps of docs/serve/e2e/wan.md. MXFP8 changes nothing (15.16 fps). H100 SXM: 23.8 frames/s, block p50 about 0.51 s, about 3.4 s per 5 s of video (another GPU)."
 
 [quality]
 note = "The SF-Wan oracle (target sfwan13, FastVideo WanCausalDMDPipeline) is defined in docs/oracle.md; its results are in docs/ports/wan.md 'SF-Wan', outside D2's sources."
@@ -75,11 +74,11 @@ date = "2026-10-14"
 note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
 
 [[source]]
-fields = ["latency.load_s"]
+fields = []
 path = "artifacts/runpod/gold/7e580e5-1026090916-e804/sfwan21-1.3b/gpucheck-out/engine.json"
 heading = "checks"
 date = "2026-10-26"
-note = "The gold run at 7e580e5 (2026-10-26, ADR-0019 §16.7; run artifacts/runpod/gold/7e580e5-1026090916-e804, arm `sfwan21-1.3b`, exit 0, 35 s): one serve-engine job of the gold cell (lab/cells/gold-sfwan21-1.3b.toml: runpod-matrix.sh's default prompt, seed 7, 832x480, 81 frames, 4 steps, the served default) on an RTX PRO 6000 Blackwell Server Edition at $2.49/hr (the run's pod.json). Check `timings`: submit_to_mp4_s 5.29 (text 0.45, denoise 4.06, video_decode 0.60, encode 0.10), load_s 28.9, no peak_memory_mb (the Wan pipeline reports none). Host RAM (summary.json): peak 59060 MiB of the pod's 269889 MiB, oom_kills 0. decode_s = video_decode + encode, as docs/perf/tiers.md. load_s is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's own R2 fetch had just written, can load from the page cache (live.log). Its times are not this file's: the file's latency measures a different quantity (latency.measures), and a serve job includes the text encode of an uncached prompt and is one request. It closes only the gaps it measured that are not times: latency.load_s."
+note = "The gold run at 7e580e5 (2026-10-26, ADR-0019 §16.7; run artifacts/runpod/gold/7e580e5-1026090916-e804, arm `sfwan21-1.3b`, exit 0, 35 s): one serve-engine job of the gold cell (lab/cells/gold-sfwan21-1.3b.toml: runpod-matrix.sh's default prompt, seed 7, 832x480, 81 frames, 4 steps, the served default) on an RTX PRO 6000 Blackwell Server Edition at $2.49/hr (the run's pod.json). Check `timings`: submit_to_mp4_s 5.29 (text 0.45, denoise 4.06, video_decode 0.60, encode 0.10), load_s 28.9, no peak_memory_mb (the Wan pipeline reports none). Host RAM (summary.json): peak 59060 MiB of the pod's 269889 MiB, oom_kills 0. decode_s = video_decode + encode, as docs/perf/tiers.md. load_s is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's own R2 fetch had just written, can load from the page cache (live.log). None of its numbers is copied into this file: the file's [latency] is one measurement of another kind (latency.measures), load_s and peak_gib are of the process that measured, and a serve job includes the text encode of an uncached prompt and is one request."
 
 [[gap]]
 field = "latency.min_s"
@@ -96,6 +95,10 @@ why = "a stream: denoise and decode are per block (block p50 0.782 s for 12 fram
 [[gap]]
 field = "latency.decode_s"
 why = "a stream: the TAEHV decode runs inside every block"
+
+[[gap]]
+field = "latency.load_s"
+why = "not reported for the stream cell; the gold run's serve job (7e580e5, 2026-10-26) measured it in another process and kind of measurement than this file's [latency]: its value is in that run's [[source]] note, not copied"
 
 [[gap]]
 field = "quality.psnr_vs_upstream_min_db"

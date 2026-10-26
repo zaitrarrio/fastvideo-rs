@@ -77,11 +77,11 @@ why = "the gold run's engine report (7e580e5, 2026-10-26) carries no peak_memory
 
 [[gap]]
 field = "latency.fps"
-why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+why = "the gold run (7e580e5, 2026-10-26) made one clip serve job of the default length, not a stream (its job is this file's [latency]); no stream of this variant measured yet"
 
 [[gap]]
 field = "latency.ttff_s"
-why = "no measurement in D2's sources (docs/perf, docs/oracle.md, docs/techniques.md, the profile comments, artifacts/perf); the LongLive notes are in docs/serve/research-longlive.md, which D3's gold runs replace"
+why = "the gold run (7e580e5, 2026-10-26) made one clip serve job of the default length, not a stream (its job is this file's [latency]); no stream of this variant measured yet"
 
 [[gap]]
 field = "quality.psnr_vs_upstream_min_db"

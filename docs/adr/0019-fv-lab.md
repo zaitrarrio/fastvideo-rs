@@ -2054,20 +2054,29 @@ gold file's canvas, frames and steps; the 4 above `not measured (failed: exit 2)
 `[last_validated]` `commit = "7e580e5"`, `run = "<its run directory>/<arm>/summary.json"`, `date = "2026-10-26"`, and
 its arm's `gpucheck-out/engine.json` as a `[[source]]` (heading `checks`: the `timings` check, with the host-RAM
 record in the note). Gaps are closed only for fields the run measured, and one `[latency]` table holds one kind of
-measurement:
+measurement, from one process:
 
 - the 10 files with no latency measurement before (`fasth3-4step-vsa-nvfp4{,-taeh3}`, `fasth3-8step-dense`,
   `h3-larry-turbo`, `h3-lightx2v-turbo{,-v01}`, `longlive-1.3b`, `vdn-h3{,-8step}`, `wan14b-plug-4step`) take the
   run's job: `measures = "serve_job"`, `p50_s` = `submit_to_mp4_s` (the text encode of the uncached prompt included),
-  `denoise_s`, `decode_s` = `video_decode` + `encode` (as the table), `load_s`, `peak_gib` where the engine reports
-  one (not for the two Wan pipelines), `usd_per_clip` derived; `min_s` / `max_s` stay gaps (one request). Their
+  `denoise_s`, `decode_s` = `video_decode` + `encode` (as the table), `peak_gib` where the engine reports one (not for
+  the two Wan pipelines), `usd_per_clip` derived; `min_s` / `max_s` stay gaps (one request). `load_s` is closed only
+  where no earlier arm of the same pod had read the arm's model trees (auxiliary TAE files, a few MB, aside):
+  `fasth3-4step-vsa-nvfp4-taeh3` (88.1 s), `longlive-1.3b` (35.9 s) and `wan14b-plug-4step` (155.5 s). In the other
+  7 it stays a gap whose reason says the load was page-cache warm and names the cold sibling where there is one
+  (`fasth3-4step-vsa-nvfp4` 11.7 s right after `fasth3-4step-vsa-nvfp4-taeh3` read the same trees in 88.1 s; every
+  other H3 arm of that pod after the first had `h3-base` warm); the measured value stays in the source's note. Their
   `prompt_set` loses "no run of this variant yet", so their cells are regenerated (the note only);
 - the 18 files with a measurement of another kind (`gen`, `end_to_end`, `stream`: CLI medians, a cached prompt, often
-  an older setting in `workload.env`) keep their times; a serve job is not that quantity, so the run's numbers are in
-  its source's note, and only gaps that are not times close where the file has no `workload.env`: `load_s` in
-  `fasth3-trim-8step`, `fasth3-trim-nvfp4-fast`, `fasth3-v2-nvfp4{,-taeh3}`, `sfwan21-1.3b` and
-  `ltx25-distill-dense`, and `peak_gib` in `ltx25-distill-dense`;
+  an older setting in `workload.env`) are unchanged in their numbers: a serve job is not that quantity, and `load_s`
+  and `peak_gib` are of "the process that measured" (`gold.rs`), so no gap closes; the run's numbers are in its
+  source's note (`fields = []`), and the gap reasons for `load_s` / `peak_gib` (and `fasth3-trim-8step`'s `p50_s`)
+  point to it;
 - the 4 refusals are not validated and their gold files are unchanged.
+
+`[last_validated]` here means the variant ran to exit 0 at this commit on its gold cell; it does not mean every number
+already in the file was re-confirmed, and files whose recorded `peak_gib` differs from the run's (for example
+`fasth3-trim-nvfp4`, 20.3 GiB against 43.6) measure another setting or process: see their notes.
 
 A `load_s` of the gold run is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's
 own R2 fetch had just written, can load from the page cache (`fasth3-4step-vsa-taeh3` 7.0 s after
@@ -2079,8 +2088,10 @@ about twice the ~80 GB of §16.10's estimate; its cumulative peak reached the 26
 its 84.09 GB fetch, reclaimable) with no OOM kill. The next are `h3-ref2v-turbo` 79,933 MiB, `fasth3-8step-dense`
 78,470 MiB and `h3-ref2v-max` 71,543 MiB; every other arm stays under 70,000 MiB. Runpod's GB are 10^9 bytes (283 GB
 is the 269,889 MiB limit), so the 192 GB floor is 183,105 MiB and a pod given exactly the floor would leave the
-14B plug load about 27,100 MiB (26.5 GiB): the floor holds, narrowly (plan D3, follow-up: raise it or cut the
-loader's host copies). The peak supports host-RAM starvation as the cause of `e9b9435`'s exit 137 (below), which
+14B plug load about 27,100 MiB (26.5 GiB) by this sample. That does not show such a pod survives: the peak is a
+once-a-second sample, and pages not yet written back (up to the 84 GB the arm had just fetched) are charged to the
+same cgroup (§16.10), so the floor **may not hold**. Raising the gold tier's `min_ram_gb` (or cutting the loader's host
+copies) is a prerequisite of the next gold run (plan D3, follow-up a). The peak supports host-RAM starvation as the cause of `e9b9435`'s exit 137 (below), which
 that pod, with no floor, could not record.
 
 *Before the fixes: the run at `e9b9435`* (the same split; RTX PRO 6000, EU-RO-1, no host-RAM floor; not committed,

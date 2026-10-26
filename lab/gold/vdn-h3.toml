@@ -29,7 +29,6 @@ measures = "serve_job"
 p50_s = 561.52
 denoise_s = 449.86
 decode_s = 4.88
-load_s = 220.9
 peak_gib = 53.5
 note = "One serve-engine job of the gold cell (n = 1, the gold run at 7e580e5, 2026-10-26): p50_s is submit to MP4, the text encode of the uncached prompt (106.38 s) included; decode_s is video_decode + encode."
 
@@ -66,11 +65,11 @@ date = "2026-10-14"
 note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived."
 
 [[source]]
-fields = ["latency.measures", "latency.p50_s", "latency.denoise_s", "latency.decode_s", "latency.load_s", "latency.peak_gib", "cost.usd_per_clip"]
+fields = ["latency.measures", "latency.p50_s", "latency.denoise_s", "latency.decode_s", "latency.peak_gib", "cost.usd_per_clip"]
 path = "artifacts/runpod/gold/7e580e5-1026090916-e804/vdn-h3/gpucheck-out/engine.json"
 heading = "checks"
 date = "2026-10-26"
-note = "The gold run at 7e580e5 (2026-10-26, ADR-0019 §16.7; run artifacts/runpod/gold/7e580e5-1026090916-e804, arm `vdn-h3`, exit 0, 783 s): one serve-engine job of the gold cell (lab/cells/gold-vdn-h3.toml: runpod-matrix.sh's default prompt, seed 1024, 1344x768, 124 frames, 50 steps, the served default) on an RTX PRO 6000 Blackwell Server Edition at $2.49/hr (the run's pod.json). Check `timings`: submit_to_mp4_s 561.52 (text 106.38, denoise 449.86, video_decode 4.74, encode 0.14), load_s 220.9, peak_memory_mb 54768 (53.5 GiB). Host RAM (summary.json): peak 66281 MiB of the pod's 269889 MiB, oom_kills 0. decode_s = video_decode + encode, as docs/perf/tiers.md. load_s is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's own R2 fetch had just written, can load from the page cache (live.log). usd_per_clip = cost.usd_per_hr x latency.p50_s / 3600, derived."
+note = "The gold run at 7e580e5 (2026-10-26, ADR-0019 §16.7; run artifacts/runpod/gold/7e580e5-1026090916-e804, arm `vdn-h3`, exit 0, 783 s): one serve-engine job of the gold cell (lab/cells/gold-vdn-h3.toml: runpod-matrix.sh's default prompt, seed 1024, 1344x768, 124 frames, 50 steps, the served default) on an RTX PRO 6000 Blackwell Server Edition at $2.49/hr (the run's pod.json). Check `timings`: submit_to_mp4_s 561.52 (text 106.38, denoise 449.86, video_decode 4.74, encode 0.14), load_s 220.9, peak_memory_mb 54768 (53.5 GiB). Host RAM (summary.json): peak 66281 MiB of the pod's 269889 MiB, oom_kills 0. decode_s = video_decode + encode, as docs/perf/tiers.md. load_s is the engine's load in the run's arm order: a tree an earlier arm read, or that the arm's own R2 fetch had just written, can load from the page cache (live.log). load_s (220.9 s) is not in the fields: it was page-cache warm (vdn-h3-8step read the same vdn-h3-stage-b-2000 and h3-base trees just before (221.2 s); no cold load of this variant was measured). usd_per_clip = cost.usd_per_hr x latency.p50_s / 3600, derived."
 
 [[gap]]
 field = "latency.min_s"
@@ -79,6 +78,10 @@ why = "one request: the gold run (7e580e5, 2026-10-26) makes one serve job per v
 [[gap]]
 field = "latency.max_s"
 why = "one request: the gold run (7e580e5, 2026-10-26) makes one serve job per variant (n = 1), so there is no spread"
+
+[[gap]]
+field = "latency.load_s"
+why = "the gold run's load was page-cache warm (vdn-h3-8step read the same vdn-h3-stage-b-2000 and h3-base trees just before (221.2 s); no cold load of this variant was measured); the measured value is in the run source's note"
 
 [[gap]]
 field = "quality.psnr_vs_upstream_min_db"
