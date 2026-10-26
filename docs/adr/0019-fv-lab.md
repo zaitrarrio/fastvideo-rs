@@ -4441,7 +4441,7 @@ Nothing by itself: no script, cell, tier, golden, schema or test. Each slice abo
 
 #### 22.8 S1 done: the nine retired with no tier
 
-Executed 2026-10-26 on `claude/d1-s1-retire-nine` (draft PR, from `4f8822a0`), §18.2's mechanism; CPU only, $0.
+Executed 2026-10-26 on `claude/d1-s1-retire-nine` (draft PR #222, from `4f8822a0`), §18.2's mechanism; CPU only, $0.
 
 - **The list.** `FV_SCRIPT_RETIRED` (`scripts/gpu/fv-lab-retired.sh`) gains `sfquality`, `headline`, `speechtest`,
   `cold`, `eval`, `ltxoffload`, `solbench`, `sol-lingbot` and `sol-cosmos3` (twenty families). Each pointer
