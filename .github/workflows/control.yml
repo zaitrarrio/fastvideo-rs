@@ -46,6 +46,8 @@ on:
       - "scripts/gpu/runpod-http.sh"
       - "scripts/gpu/tests/fv-lab-goldens.sh"
       - "scripts/gpu/fv-lab-compare-runs.sh"
+      # its control arms come from the cells' `[repeats] controls` (ADR-0019 §15.7)
+      - "lab/cells/**"
       - "scripts/gpu/fv-lab-retired.sh"
       - "scripts/gpu/tests/fv-lab-route.test.sh"
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
@@ -115,6 +117,8 @@ on:
       - "scripts/gpu/runpod-http.sh"
       - "scripts/gpu/tests/fv-lab-goldens.sh"
       - "scripts/gpu/fv-lab-compare-runs.sh"
+      # its control arms come from the cells' `[repeats] controls` (ADR-0019 §15.7)
+      - "lab/cells/**"
       - "scripts/gpu/fv-lab-retired.sh"
       - "scripts/gpu/tests/fv-lab-route.test.sh"
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
