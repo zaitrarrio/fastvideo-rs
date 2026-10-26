@@ -1169,6 +1169,30 @@ fn process_key(m: &CudaModel, settings: &BTreeMap<String, String>) -> BTreeMap<S
 }
 
 impl ProcessPlan {
+    /// Whether a process whose technique settings were installed before the
+    /// engine can serve this plan: by a binary's `--techniques <profile>` at
+    /// start-up (`have`: that profile's load-time settings, `path` its name)
+    /// or with none (`have` empty). A profile is installed once per process,
+    /// so `CudaBackend::new` (`install_process_plan`) runs this when its own
+    /// install is refused, and the installed settings must be the plan's.
+    /// fv-gpucheck installs at start-up (none without the flag), so its
+    /// `engine` stage must be started with the model's profile; fv-serve
+    /// installs nothing first.
+    pub fn check_installed(
+        &self,
+        path: Option<&Path>,
+        have: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        if *have != self.settings {
+            return Err(format!(
+                "technique settings already installed ({path:?}: {have:?}) differ from what the served models need ({:?}: {:?}); \
+                 start the process with that profile or none",
+                self.profile, self.settings
+            ));
+        }
+        Ok(())
+    }
+
     /// Checks that `models` can share one process and returns what to install.
     ///
     /// H3 models may differ in their per-model settings
