@@ -52,6 +52,8 @@ on:
       - "lab/cells/**"
       - "scripts/gpu/fv-lab-retired.sh"
       - "scripts/gpu/tests/fv-lab-route.test.sh"
+      # runpod.sh gpu / matrix: a retired family runs fv-lab on the pod (ADR-0019 §17.6)
+      - "scripts/gpu/tests/runpod-plan.test.sh"
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
       # D1e (ADR-0019 §14): the experiment tiers' goldens, cut from the experiments' pod scripts (read from the history since §14.4)
       - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
@@ -124,6 +126,8 @@ on:
       - "lab/cells/**"
       - "scripts/gpu/fv-lab-retired.sh"
       - "scripts/gpu/tests/fv-lab-route.test.sh"
+      # runpod.sh gpu / matrix: a retired family runs fv-lab on the pod (ADR-0019 §17.6)
+      - "scripts/gpu/tests/runpod-plan.test.sh"
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
       # D1e (ADR-0019 §14): the experiment tiers' goldens, cut from the experiments' pod scripts (read from the history since §14.4)
       - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
@@ -208,6 +212,9 @@ jobs:
       - name: runpod-http.sh routes the retired families to fv-lab, refusing what fv-lab would not honour (ADR-0019 §10)
         working-directory: .
         run: bash scripts/gpu/tests/fv-lab-route.test.sh
+      - name: runpod.sh gpu / matrix run a retired family's tier with fv-lab, never runpod-matrix.sh, and stop before any pod on a family nothing runs (ADR-0019 §17.6)
+        working-directory: .
+        run: bash scripts/gpu/tests/runpod-plan.test.sh
       - name: the pod scripts send a config the serve images can boot (one image, ADR-0011)
         working-directory: .
         run: bash scripts/serve/tests/no-baked-config.test.sh

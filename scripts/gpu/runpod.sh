@@ -9,6 +9,10 @@
 #   runpod.sh gpu       three PRO 6000 96 GB pods (refuses if volume incomplete)
 #   runpod.sh smoke     cheap Blackwell nvrtc+kernels, then destroy
 #   runpod.sh matrix    one PRO 6000; restart between H3/LTX/Hunyuan/Wan
+#   runpod.sh plan gpu|matrix   what `gpu` / `matrix` start on each pod, one
+#                       line per family (no key, no pod): a family retired to
+#                       fv-lab (fv-lab-retired.sh, e.g. ltx) runs `fv-lab run`
+#                       from the image, the others runpod-matrix.sh
 #   runpod.sh rtx6000   retired with the rtx6000 family's runpod-matrix.sh
 #                       branch (docs/adr/0019-fv-lab.md §10): fv-lab pod up
 #                       --family rtx6000, or runpod-http.sh run
@@ -23,6 +27,8 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=scripts/gpu/volumes.sh
 source "$(dirname "${BASH_SOURCE[0]}")/volumes.sh"
+# shellcheck source=scripts/gpu/fv-lab-retired.sh
+source "$(dirname "${BASH_SOURCE[0]}")/fv-lab-retired.sh"
 
 RUNPOD_API_BASE="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 RUNPOD_GQL="${RUNPOD_GQL:-https://api.runpod.io/graphql}"
@@ -654,16 +660,87 @@ rp_create_gpu_pod() {
   printf '%s\n' "$id"
 }
 
+# The families `gpu` starts (one pod each) and `matrix` runs (in turn on one
+# pod). Constants: cmd_gpu, cmd_matrix and cmd_plan all read these lists, so
+# `plan` prints what the commands start, and each checks exactly those.
+RP_GPU_FAMILIES=(h3 ltx hunyuan)
+RP_MATRIX_FAMILIES=(h3 ltx hunyuan wan)
+
+# rp_gpu_cap_s <family>: `gpu`'s backstop for that family's pod (s).
+rp_gpu_cap_s() { case "$1" in ltx) echo 7200 ;; *) echo 5400 ;; esac; }
+# rp_gpu_pod_tag <family>: the family in `gpu`'s pod name (hunyuan: hy).
+rp_gpu_pod_tag() { case "$1" in hunyuan) echo hy ;; *) echo "$1" ;; esac; }
+
+# rp_destroy_pods <pod...>: the pods `gpu` created before one failed (none
+# has its backstop yet: rp_start_family arms it).
+rp_destroy_pods() {
+  local p
+  for p in "$@"; do rp_destroy_pod "$p"; done
+}
+
+# rp_backstop <pod> <cap_s>: delete the pod after cap_s even if this driver dies.
+rp_backstop() {
+  nohup bash -c "sleep ${2}; curl -sS -X DELETE -H 'Authorization: Bearer ${RUNPOD_API_KEY}' '${RUNPOD_API_BASE}/pods/${1}' >/dev/null" >/dev/null 2>&1 &
+}
+
+# rp_has_branch <family>: a label of runpod-matrix.sh's top-level `case`
+# (the copy this driver ships to the pod), as fv-lab-goldens.sh reads it.
+rp_has_branch() {
+  sed -n '/^case "\$FAMILY" in$/,/^esac$/p' "$FV_ROOT/scripts/gpu/runpod-matrix.sh" \
+    | grep -E "^  ([A-Za-z0-9_-]+ *\| *)*$1( *\| *[A-Za-z0-9_-]+)* *\)" >/dev/null
+}
+
+# rp_family_cmd <family>: the command the pod runs for a family, after
+# `nohup` or `export …;`. A family retired to fv-lab (fv-lab-retired.sh
+# FV_LAB_RETIRED: its runpod-matrix.sh branch is gone and the script refuses
+# it, docs/adr/0019-fv-lab.md §10, §17.6) runs as its tier with the image's
+# fv-lab (/opt/fastvideo-rs/target/release/fv-lab, lab/ beside it), writing
+# /workspace/runs/<family> as the script did; a family with a branch runs
+# runpod-matrix.sh. Anything else (an experiment tier, gold, an unknown name)
+# dies here, before a pod exists.
+rp_family_cmd() {
+  local family="$1"
+  if fv_lab_retired "$family"; then
+    printf '%s' "bash -c 'lab=/opt/fastvideo-rs/target/release/fv-lab; [ -x \"\$lab\" ] || { echo \"FATAL: no fv-lab in this image (\$lab): $family is fv-lab only; fv-lab pod up --family $family from a host\" >&2; exit 2; }; exec env FV_WORK=/workspace \"\$lab\" run $family'"
+  elif rp_has_branch "$family"; then
+    printf '%s' "bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $family"
+  else
+    die "$family is neither a runpod-matrix.sh family nor a retired one (fv-lab-retired.sh): nothing to run on the pod; fv-lab pod up --family $family from a host if it is a tier"
+  fi
+}
+
+# rp_check_families <family...>: every family has a command (rp_family_cmd
+# dies otherwise). Called before the first pod is created.
+rp_check_families() {
+  local f
+  for f in "$@"; do rp_family_cmd "$f" >/dev/null; done
+}
+
+cmd_plan() {
+  local fams=() f cmd
+  case "${1:-}" in
+    gpu) fams=("${RP_GPU_FAMILIES[@]}") ;;
+    matrix) fams=("${RP_MATRIX_FAMILIES[@]}") ;;
+    *) die "usage: runpod.sh plan gpu|matrix" ;;
+  esac
+  rp_check_families "${fams[@]}"
+  for f in "${fams[@]}"; do
+    cmd="$(rp_family_cmd "$f")" || exit 2
+    printf '%s\t%s\n' "$f" "$cmd"
+  done
+}
+
 rp_start_family() {
   local family="$1" pod="$2" host="$3" port="$4" cap_s="$5"
-  local remote="/opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh"
+  local remote="/opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh" cmd
+  cmd="$(rp_family_cmd "$family")" || exit 2
   rp_ssh "$host" "$port" "mkdir -p /opt/fastvideo-rs/scripts/gpu /workspace/runs/$family /workspace/gpucheck-out/logs"
   rp_rsync "$host" "$port" "$FV_ROOT/scripts/gpu/runpod-matrix.sh" "$remote"
   rp_ssh "$host" "$port" "chmod +x $remote; echo CPU_CHECK; nvidia-smi -L; df -h /workspace | tail -1; ls /workspace/weights | head"
-  rp_log "stage start $family pod=$pod cap=${cap_s}s"
-  rp_ssh "$host" "$port" "nohup bash $remote $family > /workspace/runs/$family/driver.log 2>&1 & echo \$! > /workspace/runs/$family/pid"
+  rp_log "stage start $family pod=$pod cap=${cap_s}s: $cmd"
+  rp_ssh "$host" "$port" "nohup $cmd > /workspace/runs/$family/driver.log 2>&1 & echo \$! > /workspace/runs/$family/pid"
   # Hard wall: destroy even if this driver dies.
-  nohup bash -c "sleep ${cap_s}; curl -sS -X DELETE -H 'Authorization: Bearer ${RUNPOD_API_KEY}' '${RUNPOD_API_BASE}/pods/${pod}' >/dev/null" >/dev/null 2>&1 &
+  rp_backstop "$pod" "$cap_s"
   printf '%s %s\n' "$host" "$port" >"$RP_STATE/gpu-${family}-ssh"
   printf '%s\n' "$pod" >"$RP_STATE/gpu-${family}.id"
   rp_log "stage ok $family started pid on $host:$port (cap ${cap_s}s)"
@@ -684,6 +761,9 @@ rp_restart_dest() {
 }
 
 cmd_gpu() {
+  # Every family's pod command first (rp_family_cmd): a family nothing can
+  # run must stop here, before the key is read or a paid pod exists.
+  rp_check_families "${RP_GPU_FAMILIES[@]}"
   require_tools curl jq ssh rsync python3
   rp_load_key
   [[ -f "$RP_SSH_KEY" ]] || die "ssh key $RP_SSH_KEY missing"
@@ -709,33 +789,30 @@ cmd_gpu() {
   rp_gpu_offer "$dc" >/dev/null || die "no $RP_GPU_TYPE stock in $dc (quota/stock)"
   auth="$(jq -r '.containerRegistryAuthId // empty' "$RP_STATE/fetch-pod.json" 2>/dev/null || true)"
   [[ -n "$auth" ]] || auth="$(rp_ensure_registry_auth)"
-  rp_log "▶ gpu: three PRO 6000 pods on vol=$vol dc=$dc image=$RP_IMAGE auth=${auth:-none}"
+  rp_log "▶ gpu: ${#RP_GPU_FAMILIES[@]} PRO 6000 pods (${RP_GPU_FAMILIES[*]}) on vol=$vol dc=$dc image=$RP_IMAGE auth=${auth:-none}"
 
-  local h3_name ltx_name hy_name
-  h3_name="${GPU_NAME_PREFIX}-h3-$(date -u +%Y%m%d%H%M%S)"
-  ltx_name="${GPU_NAME_PREFIX}-ltx-$(date -u +%Y%m%d%H%M%S)"
-  hy_name="${GPU_NAME_PREFIX}-hy-$(date -u +%Y%m%d%H%M%S)"
+  # One pod per family of RP_GPU_FAMILIES (the list checked above), created
+  # first, then each started once its ssh answers.
+  local i f id hp stamp host port started="" ids=() hps=()
+  stamp="$(date -u +%Y%m%d%H%M%S)"
+  for f in "${RP_GPU_FAMILIES[@]}"; do
+    id="$(rp_create_gpu_pod "${GPU_NAME_PREFIX}-$(rp_gpu_pod_tag "$f")-$stamp" "$vol" "$dc" "$auth")" \
+      || { rp_destroy_pods ${ids[@]+"${ids[@]}"}; die "$f GPU create failed"; }
+    ids+=("$id")
+  done
+  for i in "${!RP_GPU_FAMILIES[@]}"; do
+    hp="$(rp_wait_ssh "${ids[$i]}" 900)" \
+      || { rp_destroy_pods ${ids[@]+"${ids[@]}"}; die "${RP_GPU_FAMILIES[$i]} GPU pod ${ids[$i]}: no ssh"; }
+    hps+=("$hp")
+  done
+  for i in "${!RP_GPU_FAMILIES[@]}"; do
+    f="${RP_GPU_FAMILIES[$i]}"
+    read -r host port <<<"${hps[$i]}"
+    rp_start_family "$f" "${ids[$i]}" "$host" "$port" "$(rp_gpu_cap_s "$f")"
+    started+="  $f=${ids[$i]}@$host:$port"
+  done
 
-  local h3_id ltx_id hy_id
-  h3_id="$(rp_create_gpu_pod "$h3_name" "$vol" "$dc" "$auth")" || die "h3 GPU create failed"
-  ltx_id="$(rp_create_gpu_pod "$ltx_name" "$vol" "$dc" "$auth")" || die "ltx GPU create failed"
-  hy_id="$(rp_create_gpu_pod "$hy_name" "$vol" "$dc" "$auth")" || die "hy GPU create failed"
-
-  local h3_hp ltx_hp hy_hp
-  read -r h3_hp < <(echo "$(rp_wait_ssh "$h3_id" 900)")
-  read -r ltx_hp < <(echo "$(rp_wait_ssh "$ltx_id" 900)")
-  read -r hy_hp < <(echo "$(rp_wait_ssh "$hy_id" 900)")
-
-  local h3_host h3_port ltx_host ltx_port hy_host hy_port
-  read -r h3_host h3_port <<<"$h3_hp"
-  read -r ltx_host ltx_port <<<"$ltx_hp"
-  read -r hy_host hy_port <<<"$hy_hp"
-
-  rp_start_family h3 "$h3_id" "$h3_host" "$h3_port" 5400
-  rp_start_family ltx "$ltx_id" "$ltx_host" "$ltx_port" 7200
-  rp_start_family hunyuan "$hy_id" "$hy_host" "$hy_port" 5400
-
-  rp_log "gpu jobs started  h3=$h3_id@$h3_host:$h3_port  ltx=$ltx_id@$ltx_host:$ltx_port  hy=$hy_id@$hy_host:$hy_port"
+  rp_log "gpu jobs started$started"
   rp_log "CPU fetch pod left up for ltx23 extra/logs — destroy after Hunyuan skip or extra fetch ends"
 }
 
@@ -816,10 +893,11 @@ rp_recreate_matrix_pod() {
 }
 
 cmd_matrix() {
+  rp_check_families "${RP_MATRIX_FAMILIES[@]}"
   require_tools curl jq ssh rsync python3
   rp_load_key
   [[ -f "$RP_SSH_KEY" ]] || die "ssh key $RP_SSH_KEY missing"
-  local vol dc auth name id host port family
+  local vol dc auth name id host port family cmd gen
   vol="$(jq -r '.id // empty' "$RP_STATE/volume.json" 2>/dev/null || cat "$RP_STATE/volume.id" 2>/dev/null || true)"
   [[ -n "$vol" ]] || die "no volume id"
   [[ -f "$(rp_volume_ready_file)" ]] || die "volume not verified"
@@ -829,12 +907,12 @@ cmd_matrix() {
   rp_log "▶ matrix: one PRO 6000, restart between H3/LTX/Hunyuan/Wan  image=$RP_IMAGE"
   id="$(rp_create_gpu_pod "$name" "$vol" "$dc" "$auth" "$RP_GPU_TYPE" 0)" || die "matrix GPU create failed"
   echo "$id" >"$RP_STATE/gpu-matrix.id"
-  nohup bash -c "sleep 10800; curl -sS -X DELETE -H 'Authorization: Bearer ${RUNPOD_API_KEY}' '${RUNPOD_API_BASE}/pods/${id}' >/dev/null" >/dev/null 2>&1 &
+  rp_backstop "$id" 10800
   read -r host port < <(rp_wait_ssh "$id" 900)
   echo "$host $port" >"$RP_STATE/gpu-matrix-ssh"
   mkdir -p "$RP_STATE/phase3-gate"
   local first=1
-  for family in h3 ltx hunyuan wan; do
+  for family in "${RP_MATRIX_FAMILIES[@]}"; do
     if [[ "$first" -eq 0 ]]; then
       read -r id host port < <(rp_recreate_matrix_pod "$id")
       echo "$host $port" >"$RP_STATE/gpu-matrix-ssh"
@@ -846,9 +924,15 @@ cmd_matrix() {
     if [[ "$family" == h3 ]]; then
       rp_ssh "$host" "$port" "python3 -c 'import json; print(json.load(open(\"/workspace/gpucheck-out/nvrtc.json\")).get(\"context\",{}).get(\"aot_sms\"))' 2>/dev/null || true" || true
     fi
-    # 4 cells × 300s + load slack
-    if ! rp_ssh "$host" "$port" "export FV_WORK=/workspace FV_GEN_TIMEOUT_S=300 PATH=/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:\$PATH
-      bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $family"; then
+    cmd="$(rp_family_cmd "$family")" || exit 2
+    # A script family: 4 cells × 300s + load slack. A retired family runs its
+    # tier through fv-lab, which reads FV_GEN_TIMEOUT_S as its per-arm cap: it
+    # gets the tier's cell_timeout_s instead (ltx: 3600; ltx25-two-stage takes
+    # about 540 s, which 300 would kill).
+    gen="FV_GEN_TIMEOUT_S=300"
+    fv_lab_retired "$family" && gen=""
+    if ! rp_ssh "$host" "$port" "export FV_WORK=/workspace ${gen} PATH=/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:\$PATH
+      $cmd"; then
       rp_log "family $family returned non-zero (cells continue-on-fail inside the script)"
     fi
     rp_ssh "$host" "$port" "tail -30 /workspace/runs/$family/live.log" | tee -a "$RP_LIVE" >&2 || true
@@ -1009,6 +1093,10 @@ cmd_b200() {
   rp_log "b200 PASS (see $RP_STATE/b200/runs) — volumes kept ($vol and $RP_EUR_VOLUME_KEEP)"
 }
 
+# Sourced with FV_SOURCE_ONLY=1 (tests/runpod-plan.test.sh): the functions
+# only, no command dispatched (as docker.sh and validate.sh).
+[[ -n "${FV_SOURCE_ONLY:-}" && "${BASH_SOURCE[0]}" != "$0" ]] && return 0
+
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 2; }
 
 case "${1:-}" in
@@ -1019,6 +1107,7 @@ case "${1:-}" in
   gpu) cmd_gpu ;;
   smoke) cmd_smoke ;;
   matrix) cmd_matrix ;;
+  plan) cmd_plan "${2:-}" ;;
   rtx6000) die "rtx6000 is fv-lab only (scripts/gpu/fv-lab-retired.sh, docs/adr/0019-fv-lab.md §10): fv-lab pod up --sha <7> --family rtx6000 --yes --wait, or runpod-http.sh run <7>" ;;
   b200) cmd_b200 ;;
   offers) cmd_offers ;;

@@ -1,0 +1,15 @@
+{
+  "id": "ktao6reo6e4p1e",
+  "name": "fv-lab-fuse-762ce4d-1026124004-44af",
+  "family": "fuse",
+  "tag": "762ce4d-1026124004-44af",
+  "sha": "762ce4d",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:ae688277d596110669173d39ccb6458768246f31ba2a237b27cebb0712508d0e",
+  "url": "https://ktao6reo6e4p1e-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793018407.8001106,
+  "cap_s": 3600,
+  "memory_gb": 283.0,
+  "vcpus": 28.0
+}

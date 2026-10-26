@@ -1,0 +1,35 @@
+[12:40:39] [fuse] matrix start image=c7d4230782e731e1
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-c70dfc40-ac37-a012-412b-a11bb5f06687)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[12:40:39] [fuse] pod memory: cgroup v2 /sys/fs/cgroup, limit 269889 MiB, oom_kills 0
+[12:40:39] [fuse] ▶ kernels-fuse  /opt/fastvideo-rs/target/release/fv-gpucheck --out /fvscratch/runs/fuse/762ce4d-1026124004-44af/kernels-fuse/gpucheck-out kernels --groups dit_fusion,bf16_act  (wall cap 2364s; 0=none)
+[12:40:43] [fuse] ok kernels-fuse  4s  
+[12:40:43] [fuse] ram kernels-fuse: ram 866 MiB of 269889 MiB, oom_kills 0
+[12:40:43] [fuse] skip trace-fasth3-8step-768p (not in FV_CELLS)
+[12:40:43] [fuse] skip trace-fasth3-4step-vsa-768p (not in FV_CELLS)
+[12:40:43] [fuse] skip trace-ltx25-4k5s-sol (not in FV_CELLS)
+[12:40:43] [fuse] SKIP fasth3-8step-768p-off: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[12:40:43] [fuse] SKIP fasth3-8step-768p-on: weights incomplete
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+[12:40:44] [fuse] ▶ fasth3-4step-vsa-768p-off  env FASTVIDEO_H3_FUSE=0 FASTVIDEO_LTX_FUSE=0 FASTVIDEO_SPLIT_ROWS=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --adaln-cache /fvscratch/runs/fuse/762ce4d-1026124004-44af/fasth3-4step-vsa-768p-off-adaln.cache --clip-dir /fvscratch/runs/fuse/762ce4d-1026124004-44af/fasth3-4step-vsa-768p-off/frames --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder auto --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --warm  (wall cap 2359s; 0=none)
+[12:45:04] [fuse] ok fasth3-4step-vsa-768p-off  259s  /fvscratch/runs/fuse/762ce4d-1026124004-44af/fasth3-4step-vsa-768p-off/stderr.log:[INFO] h3/timings {"audio_decode_s":0.05679201,"decode_s":4.8566048639999995,"denoise_s":18.535858122,"load_s":208.925434595,"peak_mib":68836,"refine_s":0.000456919,"step_s":[4.65372412109375,4.6219755859375,4.6259208984375,4.63379052734375],"text_cache":"hit","text_encoder":"cache","text_s":0.270858659,"total_s":23.939057034,"video_decode_s":4.799812854,"video_encode_s":0.163617625,"video_push_s":0.00005318,"video_rgb_s":0.10732142796844757,"video_vae_s":4.618000155270099,"video_wait_s":0.131178194,"warm":true,"write_s":0.150522622}
+[12:45:04] [fuse] ram fasth3-4step-vsa-768p-off: ram 28106 MiB of 269889 MiB, oom_kills 0
+[12:45:06] [fuse] ▶ fasth3-4step-vsa-768p-on  env FASTVIDEO_H3_FUSE=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe 4step-vsa --adaln-cache /fvscratch/runs/fuse/762ce4d-1026124004-44af/fasth3-4step-vsa-768p-on-adaln.cache --clip-dir /fvscratch/runs/fuse/762ce4d-1026124004-44af/fasth3-4step-vsa-768p-on/frames --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder auto --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --warm  (wall cap 2097s; 0=none)
+[12:47:49] [fuse] ok fasth3-4step-vsa-768p-on  163s  /fvscratch/runs/fuse/762ce4d-1026124004-44af/fasth3-4step-vsa-768p-on/stderr.log:[INFO] h3/timings {"audio_decode_s":0.053614357,"decode_s":4.834664495999999,"denoise_s":17.133805665,"load_s":117.871942953,"peak_mib":70020,"refine_s":0.000463079,"step_s":[4.2993486328125,4.27355126953125,4.2802109375,4.28031787109375],"text_cache":"hit","text_encoder":"cache","text_s":0.226547748,"total_s":22.438873078,"video_decode_s":4.7810501389999995,"video_encode_s":0.15014994,"video_push_s":0.000034210000000000006,"video_rgb_s":0.10482028901686002,"video_vae_s":4.613396026611328,"video_wait_s":0.13164113300000002,"warm":true,"write_s":0.143906831}
+[12:47:49] [fuse] ram fasth3-4step-vsa-768p-on: ram 52460 MiB of 269889 MiB, oom_kills 0
+[12:47:50] [fuse] skip ltx25-4k5s-sol-off (not in FV_CELLS)
+[12:47:50] [fuse] skip ltx25-4k5s-sol-on (not in FV_CELLS)
+[12:47:50] [fuse] skip compare fasth3-8step-768p-off--fasth3-8step-768p-on (frames missing)
+[12:47:50] [fuse] skip gate fasth3-8step-768p-off--fasth3-8step-768p-on (benchmark.json missing)
+[12:47:51] [fuse] compare fasth3-4step-vsa-768p-off--fasth3-4step-vsa-768p-on exit=0 "psnr_mean":null 
+[12:47:51] [fuse] gate fasth3-4step-vsa-768p-off--fasth3-4step-vsa-768p-on exit=1 gate verdict: "fail"
+[12:47:51] [fuse] skip compare ltx25-4k5s-sol-off--ltx25-4k5s-sol-on (frames missing)
+[12:47:51] [fuse] skip gate ltx25-4k5s-sol-off--ltx25-4k5s-sol-on (benchmark.json missing)
+[12:47:51] [fuse] matrix done

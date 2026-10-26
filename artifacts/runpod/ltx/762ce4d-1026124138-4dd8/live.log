@@ -1,0 +1,27 @@
+[12:41:54] [ltx] matrix start image=c7d4230782e731e1
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-6e4d694b-b986-6331-3323-fdd8e43eb553)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[12:41:54] [ltx] pod memory: cgroup v2 /sys/fs/cgroup, limit 89645 MiB, oom_kills 0
+[12:41:55] [ltx] ▶ ltx25-two-stage  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --warm --clip /fvscratch/runs/ltx/762ce4d-1026124138-4dd8/ltx25-two-stage/frames  (wall cap 2382s; 0=none)
+[12:51:04] [ltx] ok ltx25-two-stage  549s  
+[12:51:04] [ltx] ram ltx25-two-stage: ram 36289 MiB of 89645 MiB, oom_kills 0
+[12:51:05] [ltx] SKIP ltx23-two-stage: weights incomplete
+  MISSING dir /workspace/weights/ltx23/transformer
+  MISSING dir /workspace/weights/ltx23/vae
+  MISSING dir /workspace/weights/ltx23/audio_vae
+  MISSING dir /workspace/weights/ltx23/vocoder
+  MISSING dir /workspace/weights/ltx23/text_encoder
+  MISSING dir /workspace/weights/ltx23/text_encoder/gemma
+  MISSING dir /workspace/weights/ltx23/tokenizer
+  MISSING dir /workspace/weights/ltx23/text_embedding_projection
+  MISSING dir /workspace/weights/ltx23/spatial_upscaler
+weights INCOMPLETE: ltx23
+[12:51:05] [ltx] SKIP ltx20-distilled-8step: weights incomplete
+missing /workspace/weights/ltx2/ltx-2-19b-distilled.safetensors
+  MISSING dir /workspace/weights/ltx2/text_encoder
+  MISSING dir /workspace/weights/ltx2/tokenizer
+  MISSING dir /workspace/weights/ltx2/vae
+  MISSING dir /workspace/weights/ltx2/audio_vae
+  MISSING dir /workspace/weights/ltx2/vocoder
+weights INCOMPLETE: ltx2
+[12:51:05] [ltx] matrix done

@@ -1,4 +1,5 @@
-# The fuse family's kernel check (runpod-matrix.sh `fuse`, step 1; Phase 3c
+# The fuse family's kernel check (was runpod-matrix.sh `fuse`, retired after its GPU check,
+# docs/adr/0019-fv-lab.md §17.6; step 1; Phase 3c
 # DiT block fusions, FASTVIDEO_H3_FUSE / FASTVIDEO_LTX_FUSE): `fv-gpucheck
 # kernels --groups dit_fusion,bf16_act`, every fused kernel bit for bit against
 # its unfused op chain, plus fused / unfused timings at production shapes. An

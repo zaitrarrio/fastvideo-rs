@@ -1,4 +1,5 @@
-# runpod-matrix.sh `attn3` (FVID-2026-09-27-attention-sm120): sm_120 dense attention
+# Was runpod-matrix.sh `attn3` (retired after its GPU check, docs/adr/0019-fv-lab.md §17.6;
+# FVID-2026-09-27-attention-sm120): sm_120 dense attention
 # A/B, flash_mma_fwd2 (FASTVIDEO_FLASH_KERNEL=v2) against cuDNN's unified SDPA node
 # (=cudnn), on FastH3 4-step dense (768p in the arm names: the recipe's default
 # canvas) and LTX-2.5 1080p20s dense stage 2; then VSA on bf16 activations read in
@@ -7,7 +8,8 @@
 # arms. One cell with H3 and LTX-2.5 arms: the script's three compares follow every
 # arm, so per-pipeline cells would move them (docs/adr/0019-fv-lab.md §17). The
 # script's FV_ATTN3_ARMS / FV_ATTN3_VSA picked arms; the cell is their defaults
-# (v2 cudnn, 0 1): narrow by arm with --cells (both are refused by fv-lab).
+# (v2 cudnn, 0 1): narrow by arm with --cells (both are refused by fv-lab and,
+# since the branch went, runpod-http.sh).
 # Each H3 pair shares its AdaLN cache, as in the script. Schema:
 # crates/fastvideo-lab/schemas/cell.v1.json.
 schema = 1

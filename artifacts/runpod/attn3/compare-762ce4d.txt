@@ -1,0 +1,8 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/attn3/762ce4d-1026124004-04fa artifacts/runpod/attn3/762ce4d-10261240
+same fasth3-4step-vsa-768p-b160: {"exit":0,"skipped":null}, 248 frames byte-identical
+same fasth3-4step-vsa-768p-b161: {"exit":0,"skipped":null}, 248 frames byte-identical
+same compare/compare-clips-fasth3-4step-dense-768p-v2--fasth3-4step-dense-768p-cudnn.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-fasth3-4step-vsa-768p-b160--fasth3-4step-vsa-768p-b161.json: {"status":"pass","off_identity":"ok"}
+same compare/compare-clips-ltx25-1080p20s-dense-v2--ltx25-1080p20s-dense-cudnn.json: {"status":"skipped","off_identity":null}
+2 arm(s) the same (2 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 3 report(s) the same, 0 verdict file(s) the same, 0 difference(s)
+exit 0

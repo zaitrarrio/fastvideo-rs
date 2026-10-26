@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan | b200 | ... | b4c2
+# Runs ON a Runpod GPU box. Family: h3 | hunyuan | wan | b200 | ... | b4c2
 # One process per family. Continues to the next cell on failure.
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) unless a
 # cell sets it.
@@ -7,8 +7,8 @@
 # Retired to fv-lab (docs/adr/0019-fv-lab.md §10): the families of
 # fv-lab-retired.sh (rtx6000, techniques, b6, rtx5090, fastvideo, h3arms,
 # trace, ltxfps, ltxvae, precision; b4a, with its verdict step, §11.6;
-# det-short and determinism, with their [repeats] hashes, §15.10)
-# passed their GPU gate and their branches are gone; they are tiers of lab/ (`fv-lab run <tier>` on the box,
+# det-short and determinism, with their [repeats] hashes, §15.10; fuse, attn3
+# and ltx, D1f's, §17.6) passed their GPU gate and their branches are gone; they are tiers of lab/ (`fv-lab run <tier>` on the box,
 # `runpod-http.sh run` / `fv-lab pod up` from a host). This script refuses
 # them (exit 2), and `headline` runs its cells of them through fv-lab. Two
 # modes of them are fv-lab tiers too (§12, FV_LAB_RESTORED):
@@ -38,7 +38,7 @@
 # or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh) when a
 # family moves to lab/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|sana-video|wan|b200|precision-debug|fuse|oracle|writer|eval|ltxoffload|b4b|b4c|b4c2|h3attn (retired to fv-lab: fv-lab-retired.sh)}"
+FAMILY="${1:?usage: runpod-matrix.sh solbench|sol-lingbot|sol-cosmos3|serve-engine|hd|headline|mmaudio|speechtest|h3|hunyuan|sana-video|wan|b200|precision-debug|oracle|writer|eval|ltxoffload|b4b|b4c|b4c2|h3attn (retired to fv-lab: fv-lab-retired.sh)}"
 DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
@@ -893,41 +893,6 @@ Audio: male speech, clear voice, quiet room"
       log "skip sol-h3-spark: upscaler=${spark_up:-missing} adapter=${spark_ad:-missing}"
     fi
     ;;
-  ltx)
-    # Each arm gates on its weight tree (verify-weights.sh), as every fv-lab
-    # arm does (docs/adr/0019-fv-lab.md §4, §17): ltx23 and ltx2 are not on
-    # the EU volume, so on bz0ofkfx45 those two arms are recorded as skipped
-    # ("weights incomplete") instead of failing on the missing files.
-    gated_cell ltx25-two-stage ltx25-two-stage \
-      "$BIN" --mode fast ltx2 gen \
-        --model-version 2.5 \
-        --weights "$W/ltx25" \
-        --dit "$W/ltx25" \
-        --prompt "$PROMPT" \
-        --seed "$SEED" \
-        --two-stage \
-        --text streamed \
-        --warm \
-        --clip "$RUNS/ltx25-two-stage/frames"
-    gated_cell ltx23-two-stage ltx23 \
-      "$BIN" --mode fast ltx2 gen \
-        --model-version 2.3 \
-        --weights "$W/ltx23" \
-        --dit "$W/ltx23" \
-        --prompt "$PROMPT" \
-        --seed "$SEED" \
-        --two-stage \
-        --text streamed \
-        --clip "$RUNS/ltx23-two-stage/frames"
-    gated_cell ltx20-distilled-8step ltx2 \
-      "$BIN" --mode fast ltx2 gen \
-        --model-version 2.0 \
-        --weights "$W/ltx2" \
-        --dit "$W/ltx2/ltx-2-19b-distilled.safetensors" \
-        --prompt "$PROMPT" \
-        --seed "$SEED" \
-        --clip "$RUNS/ltx20-distilled-8step/frames"
-    ;;
   hunyuan)
     if ! "$BIN" hunyuan --help >/dev/null 2>&1; then
       log "skip hunyuan: fv-gpucheck in this image has no hunyuan gen tier"
@@ -1469,109 +1434,6 @@ Audio: male speech, clear voice, quiet room"
     compare_cells fasth3-8step-768p-f32act fasth3-8step-768p-bf16act
     compare_cells fasth3-8step-768p-bf16act fasth3-8step-768p-w8a8
     rm -rf "$RUNS"/h3dump-*
-    ;;
-  attn3)
-    # sm_120 dense attention A/B (FVID-2026-09-27-attention-sm120): flash_mma_fwd2
-    # vs cuDNN's unified SDPA node, FastH3 4-step dense 768p denoise and LTX-2.5
-    # 1080p 20 s dense stage 2, same prompt/seed, then the frame diff.
-    h3_common=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder auto
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-      --warm
-    )
-    for arm in ${FV_ATTN3_ARMS:-v2 cudnn}; do
-      gated_cell "fasth3-4step-dense-768p-$arm" fasth3-4step-dense \
-        env FASTVIDEO_FLASH_KERNEL="$arm" \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
-          --adaln-cache "$RUNS/fasth3-4step-dense-768p-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-4step-dense-768p-$arm/frames" "${h3_common[@]}"
-    done
-    for arm in ${FV_ATTN3_ARMS:-v2 cudnn}; do
-      gated_cell "ltx25-1080p20s-dense-$arm" ltx25-two-stage \
-        env FASTVIDEO_FLASH_KERNEL="$arm" \
-        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-          --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s --dense-stage2 \
-          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-          --clip "$RUNS/ltx25-1080p20s-dense-$arm/frames"
-    done
-    # VSA on bf16 activations read in place (FASTVIDEO_VSA_BF16) vs the f32
-    # widening path: the frames must match bit for bit.
-    for vb in ${FV_ATTN3_VSA:-0 1}; do
-      gated_cell "fasth3-4step-vsa-768p-b16$vb" fasth3-4step-vsa \
-        env FASTVIDEO_VSA_BF16="$vb" \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
-          --adaln-cache "$RUNS/fasth3-4step-vsa-768p-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-4step-vsa-768p-b16$vb/frames" "${h3_common[@]}"
-    done
-    compare_cells fasth3-4step-dense-768p-v2 fasth3-4step-dense-768p-cudnn
-    compare_cells ltx25-1080p20s-dense-v2 ltx25-1080p20s-dense-cudnn
-    compare_cells fasth3-4step-vsa-768p-b160 fasth3-4step-vsa-768p-b161
-    ;;
-  fuse)
-    # Phase 3c DiT block fusions (FASTVIDEO_H3_FUSE, FASTVIDEO_LTX_FUSE).
-    # 1. kernels-fuse: `fv-gpucheck kernels --groups dit_fusion,bf16_act`,
-    #    every fused kernel bit for bit against its unfused op chain, plus
-    #    fused / unfused timings at production shapes.
-    # 2. trace-*: a CUPTI-traced warm step of each workload with the fusions
-    #    on (the trace family's command lines; compare with a trace run of
-    #    the previous build).
-    # 3. <workload>-off / -on: untraced warm generations with the fusions off
-    #    (the ops the previous build runs) and on. The fusions keep every
-    #    rounding point, so compare-clips must find the clips byte-identical
-    #    (--off-identity) and the gate runs as an `exact` switch.
-    run_cell kernels-fuse "$BIN" --out "$RUNS/kernels-fuse/gpucheck-out" kernels --groups dit_fusion,bf16_act
-    grep -hE '^\[(PASS|FAIL)\]' "$RUNS/kernels-fuse/stderr.log" 2>/dev/null | cut -c1-200 | tee -a "$LOG" || true
-    h3_common=(
-      --prompt "$PROMPT"
-      --seconds 5
-      --seed "$SEED"
-      --text-encoder auto
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-      --warm
-    )
-    off=(FASTVIDEO_H3_FUSE=0 FASTVIDEO_LTX_FUSE=0 FASTVIDEO_SPLIT_ROWS=0)
-    fuse_h3() {
-      local name="$1" wcell="$2" weights="$3" recipe="$4"
-      shift 4
-      gated_cell "$name" "$wcell" \
-        env "$@" \
-        "$BIN" --mode fast h3 gen --weights "$W/$weights" --h3-recipe "$recipe" \
-          --adaln-cache "$RUNS/$name-adaln.cache" \
-          --clip-dir "$RUNS/$name/frames" "${h3_common[@]}"
-    }
-    fuse_ltx() {
-      local name="$1"
-      shift
-      gated_cell "$name" ltx25-two-stage \
-        env "$@" \
-        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-          --weights "$W/ltx25" --dit "$W/ltx25" --workload 4k5s \
-          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-          --clip "$RUNS/$name/frames"
-    }
-    fuse_h3 trace-fasth3-8step-768p fasth3-8step h3-8step 8step FASTVIDEO_GPU_TRACE=1
-    fuse_h3 trace-fasth3-4step-vsa-768p fasth3-4step-vsa h3-base 4step-vsa FASTVIDEO_GPU_TRACE=1
-    fuse_ltx trace-ltx25-4k5s-sol FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_STEP=9
-    for cell in trace-fasth3-8step-768p trace-fasth3-4step-vsa-768p trace-ltx25-4k5s-sol; do
-      grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
-    done
-    fuse_h3 fasth3-8step-768p-off fasth3-8step h3-8step 8step "${off[@]}"
-    fuse_h3 fasth3-8step-768p-on fasth3-8step h3-8step 8step FASTVIDEO_H3_FUSE=1
-    fuse_h3 fasth3-4step-vsa-768p-off fasth3-4step-vsa h3-base 4step-vsa "${off[@]}"
-    fuse_h3 fasth3-4step-vsa-768p-on fasth3-4step-vsa h3-base 4step-vsa FASTVIDEO_H3_FUSE=1
-    fuse_ltx ltx25-4k5s-sol-off "${off[@]}"
-    fuse_ltx ltx25-4k5s-sol-on FASTVIDEO_LTX_FUSE=1
-    for wl in fasth3-8step-768p fasth3-4step-vsa-768p ltx25-4k5s-sol; do
-      compare_cells "$wl-off" "$wl-on" --off-identity
-      # `exact`: the OFF-identity report is the on/off one itself (the
-      # fused path must equal the unfused one byte for byte).
-      gate_cells "$wl-off" "$wl-on" exact "$wl-on"
-    done
     ;;
   eval)
     # The evaluation layer end to end on one card: precision A/B pairs with

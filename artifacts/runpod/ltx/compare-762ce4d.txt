@@ -1,0 +1,6 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/ltx/762ce4d-1026124138-4dd8 artifacts/runpod/ltx/762ce4d-10261241
+same ltx20-distilled-8step: {"exit":null,"skipped":"weights incomplete"}, no frames
+same ltx23-two-stage: {"exit":null,"skipped":"weights incomplete"}, no frames
+same ltx25-two-stage: {"exit":0,"skipped":null}, 242 frames byte-identical
+3 arm(s) the same (1 ran with byte-identical frames, 2 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 difference(s)
+exit 0
