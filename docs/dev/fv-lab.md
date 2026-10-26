@@ -296,7 +296,8 @@ up --extra-env` (the script still reads them): `FV_DET_CELLS`, `FV_DET_REPEATS`,
 `FV_DET_T2V_PROMPT`, `FV_DET_I2V_PROMPT`, `FV_ORACLE_TARGETS`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`,
 `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT`, and for `oracle` a `FASTVIDEO_DUMP_OPS` other than `0,1,24,47`. `pod fetch`
 takes `determinism.txt`, `hashes.txt` and each arm's `hashes.txt` / `digests.txt`; `fv-lab-compare-runs.sh` compares
-the hashes files byte for byte and each arm's `compare-dumps` lines. Still in the script (§15.6): the oracle's ffmpeg
+the hashes files byte for byte and each arm's `compare-dumps` lines, except a `[repeats] controls` arm's (read from
+`lab/cells`), which are reported, not judged (ADR-0019 §15.7). Still in the script (§15.6): the oracle's ffmpeg
 clip-metric targets (`ltx25-{i2v,kf,ref2v,a2v*,retake*,extend}`, `sfwan13`), `FV_ORACLE_OWN_TEXT=1`, det-short's
 `ltx-sol`, and `runpod-http.sh upstream` (the reference pods; it moves with an `fv-lab oracle` driver).
 
