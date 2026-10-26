@@ -8,7 +8,13 @@
 - GitHub workflow_dispatch: /repos/<o>/<r>/actions/workflows/<f>/dispatches
 - fv-serve pods: /pod/<id>/health, /pod/<id>/fv/v1/internal/{drain,status}
 - test hooks: GET /__state, POST /__seed (merge), POST /__tag {tag, digest},
-  POST /__build {sha, keys} (a build's images and sha tags), POST /__sql {sql}
+  POST /__build {sha, keys} (a build's images and sha tags), POST /__sql {sql},
+  GET /__log?since=N (the requests from the N-th on: method, path, JSON body;
+  the request goldens of scripts/serve/tests/fv-deploy-goldens.sh)
+
+A manifest's digest is the SHA-256 of the bytes served, as in a real
+registry (fv-deploy computes it from the body; the scripts read the
+docker-content-digest header, which carries the same value).
 
 Credentials are checked (Bearer tokens below) so a script that forgets a
 header fails. Usage: mock_api.py <port file>; prints the port there.
@@ -48,6 +54,9 @@ STATE = {
     # Every POST /v1/pods body's GPU types, in order.
     "pod_creates": [],
 }
+# Every request but the test hooks, in order: {m, p, body} (body: the JSON
+# sent, or null).
+LOG = []
 
 
 def now_str():
@@ -71,9 +80,15 @@ class H(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(data)
 
+    def raw_body(self):
+        # Read once: the log and the route both use it.
+        if not hasattr(self, "_raw"):
+            n = int(self.headers.get("content-length") or 0)
+            self._raw = self.rfile.read(n) if n else b""
+        return self._raw
+
     def body(self):
-        n = int(self.headers.get("content-length") or 0)
-        raw = self.rfile.read(n) if n else b""
+        raw = self.raw_body()
         try:
             return json.loads(raw) if raw else {}
         except ValueError:
@@ -110,6 +125,16 @@ class H(BaseHTTPRequestHandler):
         q = self.path.split("?")[1] if "?" in self.path else ""
         m = self.command
         # --- test hooks
+        if p == "/__log":
+            since = int(q.split("since=")[1]) if "since=" in q else 0
+            return self.reply(200, {"next": len(LOG), "requests": LOG[since:]})
+        if not p.startswith("/__"):
+            raw = self.raw_body()
+            try:
+                logged = json.loads(raw) if raw else None
+            except ValueError:
+                logged = raw.decode("utf-8", "replace")
+            LOG.append({"m": m, "p": self.path, "body": logged})
         if p == "/__state":
             return self.reply(200, STATE)
         if p == "/__seed":
@@ -258,7 +283,8 @@ def image(sha, key):
     cfg_d = "sha256:" + hashlib.sha256(json.dumps(cfg).encode()).hexdigest()
     man = {"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
            "config": {"digest": cfg_d}, "layers": []}
-    man_d = "sha256:" + hashlib.sha256((sha + key).encode()).hexdigest()
+    # The digest of the bytes the registry serves (json.dumps of the stored dict).
+    man_d = "sha256:" + hashlib.sha256(json.dumps(man).encode()).hexdigest()
     return man_d, man, cfg_d, cfg
 
 

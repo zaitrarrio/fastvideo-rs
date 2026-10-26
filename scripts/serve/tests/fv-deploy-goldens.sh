@@ -17,7 +17,14 @@
 # (startup-script, fv-config, the verify scripts and tables) are written as
 # "<file>" and fv-env as the object it encodes, so the fixture does not
 # change with those files; the Rust test checks those items against the
-# files themselves. Needs bash and jq.
+# files themselves.
+#
+# C3d (ADR-0018 §10): `runpod-templates.sh plan` gives the serve templates'
+# create bodies (serve-templates.json); fv-deploy-release-goldens.sh runs
+# release.sh promote / rollback / reconcile, runpod-templates.sh sync and the
+# deployments writes of registry.sh against scripts/serve/tests/mock_api.py
+# and records what they send (release.json). Needs bash and jq; the release
+# goldens also python3 and curl (no network: the mock is local).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -102,10 +109,20 @@ step gcp-instance-items jq '.metadata.items |= map(
 step gcp-instance-json canon "$TMP/i2.json" >"$TMP/gcp-instance.json"
 step gcp-firewall-json canon "$TMP/f.json" >"$TMP/gcp-firewall.json"
 
+# runpod-templates.sh plan: the create bodies of fv-serve-cuda-sls, fv-serve-cuda-pod (the CUDA image) and
+# fv-serve-cpu-pod (the CPU image, a second digest), on the stable channel.
+IMAGE_CPU="ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+FV_RELEASE_CHANNEL=stable step serve-templates-cuda bash "$ROOT/scripts/serve/runpod-templates.sh" plan cuda "$IMAGE" >"$TMP/tc.json"
+FV_RELEASE_CHANNEL=stable step serve-templates-cpu bash "$ROOT/scripts/serve/runpod-templates.sh" plan cpu "$IMAGE_CPU" >>"$TMP/tc.json"
+step serve-templates-json bash -c 'jq -s . "$1" | jq -S "(.. | numbers) |= . + 0"' _ "$TMP/tc.json" >"$TMP/serve-templates.json"
+
+# release.sh / runpod-templates.sh sync / registry.sh against the mock.
+step release bash "$HERE/fv-deploy-release-goldens.sh" "$TMP/release.json"
+
 rc=0
 mkdir -p "$OUT"
 for f in runpod-pod.json runpod-template.json runpod-endpoint.json vast-offers.json vast-create.json \
-  gcp-instance.json gcp-firewall.json; do
+  gcp-instance.json gcp-firewall.json serve-templates.json release.json; do
   if [[ "$CHECK" == 1 ]]; then
     if ! diff -u "$OUT/$f" "$TMP/$f"; then
       echo "fv-deploy-goldens: $f differs from what the script sends (rerun without --check and fix the Rust payload)" >&2

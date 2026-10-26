@@ -1,0 +1,91 @@
+[
+  {
+    "category": "NVIDIA",
+    "containerDiskInGb": 20,
+    "env": {
+      "FV_AUTH_MODE": "trust-gateway",
+      "FV_CACHE_DIR": "/fvstate/cache",
+      "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+      "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+      "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+      "FV_IMAGE_DIGEST": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+      "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+      "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+      "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+      "FV_RELEASE_CHANNEL": "stable",
+      "FV_SERVE_MODE": "runpod-queue",
+      "FV_STATE_DIR": "/fvstate",
+      "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+      "FV_WEIGHTS": "/runpod-volume/weights",
+      "RUST_LOG": "info"
+    },
+    "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "isServerless": true,
+    "name": "fv-serve-cuda-sls",
+    "readme": "fv-serve cuda (sls), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+    "volumeInGb": 0
+  },
+  {
+    "category": "NVIDIA",
+    "containerDiskInGb": 30,
+    "env": {
+      "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+      "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+      "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+      "FV_IMAGE_DIGEST": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+      "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+      "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+      "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+      "FV_RELEASE_CHANNEL": "stable",
+      "FV_SERVE_FORWARD": "1",
+      "FV_SERVE_MODE": "http",
+      "FV_STATE_DIR": "/fvstate",
+      "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+      "FV_WEIGHTS": "/workspace/weights",
+      "RUST_LOG": "info"
+    },
+    "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "isServerless": false,
+    "name": "fv-serve-cuda-pod",
+    "ports": [
+      "8000/http",
+      "70000/tcp"
+    ],
+    "readme": "fv-serve cuda (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+    "volumeInGb": 0,
+    "volumeMountPath": "/workspace"
+  },
+  {
+    "category": "CPU",
+    "containerDiskInGb": 30,
+    "env": {
+      "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+      "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+      "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+      "FV_IMAGE_DIGEST": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+      "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+      "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+      "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+      "FV_RELEASE_CHANNEL": "stable",
+      "FV_SERVE_MODE": "http",
+      "FV_STATE_DIR": "/fvstate",
+      "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+      "RUST_LOG": "info"
+    },
+    "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "isServerless": false,
+    "name": "fv-serve-cpu-pod",
+    "ports": [
+      "8000/http"
+    ],
+    "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
+    "volumeInGb": 0,
+    "volumeMountPath": "/workspace"
+  }
+]
