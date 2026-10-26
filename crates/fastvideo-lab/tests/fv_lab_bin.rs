@@ -105,6 +105,32 @@ fn gold_dry_run_prints_its_r2_plan() {
     }
 }
 
+/// A `volume+r2` run never puts its weights root on the volume (ADR-0019
+/// §14.3): without `--scratch` the scratch disk is the work directory, and a
+/// scratch under the work directory or the volume mount is refused too; exit
+/// 2, before anything is written.
+#[test]
+fn a_volume_r2_root_on_the_volume_is_refused() {
+    for extra in [
+        &["--work", "/tmp/fv-lab-w"][..],
+        &["--work", "/tmp/fv-lab-w", "--scratch", "/tmp/fv-lab-w/s"][..],
+        &["--work", "/tmp/fv-lab-w", "--scratch", "/workspace/s"][..],
+    ] {
+        let o = fv_lab()
+            .args(["run", "gold", "--all", "--dry-run"])
+            .args(extra)
+            .output()
+            .expect("fv-lab runs");
+        assert_eq!(o.status.code(), Some(2), "{extra:?}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains("FATAL") && err.contains("--scratch / FV_SCRATCH"),
+            "{err}"
+        );
+        assert!(o.stdout.is_empty(), "{extra:?}");
+    }
+}
+
 /// The restored modes (ADR-0019 §12) through the binary: each tier's dry run
 /// is the script's in that mode at 5987e6a4, the family named by the tier;
 /// a gen cell of `ltxvae-gen` runs in that tier, a shared cell in `ltxvae`

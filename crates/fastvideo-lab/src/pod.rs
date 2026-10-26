@@ -92,11 +92,40 @@ pub struct StartOptions {
     /// starts, with the pod-scoped key, whatever the host that made it does
     /// (docs/adr/0023-lab-report-and-ci-bridge.md §4).
     pub cap_s: u64,
+    /// `FV_RUN_DEADLINE` (unix seconds) in the pod's env, not the command:
+    /// `pod up` sets it to its create time plus the cap less
+    /// [`RUN_DEADLINE_RESERVE_S`], so the runner ends (and writes `DONE`)
+    /// before the driver stops waiting ([`wait_limit_s`]). `None` in a plan.
+    pub run_deadline: Option<u64>,
+}
+
+/// What the runner's deadline leaves before the cap (s): the driver's
+/// [`FETCH_RESERVE_S`] plus 5 minutes to write `DONE` and be seen.
+pub const RUN_DEADLINE_RESERVE_S: u64 = FETCH_RESERVE_S + 300;
+/// What `pod up --wait` / `pod fetch --wait` keep before the cap to fetch a
+/// run that has not finished (s): the pod deletes itself at the cap.
+pub const FETCH_RESERVE_S: u64 = 900;
+
+/// How long the driver waits for `DONE` (s): until the cap less
+/// [`FETCH_RESERVE_S`], counted from the pod's creation, so a run cut short
+/// is still fetched (and judged failed) while the pod lives.
+pub fn wait_limit_s(cap_s: u64, elapsed_s: f64) -> u64 {
+    (cap_s.saturating_sub(FETCH_RESERVE_S) as f64 - elapsed_s.max(0.0)).max(0.0) as u64
 }
 
 impl StartOptions {
-    /// `runpod-http.sh`'s defaults for a tier.
+    /// `runpod-http.sh`'s defaults for a tier. A `volume+r2` tier's idle
+    /// watchdog waits [`crate::weights::r2_idle_min`] minutes (85 for 3600 s
+    /// cells), both before and after the GPU's first use: an R2 fetch keeps
+    /// the GPU at 0 % (ADR-0019 §14.6).
     pub fn for_tier(tier: &Tier, tag: &str) -> Self {
+        let (idle_min, idle_grace_min) = match tier.weights {
+            TierWeights::Volume => (10, 30),
+            TierWeights::VolumeR2 => {
+                let m = crate::weights::r2_idle_min(tier.cell_timeout_s);
+                (m, m)
+            }
+        };
         Self {
             family: tier.name.clone(),
             tag: tag.to_owned(),
@@ -105,13 +134,14 @@ impl StartOptions {
             extra_env: Vec::new(),
             cells: Vec::new(),
             lpips: false,
-            idle_min: 10,
-            idle_grace_min: 30,
+            idle_min,
+            idle_grace_min,
             idle_net_bytes: 262_144,
             min_driver: 580,
             skip_tae: !tier.tae,
             runner: format!("{FV_LAB_BIN} run"),
             cap_s: tier.wall_cap_s,
+            run_deadline: None,
         }
     }
 
@@ -350,9 +380,15 @@ pub fn launch(tier: &Tier, sha7: &str, start: &StartOptions) -> Result<Launch, P
         args: vec!["/bin/bash".into(), "-c".into(), cmd],
         // A `volume+r2` tier's runner fetches the trees the volume lacks: the
         // R2 key as Runpod secret references, never values (ADR-0019 §14).
-        env: match tier.weights {
-            TierWeights::Volume => Default::default(),
-            TierWeights::VolumeR2 => crate::weights::r2_env_refs(),
+        env: {
+            let mut env = match tier.weights {
+                TierWeights::Volume => std::collections::BTreeMap::new(),
+                TierWeights::VolumeR2 => crate::weights::r2_env_refs(),
+            };
+            if let Some(d) = start.run_deadline {
+                env.insert("FV_RUN_DEADLINE".into(), d.to_string());
+            }
+            env
         },
         ports: vec!["8000/http".into()],
         gpu: GpuSpec {
@@ -1314,10 +1350,23 @@ cells = ["c"]
         let o = StartOptions::for_tier(&t, "abcdef1-10241200");
         let l = launch(&t, "abcdef1", &o).unwrap();
         // The volume is mounted as on a volume tier, and the start command
-        // is the same: the runner fetches the rest.
+        // is the same but for the idle watchdog's limits: an R2 fetch keeps
+        // the GPU at 0 % for up to apt + one fetch cap (85 min at 3600 s).
         assert_eq!(l.weights, fastvideo_deploy::provider::WeightsSource::Volume);
         assert!(l.placement.volume.is_some());
-        assert_eq!(l.args, launch(&tier(), "abcdef1", &o).unwrap().args);
+        assert_eq!((o.idle_min, o.idle_grace_min), (85, 85));
+        let v = tier();
+        let vo = StartOptions::for_tier(&v, "abcdef1-10241200");
+        assert_eq!((vo.idle_min, vo.idle_grace_min), (10, 30));
+        let vl = launch(&v, "abcdef1", &vo).unwrap();
+        assert_eq!(
+            l.args[2].replace(
+                "lim=85; [ \"$used\" = 1 ] && lim=85",
+                "lim=30; [ \"$used\" = 1 ] && lim=10"
+            ),
+            vl.args[2]
+        );
+        assert!(vl.env.is_empty());
         assert_eq!(
             l.env.keys().map(String::as_str).collect::<Vec<_>>(),
             [
@@ -1330,6 +1379,33 @@ cells = ["c"]
             .values()
             .all(|v| v.starts_with("{{ RUNPOD_SECRET_fv_r2_") && v.ends_with(" }}")));
         assert_eq!(guard::check_env(&l, |s| s.contains("rpa_key")), Ok(()));
+        // `pod up` adds the run's deadline (any tier), a plain number.
+        let mut o = o;
+        o.run_deadline = Some(1_900_000_000);
+        let l = launch(&t, "abcdef1", &o).unwrap();
+        assert_eq!(l.env["FV_RUN_DEADLINE"], "1900000000");
+        let vo = StartOptions {
+            run_deadline: Some(5),
+            ..vo
+        };
+        assert_eq!(
+            launch(&v, "abcdef1", &vo)
+                .unwrap()
+                .env
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [("FV_RUN_DEADLINE".to_owned(), "5".to_owned())]
+        );
+    }
+
+    #[test]
+    fn the_driver_stops_waiting_in_time_to_fetch_and_the_runner_before_it() {
+        assert_eq!(wait_limit_s(14_400, 0.0), 13_500);
+        assert_eq!(wait_limit_s(14_400, 600.0), 12_900);
+        assert_eq!(wait_limit_s(14_400, 20_000.0), 0);
+        assert_eq!(wait_limit_s(600, 0.0), 0);
+        // The runner's deadline is 5 minutes before the driver gives up.
+        assert_eq!(RUN_DEADLINE_RESERVE_S, FETCH_RESERVE_S + 300);
     }
 
     #[test]

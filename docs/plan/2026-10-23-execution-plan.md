@@ -1357,3 +1357,8 @@ ran (pod id, $/hr), result, cost.
   it with a 300 GB container disk; every other tier's goldens unchanged. Gates on build pods
   `8gg7uz30x3nesu`, then `dbf6gok3crgj9x` (the coordinator's switch). No GPU, no R2 or volume
   write; the full gold run is the coordinator's (ADR-0019 §14.7).
+- 2026-10-26, Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ): #201 review fixes on
+  `claude/lab-r2-weights` (ADR-0019 §14.9): the merged weights root refused on or above the volume
+  (exit 2), an 85 min idle limit for `volume+r2` pods, a run deadline in the pod's env and the
+  driver's 15 min fetch reserve, `r2-weights.py plan --pin`, partial-fetch clean-up, `python3` in the
+  runtime image. Build pod `dbf6gok3crgj9x`. No GPU, no R2 or volume write.

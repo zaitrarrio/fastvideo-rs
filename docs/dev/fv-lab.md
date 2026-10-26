@@ -371,10 +371,18 @@ tree from the R2 weights store onto the container disk, right before the first a
 - `{weights}` is `/fvscratch/weights`: a symlink per volume tree into `/workspace/weights`, the fetched trees beside
   them. The volume is never written.
 - Per arm, when a tree it reads is not on the disk yet: the fetched trees it does not read are removed, then
-  `r2-weights.py plan <dest>@<rev>` (the revisions of `scripts/gpu/weights-r2.tsv`) and `r2-fetch.py` fetch the missing
-  ones under the arm's cap. Logs: `<arm>/r2-fetch.log`, `<arm>/r2-fetch.json`, the `r2 <arm>: …` lines of `live.log`; the
-  first fetch installs `python3` with apt (`r2-apt.log`), which the runtime image lacks.
+  `r2-weights.py plan <dest>@<rev> --pin weights-r2.tsv` (the revisions and manifest SHA-256s of
+  `scripts/gpu/weights-r2.tsv`) and `r2-fetch.py` fetch the missing ones under the arm's cap. Logs: `<arm>/r2-fetch.log`,
+  `<arm>/r2-fetch.json`, the `r2 <arm>: …` lines of `live.log`. The runtime image carries `python3`; an older one gets
+  it with apt at the first fetch (`r2-apt.log`).
 - A failed fetch records the arm as skipped (`r2 fetch failed`); a tree in neither place as `weights incomplete`.
+- The root is never on the volume: run by hand, pass `--scratch` (or `FV_SCRATCH`) on the container disk, e.g.
+  `fv-lab run gold --all --work /workspace --scratch /fvscratch`; without it (the scratch disk is then the work
+  directory), or with a scratch under `/workspace`, the run is refused (exit 2).
+- The idle watchdog of a `volume+r2` pod waits 85 minutes at 0 % GPU (a fetch uses none), not 10.
+- Any pod's run gets `FV_RUN_DEADLINE` from `pod up` (the cap less 20 min): arms that could not finish by then are
+  skipped as `wall cap near`, so `DONE` is written, and `pod up --wait` stops waiting 15 min before the cap and
+  fetches what is there.
 - The R2 key is two Runpod secret references in the pod's env (`fv_r2_access_key_id`, `fv_r2_secret_access_key`, filled
   in by Runpod); `fv-lab run` gives it to the plan step only. Nothing to set locally.
 - `fv-lab run gold --all --dry-run …` prints the plan: one `dry-run weights …` line (18 trees, 530.74 GB, at most

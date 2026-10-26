@@ -180,7 +180,7 @@ case "$1" in
     shift; [ "$1" = plan ] || exit 2; shift
     out=""; specs=""
     while [ $# -gt 0 ]; do
-      case "$1" in --ttl) shift ;; --out) out="$2"; shift ;; *) specs="$specs $1" ;; esac
+      case "$1" in --ttl|--pin) shift ;; --out) out="$2"; shift ;; *) specs="$specs $1" ;; esac
       shift
     done
     for s in $specs; do echo "$s"; done > "$out"
@@ -188,15 +188,18 @@ case "$1" in
   */r2-fetch.py)
     shift; root=""; plan=""; status=""
     while [ $# -gt 0 ]; do
-      case "$1" in --root) root="$2"; shift ;; --plan) plan="$2"; shift ;; --status) status="$2"; shift ;; esac
+      case "$1" in --root) root="$2"; shift ;; --plan) plan="$2"; shift ;; --status) status="$2"; shift ;; --skip-trees) [ -z "$2" ] || exit 9; shift ;; esac
       shift
     done
     echo '{{"state":"done"}}' > "$status"
     while read -r s; do
       d="${{s%@*}}"; r="${{s#*@}}"
-      if [ "$d" = bad ]; then mkdir -p "$root/.r2-partial/bad@x"; echo "r2-fetch: FAILED: part 0 of bad"; exit 1; fi
+      [ "$d" = bad ] && continue
       mkdir -p "$root/$d/sub"; : > "$root/$d/.complete"; echo "$r" > "$root/$d/.fv-revision"; : > "$root/$d/sub/file.safetensors"
     done < "$plan"
+    if grep -q '^bad@' "$plan"; then
+      mkdir -p "$root/.r2-partial/bad@x" "$root/bad/sub"; echo "r2-fetch: FAILED: part 0 of bad"; exit 1
+    fi
     echo "weights ready: $(wc -l < "$plan") tree(s), 1.00 GB fetched in 1.0s (1000 MB/s); retries 0" >&2 ;;
 esac
 "#,
@@ -207,7 +210,7 @@ esac
     script(
         &f.dir.join("bin/apt-get"),
         &format!(
-            "echo \"apt-get $*\" >> {}\n[ \"$5\" = install ] && rm -f {}\nexit 0\n",
+            "echo \"apt-get $*\" >> {}\ncase \" $* \" in *\" install \"*) rm -f {} ;; esac\nexit 0\n",
             rec.display(),
             gate.display()
         ),
@@ -309,11 +312,13 @@ fn volume_trees_are_linked_r2_trees_fetched_per_arm_and_the_key_reaches_the_plan
     assert!(lines[0].starts_with("-c key=none"), "{calls}");
     assert!(lines[1].starts_with(&format!("r2-weights.py key={KEY_ID} secret={KEY_SECRET} ")));
     assert!(
-        lines[1].contains(" plan big@rev1 --ttl 677 --out "),
+        lines[1].contains(" plan big@rev1 --pin ")
+            && lines[1].contains("/root/scripts/gpu/weights-r2.tsv --ttl 677 --out "),
         "{calls}"
     );
     assert!(
-        lines[2].starts_with("r2-fetch.py key=none secret=none "),
+        lines[2].starts_with("r2-fetch.py key=none secret=none ")
+            && lines[2].contains(" --skip-trees  --status "),
         "{calls}"
     );
     assert!(lines[3].contains(" plan small@rev2 "), "{calls}");
@@ -422,6 +427,85 @@ fn an_r2_tree_holding_a_volume_tree_is_fatal_before_any_arm() {
     assert!(!f.dir.join("scratch/runs/fam/t1/vol").exists());
 }
 
+#[test]
+fn a_partly_failed_fetch_keeps_the_complete_trees_and_removes_the_rest() {
+    let f = fake("partial");
+    let cell = CellFile::parse(
+        r#"
+schema = 1
+name = "p"
+description = "one good tree, one bad"
+
+[workload]
+model = "engine"
+
+[[arm]]
+name = "both"
+gate = "small:bad"
+trees = ["small", "bad"]
+argv = ["gen"]
+
+[[arm]]
+name = "small-only"
+gate = "small"
+trees = ["small"]
+argv = ["gen"]
+"#,
+        "p.toml",
+    )
+    .unwrap();
+    let cfg = config(&f, setup(&f, key()));
+    let root = cfg.weights();
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    let mut r = Runner::new(cfg);
+    r.run(&steps).unwrap();
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    assert!(read(&runs.join("both/summary.json")).contains("r2 fetch failed"));
+    // `small` came whole before `bad` failed: it stays, and the next arm
+    // reads it without a fetch; `bad` and the staging are gone.
+    assert!(root.join("small/.complete").is_file());
+    assert!(!root.join("bad").exists() && !root.join(".r2-partial").exists());
+    assert!(read(&runs.join("small-only/summary.json")).contains("\"exit\":0,"));
+    assert_eq!(
+        read(&f.dir.join("python.log"))
+            .matches("r2-fetch.py key=")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn near_the_deadline_arms_are_skipped_or_capped_and_the_run_ends() {
+    let f = fake("deadline");
+    let cell = CellFile::parse(CELL, "c.toml").unwrap();
+    let mut cfg = config(&f, setup(&f, key()));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    // An arm's cap is the time left when the tier has none, else the smaller
+    // of the two; with less than MIN_ARM_S left every arm is skipped.
+    cfg.cell_timeout_s = 0;
+    cfg.deadline = Some(now + 700.0);
+    assert!((690..=700).contains(&cfg.arm_cap_s()));
+    cfg.cell_timeout_s = 77;
+    assert_eq!(cfg.arm_cap_s(), 77);
+    cfg.deadline = Some(now + 300.0);
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    let mut r = Runner::new(cfg);
+    r.run(&steps).unwrap();
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    for a in ["vol", "one", "again", "two", "broken", "nowhere"] {
+        assert_eq!(
+            read(&runs.join(a).join("summary.json")),
+            format!("{{\"cell\":\"{a}\",\"family\":\"fam\",\"exit\":null,\"skipped\":\"wall cap near\"}}\n")
+        );
+    }
+    assert!(read(&runs.join("live.log")).contains("SKIP one: wall cap near ("));
+    assert!(runs.join("done.json").is_file(), "the run still ends");
+    assert!(!f.dir.join("python.log").exists(), "nothing fetched");
+}
+
 // --------------------------------------------------------------- fake R2
 
 /// The fake R2 with one published tree: `fake_r2.serve()` and the real
@@ -432,6 +516,8 @@ struct FakeR2 {
     child: std::process::Child,
     base: String,
     bytes: u64,
+    /// The manifest's SHA-256 (what weights-r2.tsv pins).
+    sha: String,
 }
 
 impl Drop for FakeR2 {
@@ -452,7 +538,7 @@ fn fake_r2(src: &Path) -> FakeR2 {
     let gpu = repo().join("scripts/gpu");
     let driver = format!(
         r#"
-import importlib.util, os, sys
+import hashlib, importlib.util, os, sys
 sys.path.insert(0, {tests:?})
 import fake_r2
 spec = importlib.util.spec_from_file_location("r2_weights", {w:?})
@@ -465,7 +551,7 @@ pub = W.Publisher(s3, args)
 pub.part_size = 64 << 10
 pub.publish("demo", "r1", {{"kind": "dir", "path": {src:?}}}, W.dir_sources("demo", {src:?}))
 m = W.load_manifest(s3, "", "demo", "r1")
-print(base, m["total_bytes"], flush=True)
+print(base, m["total_bytes"], hashlib.sha256(s3.get(W.manifest_key("", "demo", "r1"))).hexdigest(), flush=True)
 sys.stdin.read()
 "#,
         tests = gpu.join("tests").display().to_string(),
@@ -486,7 +572,13 @@ sys.stdin.read()
     let mut w = line.split_whitespace();
     let base = w.next().expect("endpoint").to_owned();
     let bytes = w.next().and_then(|b| b.parse().ok()).expect("bytes");
-    FakeR2 { child, base, bytes }
+    let sha = w.next().expect("manifest sha256").to_owned();
+    FakeR2 {
+        child,
+        base,
+        bytes,
+        sha,
+    }
 }
 
 #[test]
@@ -525,7 +617,9 @@ fn a_tree_published_in_a_fake_r2_is_planned_fetched_and_read_by_its_arm() {
             r2.base
         ),
     );
-    let table = format!("demo\tr1\t3\t{}\tsha\tdir\n", r2.bytes);
+    // The table the trees are chosen from, and the one `plan --pin` checks.
+    let table = format!("demo\tr1\t3\t{}\t{}\tdir\n", r2.bytes, r2.sha);
+    std::fs::write(gpu.join("weights-r2.tsv"), &table).unwrap();
     let mut setup = R2Setup::new(
         TreeSources {
             volume: vec!["w".into()],
@@ -582,4 +676,24 @@ argv = ["gen", "--weights-root", "{weights}"]
     );
     assert!(!f.dir.join("scratch/r2/plan.json").exists());
     assert!(read(&runs.join("live.log")).contains("r2 demo-arm: weights ready"));
+
+    // A manifest the table does not pin is refused before any GET of the tree.
+    std::fs::remove_dir_all(&tree).unwrap();
+    std::fs::write(
+        gpu.join("weights-r2.tsv"),
+        format!("demo\tr1\t3\t{}\t{}\tdir\n", r2.bytes, "0".repeat(64)),
+    )
+    .unwrap();
+    let mut cfg = config(&f, r.cfg.r2.clone().unwrap());
+    cfg.tag = Some("t2".into());
+    let mut r = Runner::new(cfg);
+    r.run(&steps).unwrap();
+    let runs = f.dir.join("scratch/runs/fam/t2");
+    assert!(read(&runs.join("demo-arm/summary.json")).contains("\"skipped\":\"r2 fetch failed\""));
+    assert!(
+        read(&runs.join("live.log")).contains("manifest sha256"),
+        "{}",
+        read(&runs.join("live.log"))
+    );
+    assert!(!tree.exists());
 }

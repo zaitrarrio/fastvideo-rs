@@ -944,11 +944,33 @@ def cmd_record(s3, args):
             print("\t".join([dest, rev, str(len(m["files"])), str(m["total_bytes"]), hashlib.sha256(raw).hexdigest(), m["source"].get("kind", "?")]))
 
 
+def pinned_manifests(path):
+    """(dest, rev) -> manifest SHA-256 of a weights-r2.tsv (column 5), for `plan --pin`."""
+    pins = {}
+    for n, line in enumerate(Path(path).read_text().splitlines(), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        f = line.split("\t")
+        if len(f) < 5 or not re.fullmatch(r"[0-9a-f]{64}", f[4]):
+            raise Fail(f"{path}:{n}: not dest<TAB>rev<TAB>files<TAB>bytes<TAB>manifest sha256")
+        pins[(f[0], f[1])] = f[4]
+    return pins
+
+
 def cmd_plan(s3, args):
+    pins = pinned_manifests(args.pin) if args.pin else None
     trees = []
     for d in args.dests:
         dest, _, rev = d.partition("@")
         m = load_manifest(s3, args.prefix, dest, rev or None)
+        if pins is not None:
+            # As fv-control's r2Manifest: the manifest's bytes are the ones the record pins.
+            want = pins.get((dest, m["rev"]))
+            if want is None:
+                raise Fail(f"{dest}@{m['rev']}: not in {args.pin} (--pin)")
+            got = hashlib.sha256(s3.get(manifest_key(args.prefix, dest, m["rev"])) or b"").hexdigest()
+            if got != want:
+                raise Fail(f"{dest}@{m['rev']}: manifest sha256 {got[:16]}… is not {want[:16]}… ({args.pin})")
         files = [dict(f, url=presign(s3.endpoint, s3.bucket, obj_key(args.prefix, dest, m["rev"], f["path"]), s3.access, s3.secret, args.ttl)) for f in m["files"]]
         trees.append({"dest": dest, "rev": m["rev"], "part_size": m["part_size"], "total_bytes": m["total_bytes"], "files": files})
     plan = {"format": r2_fetch.PLAN_FORMAT, "expires_at": int(time.time() + args.ttl), "trees": trees}
@@ -1161,6 +1183,7 @@ def main(argv=None):
     p.add_argument("--workers", type=int, default=24, help="parts read and hashed at once")
     p = sub.add_parser("plan")
     p.add_argument("dests", nargs="+", help="dest or dest@rev")
+    p.add_argument("--pin", default="", help="a weights-r2.tsv: refuse a manifest whose SHA-256 is not the one recorded there (column 5)")
     p.add_argument("--ttl", type=int, default=3600)
     p.add_argument("--out", default="")
     p = sub.add_parser("archive", help="copy a directory as-is under archive/<label>/<name>/ (no manifest, no preset wiring)")

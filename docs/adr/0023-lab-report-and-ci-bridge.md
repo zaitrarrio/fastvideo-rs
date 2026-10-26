@@ -131,7 +131,8 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family gold --yes --wait        
 Estimate on the RTX PRO 6000 at about $2.49/hr: boot 5-10 min, R2 11-15 min, 32 cold arms 64-160 min, so about
 1.5-3.1 h and $3.70-$7.70; at most $9.96 at the 4 h cap; a balance of at least $17.96 before the create (fv-deploy's $8
 floor over the cap). The R2 key reaches the pod as Runpod secret references (`fv_r2_access_key_id`,
-`fv_r2_secret_access_key`); nothing new in GitHub.
+`fv_r2_secret_access_key`); nothing new in GitHub. A run near the cap skips its remaining arms (`wall cap near`), and the
+driver fetches what is there 15 min before the cap (ADR-0019 §14.7), so even an overlong run leaves its record.
 
 ### 4. CI
 

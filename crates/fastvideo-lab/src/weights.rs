@@ -28,6 +28,31 @@ use fastvideo_manifest::family::tree_covers;
 
 /// The published trees (`dest`, `rev`, files, bytes, manifest SHA-256, source).
 pub const R2_TABLE: &str = "scripts/gpu/weights-r2.tsv";
+/// Its file name, beside the R2 tools (`r2-weights.py plan --pin`).
+pub const R2_TABLE_NAME: &str = "weights-r2.tsv";
+/// What the R2 tools import beyond the core (`python3 -c`): a `python3` that
+/// runs this runs them.
+pub const PYTHON_CHECK: &str = "import concurrent.futures, hashlib, hmac, http.client, json, ssl, urllib.request, xml.etree.ElementTree";
+
+/// One fetch's cap (s): the tier's `cell_timeout_s`, 3600 when it is 0.
+pub fn fetch_cap_s(cell_timeout_s: u64) -> u64 {
+    if cell_timeout_s == 0 {
+        3600
+    } else {
+        cell_timeout_s
+    }
+}
+
+/// The idle watchdog's limit (min) for a `volume+r2` pod: the longest the
+/// runner keeps the GPU idle on its own, a fallback `apt-get` (10 min) then
+/// one fetch at its cap, plus 15 min; never under the volume tiers' 10 / 30.
+/// The watchdog counts minutes at 0 % GPU, and an R2 fetch uses none.
+pub fn r2_idle_min(cell_timeout_s: u64) -> u32 {
+    let s = crate::run::APT_CAP_S + fetch_cap_s(cell_timeout_s);
+    u32::try_from(s.div_ceil(60) + 15)
+        .unwrap_or(u32::MAX)
+        .max(30)
+}
 /// `FV_EU_VOLUME_TREES`: the trees on the EU volume.
 pub const VOLUMES_SH: &str = "scripts/gpu/volumes.sh";
 /// The merged weight root under the scratch disk (`{weights}`).
@@ -112,6 +137,50 @@ impl R2Tree {
     }
 }
 
+/// A tree name as both lists must spell it: relative, no empty, `.` or `..`
+/// component, letters, digits and `._-/` only (it becomes a path under the
+/// merged root and an argument of the R2 tools).
+pub fn safe_tree(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('/')
+        && s.split('/').all(|p| !p.is_empty() && p != ".." && p != ".")
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
+}
+
+/// Where the EU volume is mounted on a pod (`fastvideo_deploy::launch::POD_VOLUME_MOUNT`).
+pub const VOLUME_MOUNT: &str = fastvideo_deploy::launch::POD_VOLUME_MOUNT;
+
+/// The merged root, and so every write and removal of a `volume+r2` run,
+/// stays off the volume (CLAUDE.md: the volume is add-only, never written
+/// here): `scratch` is not `work`, and the root (resolved through symlinks)
+/// is neither inside nor above `work` or the volume mount. Checked when the
+/// run starts and again before every fetch and removal.
+pub fn check_off_volume(scratch: &Path, root: &Path, work: &Path) -> Result<(), String> {
+    let (s, r, w) = (
+        crate::run::resolved(scratch),
+        crate::run::resolved(root),
+        crate::run::resolved(work),
+    );
+    let vol = crate::run::resolved(Path::new(VOLUME_MOUNT));
+    if s == w {
+        return Err(format!(
+            "the scratch disk {} is the volume's work directory: a volume+r2 run writes its weights on the container disk (--scratch / FV_SCRATCH, e.g. /fvscratch)",
+            s.display()
+        ));
+    }
+    for (what, v) in [("the work directory", &w), ("the volume mount", &vol)] {
+        if r.starts_with(v) || v.starts_with(&r) {
+            return Err(format!(
+                "the weights root {} is {what} {} or holds it: a volume+r2 run never writes or removes there (--scratch / FV_SCRATCH on the container disk)",
+                r.display(),
+                v.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Bytes as `r2-weights.py` prints them: decimal GB, two places.
 pub fn gb(bytes: u64) -> String {
     format!("{:.2} GB", bytes as f64 / 1e9)
@@ -135,14 +204,7 @@ pub fn parse_r2_table(text: &str) -> Result<BTreeMap<String, R2Tree>, String> {
         let bytes: u64 = bytes
             .parse()
             .map_err(|_| format!("{R2_TABLE}:{}: bytes `{bytes}`", i + 1))?;
-        let ok = |s: &str| {
-            !s.is_empty()
-                && !s.starts_with('/')
-                && s.split('/').all(|p| !p.is_empty() && p != "..")
-                && s.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
-        };
-        if !ok(dest) || !ok(rev) || rev.contains('/') {
+        if !safe_tree(dest) || !safe_tree(rev) || rev.contains('/') {
             return Err(format!("{R2_TABLE}:{}: `{dest}` `{rev}`", i + 1));
         }
         let t = R2Tree {
@@ -186,6 +248,11 @@ impl TreeSources {
         if volume.is_empty() {
             return Err(format!("{VOLUMES_SH}: no FV_EU_VOLUME_TREES"));
         }
+        if let Some(v) = volume.iter().find(|v| !safe_tree(v)) {
+            return Err(format!(
+                "{VOLUMES_SH}: FV_EU_VOLUME_TREES holds `{v}`, not a tree name"
+            ));
+        }
         Ok(TreeSources {
             volume,
             r2: parse_r2_table(&read(R2_TABLE)?)?,
@@ -193,7 +260,11 @@ impl TreeSources {
     }
 
     /// The source of one tree: the volume first (what it holds is never
-    /// fetched), then R2.
+    /// fetched), then R2. A tree under a volume tree is the volume's even when
+    /// the volume list does not name it and R2 publishes it on its own
+    /// (`ltx25/text_encoder_fp8` under `ltx25`): it is read through the
+    /// volume's symlink, and its gate skips the arm when the volume lacks it.
+    /// Fetching it would write through that symlink into the volume.
     pub fn source(&self, tree: &str) -> Source<'_> {
         if let Some(v) = self.volume.iter().find(|v| tree_covers(v, tree)) {
             return Source::Volume(v);
@@ -413,6 +484,54 @@ mod tests {
     }
 
     #[test]
+    fn a_tree_under_a_volume_tree_is_the_volumes_even_when_r2_publishes_it() {
+        let s = TreeSources {
+            volume: vec!["ltx25".into(), "h3-base/text_encoder_fp8".into()],
+            r2: parse_r2_table("ltx25\tr\t1\t9\ts\th\nltx25/text_encoder_fp8\teu\t1\t9\ts\td\n")
+                .unwrap(),
+        };
+        assert_eq!(s.source("ltx25/text_encoder_fp8"), Source::Volume("ltx25"));
+        assert!(s
+            .arm_r2("x", &v(&["ltx25", "ltx25/text_encoder_fp8"]))
+            .unwrap()
+            .is_empty());
+        assert_eq!(s.link_roots(), ["h3-base/text_encoder_fp8", "ltx25"]);
+    }
+
+    #[test]
+    fn tree_names_are_checked() {
+        for ok in ["h3-base", "auxiliary/tae", "a.b_c-d/e"] {
+            assert!(safe_tree(ok), "{ok}");
+        }
+        for bad in [
+            "", "/abs", "a/../b", "a//b", "./a", "a b", "a$b", "..", "a/",
+        ] {
+            assert!(!safe_tree(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_merged_root_stays_off_the_volume() {
+        let p = Path::new;
+        assert!(
+            check_off_volume(p("/fvscratch"), p("/fvscratch/weights"), p("/workspace")).is_ok()
+        );
+        // `--work X` without `--scratch`: the scratch disk defaults to the work directory.
+        let e = check_off_volume(p("/x/w"), p("/x/w/weights"), p("/x/w")).unwrap_err();
+        assert!(e.contains("is the volume's work directory"), "{e}");
+        for (scratch, work) in [("/x/w/s", "/x/w"), ("/workspace/s", "/x/w")] {
+            let root = Path::new(scratch).join(WEIGHTS_DIR);
+            let e = check_off_volume(p(scratch), &root, p(work)).unwrap_err();
+            assert!(
+                e.contains("never writes or removes there"),
+                "{scratch} {work}: {e}"
+            );
+        }
+        assert!(check_off_volume(p("/"), p("/weights"), p("/x/w")).is_ok());
+        assert!(check_off_volume(p("/"), p("/"), p("/x/w")).is_err());
+    }
+
+    #[test]
     fn an_r2_tree_may_not_hold_a_volume_tree_or_come_without_its_parent() {
         let mut s = sources();
         s.r2.insert(
@@ -518,5 +637,9 @@ mod tests {
         );
         assert!(refs.values().all(|v| v.starts_with("{{ RUNPOD_SECRET_")));
         assert_eq!(gb(147_857_050_891), "147.86 GB");
+        assert_eq!(fetch_cap_s(0), 3600);
+        assert_eq!(r2_idle_min(3600), 85);
+        assert_eq!(r2_idle_min(0), 85);
+        assert_eq!(r2_idle_min(60), 30);
     }
 }

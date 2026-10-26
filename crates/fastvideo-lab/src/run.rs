@@ -115,7 +115,20 @@ pub struct RunConfig {
     /// merged root on the scratch disk, and the trees the volume lacks are
     /// fetched from R2 before the arms that read them. `None`: the volume.
     pub r2: Option<R2Setup>,
+    /// `FV_RUN_DEADLINE` (unix seconds): the run must have ended by then (the
+    /// pod's wall cap less what the driver needs to fetch it, set by `pod
+    /// up`). An arm that could not finish in the time left is skipped
+    /// (`wall cap near`); the others run under the time left.
+    pub deadline: Option<f64>,
 }
+
+/// The least time an arm gets before the deadline (s): less, and it is skipped.
+pub const MIN_ARM_S: f64 = 600.0;
+/// The fetch rate the deadline assumes (bytes/s): well under the 0.61-0.79
+/// GB/s two R2-mode pods measured (docs/serve/e2e/h3-test-round-2026-10-14.md).
+pub const R2_RATE_FLOOR: f64 = 250e6;
+/// The fallback `apt-get` (python3 when the image lacks it) runs under this cap (s).
+pub const APT_CAP_S: u64 = 600;
 
 impl RunConfig {
     pub fn new(family: &str, root: &Path) -> Self {
@@ -138,6 +151,7 @@ impl RunConfig {
             aux_dir: None,
             tae_dir: None,
             r2: None,
+            deadline: None,
         }
     }
 
@@ -151,11 +165,39 @@ impl RunConfig {
     /// `$TAE`: `FV_TAE_DIR`; else the volume's `<aux>/tae` when its
     /// `.complete` marker exists; else `<scratch>/tae` (where the pod's start
     /// command fetches the files).
+    /// A `volume+r2` run reads the marker on the volume itself: the merged
+    /// root's link to it is made when the run starts, after the command
+    /// lines are rendered, and the volume arms read the volume's
+    /// `auxiliary/tae` through it (ADR-0019 §14.3).
     pub fn tae(&self) -> PathBuf {
+        let marker = match (&self.r2, &self.aux_dir) {
+            (Some(_), None) => self.volume_weights().join("auxiliary/tae/.complete"),
+            _ => self.aux().join("tae/.complete"),
+        };
         match &self.tae_dir {
             Some(d) => d.clone(),
-            None if self.aux().join("tae/.complete").is_file() => self.aux().join("tae"),
+            None if marker.is_file() => self.aux().join("tae"),
             None => self.scratch.join("tae"),
+        }
+    }
+
+    /// The time left before [`RunConfig::deadline`] (s), if there is one.
+    pub fn time_left(&self) -> Option<f64> {
+        self.deadline.map(|d| d - now_unix())
+    }
+
+    /// An arm's cap: the tier's `cell_timeout_s` (0: none), never past the deadline.
+    pub fn arm_cap_s(&self) -> u64 {
+        match self.time_left() {
+            None => self.cell_timeout_s,
+            Some(left) => {
+                let left = left.max(1.0) as u64;
+                if self.cell_timeout_s == 0 {
+                    left
+                } else {
+                    self.cell_timeout_s.min(left)
+                }
+            }
         }
     }
 
@@ -581,8 +623,8 @@ pub struct Runner {
     outcomes: Vec<Outcome>,
     /// A `volume+r2` run: the trees fetched so far and still on the disk.
     held: BTreeSet<R2Tree>,
-    /// Whether `python3` runs (checked, and installed, at the first fetch).
-    python_ok: Option<bool>,
+    /// `python3` ran (checked, and installed, at a fetch; a failure is not kept).
+    python_ok: bool,
 }
 
 impl Runner {
@@ -599,7 +641,7 @@ impl Runner {
             offline: false,
             outcomes: Vec::new(),
             held: BTreeSet::new(),
-            python_ok: None,
+            python_ok: false,
         }
     }
 
@@ -683,6 +725,10 @@ impl Runner {
             libs.clone(),
         ] {
             fs::create_dir_all(&d).map_err(io(&d))?;
+        }
+        // Before anything reads `<weights>/auxiliary` (FV_AUX_DIR, LPIPS).
+        if self.cfg.r2.is_some() {
+            self.link_volume()?;
         }
         let pins_path = self.cfg.scripts().join("cuda-13.pins");
         let pins = read_pins(&fs::read_to_string(&pins_path).unwrap_or_default());
@@ -828,10 +874,15 @@ impl Runner {
                 }
             }
         }
-        if self.cfg.r2.is_some() {
-            self.link_volume()?;
-        }
         Ok(())
+    }
+
+    /// The merged root is off the volume ([`weights::check_off_volume`]).
+    fn r2_guard(&self) -> Result<(), String> {
+        match &self.cfg.r2 {
+            Some(r) => weights::check_off_volume(&self.cfg.scratch, &r.root, &self.cfg.work),
+            None => Ok(()),
+        }
     }
 
     /// A `volume+r2` run's merged root (`<scratch>/weights`): one symlink per
@@ -841,6 +892,12 @@ impl Runner {
         let Some(r) = &self.cfg.r2 else {
             return Ok(());
         };
+        if let Err(e) = self.r2_guard() {
+            self.log(&format!("FATAL: {e}"));
+            return Err(RunError::Fatal(e));
+        }
+        // A plan an interrupted run left (presigned URLs) goes first.
+        let _ = fs::remove_file(self.cfg.scratch.join(R2_STATE_DIR).join("plan.json"));
         fs::create_dir_all(&r.root).map_err(io(&r.root))?;
         for t in r.sources.link_roots() {
             let link = r.root.join(t);
@@ -1329,6 +1386,12 @@ impl Runner {
             self.log(&format!("skip {name} (not in FV_CELLS)"));
             return;
         }
+        if let Some(why) = self.deadline_skip(trees) {
+            let _ = fs::create_dir_all(self.runs.join(name));
+            self.log(&format!("SKIP {name}: wall cap near ({why})"));
+            self.skipped(name, "wall cap near");
+            return;
+        }
         if self.cfg.r2.is_some() {
             if let Err(why) = self.stage_r2(name, trees) {
                 let _ = fs::create_dir_all(self.runs.join(name));
@@ -1374,10 +1437,11 @@ impl Runner {
         let Some(r) = self.cfg.r2.clone() else {
             return Ok(());
         };
+        self.r2_guard()?;
         let need = r.sources.arm_r2(name, trees)?;
         let st = weights::step(&self.held, &need);
         for t in &st.drop {
-            remove_fetched(&r.root, &t.dest)?;
+            remove_fetched(&self.cfg, &r.root, &t.dest)?;
             self.held.remove(t);
             self.log(&format!("r2 {name}: drop {} ({})", t.dest, gb(t.bytes)));
         }
@@ -1399,12 +1463,12 @@ impl Runner {
                 R2_KEY_ENV[0].0, R2_KEY_ENV[1].0
             )
         })?;
-        self.ensure_python(&r)?;
         let dir = self.runs.join(name);
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let state = self.cfg.scratch.join(R2_STATE_DIR);
         fs::create_dir_all(&state).map_err(|e| format!("{}: {e}", state.display()))?;
         let _ = fs::set_permissions(&state, fs::Permissions::from_mode(0o700));
+        self.ensure_python(&r, &state)?;
         let plan = state.join("plan.json");
         let _ = fs::remove_file(&plan);
         let log = dir.join("r2-fetch.log");
@@ -1416,17 +1480,20 @@ impl Runner {
             gb(bytes),
             r.root.display()
         ));
-        let cap = if self.cfg.cell_timeout_s == 0 {
-            3600
-        } else {
-            self.cfg.cell_timeout_s
-        };
+        let mut cap = weights::fetch_cap_s(self.cfg.cell_timeout_s);
+        if let Some(left) = self.cfg.time_left() {
+            cap = cap.min((left - MIN_ARM_S).max(1.0) as u64);
+        }
         let out = |l: &Path| append(l).map_err(|e| e.to_string());
+        // `--pin`: each manifest's SHA-256 is the one weights-r2.tsv records
+        // (the table the trees were chosen from), as fv-control checks it.
         let planned = self
             .cmd(&r.python)
             .arg(self.cfg.scripts().join("r2-weights.py"))
             .arg("plan")
             .args(&specs)
+            .arg("--pin")
+            .arg(self.cfg.scripts().join(weights::R2_TABLE_NAME))
             .arg("--ttl")
             .arg((cap + 600).to_string())
             .arg("--out")
@@ -1440,8 +1507,11 @@ impl Runner {
             let _ = fs::remove_file(&plan);
             return Err(format!("r2-weights.py plan: {}", last_line(&log)));
         }
+        self.r2_guard()?;
+        // Every tree of the plan: no FV_R2_SKIP_TREES from the pod's env.
         let fetched = self
             .cmd(&self.cfg.timeout)
+            .env_remove("FV_R2_SKIP_TREES")
             .args(["--signal=TERM", "--kill-after=15", &cap.to_string()])
             .arg(&r.python)
             .arg(self.cfg.scripts().join("r2-fetch.py"))
@@ -1449,6 +1519,8 @@ impl Runner {
             .arg(&r.root)
             .arg("--plan")
             .arg(&plan)
+            .arg("--skip-trees")
+            .arg("")
             .arg("--status")
             .arg(dir.join("r2-fetch.json"))
             .current_dir(&state)
@@ -1458,8 +1530,17 @@ impl Runner {
             .is_ok_and(|s| s.success());
         let _ = fs::remove_file(&plan);
         if !fetched {
-            // The staging of a fetch that did not finish frees its space for
-            // the next arm (the volume's links are never touched).
+            // A tree the fetch completed stays (held); one it did not is
+            // removed, and so is the staging, so the disk holds only held
+            // trees. Never on the volume (checked again).
+            self.r2_guard()?;
+            for t in todo {
+                if fastvideo_deploy::boot::weights::tree_present(&r.root, &t.dest, &t.rev) {
+                    self.held.insert(t);
+                } else if let Err(e) = remove_fetched(&self.cfg, &r.root, &t.dest) {
+                    self.log(&format!("r2 {name}: {e}"));
+                }
+            }
             let _ = fs::remove_dir_all(r.root.join(".r2-partial"));
             fastvideo_deploy::boot::weights::clean_leftovers(&r.root);
             let why = fastvideo_deploy::boot::weights::r2::failed_line(&log);
@@ -1474,59 +1555,84 @@ impl Runner {
         Ok(())
     }
 
-    /// `python3` for the R2 tools: the runtime image has none, so the first
-    /// fetch installs it (`apt-get install python3`, as fv-boot does on an
-    /// older image) into `<runs>/r2-apt.log`. Decided once per run.
-    fn ensure_python(&mut self, r: &R2Setup) -> Result<(), String> {
+    /// `python3` for the R2 tools. The runtime image carries it
+    /// (`docker/gpucheck.Dockerfile` `runtime`); an older image gets it with
+    /// `apt-get install python3` (as fv-boot does), under `timeout 600` and
+    /// a 120 s dpkg lock wait, into `<runs>/r2-apt.log`. Only a success is
+    /// remembered: after a failure the next fetching arm tries again.
+    fn ensure_python(&mut self, r: &R2Setup, state: &Path) -> Result<(), String> {
+        if self.python_ok {
+            return Ok(());
+        }
         let check = |me: &Self| {
             me.cmd(&r.python)
-                .args([
-                    "-c",
-                    "import concurrent.futures, hashlib, json, ssl, urllib.request, xml.etree.ElementTree",
-                ])
+                .args(["-c", weights::PYTHON_CHECK])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
                 .is_ok_and(|s| s.success())
         };
-        let ok = match self.python_ok {
-            Some(ok) => ok,
-            None => {
-                let mut ok = check(self);
-                if !ok {
-                    let log = self.runs.join("r2-apt.log");
-                    self.log("r2: no python3 in the image: apt-get install python3 (r2-apt.log)");
-                    let apt = |args: &[&str]| {
-                        let (Ok(o), Ok(e)) = (append(&log), append(&log)) else {
-                            return false;
-                        };
-                        self.cmd(&r.apt_get)
-                            .env("DEBIAN_FRONTEND", "noninteractive")
-                            .args([
-                                "-o",
-                                "Acquire::http::Timeout=15",
-                                "-o",
-                                "Acquire::Retries=3",
-                            ])
-                            .args(args)
-                            .stdout(o)
-                            .stderr(e)
-                            .status()
-                            .is_ok_and(|s| s.success())
-                    };
-                    ok = apt(&["update", "-qq"])
-                        && apt(&["install", "-y", "-qq", "--no-install-recommends", "python3"])
-                        && check(self);
-                }
-                self.python_ok = Some(ok);
-                ok
-            }
-        };
+        let mut ok = check(self);
+        if !ok {
+            let log = self.runs.join("r2-apt.log");
+            self.log("r2: no python3 in the image: apt-get install python3 (r2-apt.log)");
+            let apt = |args: &[&str]| {
+                let (Ok(o), Ok(e)) = (append(&log), append(&log)) else {
+                    return false;
+                };
+                self.cmd(&self.cfg.timeout)
+                    .args(["--signal=TERM", "--kill-after=15", &APT_CAP_S.to_string()])
+                    .arg(&r.apt_get)
+                    .env("DEBIAN_FRONTEND", "noninteractive")
+                    .args([
+                        "-o",
+                        "Acquire::http::Timeout=15",
+                        "-o",
+                        "Acquire::Retries=3",
+                        "-o",
+                        "DPkg::Lock::Timeout=120",
+                    ])
+                    .args(args)
+                    .current_dir(state)
+                    .stdout(o)
+                    .stderr(e)
+                    .status()
+                    .is_ok_and(|s| s.success())
+            };
+            ok = apt(&["update", "-qq"])
+                && apt(&["install", "-y", "-qq", "--no-install-recommends", "python3"])
+                && check(self);
+        }
+        self.python_ok = ok;
         if ok {
             Ok(())
         } else {
             Err("python3 unavailable (r2-apt.log)".into())
         }
+    }
+
+    /// Why an arm is skipped for the deadline, if it is: less than
+    /// [`MIN_ARM_S`] would be left after its R2 fetch (at [`R2_RATE_FLOOR`]).
+    fn deadline_skip(&self, trees: &[String]) -> Option<String> {
+        let left = self.cfg.time_left()?;
+        let fetch = match &self.cfg.r2 {
+            Some(r) => r.sources.arm_r2("", trees).map_or(0.0, |need| {
+                weights::step(&self.held, &need)
+                    .fetch
+                    .iter()
+                    .map(|t| t.bytes as f64)
+                    .sum::<f64>()
+                    / R2_RATE_FLOOR
+            }),
+            None => 0.0,
+        };
+        (left < fetch + MIN_ARM_S).then(|| {
+            format!(
+                "{:.0} s to the deadline, {:.0} s of fetch and {MIN_ARM_S:.0} s of arm needed",
+                left.max(0.0),
+                fetch
+            )
+        })
     }
 
     /// `gpu_clean`: wait for the previous process's memory to drain, kill a
@@ -1608,7 +1714,7 @@ impl Runner {
         let cell = self.runs.join(name);
         let _ = fs::create_dir_all(&cell);
         let t0 = Instant::now();
-        let cap = self.cfg.cell_timeout_s;
+        let cap = self.cfg.arm_cap_s();
         self.log(&format!(
             "▶ {name}  {}  (wall cap {cap}s; 0=none)",
             command.join(" ")
@@ -1867,7 +1973,7 @@ impl Runner {
 
 /// `p` with its longest existing ancestor canonicalized (symlinks, `..`)
 /// and the rest appended: where `p` is or would be created.
-fn resolved(p: &Path) -> PathBuf {
+pub(crate) fn resolved(p: &Path) -> PathBuf {
     let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
     for base in abs.ancestors() {
         if let Ok(c) = fs::canonicalize(base) {
@@ -1879,8 +1985,10 @@ fn resolved(p: &Path) -> PathBuf {
 }
 
 /// Removes a tree this run fetched from the merged root: a plain directory
-/// only (a volume tree is a symlink there and is never removed).
-fn remove_fetched(root: &Path, dest: &str) -> Result<(), String> {
+/// only (a volume tree is a symlink there and is never removed), and never
+/// with the root on the volume ([`weights::check_off_volume`]).
+fn remove_fetched(cfg: &RunConfig, root: &Path, dest: &str) -> Result<(), String> {
+    weights::check_off_volume(&cfg.scratch, root, &cfg.work)?;
     let p = root.join(dest);
     match fs::symlink_metadata(&p) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1893,6 +2001,14 @@ fn remove_fetched(root: &Path, dest: &str) -> Result<(), String> {
             p.display()
         )),
     }
+}
+
+/// Now, in unix seconds.
+fn now_unix() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 /// The last non-empty line of a log (at most 240 characters).

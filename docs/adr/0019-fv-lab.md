@@ -1240,8 +1240,10 @@ neither path served them.
 
 #### 14.2 Decision: a new tier mode, not a fallback inside `volume`
 
-A tier's `weights` is now fv-lab's own `TierWeights` (`plan.rs`; `tiers.v1.json` regenerated, additive: `volume` reads
-as before): `volume` or **`volume+r2`**. In `volume+r2` each tree an arm names (§4) is classified by
+A tier's `weights` is now fv-lab's own `TierWeights` (`plan.rs`): `volume` or **`volume+r2`**. `tiers.v1.json` is
+regenerated and is not purely additive: it gains `volume+r2` and loses the four values of fv-deploy's `WeightsSource`
+(`r2`, `hub`, `none`, `registry`) that it listed but §4's validation always refused, so every file valid before is valid
+now and `volume` reads as before. In `volume+r2` each tree an arm names (§4) is classified by
 `weights::TreeSources::source`: a tree an EU-volume tree covers (`tree_covers`, so `auxiliary/tae/taeh3.safetensors` is
 the volume's `auxiliary/tae`) is read from the volume; else the longest `weights-r2.tsv` dest covering it is fetched from
 R2; else it is in neither, nothing is fetched, and the arm's gate records it as skipped (`weights incomplete`), as on a
@@ -1273,6 +1275,17 @@ the volume layout, so the volume-only arms run exactly as on a `volume` tier. An
 or a nested R2 tree whose parent the arm does not read, is refused before any arm (`TreeSources::arm_r2`; `FATAL`, exit
 2); no gold arm has either.
 
+**Never on the volume** (CLAUDE.md: the volume is add-only and never written here). `fv-lab run` refuses a
+`volume+r2` tier, exit 2 before anything is written, when the scratch disk is the work directory (the default without
+`--scratch` / `FV_SCRATCH`) or when the merged root, resolved through symlinks, is inside or above the work directory or
+the volume mount `/workspace` (`weights::check_off_volume`). The runner checks it again when it links the root, before
+every `r2-fetch.py`, in every removal of a fetched tree (`remove_fetched`) and before the staging clean-up, so a later
+caller that skips the entry check still cannot write or remove on the volume (`tests/fv_lab_bin.rs`
+`a_volume_r2_root_on_the_volume_is_refused`, `weights::tests::the_merged_root_stays_off_the_volume`). A tree under a
+volume tree is the volume's even when R2 publishes it on its own (`ltx25/text_encoder_fp8` under `ltx25`): it is never
+fetched, so nothing is written through a volume symlink (`weights::tests::a_tree_under_a_volume_tree_is_the_volumes_…`).
+`FV_EU_VOLUME_TREES` names are checked like `weights-r2.tsv`'s (relative, no `.` / `..`, `[A-Za-z0-9._/-]`).
+
 #### 14.4 The fetch: the repository's tools, per arm
 
 Before an arm's gate (`Runner::stage_r2`; `gated_cell` and so `tae_gated_cell` and verdict arms too):
@@ -1281,17 +1294,27 @@ Before an arm's gate (`Runner::stage_r2`; `gated_cell` and so `tae_gated_cell` a
    fetched tree the arm does not read (and that holds none it reads) is **removed**, then the missing ones are fetched.
    An arm that fetches nothing changes nothing, so a tree stays across volume-only arms until an arm that must fetch
    needs the room. Only directories the run fetched are removed; a symlink is never removed (`remove_fetched`).
-2. `python3`: the runtime image has none (`docker/gpucheck.Dockerfile` `runtime`), so the first fetch of a run checks it
-   and runs `apt-get install python3` once if needed (into `<runs>/r2-apt.log`), as fv-boot does on an older image.
-3. `python3 scripts/gpu/r2-weights.py plan <dest>@<rev>… --ttl <cap + 600> --out <scratch>/r2/plan.json`: the presigned
-   plan for exactly the missing trees, at the revisions `weights-r2.tsv` records (no listing). The only child that gets
-   the R2 key. `<scratch>/r2` is mode 700 and outside `<scratch>/runs`, which the pod serves over HTTP; the plan
-   (bearer URLs) is removed after the fetch, whatever it did.
+2. `python3`: the runtime image carries it now (`docker/gpucheck.Dockerfile` `runtime`: `python3`, stdlib only, the
+   build checks the tools' imports, `weights::PYTHON_CHECK`; `python3-minimal` alone lacks part of the stdlib they
+   import, so the full interpreter package, no recommends). An older image gets it at the first fetch with `timeout 600
+   apt-get … -o DPkg::Lock::Timeout=120 install python3` (into `<runs>/r2-apt.log`), as fv-boot does; only a success is
+   remembered, so after a failure the next fetching arm tries again.
+3. `python3 scripts/gpu/r2-weights.py plan <dest>@<rev>… --pin scripts/gpu/weights-r2.tsv --ttl <cap + 600> --out
+   <scratch>/r2/plan.json`: the presigned plan for exactly the missing trees, at the revisions `weights-r2.tsv` records
+   (no listing). `--pin` (new) refuses a manifest whose SHA-256 is not that table's column 5, as fv-control's
+   `r2Manifest` does (`test_r2_weights.py` `test_plan_pin_…`). The only child that gets the R2 key. `<scratch>/r2` is
+   mode 700 and outside `<scratch>/runs`, which the pod serves over HTTP; the plan (bearer URLs) is removed after the
+   fetch whatever it did, and at the run's start (an interrupted run's).
 4. `timeout --signal=TERM --kill-after=15 <cap> python3 scripts/gpu/r2-fetch.py --root <scratch>/weights --plan …
-   --status <arm>/r2-fetch.json`, `<cap>` the tier's `cell_timeout_s` (3600 s; 3600 when 0). Its log is
-   `<arm>/r2-fetch.log`; `pod fetch` takes `r2-fetch.json` with every arm JSON. A failed fetch's staging
-   (`.r2-partial`, `.stale-*`) is removed, the arm is recorded as skipped (`r2 fetch failed`), `live.log` gets
-   `SKIP <arm>: r2 fetch failed: <the fetcher's FAILED line>`, and the run goes on.
+   --skip-trees '' --status <arm>/r2-fetch.json` (and `FV_R2_SKIP_TREES` removed from its env: every tree of the plan),
+   `<cap>` the tier's `cell_timeout_s` (3600 s; 3600 when 0), never past the run's deadline (§14.7). Its log is
+   `<arm>/r2-fetch.log`; `pod fetch` takes `r2-fetch.json` with every arm JSON. After a failed fetch, each tree it
+   completed stays (it is held, as a success would have it) and each it did not is removed, with the staging
+   (`.r2-partial`, `.stale-*`), so the disk holds only held trees; the arm is recorded as skipped (`r2 fetch failed`),
+   `live.log` gets `SKIP <arm>: r2 fetch failed: <the fetcher's FAILED line>`, and the run goes on.
+
+The children share `fv-lab`'s process group, so an interrupt of the group (a terminal's Ctrl-C) stops a fetch too; a
+run killed alone leaves at most `plan.json`, which the next run removes first.
 
 Not a third fetcher: `r2-fetch.py` is the fetcher fv-boot's R2 source runs (ranged GETs, every 64 MiB part checked
 against the manifest's SHA-256, stragglers cut, resume), and `r2-weights.py plan` is the presigner the experiment and
@@ -1334,9 +1357,19 @@ The gold tier is `weights = "volume+r2"` and `container_disk_gb = 300`. From `we
 | container disk | 300 GB = 147.86 GB + the 120 GB every `volume` tier has for runs, frames, TAE files and library links (`DISK_RESERVE_GB`), rounded up; `r2-fetch.py` refuses a fetch that would leave under 5 GB free |
 
 Keeping every tree instead (no drops) would need about 650 GB of container disk for no gain: each tree is fetched once
-in this order anyway. 11 of the 32 arms read the volume only; 14 fetch, and 7 more read trees an earlier arm fetched. The pod body golden (`runpod-http-gold.json`) is
-`runpod-http.sh plan` with `FV_CONTAINER_DISK_GB=300` (`fv-lab-goldens.sh`), and its env is the one allowed difference
-(`tests/payload_golden.rs`); the start command is unchanged.
+in this order anyway. 11 of the 32 arms read the volume only; 14 fetch, and 7 more read trees an earlier arm fetched.
+
+**The idle watchdog.** The pod's idle watchdog deletes it after `FV_IDLE_GPU_MIN` minutes at 0 % GPU (10 on a volume
+tier, 30 before the GPU's first use), and an R2 fetch uses no GPU: a slow 148 GB fetch would delete the pod with every
+result. A `volume+r2` tier's limit, before and after the first use, is `weights::r2_idle_min`: a fallback `apt-get`
+(600 s) plus one fetch at its cap, in minutes, plus 15, at least 30: **85 min** for the gold tier. The watchdog itself
+is unchanged (a heartbeat would change every tier's start command, which the scripts' goldens freeze). Two fetches
+back to back with no GPU arm between (a fetching arm whose gate then fails) at the cap each could still reach it; at
+the measured rates the largest fetch is about 4 min.
+
+The pod body golden (`runpod-http-gold.json`) is `runpod-http.sh plan` with `FV_CONTAINER_DISK_GB=300` and
+`FV_IDLE_GPU_MIN` = `FV_IDLE_GPU_GRACE_MIN` = 85 (`fv-lab-goldens.sh`), and its env (the R2 references) is the one
+allowed difference (`tests/payload_golden.rs`).
 
 #### 14.7 The GPU check (the coordinator's)
 
@@ -1364,15 +1397,33 @@ about 1 min; 530.74 GB from R2 at the 0.61-0.79 GB/s two R2-mode PRO 6000 pods m
 (`docs/serve/e2e/h3-test-round-2026-10-14.md`; not in EU-RO-1, so UNVERIFIED there), 11-15 min; 32 cold arms at 2-5 min
 each (the gold files' recorded load times are 36-139 s, generation seconds to about two minutes), 64-160 min. In all about 1.5-3.1 h,
 **$3.70-$7.70**, at most **$9.96** at the cap; fv-deploy's floor needs a balance of at least $17.96 ($8 + 4 h x $2.49)
-before the create. R2 egress is free. If the run reaches the 4 h cap, the pod deletes itself before `pod fetch` and the
-run is lost: if the smoke run's per-arm times project past about 3.5 h, split the full run in two with `--cells` (the 21
-arms that read R2 trees, then the 11 others; about 10 min of boot more).
+before the create. R2 egress is free.
+
+**Near the wall cap a run ends early and is still fetched** (any tier). `pod up` puts `FV_RUN_DEADLINE` (unix
+seconds: its create time plus the cap less `RUN_DEADLINE_RESERVE_S`, 20 min) in the pod's env, not its start command,
+so the payload goldens stay the scripts'. Before each arm the runner skips it as `wall cap near` when less than 600 s
+(`MIN_ARM_S`) would be left after its R2 fetch at a 0.25 GB/s floor; an arm that runs, and its fetch, get at most the
+time left as their cap. So the runner ends and the start command writes `DONE` before the deadline. The driver (`pod up
+--wait`, `pod fetch --wait`) stops waiting at the cap less `FETCH_RESERVE_S` (15 min, `pod::wait_limit_s`) and fetches
+whatever the run holds (judged failed when there is no `DONE`), while the pod still lives. If the smoke run's per-arm
+times project past about 3.5 h, splitting the full run in two with `--cells` (the 21 arms that read R2 trees, then the
+11 others; about 10 min of boot more) still measures every arm.
 
 #### 14.8 Differences, and what stays
 
-- The manifest is fetched by `r2-weights.py plan` at the revision `weights-r2.tsv` records, but its SHA-256 is not
-  compared with the recorded one (fv-control's `r2Manifest` does); the bucket is add-only (`If-None-Match`, §2 of
-  `docs/ops/r2-weights.md`), so a revision's manifest does not change. A `--pin` for `plan` is a follow-up.
+- The `scripts/gpu/experiments/*-validate.sh` comments that say the runtime image has no Python are now stale (D1e's
+  files, left to it).
 - A nested R2 tree is fetched only with its parent (refused otherwise, §14.3); no gold arm reads one.
 - The preflight `weights.log` and `tree.txt` at pod start still describe the volume only.
 - `gold-run.yml` needs nothing new: the key is a Runpod secret, not a GitHub one.
+
+#### 14.9 Review of #201 (2026-10-26)
+
+The coordinator's review, all fixed on the branch: the merged root may never be on the volume (§14.3, the blocking
+finding: without `--scratch` it was `/workspace/weights`, and fetches, removals and the staging clean-up would have
+written and deleted there); the idle watchdog's limit for `volume+r2` pods (§14.6); a run deadline and the driver's
+fetch reserve, so a run near the cap ends and is fetched (§14.7); `plan --pin` (§14.4); a partly failed fetch keeps
+what it completed and removes the rest (§14.4); `python3` in the runtime image, apt as a retried, capped fallback
+(§14.4); the TAE directory read from the volume's marker when the command lines are rendered (`RunConfig::tae`);
+`FV_EU_VOLUME_TREES` names checked; the nested-tree classification pinned by a test; `--skip-trees ''`; `plan.json`
+removed at the run's start; the schema wording (§14.2).
