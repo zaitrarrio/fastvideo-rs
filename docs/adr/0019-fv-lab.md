@@ -2694,7 +2694,10 @@ The name is equal (`fv-lab-upstream-<tag>`, the golden made with `FV_POD_PREFIX=
 `OracleOps` trait), `src/upstream-start.sh.in`, `src/bin/fv-lab.rs` (`fv-lab oracle`, its `RealOps`: Runpod through
 fv-deploy, the pods through their proxy, the runtime side as a child `pod up`; `check` and `schema upstream`; `reap
 --account`), `lab/upstream.toml`, `schemas/upstream.v1.json`; `scripts/gpu/runpod-http.sh plan-upstream`,
-`scripts/gpu/tests/fv-lab-goldens.sh` (the two upstream goldens).
+`scripts/gpu/tests/fv-lab-goldens.sh` (the two upstream goldens). The runtime image ships `lab/upstream.toml` beside
+`lab/tiers.toml` and `lab/cells` (`docker/gpucheck.Dockerfile`; its smoke step's `fv-lab check` reads it, and the
+image and `control.yml` workflows' path filters name it); `tests/fv_lab_bin.rs::the_runtime_images_lab_subset_passes_check`
+copies exactly what that stage of the Dockerfile copies into a root of its own and runs `check` and a dry run there.
 
 `tests/oracle_driver.rs` (18): the payload golden and the start command; the stacks file against the cells and its
 refusals; the plan (one pod per stack, the tier's order, the caps, the waits, the projection) and its 15 refusals; the

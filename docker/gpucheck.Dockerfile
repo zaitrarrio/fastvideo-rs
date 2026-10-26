@@ -133,7 +133,7 @@ FROM scratch AS binary
 COPY --from=build /out/ /
 
 # lab-build: fv-lab (docs/adr/0019-fv-lab.md), the validation driver the runtime image runs on a GPU pod
-# (`fv-lab run <tier>`: lab/tiers.toml + lab/cells, calling fv-gpucheck and verify-weights.sh). No CUDA. A tools
+# (`fv-lab run <tier>`: lab/tiers.toml + lab/cells (+ lab/upstream.toml, which `fv-lab check` reads), calling fv-gpucheck and verify-weights.sh). No CUDA. A tools
 # release whose gpucheck set carries out/fv-lab replaces this stage (prebuilt.sh lab-build=…); a release from
 # before fv-lab does not, and only this stage compiles (as boot-build did before releases carried fv-boot).
 FROM builder AS lab-build
@@ -384,6 +384,8 @@ COPY --from=binary /fv-gpucheck /fv-gpucheck.build-id /opt/fastvideo-rs/target/r
 # fv-lab and the run plan it reads (fv-lab finds lab/ above its binary: /opt/fastvideo-rs/lab).
 COPY lab/tiers.toml /opt/fastvideo-rs/lab/tiers.toml
 COPY lab/cells /opt/fastvideo-rs/lab/cells
+# The oracle's upstream stacks (`fv-lab oracle`, ADR-0019 §19): `fv-lab check` validates them against the cells.
+COPY lab/upstream.toml /opt/fastvideo-rs/lab/upstream.toml
 COPY --from=lab-build /out/fv-lab /opt/fastvideo-rs/target/release/
 LABEL org.opencontainers.image.description="fastvideo-rs cudarc GPU validation runtime (fv-gpucheck + fv-lab + CUDA runtime + hf-fm)"
 WORKDIR /opt/fastvideo-rs

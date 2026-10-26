@@ -1144,3 +1144,66 @@ fn oracle_without_yes_is_the_plan_and_needs_no_key() {
     assert!(out.contains("upstream fastvideo: 5 target(s)"), "{out}");
     assert!(out.contains("upstream sol-ltx25: 4 target(s)"), "{out}");
 }
+
+/// The runtime image's smoke step runs `fv-lab check` (and a dry run) in
+/// `/opt/fastvideo-rs`, where `docker/gpucheck.Dockerfile` copies only a
+/// subset of the repository. The same subset, read from the Dockerfile's
+/// `COPY` lines of the stage that ships fv-lab, in a root of its own: what
+/// `fv-lab` reads there must be among them (`lab/upstream.toml` was not, at
+/// first, ADR-0019 §19).
+#[test]
+fn the_runtime_images_lab_subset_passes_check() {
+    let df = std::fs::read_to_string(repo_root().join("docker/gpucheck.Dockerfile")).unwrap();
+    let stages: Vec<&str> = df.split("\nFROM ").collect();
+    let stage = stages
+        .iter()
+        .find(|s| s.contains("COPY --from=lab-build /out/fv-lab"))
+        .expect("the stage that ships fv-lab");
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fv-lab-image-root");
+    let _ = std::fs::remove_dir_all(&root);
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        if from.is_dir() {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap().flatten() {
+                copy(&e.path(), &to.join(e.file_name()));
+            }
+        } else {
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::copy(from, to).unwrap_or_else(|e| panic!("{}: {e}", from.display()));
+        }
+    }
+    let mut lab = 0;
+    for line in stage.lines() {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        if w.len() != 3 || w[0] != "COPY" || w[1].starts_with("--") {
+            continue;
+        }
+        let Some(dst) = w[2].strip_prefix("/opt/fastvideo-rs/") else {
+            continue;
+        };
+        lab += usize::from(w[1].starts_with("lab/"));
+        copy(&repo_root().join(w[1]), &root.join(dst));
+    }
+    assert!(lab >= 3, "lab/tiers.toml, lab/cells, lab/upstream.toml");
+    let out = stdout(fv_lab().args(["check", "--root"]).arg(&root));
+    assert!(out.contains("rtx6000: 2 cell(s), 7 arm(s)"), "{out}");
+    assert!(out.contains("upstream fastvideo: 5 target(s)"), "{out}");
+    let dry = stdout(
+        fv_lab()
+            .args([
+                "run",
+                "rtx6000",
+                "--dry-run",
+                "--work",
+                "/workspace",
+                "--scratch",
+                "/fvscratch",
+                "--tag",
+                "smoke",
+                "--root",
+            ])
+            .arg(&root),
+    );
+    assert!(dry.contains("dry-run sol-h3: "), "{dry}");
+    let _ = std::fs::remove_dir_all(&root);
+}

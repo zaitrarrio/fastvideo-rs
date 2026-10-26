@@ -21,6 +21,7 @@ on:
       - "scripts/gpu/**"
       - "lab/tiers.toml"
       - "lab/cells/**"
+      - "lab/upstream.toml"
       - "scripts/ci/prebuilt.sh"
       - "scripts/ci/tools-release.sh"
       - ".github/workflows/gpucheck-runtime-image.yml"
