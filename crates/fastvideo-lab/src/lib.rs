@@ -23,6 +23,11 @@
 //!   and which from the R2 weights store, fetched per arm (ADR-0019 §16).
 //! - [`pod`]: `fv-lab pod`, a tier's Runpod pod on fv-deploy's `Provider`
 //!   trait, guards and lifecycle.
+//! - [`oracle`]: `fv-lab oracle`, the driver of an oracle run: the
+//!   upstream reference pods of `lab/upstream.toml` up as fv-lab pods, the
+//!   `oracle` tier's runtime pod with `FV_ORACLE_URL`, the release of the
+//!   upstream pods on `ORACLE_REFS_DONE`, a stock wait or any failure
+//!   (ADR-0019 §19).
 //! - [`podmem`]: the pod's memory cgroup (its RAM limit, OOM kills and an
 //!   arm's peak process memory), for the runner's `box.txt`, `summary.json`
 //!   and `live.log` (ADR-0019 §16.10).
@@ -54,6 +59,7 @@ pub mod gold;
 pub mod goldcell;
 pub mod goldcheck;
 pub mod knobs;
+pub mod oracle;
 pub mod plan;
 pub mod pod;
 pub mod podmem;

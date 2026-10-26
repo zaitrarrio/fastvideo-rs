@@ -2059,3 +2059,12 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §9.1, §17.5 "Results", §17.6
 - Verification: `knobs::tests::the_retired_attn3_knobs_are_not_read`, `tests/knobs.rs`, `tests/dry_run.rs::retired_families_are_frozen_tiers_without_a_branch`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, `runpod-plan.test.sh`, `FV_DRY_RUN=1 runpod-matrix.sh <family>` before and after for the 27 remaining families (26 byte-identical, `writer` in its `dd` timings); evidence `artifacts/runpod/{fuse,attn3,ltx}/762ce4d-*` with `compare-762ce4d.txt`
+
+### FVID · 2026-10-26 · FVID-2026-10-26-fv-lab-oracle-driver
+- Trigger: the coordinator's D1h: the `fv-lab oracle` driver of ADR-0019 §15.6 / §15.10 (what `oracle.sh` and §15.7's hand-run commands do) and the remaining oracle targets as cells
+- Decision: (agent, for the coordinator's review) `fv-lab oracle` brings up the upstream reference pods as fv-lab pods on fv-deploy's guards from a new `lab/upstream.toml` (its own schema v1, additive: one `[[stack]]` per upstream image with its targets' weight steps; not tiers, which run cells), waits for every selected reference before the runtime pod, runs the runtime side as `fv-lab pod up --wait`, and releases the upstream pods on `ORACLE_REFS_DONE`, a 1,800 s stock wait or any failure; the clip-metric targets and `sfwan13` are not moved (they need a derived-clip step the ADR has not designed: a decision, §19.9), so `oracle`'s branch stays whole
+- Reason: the ADR names the driver's shape (a second image and start command, the release on `ORACLE_REFS_DONE`); the stacks are data like the tiers; the runtime side is reused, not copied
+- Reversibility: high (a new subcommand, file and schema; `oracle.sh`, the branch and every existing pod body unchanged)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §19
+- Verification: `tests/oracle_driver.rs` (payload goldens from `runpod-http.sh plan-upstream`, the plan's refusals, the balance guard, the driver's order and releases on fakes), `tests/fv_lab_bin.rs::oracle_without_yes_is_the_plan_and_needs_no_key`, `tests/schema.rs`, `fv-lab-goldens.sh --check`; GPU check §19.7 pending (the coordinator's)

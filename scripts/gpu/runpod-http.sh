@@ -29,6 +29,11 @@
 #                                datacentre comes from FV_PLAN_VOLUME="<id> <dc>" or,
 #                                without it, the API lookup `run` makes. For a
 #                                retired family: `fv-lab pod up` without --yes (its plan)
+#   runpod-http.sh plan-upstream [sha] [tag]  print the pod body `upstream` would send
+#                                (no pod, no price check): the payload golden of the
+#                                upstream pods of `fv-lab oracle` (fv-lab-goldens.sh;
+#                                docs/adr/0019-fv-lab.md §19). UP_SHA (the full commit
+#                                the pod clones) defaults to `git rev-parse <sha>`
 #
 # The pod's start command runs everything; results are published read-only on
 # port 8000 (python http.server over /workspace/runs) and fetched through
@@ -96,7 +101,7 @@ fv_check_volume $VOL_NAME "${RUNPOD_VOLUME_ID:-}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-5}"
 CAP_S="${FV_POD_CAP_S:-14400}"
 FAMILY="${FV_FAMILY:-rtx6000}"
-[[ "${1:-}" == upstream ]] && FAMILY="${FV_FAMILY:-upstream}"
+[[ "${1:-}" == upstream || "${1:-}" == plan-upstream ]] && FAMILY="${FV_FAMILY:-upstream}"
 OUT_ROOT="$ROOT/artifacts/runpod/$FAMILY"
 # A dry run (FV_DRY_RUN=1: the route and the command, nothing created) needs no key.
 [[ "${FV_DRY_RUN:-0}" == 1 ]] || : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
@@ -709,6 +714,18 @@ fv_lab_route() {
   exec "$lab" "${args[@]}"
 }
 
+# upstream_image <sha>: the image an upstream pod boots. UP_IMAGE_TARGET=
+# fastvideo|sol-h3|sol-h3-4step|sol-ltx25 boots the baked image
+# (docker/upstream.Dockerfile, built by CI); unset = plain PyTorch image and
+# pod-side installs.
+upstream_image() {
+  if [[ -n "${UP_IMAGE_TARGET:-}" ]]; then
+    echo "${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-upstream-$UP_IMAGE_TARGET:${UP_IMAGE_TAG:-sha-$1}}"
+  else
+    echo "${RUNPOD_IMAGE:-runpod/pytorch:1.3.3-cu1300-torch2130-ubuntu2404}"
+  fi
+}
+
 cmd_run() {
   local mode="$1" sha="${2:-}" image tag id rc=0 attempt
   sha="${sha:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
@@ -733,14 +750,7 @@ cmd_run() {
   fi
   image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}"
   if [[ "$mode" == upstream ]]; then
-    # UP_IMAGE_TARGET=fastvideo|sol-h3|sol-h3-4step|sol-ltx25 boots the baked
-    # image (docker/upstream.Dockerfile, built by CI); unset = plain PyTorch image
-    # and pod-side installs.
-    if [[ -n "${UP_IMAGE_TARGET:-}" ]]; then
-      image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-upstream-$UP_IMAGE_TARGET:${UP_IMAGE_TAG:-sha-$sha}}"
-    else
-      image="${RUNPOD_IMAGE:-runpod/pytorch:1.3.3-cu1300-torch2130-ubuntu2404}"
-    fi
+    image="$(upstream_image "$sha")"
     UP_SHA="$(git -C "$ROOT" rev-parse "$sha")"
   fi
   for attempt in 1 2 3; do
@@ -805,6 +815,17 @@ case "${1:-}" in
       [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
     fi
     pod_payload "${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}" "$tag" run "$vol" "$dc" ;;
+  plan-upstream)
+    # The body `upstream` would send for <sha> and <tag>; nothing is created.
+    sha="${2:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
+    tag="${3:-$sha-$(date -u +%m%d%H%M)}"
+    UP_SHA="${UP_SHA:-$(git -C "$ROOT" rev-parse "$sha")}"
+    vol="" dc=""
+    if [[ "${RUNPOD_NO_VOLUME:-0}" != 1 ]]; then
+      if [[ -n "${FV_PLAN_VOLUME:-}" ]]; then read -r vol dc <<<"$FV_PLAN_VOLUME"; else read -r vol dc < <(volume) || true; fi
+      [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
+    fi
+    pod_payload "$(upstream_image "$sha")" "$tag" upstream "$vol" "$dc" ;;
   status) proxy "${2:?pod}" "$FAMILY/" ;;
   down) rest DELETE "/pods/${2:?pod}" >/dev/null && echo "deleted ${2}" ;;
   *) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 2 ;;

@@ -313,11 +313,47 @@ takes `determinism.txt`, `hashes.txt` and each arm's `hashes.txt` / `digests.txt
 the hashes files byte for byte and each arm's `compare-dumps` lines, except a `[repeats] controls` arm's (read from
 `lab/cells`), which are reported, not judged (ADR-0019 §15.7). Still in the script (§15.6): the oracle's ffmpeg
 clip-metric targets (`ltx25-{i2v,kf,ref2v,a2v*,retake*,extend}`, `sfwan13`), `FV_ORACLE_OWN_TEXT=1`, and
-`runpod-http.sh upstream` (the reference pods; it moves with an `fv-lab oracle` driver). So the `oracle` branch stays
+`runpod-http.sh upstream` (the reference pods; `fv-lab oracle`, below, brings them up as fv-lab pods for the
+targets that are cells). So the `oracle` branch stays
 whole and `oracle.sh` keeps driving it (`FV_ORACLE_TARGETS`, `FV_POD_FILE`, `FV_CREATE_WAIT_S`, which `fv-lab pod up`
 lacks); it retires once the driver and the clip-metric cells exist (ADR-0019 §15.10). det-short's opt-in `ltx-sol`
 group and other `FV_DET_REPEATS` went with its branch (a tier when wanted). The two retired families' script side is
 frozen for `tests/repeats_oracle.rs` at `0f63c56b` (`crates/fastvideo-lab/fixtures/det-script/`).
+
+## An oracle run: `fv-lab oracle` (D1h)
+
+[ADR-0019 §19](../adr/0019-fv-lab.md) (proposed until its GPU check, §19.7). The driver of an oracle run on
+fv-deploy's guards: the upstream reference pods of `lab/upstream.toml` (one per stack: `fastvideo` for the H3
+targets, with its 192 GB host-RAM floor; `sol-ltx25` for the LTX ones), the wait for their references, the `oracle`
+tier's runtime pod with `FV_ORACLE_URL`, and the release (fetch, then delete) of the upstream pods once the runtime
+pod has every reference (`ORACLE_REFS_DONE`), when no runtime pod is ready within `--stock-wait-s`, or on any
+failure or interrupt.
+
+```sh
+./fv-lab oracle --sha <7> --cells oracle-fasth3-4step-vsa,oracle-fasth3-4step-vsa-diff   # the plan, no key
+RUNPOD_API_KEY=… ./fv-lab oracle --sha <7> \
+  --cells oracle-fasth3-4step-vsa,oracle-fasth3-4step-vsa-diff,oracle-fasth3-4step-vsa-f32,oracle-fasth3-4step-vsa-f32-diff,oracle-fasth3-4step-vsa-bf16-vs-f32 \
+  [--upstream-wall-cap-s 7200] [--wall-cap-s 5400] [--up-sha <commit>] [--upstream-image-tag latest|sha-<7>] --yes
+./fv-lab check                     # also validates lab/upstream.toml against the oracle cells
+./fv-lab schema upstream           # schemas/upstream.v1.json
+```
+
+- `--cells` names arms, as `pod up`'s; their cells' `[reference] target`s pick the stacks. `FV_ORACLE_URL` is the
+  driver's (refused in `--extra-env`); the runtime side is `fv-lab pod up --wait`, so its refusals apply.
+- The upstream pods clone `--up-sha` (default `--sha`; it must be on GitHub) for `scripts/gpu/upstream` and boot
+  `ghcr.io/zaitrarrio/fastvideo-rs-upstream-<image>:<--upstream-image-tag>` (default `latest`, pinned to its digest).
+- `--refs-wait-s` (default what the upstream cap leaves after the stock wait and 30 minutes) bounds the wait for the
+  references; a target not served by then (or whose upstream run ended without it) is not run, and fails the run.
+- Before the first create, the balance less every pod of the run at its price cap over its wall cap must stay at $8.
+- `--url-file F` writes the served bases; `--hold-upstream F` keeps the upstream pods until `F` exists (at most their
+  cap less 15 min), for a second reader of the same references (§19.7's script side).
+- Results: the runtime run in `artifacts/runpod/oracle/<tag>/` (`pod up`'s fetch), each upstream run in
+  `artifacts/runpod/upstream/<tag>/` (without dumps or clips), the JSON report on stdout. `pod reap --account`
+  covers `fv-lab-upstream-…` pods.
+
+The upstream pod's body is `runpod-http.sh upstream`'s (`runpod-http.sh plan-upstream`, the goldens
+`fixtures/runpod-http-upstream-<stack>.json`) but for the wall-cap watchdog every fv-lab pod carries. Not yet in
+fv-lab: the oracle's clip-metric targets and `sfwan13` (§19.9); for those `scripts/gpu/oracle.sh` is still the way.
 
 ## `fuse`, `attn3`, `ltx` (D1f)
 
@@ -554,7 +590,9 @@ when the history has it, and every line of the script-side runs is checked to be
 
 For every tier of `lab/tiers.toml`, the fixtures are the script's dry run (`<tier>-dry-run.txt`), its weight gates
 (`<tier>-gates.tsv`: the cells the dry run gated, with their `verify-weights.sh --list` needs) and `runpod-http.sh
-plan`'s pod body (`runpod-http-<tier>.json`).
+plan`'s pod body (`runpod-http-<tier>.json`). For every stack of `lab/upstream.toml`, `runpod-http.sh
+plan-upstream`'s pod body with `oracle.sh`'s settings (`runpod-http-upstream-<stack>.json`, ADR-0019 §19.3;
+`tests/oracle_driver.rs`).
 
 **Frozen since the GPU gate.** Once a tier passed its GPU gate and its script branch is deleted (it is listed in
 `scripts/gpu/fv-lab-retired.sh`), the scripts can no longer produce its fixtures. They stay as they were written

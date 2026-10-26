@@ -33,6 +33,9 @@
 #   runpod-http-<f>.json       FV_FAMILY=<f> runpod-http.sh plan $SHA $TAG with
 #                              FV_POD_PREFIX=fv-lab: the PodCreateInput of the run (jq -S)
 # and once:
+#   runpod-http-upstream-<s>.json  per stack <s> of lab/upstream.toml, runpod-http.sh
+#                              plan-upstream with oracle.sh's settings for that stack
+#                              (fv-lab oracle's upstream pods, ADR-0019 §19)
 #   frames-sample.sha256.json  runpod-matrix.sh's frames_digest over frames-sample/frames
 #                              (the per-arm byte-identity record, ADR-0019 §8)
 #
@@ -187,6 +190,29 @@ for FAMILY in $FAMILIES; do
     bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
   FIXTURES+=("$FAMILY-dry-run.txt" "$FAMILY-gates.tsv" "runpod-http-$FAMILY.json")
 done
+
+# 3b. The upstream pods of `fv-lab oracle` (ADR-0019 §19): runpod-http.sh
+#     plan-upstream with the settings scripts/gpu/oracle.sh's start_up passes,
+#     for one selection per stack of lab/upstream.toml (UP_STEPS in §15.7's
+#     form; the clone commit UP_SHA fixed). tests/oracle_driver.rs holds fv-lab's
+#     upstream pod body to them (the cap watchdog and `env {}` excepted).
+UP_SHA_GOLDEN=1234567890abcdef1234567890abcdef12345678
+upstream_golden() { # <stack> [K=V …]
+  local stack="$1"
+  shift
+  clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab UP_SHA="$UP_SHA_GOLDEN" UP_IMAGE_TAG=latest \
+    UP_CELL_TIMEOUT_S=7200 "$@" bash "$ROOT/scripts/gpu/runpod-http.sh" plan-upstream "$SHA" "$TAG" \
+    | jq -S . >"$TMP/new/runpod-http-upstream-$stack.json"
+  FIXTURES+=("runpod-http-upstream-$stack.json")
+}
+STACKS="$(awk '/^\[\[stack\]\]/ { t = 1; next } t && /^name = "/ { gsub(/^name = "|"$/, ""); print; t = 0 }' "$ROOT/lab/upstream.toml")"
+[[ "$(echo $STACKS)" == "fastvideo sol-ltx25" ]] \
+  || { echo "fv-lab-goldens: lab/upstream.toml's stacks are '$(echo $STACKS)': give each new stack its golden here" >&2; exit 2; }
+upstream_golden fastvideo UP_IMAGE_TARGET=fastvideo FV_CONTAINER_DISK_GB=150 FV_MIN_RAM_GB=192 \
+  "UP_STEPS=info:box weights:h3-diffusers oracle:fasth3-4step-vsa" "FV_EXTRA_ENV=FASTVIDEO_DUMP_OPS=0,1,24,47"
+upstream_golden sol-ltx25 UP_IMAGE_TARGET=sol-ltx25 FV_CONTAINER_DISK_GB=250 \
+  "UP_STEPS=info:box weights:ltx25 oracle:ltx25-512p,ltx25-512p-dense" \
+  "FV_EXTRA_ENV=FASTVIDEO_DUMP_OPS=0,1,24,47 RECON_ACCEPT_MISMATCH=1"
 
 # 4. The frames digest: the script's own function, on a copy of the sample.
 sed -n '/^frames_digest() {$/,/^}$/p' "$ROOT/scripts/gpu/runpod-matrix.sh" >"$TMP/digest.sh"

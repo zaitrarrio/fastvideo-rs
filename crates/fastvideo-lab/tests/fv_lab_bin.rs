@@ -1067,3 +1067,80 @@ fn the_oracle_pod_needs_its_references_and_the_d1d_knobs_are_refused() {
     assert_ne!(code, Some(0));
     assert!(err.contains("is not an http(s):// URL"), "{err}");
 }
+
+/// `fv-lab oracle` without `--yes` (ADR-0019 §19): the plan of both sides,
+/// no request and no key; its refusals exit non-zero before anything exists.
+#[test]
+fn oracle_without_yes_is_the_plan_and_needs_no_key() {
+    const UP: &str = "1234567890abcdef1234567890abcdef12345678";
+    let cells = "oracle-fasth3-4step-vsa,oracle-fasth3-4step-vsa-diff,oracle-fasth3-4step-vsa-f32,oracle-fasth3-4step-vsa-f32-diff,oracle-fasth3-4step-vsa-bf16-vs-f32";
+    let out = stdout(fv_lab().args([
+        "oracle",
+        "--sha",
+        "1234567",
+        "--up-sha",
+        UP,
+        "--cells",
+        cells,
+        "--tag",
+        "1234567-10241200",
+    ]));
+    let v: serde_json::Value = serde_json::from_str(&out).expect("json plan");
+    let up = &v["upstream"];
+    assert_eq!(up.as_array().map(Vec::len), Some(1));
+    assert_eq!(up[0]["stack"], "fastvideo");
+    assert_eq!(
+        up[0]["launch"]["image"],
+        "ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo:latest"
+    );
+    let body = &up[0]["requests"][0]["body"];
+    assert_eq!(body["minRAMPerGPU"], 192);
+    assert_eq!(body["networkVolumeId"], "bz0ofkfx45");
+    assert_eq!(body["dataCenterIds"], serde_json::json!(["EU-RO-1"]));
+    assert_eq!(up[0]["launch"]["guards"]["ready_timeout_s"], 600);
+    let cmd = body["dockerStartCmd"][2].as_str().unwrap();
+    assert!(cmd.contains("UP_STEPS=\"info:box weights:h3-diffusers oracle:fasth3-4step-vsa\""));
+    assert!(cmd.contains(&format!("origin {UP} ")));
+    let rt = &v["runtime"];
+    assert_eq!(rt["tag"], "1234567-10241200");
+    assert_eq!(rt["launch"]["name"], "fv-lab-oracle-1234567-10241200");
+    let argv: Vec<&str> = rt["command"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|x| x.as_str())
+        .collect();
+    assert_eq!(&argv[..3], ["fv-lab", "pod", "up"]);
+    assert!(argv.contains(&"--wait") && argv.contains(&"--yes"));
+    assert!(argv.iter().any(|a| a.starts_with(
+        "FV_ORACLE_URL=https://upstream-pod-8000.proxy.runpod.net/upstream/1234567-"
+    )));
+    assert_eq!(v["stock_wait_s"], 1800);
+    assert_eq!(v["refs_wait_s"], 10800);
+    for bad in [
+        vec!["--cells", "nope"],
+        vec!["--cells", cells, "--extra-env", "FV_ORACLE_URL=https://x"],
+        vec!["--cells", cells, "--upstream-image-tag", "main"],
+        vec!["--cells", cells, "--wall-cap-s", "20000"],
+        vec!["--family", "rtx6000", "--cells", "sol-h3"],
+    ] {
+        let o = fv_lab()
+            .args(["oracle", "--sha", "1234567", "--up-sha", UP])
+            .args(&bad)
+            .output()
+            .unwrap();
+        assert!(!o.status.success(), "{bad:?}");
+    }
+    let nokey = fv_lab()
+        .args([
+            "oracle", "--sha", "1234567", "--up-sha", UP, "--cells", cells, "--yes",
+        ])
+        .output()
+        .unwrap();
+    assert!(!nokey.status.success());
+    assert!(String::from_utf8_lossy(&nokey.stderr).contains("RUNPOD_API_KEY"));
+    // `check` reads lab/upstream.toml too.
+    let out = stdout(fv_lab().arg("check"));
+    assert!(out.contains("upstream fastvideo: 5 target(s)"), "{out}");
+    assert!(out.contains("upstream sol-ltx25: 4 target(s)"), "{out}");
+}

@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Stacks",
+  "description": "`lab/upstream.toml`.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "description": "Always 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "stack": {
+      "description": "The upstream stacks, in the order their pods come up.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Stack"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "stack"
+  ],
+  "$defs": {
+    "CloudType": {
+      "description": "Runpod's cloud tier.",
+      "type": "string",
+      "enum": [
+        "SECURE",
+        "COMMUNITY"
+      ]
+    },
+    "Stack": {
+      "description": "One upstream image and the pod that runs its references.",
+      "type": "object",
+      "properties": {
+        "cell_timeout_s": {
+          "description": "`UP_CELL_TIMEOUT_S`: each reference's cap on the pod (s).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cloud": {
+          "$ref": "#/$defs/CloudType",
+          "default": "SECURE"
+        },
+        "container_disk_gb": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "description": {
+          "type": "string"
+        },
+        "env": {
+          "description": "`FV_EXTRA_ENV` of the pod: `K=V` for every reference.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpu_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "image": {
+          "description": "The docker/upstream.Dockerfile target: the image\n`ghcr.io/zaitrarrio/fastvideo-rs-upstream-<image>:<tag>`.",
+          "type": "string"
+        },
+        "max_usd_per_hr": {
+          "type": "number",
+          "format": "double"
+        },
+        "min_ram_gb": {
+          "description": "The pod's host-RAM floor, whole GB per GPU (Runpod `minRAMPerGPU`).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "region": {
+          "description": "`eu` only (the EU weights volume, CLAUDE.md).",
+          "type": "string"
+        },
+        "target": {
+          "description": "The oracle targets this stack makes.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StackTarget"
+          }
+        },
+        "wall_cap_s": {
+          "description": "The backstop's deadline and the pod's own cap (s), at most 4 h.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "image",
+        "gpu",
+        "gpu_count",
+        "region",
+        "max_usd_per_hr",
+        "wall_cap_s",
+        "container_disk_gb",
+        "cell_timeout_s",
+        "target"
+      ]
+    },
+    "StackTarget": {
+      "description": "One oracle target of a stack: `oracle-<name>` on the pod, the\n`[reference] target` of one cell.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "steps": {
+          "description": "The `scripts/gpu/upstream/pod.sh` steps its reference needs before\n`oracle:` (`weights:<view>`), in order.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

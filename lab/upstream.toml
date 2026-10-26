@@ -1,0 +1,91 @@
+# lab/upstream.toml: the upstream reference stacks `fv-lab oracle` brings up
+# (docs/adr/0019-fv-lab.md §19, schema crates/fastvideo-lab/schemas/upstream.v1.json).
+# One [[stack]] per upstream image: the Python references (FastVideo,
+# sol-engine LTX-2.5) that write the dumps the `oracle` tier's cells read as
+# `{ref}`. Its pod is `runpod-http.sh upstream`'s (the image
+# ghcr.io/zaitrarrio/fastvideo-rs-upstream-<image>:<tag>, scripts/gpu/upstream/pod.sh
+# with UP_STEPS="info:box <the selected targets' steps> oracle:<targets>")
+# on fv-deploy's guards (price cap, $8 floor, EU volume, backstop at
+# wall_cap_s, ready within 600 s in at most 3 cycles), as `fv-lab pod up`'s.
+# Each [[stack.target]] is the `[reference] target` of one oracle cell
+# (lab/cells/oracle-<target>.toml) and the weight steps its reference needs.
+# Values from scripts/gpu/oracle.sh (start_up) and the §15.7 GPU check.
+schema = 1
+
+# FastVideo (FastH3 8-step V2, the FastH3 4-step LoRAs, the H3 Ref2VA
+# pipeline): oracle.sh's `fastvideo` pod. min_ram_gb 192: the LoRA
+# conversion keeps a host copy of the 35B DiT beside the offloaded text
+# encoder (docs/oracle.md "Upstream cells: host RAM"; the 2026-10-26 rerun).
+[[stack]]
+name = "fastvideo"
+description = "FastVideo references: FastH3 8-step V2, the FastH3 4-step VSA / dense LoRAs, H3 Ref2VA"
+image = "fastvideo"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+container_disk_gb = 150
+min_ram_gb = 192
+cell_timeout_s = 7200
+env = ["FASTVIDEO_DUMP_OPS=0,1,24,47"]
+
+# The 8-step checkpoint's view (its h3-8step tree is not on the EU volume:
+# the runtime arms skip on `weights incomplete`) and the Diffusers view, as
+# oracle.sh's union for any fasth3-* target.
+[[stack.target]]
+name = "fasth3-8step"
+steps = ["weights:fasth3-8step", "weights:h3-diffusers"]
+
+[[stack.target]]
+name = "fasth3-8step-vsa0"
+steps = ["weights:fasth3-8step", "weights:h3-diffusers"]
+
+# The LoRA targets read the Diffusers view only (the §15.7 check's UP_STEPS).
+[[stack.target]]
+name = "fasth3-4step-vsa"
+steps = ["weights:h3-diffusers"]
+
+[[stack.target]]
+name = "fasth3-4step-dense"
+steps = ["weights:h3-diffusers"]
+
+# oracle_ref2va builds the Diffusers view itself when it is missing.
+[[stack.target]]
+name = "h3-ref2va-4step"
+steps = []
+
+# sol-engine LTX-2.5 (the distilled two-stage): oracle.sh's `sol-ltx25` pod.
+# RECON_ACCEPT_MISMATCH=1: two of the single-file packs rebuilt from the
+# Diffusers copy carry the Diffusers numbers (upstream/pod.sh weights_ltx25).
+# No host-RAM floor: none measured for these references yet.
+[[stack]]
+name = "sol-ltx25"
+description = "sol-engine LTX-2.5 references: the distilled two-stage at 512p and 4k, Sol and dense stage 2"
+image = "sol-ltx25"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+container_disk_gb = 250
+cell_timeout_s = 7200
+env = ["FASTVIDEO_DUMP_OPS=0,1,24,47", "RECON_ACCEPT_MISMATCH=1"]
+
+[[stack.target]]
+name = "ltx25-512p"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-512p-dense"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-4k"
+steps = ["weights:ltx25"]
+
+[[stack.target]]
+name = "ltx25-4k-dense"
+steps = ["weights:ltx25"]
