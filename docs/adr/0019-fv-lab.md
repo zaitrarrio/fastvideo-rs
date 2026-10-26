@@ -1619,7 +1619,9 @@ bash scripts/gpu/fv-lab-compare-runs.sh --expect-verdicts 4 $L $S     # determin
 ./fv-lab gate $S --check --out /tmp/regate-det-script --cells h3-ab,h3-c,h3-timed
 
 # oracle, fasth3-4step-vsa: one upstream pod makes the reference, both runtime sides fetch it
-RUNPOD_API_KEY=… FV_KEEP_POD=1 FV_POD_FILE=/tmp/up.pod UP_IMAGE_TARGET=fastvideo UP_IMAGE_TAG=latest \
+# (FV_MIN_RAM_GB=192: the reference's LoRA conversion needs host RAM a default pod may not get;
+#  docs/oracle.md "Upstream cells: host RAM")
+RUNPOD_API_KEY=… FV_MIN_RAM_GB=192 FV_KEEP_POD=1 FV_POD_FILE=/tmp/up.pod UP_IMAGE_TARGET=fastvideo UP_IMAGE_TAG=latest \
   UP_STEPS="info:box weights:h3-diffusers oracle:fasth3-4step-vsa" UP_CELL_TIMEOUT_S=7200 \
   FV_EXTRA_ENV="FASTVIDEO_DUMP_OPS=0,1,24,47" FV_FETCH_SKIP='oracle-dump\.tar|/dump/|\.mp4$' FV_CONTAINER_DISK_GB=150 \
   bash scripts/gpu/runpod-http.sh upstream $SHA & UPD=$!   # keeps the pod; writes "<id> <tag>" to /tmp/up.pod

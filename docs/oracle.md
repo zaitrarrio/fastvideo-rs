@@ -128,6 +128,31 @@ On a start failure, `bench_fastvideo.py` writes each worker's exit code to
 `minRAMPerGPU: n`, and the driver log prints the RAM the pod was given
 (`memoryInGb`). None of this changes the reference's arguments or numerics.
 
+**The rerun (2026-10-26, run `55fa19a-10260558`).** It used the same image, the
+same steps and `FV_MIN_RAM_GB=192`, in EU-RO-1 on `bz0ofkfx45`. Runpod gave the
+pod 283 GB and 28 vCPUs on a 2267 GB host, and `box.txt` recorded
+`pod_ram_limit_mib=269889`. The `oracle-fasth3-4step-vsa` cell passed:
+
+- exit 0 in 487 s;
+- `oom_kills` 0;
+- `peak_smi_mib` 86171;
+- `generation_time_s` 59.35 and `peak_memory_mb` 84160.95, the same as the
+  2026-09-29 reference;
+- a 1.3 GB dump.
+
+This run predates the page-cache fix (head `55fa19a`). Its `peak_ram_mib`
+(269885) was then `memory.current`, page cache included, which is why it
+equals the limit. It is not a measure of what the processes used.
+
+The failed run (`f93a961-10260534`) had no RAM floor and ran on a 755 GB host.
+Its pod limit was not recorded. So the evidence strongly supports host-RAM
+starvation (an OOM kill during the LoRA conversion), but does not prove it.
+
+**The setting:** run upstream H3 LoRA cells (`oracle:fasth3-4step-*`,
+`cells:fv-fasth3-4step-*`) with `FV_MIN_RAM_GB=192`. `scripts/gpu/oracle.sh`
+passes the caller's environment to `runpod-http.sh upstream`, so set it there
+too. The command in ADR-0019 §15.7 does.
+
 ## Results: H3 turbo on H100 with the datacenter VSA kernel (2026-09-29)
 
 Target `fasth3-4step-vsa`, runtime f9be674 (WP-D). The reference was run
