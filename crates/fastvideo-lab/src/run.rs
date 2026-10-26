@@ -100,7 +100,8 @@ pub struct RunConfig {
     pub tag: Option<String>,
     /// `FV_RUNS_DIR`: the run directory itself, instead of
     /// `<scratch>/runs/<family>[/<tag>]` (the script's switch for one family
-    /// running another's cells into its own run directory: `headline`).
+    /// running another's cells into its own run directory, as `sfwan` runs
+    /// `wan`'s; `headline` used it with fv-lab until it retired, ADR-0019 §22).
     pub runs_dir: Option<PathBuf>,
     /// `FV_GPUCHECK`.
     pub bin: PathBuf,
@@ -3063,11 +3064,11 @@ mod tests {
         c.scratch = "/fvscratch".into();
         c.tag = Some("abc-1".into());
         assert_eq!(c.runs(), Path::new("/fvscratch/runs/rtx6000/abc-1"));
-        // FV_RUNS_DIR (headline's sub-runs) replaces the whole path.
+        // FV_RUNS_DIR (a sub-run in another run's directory) replaces the whole path.
         let mut h = c.clone();
-        h.runs_dir = Some("/fvscratch/runs/headline/abc-1".into());
-        assert_eq!(h.runs(), Path::new("/fvscratch/runs/headline/abc-1"));
-        assert_eq!(h.paths().runs, Path::new("/fvscratch/runs/headline/abc-1"));
+        h.runs_dir = Some("/fvscratch/runs/sfwan/abc-1".into());
+        assert_eq!(h.runs(), Path::new("/fvscratch/runs/sfwan/abc-1"));
+        assert_eq!(h.paths().runs, Path::new("/fvscratch/runs/sfwan/abc-1"));
         assert_eq!(c.weights(), Path::new("/workspace/weights"));
         assert_eq!(c.aux(), Path::new("/workspace/weights/auxiliary"));
         if !Path::new("/workspace/weights/auxiliary/tae/.complete").exists() {

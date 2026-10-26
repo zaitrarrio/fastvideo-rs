@@ -806,7 +806,10 @@ bounded clip), several prompts and seeds for the long runs, and RTX PRO
 The E2E rerun (`docs/serve/e2e/wan.md`) showed a glow from about 30 s and
 horizontal bands growing down from the top rows from about 45 s with the
 rebased sink 3. `runpod-matrix.sh sfquality` (`fv-gpucheck wan stream`,
-no server) reproduces it and isolates it. RTX PRO 6000 (EUR-IS-1), the E2E
+no server) reproduced it and isolated it; that family is retired with no tier
+since the study ended (ADR-0019 §22, S1). Its run specs are in
+`git show 4f8822a0:scripts/gpu/runpod-matrix.sh`, and `fv-gpucheck wan stream --run
+<spec>` runs one by hand. RTX PRO 6000 (EUR-IS-1), the E2E
 prompt, 832x480, 16 fps. Images `sha-f2b3180` (matrix) and `sha-2c987e8`
 (long and second-seed runs). Every run records, per 10 s window, the
 picture statistics above plus the **top band** (first eighth of the rows)

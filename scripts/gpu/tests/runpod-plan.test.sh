@@ -6,7 +6,7 @@
 # the commands checked are the ones cmd_gpu / cmd_matrix send to the pods:
 #   - the lists are `gpu` (ltx) and `matrix` (ltx wan): h3 and hunyuan left
 #     them when they retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
-#     §18), and no family of that list is in them;
+#     §18), and no family of that list (§18's and §22's) is in them;
 #   - a family retired to fv-lab (fv-lab-retired.sh, here ltx) runs the
 #     image's `fv-lab run <tier>` and never runpod-matrix.sh, which refuses it;
 #     wan runs runpod-matrix.sh as before; `matrix` gives the retired family
@@ -158,14 +158,21 @@ else
 fi
 
 # 5. A family nothing can run stops gpu / matrix before the key and any pod.
-#    A family retired with no tier (§18) says so and names what replaces it.
+#    A family retired with no tier (§18, and §22's S1 nine) says so and names
+#    what replaces it. The retired families are named here, not read from the
+#    list, so one dropped from FV_SCRIPT_RETIRED fails (it would be refused as
+#    unknown, without its pointer).
+no_tier="h3 hunyuan sana-video b200 writer precision-debug identity b4b b4c b4c2 h3attn"
+no_tier+=" sfquality headline speechtest cold eval ltxoffload solbench sol-lingbot sol-cosmos3"
+[[ "$FV_SCRIPT_RETIRED" == "$no_tier" ]] && ok "FV_SCRIPT_RETIRED: the families named here" \
+  || bad "FV_SCRIPT_RETIRED: $FV_SCRIPT_RETIRED"
 for mode in gpu matrix; do
   v=RP_GPU_FAMILIES; [[ "$mode" == matrix ]] && v=RP_MATRIX_FAMILIES
-  for fam in gold h3-graphs nope $FV_SCRIPT_RETIRED; do
+  for fam in gold h3-graphs nope $no_tier; do
     rc=0; drive "$mode-$fam" "$v=(ltx $fam); cmd_$mode" || rc=$?
     d="$TMP/$mode-$fam"
     want="FATAL: $fam is neither a runpod-matrix.sh family nor a retired one"
-    fv_script_retired "$fam" && want="FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): nothing runs it on the pod; $(fv_script_retired_why "$fam")"
+    [[ " $no_tier " == *" $fam "* ]] && want="FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): nothing runs it on the pod; $(fv_script_retired_why "$fam")"
     if [[ "$rc" == 2 && "$(cat "$d/out")" == *"$want"* \
       && ! -s "$d/pods.log" && ! -s "$d/ssh.log" && ! -s "$d/local.log" ]]; then
       ok "$mode: $fam refused before the key or a pod"

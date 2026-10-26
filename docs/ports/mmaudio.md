@@ -159,7 +159,9 @@ injected.
 ## Speech
 
 The question is whether MMAudio can say a given line. `runpod-matrix.sh
-speechtest` measures it. It generates every clip on one pod and transcribes
+speechtest` measured it (retired with no tier since, ADR-0019 §22: the answer
+is below, and its commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`).
+It generated every clip on one pod and transcribed
 each one with Whisper large-v3 (`speech_transcribe.py`: English forced,
 temperature 0). WER is computed against the intended line, lowercased, with
 punctuation stripped and numbers spelled out. `no_speech_prob` is Whisper's

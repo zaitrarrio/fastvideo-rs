@@ -128,7 +128,8 @@ so the frames are byte-identical to the resident run.
 
 **Measured** on RTX PRO 6000 Blackwell Server Edition, with the Sol stage 2,
 bf16 activations and FFN chunking (all defaults). These are the matrix family
-`ltxoffload` (`scripts/gpu/runpod-matrix.sh`), runs `a73173e-09270009`,
+`ltxoffload` (`scripts/gpu/runpod-matrix.sh`; retired with no tier since,
+ADR-0019 §22, its commands in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`), runs `a73173e-09270009`,
 `a2cd194-09270039` and `a2cd194-09270103`. The peaks are the pool's
 high-water marks, the equivalent of `torch.cuda.max_memory_allocated` /
 `_reserved`. "smi" is the device-wide peak.

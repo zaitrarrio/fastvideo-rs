@@ -10,12 +10,10 @@
 #     tiers (oracle-r2, §21) refused for run / all (their plan still the
 #     script's body);
 #   - the families retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
-#     ADR-0019 §18) refused by runpod-http.sh run / all / plan (dry run or not,
-#     before the key) and by runpod-matrix.sh, exit 2, naming what replaces
-#     each; never routed to fv-lab;
-#   - runpod-matrix.sh `headline` on a fake box: its cells through a fake
-#     fv-lab (FV_RUNS_DIR), a failing fv-lab logged, a missing one and
-#     FV_PROMPTS / FV_PROMPT / FV_SEED refused (exit 2);
+#     ADR-0019 §18 and §22's S1, `headline` among them) refused by
+#     runpod-http.sh run / all / plan (dry run or not, before the key) and by
+#     runpod-matrix.sh, exit 2, naming what replaces each; never routed to
+#     fv-lab;
 #   - the usage texts print their whole header.
 #
 #   bash scripts/gpu/tests/fv-lab-route.test.sh
@@ -284,17 +282,21 @@ for fam in fuse attn3 ltx; do
   expect "plan: fv-lab's plan for $fam" 0 "--family $fam --root $ROOT --tag abc1234-1025120000-abcd" -- \
     FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
 done
-# Retired with no tier (ADR-0019 §18, FV_SCRIPT_RETIRED): h3 (§17.4), the B4
-# families (§17.3 option (b)) and the §14.7 rows. No branch and no tier:
-# runpod-http.sh run / all / plan refuse them (exit 2) before the key, with or
-# without a dry run, naming what replaces each; runpod-matrix.sh refuses them
-# too. Each has a pointer, none is a tier or in FV_LAB_RETIRED / FV_LAB_EXPERIMENTS.
+# Retired with no tier (FV_SCRIPT_RETIRED): h3 (§17.4), the B4 families
+# (§17.3 option (b)) and the §14.7 rows (ADR-0019 §18); then §22's S1 nine.
+# No branch and no tier: runpod-http.sh run / all / plan refuse them (exit 2)
+# before the key, with or without a dry run, naming what replaces each;
+# runpod-matrix.sh refuses them too. Each has a pointer, none is a tier or in
+# FV_LAB_RETIRED / FV_LAB_EXPERIMENTS. The loop runs over the families named
+# here, not the list, so one dropped from the list fails its refusals too.
 # shellcheck source=scripts/gpu/fv-lab-retired.sh
 . "$ROOT/scripts/gpu/fv-lab-retired.sh"
-[[ "$FV_SCRIPT_RETIRED" == "h3 hunyuan sana-video b200 writer precision-debug identity b4b b4c b4c2 h3attn" ]] \
-  && ok "FV_SCRIPT_RETIRED: the eleven families of ADR-0019 §18" || bad "FV_SCRIPT_RETIRED: $FV_SCRIPT_RETIRED"
+retired_18="h3 hunyuan sana-video b200 writer precision-debug identity b4b b4c b4c2 h3attn"
+retired_22="sfquality headline speechtest cold eval ltxoffload solbench sol-lingbot sol-cosmos3"
+[[ "$FV_SCRIPT_RETIRED" == "$retired_18 $retired_22" ]] \
+  && ok "FV_SCRIPT_RETIRED: the eleven families of ADR-0019 §18 and the nine of §22 (S1)" || bad "FV_SCRIPT_RETIRED: $FV_SCRIPT_RETIRED"
 tiers="$(awk '/^\[\[tier\]\]/ { t = 1; next } t && /^name = "/ { gsub(/^name = "|"$/, ""); print; t = 0 }' "$ROOT/lab/tiers.toml")"
-for fam in $FV_SCRIPT_RETIRED; do
+for fam in $retired_18 $retired_22; do
   why="$(fv_script_retired_why "$fam")"
   if [[ -n "$why" ]] && ! fv_lab_retired "$fam" && ! fv_lab_experiment "$fam" && ! grep -qx "$fam" <<<"$tiers"; then
     ok "$fam: a pointer, no tier, not routed to fv-lab"
@@ -311,7 +313,7 @@ for fam in $FV_SCRIPT_RETIRED; do
 done
 
 # A script family's dry run creates nothing.
-dry "script family: dry run" 0 "on the script path, nothing created" FV_FAMILY=eval
+dry "script family: dry run" 0 "on the script path, nothing created" FV_FAMILY=wan
 
 # A fake fv-lab: exactly the command, its exit code back.
 cat >"$TMP/fake-fv-lab" <<'EOF'
@@ -335,6 +337,11 @@ expect "no fv-lab: says how to build it" 1 "cargo build --release --locked -p fa
 expect "h3: refused, the fake FV_LAB_BIN not called" 2 "the rtx6000 tier runs every arm but" -- RUNPOD_API_KEY=x \
   FV_LAB_BIN="$TMP/fake-fv-lab" FAKE_LOG="$TMP/never.log" FV_FAMILY=h3 bash "$HTTP" run abc1234
 [[ ! -e "$TMP/never.log" ]] && ok "h3: fv-lab not run" || bad "h3: fv-lab ran: $(cat "$TMP/never.log")"
+# headline ran its cells through fv-lab (FV_LAB_BIN), even in a dry run; retired
+# (ADR-0019 §22, S1), runpod-matrix.sh refuses it before fv-lab is called.
+mx "matrix: headline refused, fv-lab not called" "FATAL: headline is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED): its nine arms are cells of four tiers" \
+  FV_LAB_BIN="$TMP/fake-fv-lab" FAKE_LOG="$TMP/never-headline.log" headline
+[[ ! -e "$TMP/never-headline.log" ]] && ok "headline: fv-lab not run" || bad "headline: fv-lab ran: $(cat "$TMP/never-headline.log")"
 
 # runpod-http.sh's private copy (TMPDIR/runpod-http.XXXXXX) is removed when the
 # run ends: a refusal, a die, a dry run, the usage text, and the exec of fv-lab.
@@ -355,51 +362,6 @@ cp "$HTTP" "$TMP/http-in-place.sh"
 (cd "$TMP" && clean FV_HTTP_COPY=1 FV_FAMILY=h3 bash "$TMP/http-in-place.sh" run abc1234 >/dev/null 2>&1) || true
 [[ -f "$TMP/http-in-place.sh" ]] && ok "runpod-http.sh with FV_HTTP_COPY set runs in place and removes nothing" \
   || bad "runpod-http.sh removed the script it ran in place"
-
-# 4. headline on a fake box (no GPU): fv-gpucheck, nvidia-smi and the CUDA
-# library links faked, the cells through the fake fv-lab.
-box() { # box <name>: a fresh fake box under $TMP/<name>
-  local b="$TMP/$1"
-  mkdir -p "$b/bin" "$b/work/weights" "$b/scratch/fv-libs"
-  printf '#!/bin/sh\necho "GPU 0: fake"\n' >"$b/bin/nvidia-smi"
-  printf '#!/bin/sh\nexit 0\n' >"$b/bin/fv-gpucheck"
-  chmod +x "$b/bin/nvidia-smi" "$b/bin/fv-gpucheck"
-  : >"$b/scratch/fv-libs/libcudnn.so"
-  : >"$b/scratch/fv-libs/libcupti.so"
-}
-headline() { # headline <box> <env...>
-  local b="$TMP/$1"
-  shift
-  clean PATH="$b/bin:$PATH" FV_WORK="$b/work" FV_SCRATCH="$b/scratch" FV_RUN_TAG=t \
-    FV_GPUCHECK="$b/bin/fv-gpucheck" FAKE_LOG="$b/fv-lab.log" "$@" bash "$MATRIX" headline
-}
-box h1
-rc=0
-out="$(headline h1 FV_LAB_BIN="$TMP/fake-fv-lab" FAKE_EXIT=3 2>&1)" || rc=$?
-runs="$TMP/h1/scratch/runs/headline/t"
-if [[ "$rc" == 0 && "$(grep -c '^run ' "$TMP/h1/fv-lab.log")" == 4 ]] \
-  && grep -qx "run fastvideo --cells fasth3-4step-vsa-480p fasth3-8step-480p fasth3-4step-vsa-768p fasth3-8step-768p" "$TMP/h1/fv-lab.log" \
-  && grep -qx "runs=$runs cap=300 work=$TMP/h1/work" "$TMP/h1/fv-lab.log" \
-  && [[ "$(grep -c 'FAIL fv-lab run [a-z0-9]* exit=3' <<<"$out")" == 4 ]] && grep -q 'matrix done' <<<"$out"; then
-  ok "headline: four tiers through fv-lab into its run dir, a failing one logged"
-else
-  bad "headline with a failing fv-lab: exit $rc; $(cat "$TMP/h1/fv-lab.log" 2>/dev/null); $out"
-fi
-box h2
-rc=0
-out="$(headline h2 FV_LAB_BIN="$TMP/none" 2>&1)" || rc=$?
-if [[ "$rc" == 2 && "$out" == *"FATAL: fv-lab missing at $TMP/none"* ]]; then ok "headline: no fv-lab is fatal (exit 2)"; else bad "headline without fv-lab: exit $rc; $out"; fi
-for kv in FV_PROMPTS=5 FV_PROMPT=x FV_SEED=7; do
-  box h3
-  rc=0
-  out="$(headline h3 FV_LAB_BIN="$TMP/fake-fv-lab" "$kv" 2>&1)" || rc=$?
-  if [[ "$rc" == 2 && "$out" == *"FATAL: ${kv%%=*} is set"* && ! -s "$TMP/h3/fv-lab.log" ]]; then
-    ok "headline: $kv refused (exit 2, nothing run)"
-  else
-    bad "headline with $kv: exit $rc; $out"
-  fi
-  rm -rf "$TMP/h3"
-done
 
 # 6. The usage texts: the whole header, to its last entry.
 expect "runpod-http.sh usage: whole header" 2 "it skips the default weight gate)." -- RUNPOD_API_KEY=x bash "$HTTP"

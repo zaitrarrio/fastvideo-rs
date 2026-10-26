@@ -18,8 +18,12 @@ Not fetched (not needed for T2V): Cosmos3 `vision_encoder/`, `sound_tokenizer/`,
 
 ## 2. Arms
 
-Both run as runpod-matrix families through `runpod-http.sh` on an image built
-from this branch (the published image does not have `fv-gpucheck sol`).
+They ran as the runpod-matrix families `sol-lingbot` and `sol-cosmos3`
+through `runpod-http.sh`. Both families are **retired** with no tier
+(ADR-0019 §22, S1): every driver refuses them (exit 2). The benchmark runs
+`scripts/gpu/sol-bench-pod.sh` (`docs/perf/sol-bench.md`), whose sets run these
+arms (LingBot on one prompt). The families' commands are in
+`git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
 
 | family / cell | what | published reference |
 |---|---|---|
@@ -30,18 +34,11 @@ from this branch (the published image does not have `fv-gpucheck sol`).
 | `sol-cosmos3` / `cosmos3-teacache` | + TeaCache 1.15 / 10 / 3 | — |
 | `sol-cosmos3` / `cosmos3-teacache-fp8` | + `FASTVIDEO_FP8=1` (W8A8, all steps; theirs: NVFP4 middle steps) | 2.26× |
 
-Commands (B200; RTX PRO 6000 drops the GPU type and the residency):
-
-```bash
-FV_FAMILY=sol-lingbot RUNPOD_GPU_TYPE="NVIDIA B200" RUNPOD_GPU_MAX_DPH=8 FV_POD_CAP_S=7200 \
-  FV_EXTRA_ENV="FV_LINGBOT_RESIDENCY=both" scripts/gpu/runpod-http.sh run <sha>
-FV_FAMILY=sol-cosmos3 RUNPOD_GPU_TYPE="NVIDIA B200" RUNPOD_GPU_MAX_DPH=8 FV_POD_CAP_S=5400 \
-  FV_EXTRA_ENV="FASTVIDEO_COSMOS3_UND=resident" scripts/gpu/runpod-http.sh run <sha>
-# RTX PRO 6000: FV_FAMILY=sol-lingbot FV_POD_CAP_S=14400 scripts/gpu/runpod-http.sh run <sha>
-```
-
-Cheaper first pass: `FV_EXTRA_ENV="FV_LINGBOT_PROMPTS=1"` (one prompt per
-arm) and `FV_EXTRA_ENV="FV_COSMOS3_ARMS=baseline"`.
+The families' `runpod-http.sh run` commands (B200 with
+`FV_LINGBOT_RESIDENCY=both` / `FASTVIDEO_COSMOS3_UND=resident`, a 14400 s cap on
+an RTX PRO 6000, `FV_LINGBOT_PROMPTS=1` / `FV_COSMOS3_ARMS=baseline` for a
+cheaper first pass) are refused now; the `sol-bench-pod.sh` launch is in
+`docs/perf/sol-bench.md`.
 
 ## 3. Estimates (FLOP-based, not measured)
 

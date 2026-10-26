@@ -288,7 +288,8 @@ struct RunArgs {
     #[arg(long)]
     tag: Option<String>,
     /// The run directory itself, instead of <scratch>/runs/<tier>/<tag>
-    /// (FV_RUNS_DIR; runpod-matrix.sh `headline` runs a tier's cells into its own).
+    /// (FV_RUNS_DIR, as runpod-matrix.sh reads it: one run's cells into another's
+    /// directory).
     #[arg(long)]
     runs_dir: Option<PathBuf>,
     /// fv-gpucheck (FV_GPUCHECK).

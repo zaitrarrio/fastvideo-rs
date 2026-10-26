@@ -380,7 +380,8 @@ models we already serve.
 5. Add partial residency to the ring: K blocks resident, the rest streamed.
 6. For Ampere, add int4/int8 weight-only GEMMs. These do not exist yet.
 
-Test: an 8 GiB memory-cap cell in `runpod-matrix.sh ltxoffload`, then one
+Test: an 8 GiB memory-cap cell (a new fv-lab tier when the work starts:
+`runpod-matrix.sh ltxoffload` is retired, ADR-0019 §22), then one
 consumer card. Host RAM: ≥ 32 GB with FP8 blocks (INFERRED).
 
 **NAVA (speech #2).** New family `nava`:
