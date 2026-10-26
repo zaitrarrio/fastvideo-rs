@@ -63,6 +63,74 @@ fn dry_run_prints_the_scripts_lines() {
     assert!(out.lines().all(|l| l.as_bytes().get(9) == Some(&b']')));
 }
 
+/// The `gold` tier (`weights = "volume+r2"`, ADR-0019 §16) through the
+/// binary: its R2 plan comes from the repository's `volumes.sh` and
+/// `weights-r2.tsv`, and the dry run is its golden, with or without an R2
+/// key in the environment (never printed).
+#[test]
+fn gold_dry_run_prints_its_r2_plan() {
+    let fixture = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/gold-dry-run.txt"),
+    )
+    .unwrap();
+    for key in [None, Some("dry-run-secret-value")] {
+        let mut c = fv_lab();
+        c.args([
+            "run",
+            "gold",
+            "--all",
+            "--dry-run",
+            "--work",
+            "/workspace",
+            "--scratch",
+            "/fvscratch",
+            "--tag",
+            "1234567-10241200",
+        ]);
+        match key {
+            Some(k) => c
+                .env("FV_WEIGHTS_R2_ACCESS_KEY_ID", k)
+                .env("FV_WEIGHTS_R2_SECRET_ACCESS_KEY", k),
+            None => c
+                .env_remove("FV_WEIGHTS_R2_ACCESS_KEY_ID")
+                .env_remove("FV_WEIGHTS_R2_SECRET_ACCESS_KEY"),
+        };
+        let o = c.output().expect("fv-lab runs");
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let out = String::from_utf8_lossy(&o.stdout);
+        let stripped: Vec<&str> = out.lines().map(|l| l.get(11..).unwrap_or("")).collect();
+        assert_eq!(stripped, fixture.lines().collect::<Vec<_>>());
+        assert!(!out.contains("dry-run-secret-value"));
+        assert!(!String::from_utf8_lossy(&o.stderr).contains("dry-run-secret-value"));
+    }
+}
+
+/// A `volume+r2` run never puts its weights root on the volume (ADR-0019
+/// §16.3): without `--scratch` the scratch disk is the work directory, and a
+/// scratch under the work directory or the volume mount is refused too; exit
+/// 2, before anything is written.
+#[test]
+fn a_volume_r2_root_on_the_volume_is_refused() {
+    for extra in [
+        &["--work", "/tmp/fv-lab-w"][..],
+        &["--work", "/tmp/fv-lab-w", "--scratch", "/tmp/fv-lab-w/s"][..],
+        &["--work", "/tmp/fv-lab-w", "--scratch", "/workspace/s"][..],
+    ] {
+        let o = fv_lab()
+            .args(["run", "gold", "--all", "--dry-run"])
+            .args(extra)
+            .output()
+            .expect("fv-lab runs");
+        assert_eq!(o.status.code(), Some(2), "{extra:?}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains("FATAL") && err.contains("--scratch / FV_SCRATCH"),
+            "{err}"
+        );
+        assert!(o.stdout.is_empty(), "{extra:?}");
+    }
+}
+
 /// The restored modes (ADR-0019 §12) through the binary: each tier's dry run
 /// is the script's in that mode at 5987e6a4, the family named by the tier;
 /// a gen cell of `ltxvae-gen` runs in that tier, a shared cell in `ltxvae`
@@ -398,6 +466,16 @@ fn pod_up_cells_must_be_arms_of_the_tier() {
         "{}",
         String::from_utf8_lossy(&ok.stderr)
     );
+    // The gold tier's plan (ADR-0019 §16): the R2 key as Runpod secret
+    // references in the pod's env, and the tier's 300 GB disk.
+    let plan = String::from_utf8_lossy(&ok.stdout);
+    for want in [
+        "\"FV_WEIGHTS_R2_ACCESS_KEY_ID\": \"{{ RUNPOD_SECRET_fv_r2_access_key_id }}\"",
+        "\"FV_WEIGHTS_R2_SECRET_ACCESS_KEY\": \"{{ RUNPOD_SECRET_fv_r2_secret_access_key }}\"",
+        "\"containerDiskInGb\": 300",
+    ] {
+        assert!(plan.contains(want), "{want}\n{plan}");
+    }
     for bad in ["sol-h3x", "x"] {
         let o = fv_lab()
             .args([

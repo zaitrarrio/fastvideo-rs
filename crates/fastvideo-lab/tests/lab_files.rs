@@ -206,3 +206,23 @@ fn every_cell_file_belongs_to_a_tier() {
         );
     }
 }
+
+#[test]
+fn the_runtime_image_stays_python_free_so_the_runner_brings_python3() {
+    // The runtime image is Python-free by design (its CI job fails on a
+    // python3); a `volume+r2` run (ADR-0019 §16) installs python3 with apt at
+    // its first fetch instead, and the pod's idle limit counts that install.
+    let docker = read("docker/gpucheck.Dockerfile");
+    let stage = docker
+        .split("FROM base-cuda AS runtime")
+        .nth(1)
+        .and_then(|r| r.split("\nFROM ").next())
+        .expect("the runtime stage");
+    assert!(
+        docker.contains("No Python, no PyTorch"),
+        "the runtime stage's rule"
+    );
+    assert!(!stage.contains("python3"), "python3 in the runtime stage");
+    assert_eq!(fastvideo_lab::run::APT_CAP_S, 600);
+    assert_eq!(fastvideo_lab::weights::r2_idle_min(3600), 85);
+}

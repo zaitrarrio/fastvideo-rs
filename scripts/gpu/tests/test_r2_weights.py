@@ -245,6 +245,26 @@ class Fetch(Base):
         lines = (d / "sha256.txt").read_text().splitlines()
         self.assertEqual(len(lines), len(files))
 
+    def test_plan_pin_refuses_a_manifest_the_record_does_not_pin(self):
+        raw = self.s3.get(W.manifest_key("test/", "demo", "r1"))
+        good = hashlib.sha256(raw).hexdigest()
+        pin = self.tmp / "weights-r2.tsv"
+        out = self.tmp / "plan-pin.json"
+
+        def plan(rows):
+            pin.write_text("# dest rev files bytes sha source\n" + "".join("\t".join(r) + "\n" for r in rows))
+            a = type("A", (), dict(dests=["demo@r1"], ttl=600, out=str(out), prefix="test/", pin=str(pin)))()
+            return W.cmd_plan(self.s3, a)
+
+        plan([("demo", "r1", "6", "1", good, "dir")])
+        self.assertEqual(json.loads(out.read_text())["trees"][0]["dest"], "demo")
+        with self.assertRaisesRegex(W.Fail, "manifest sha256"):
+            plan([("demo", "r1", "6", "1", "0" * 64, "dir")])
+        with self.assertRaisesRegex(W.Fail, "not in"):
+            plan([("other", "r1", "6", "1", good, "dir")])
+        with self.assertRaisesRegex(W.Fail, "not dest"):
+            plan([("demo", "r1", "6", "1", "short", "dir")])
+
     def test_fetch_whole_tree_then_present(self):
         plan = self.plan("demo")
         self.assertEqual(self.fetch(plan, self.root, "--get-parts", "1"), 0)

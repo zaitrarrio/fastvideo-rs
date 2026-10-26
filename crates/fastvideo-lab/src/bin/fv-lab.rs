@@ -62,14 +62,16 @@ use fastvideo_deploy::provider::{
     Instance, InstanceId, InstanceState, Provider, ProviderKind, ReachOptions,
 };
 
-use fastvideo_lab::plan::{Lab, Paths, Tier};
+use fastvideo_lab::plan::{Lab, Paths, Tier, TierWeights};
 use fastvideo_lab::pod::{
     baseline_for_pod, check_cells, check_sha7_named, fetch_run, fetch_tree, judge_run, launch,
     name_taken, random_suffix, reap_account, reap_recorded, run_dir, run_tag, undeleted_in_ledger,
-    wait_done, Done, FetchSkip, LabPod, PodRecord, StartOptions, TreeFetch,
+    wait_done, wait_limit_s, Done, FetchSkip, LabPod, PodRecord, StartOptions, TreeFetch,
+    RUN_DEADLINE_RESERVE_S,
 };
 use fastvideo_lab::run::{dry_run_lines, gate_selection, Decision, RunConfig, RunError, Runner};
 use fastvideo_lab::schema;
+use fastvideo_lab::weights::{check_off_volume, R2Key, R2Setup, TreeSources, WEIGHTS_DIR};
 use fastvideo_lab::{experiments, goldcell, goldcheck, report, summary, table};
 
 /// `-V` / `--version`: the tools release this binary was built as
@@ -598,6 +600,31 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
             a.target
         ));
     }
+    // A `volume+r2` tier (ADR-0019 §16): `{weights}` is the merged root on
+    // the scratch disk, and the trees the volume lacks come from R2. The key
+    // is read here (the Runpod secrets fill these in on the pod), held in
+    // memory and handed to the plan step only.
+    if tier.weights == TierWeights::VolumeR2 {
+        let r2_root = cfg.scratch.join(WEIGHTS_DIR);
+        if let Err(e) = check_off_volume(&cfg.scratch, &r2_root, &cfg.work) {
+            eprintln!("[fv-lab] FATAL: {e}");
+            return Ok(ExitCode::from(2));
+        }
+        let sources = TreeSources::load(&root)?;
+        cfg.r2 = Some(R2Setup::new(
+            sources,
+            &cfg.scratch,
+            R2Key::from_env(env_nonempty),
+        ));
+    }
+    cfg.deadline = match env_nonempty("FV_RUN_DEADLINE") {
+        None => None,
+        Some(d) => Some(
+            d.parse::<u64>()
+                .map_err(|_| format!("FV_RUN_DEADLINE `{d}` is not unix seconds"))?
+                as f64,
+        ),
+    };
     let paths: Paths = cfg.paths();
     let steps = Lab::steps(&cells, &cfg.bin, &paths).map_err(|e| e.to_string())?;
     if a.dry_run {
@@ -886,6 +913,9 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         ),
     };
     let mut so = StartOptions::for_tier(t, &tag);
+    // The runner ends before the driver stops waiting (pod::wait_limit_s).
+    so.run_deadline =
+        Some((clock.now() as u64 + t.wall_cap_s).saturating_sub(RUN_DEADLINE_RESERVE_S));
     so.cells = u.cells.iter().flat_map(|c| split_list(c)).collect();
     so.extra_env = u.extra_env.clone();
     // What no tier reads would be ignored on the pod: refused (`knobs`).
@@ -1096,8 +1126,10 @@ fn finish(
     let mut ok = true;
     let id = InstanceId::new(rec.id.clone());
     if wait {
+        // Until the cap less the fetch's reserve: a run cut short is still
+        // fetched (and judged failed) before the pod deletes itself.
         let elapsed = rec.created_at.map_or(0.0, |c| (clock.now() - c).max(0.0));
-        let limit = (rec.cap_s as f64 - elapsed).max(0.0) as u64;
+        let limit = wait_limit_s(rec.cap_s, elapsed);
         match wait_done(
             http,
             provider,

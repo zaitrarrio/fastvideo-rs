@@ -102,8 +102,24 @@ for FAMILY in $FAMILIES; do
   # ADR-0019 §14) are the same: no script family, their commands held to the
   # experiment's pod script by fv-lab-experiment-goldens.sh, their dry run
   # fv-lab's own (tests/experiment_tiers.rs).
+  # The gold tier's container disk is its own (weights "volume+r2", ADR-0019
+  # §16: the largest arm's R2 trees on top of the volume tiers' 120 GB), passed
+  # as the script's FV_CONTAINER_DISK_GB, and so is its idle watchdog (an R2
+  # fetch keeps the GPU at 0 %: weights::r2_idle_min, a 600 s apt-get plus one
+  # fetch at the cell cap, in minutes, plus 15, at least 30; before and after
+  # the GPU's first use); its env (the R2 key as Runpod secret references) is
+  # the one difference tests/payload_golden.rs allows.
   if [[ "$FAMILY" == gold ]] || fv_lab_experiment "$FAMILY"; then
-    clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
+    extra=()
+    if [[ "$FAMILY" == gold ]]; then
+      tv() { awk -v k="$1" '/^\[\[tier\]\]/ { t = 0 } /^name = "gold"$/ { t = 1 } t && $1 == k && $2 == "=" { print $3; exit }' "$ROOT/lab/tiers.toml"; }
+      disk="$(tv container_disk_gb)"; cell="$(tv cell_timeout_s)"
+      [[ "$disk" =~ ^[0-9]+$ && "$cell" =~ ^[0-9]+$ ]] || { echo "fv-lab-goldens: no container_disk_gb / cell_timeout_s for the gold tier" >&2; exit 2; }
+      (( cell > 0 )) || cell=3600
+      idle=$(( (600 + cell + 59) / 60 + 15 )); (( idle >= 30 )) || idle=30
+      extra=(FV_CONTAINER_DISK_GB="$disk" FV_IDLE_GPU_MIN="$idle" FV_IDLE_GPU_GRACE_MIN="$idle")
+    fi
+    clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" ${extra[@]+"${extra[@]}"} \
       bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
     FIXTURES+=("runpod-http-$FAMILY.json")
     continue

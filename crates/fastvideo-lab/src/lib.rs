@@ -19,6 +19,8 @@
 //!   evaluated again offline.
 //! - [`repeats`]: the frame hashes, `determinism.txt` and the typed verdict
 //!   of the determinism families' `[repeats]` cells (ADR-0019 §15).
+//! - [`weights`]: a `volume+r2` tier's trees: which come from the EU volume
+//!   and which from the R2 weights store, fetched per arm (ADR-0019 §16).
 //! - [`pod`]: `fv-lab pod`, a tier's Runpod pod on fv-deploy's `Provider`
 //!   trait, guards and lifecycle.
 //! - [`goldcheck`]: `fv-lab gold check`, the CI bridge (plan D4): every
@@ -60,6 +62,7 @@ pub mod run;
 pub mod schema;
 pub mod summary;
 pub mod table;
+pub mod weights;
 
 pub use gold::{
     check_date, load_dir, Cost, Gap, Gold, GoldError, LastValidated, Latency, Measures, Model,

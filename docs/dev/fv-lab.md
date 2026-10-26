@@ -60,7 +60,7 @@ dry run show what will run.
 | `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | byte identity across fresh processes at short configs, three runs per group and the timed-pick control; `determinism.txt` | D1d (§15); its script branch stays until its GPU check; `wan` skips on the EU volume |
 | `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | byte identity of 1080p runs within one process and across two; prompt sets as files, hashes per run, stage digests | D1d (§15); branch stays until its GPU check |
 | `oracle` | `oracle-<target>` (9) | 32 | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; the clip-metric targets stay in the script |
-| `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)) |
+| `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)); weights `volume+r2` ([below](#weights-from-the-volume-and-r2-volumer2)) |
 | `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`), [below](#port-one-offs-the-experiment-tiers) |
 
 All eleven above `precision-nvfp4` are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10; `b4a`
@@ -426,6 +426,37 @@ tier names its arms by variant id), with every value read from that arm's `summa
 Workflows: `gold-check.yml` runs the three checks on lab, family and lab-crate changes; `gold-run.yml`
 (`workflow_dispatch`, input `confirm: spend`) runs `pod up --family gold --yes --wait` and renders the table as an
 artifact. It needs the `RUNPOD_API_KEY` repository secret, which is the owner's to add; without it the job refuses.
+
+## Weights from the volume and R2: `volume+r2`
+
+Design: [ADR-0019 §16](../adr/0019-fv-lab.md#16-weights-by-tree-from-two-places-weights--volumer2). A tier's
+`weights = "volume+r2"` (the `gold` tier) reads every tree the EU volume holds from the volume and fetches every other
+tree from the R2 weights store onto the container disk, right before the first arm that reads it:
+
+- `{weights}` is `/fvscratch/weights`: a symlink per volume tree into `/workspace/weights`, the fetched trees beside
+  them. The volume is never written.
+- Per arm, when a tree it reads is not on the disk yet: the fetched trees it does not read are removed, then
+  `r2-weights.py plan <dest>@<rev> --pin weights-r2.tsv` (the revisions and manifest SHA-256s of
+  `scripts/gpu/weights-r2.tsv`) and `r2-fetch.py` fetch the missing ones under the arm's cap. Logs: `<arm>/r2-fetch.log`,
+  `<arm>/r2-fetch.json`, the `r2 <arm>: …` lines of `live.log`. The runtime image has no Python (by design), so the
+  first fetch installs `python3` with apt (`r2-apt.log`, at most 10 min; a failure is retried at the next fetch).
+- A failed fetch records the arm as skipped (`r2 fetch failed`); a tree in neither place as `weights incomplete`.
+- The root is never on the volume: run by hand, pass `--scratch` (or `FV_SCRATCH`) on the container disk, e.g.
+  `fv-lab run gold --all --work /workspace --scratch /fvscratch`; without it (the scratch disk is then the work
+  directory), or with a scratch under `/workspace`, the run is refused (exit 2).
+- The idle watchdog of a `volume+r2` pod waits 85 minutes at 0 % GPU (a fetch uses none), not 10.
+- Any pod's run gets `FV_RUN_DEADLINE` from `pod up` (the cap less 20 min): arms that could not finish by then are
+  skipped as `wall cap near`, so `DONE` is written, and `pod up --wait` stops waiting 15 min before the cap and
+  fetches what is there.
+- The R2 key is two Runpod secret references in the pod's env (`fv_r2_access_key_id`, `fv_r2_secret_access_key`, filled
+  in by Runpod); `fv-lab run` gives it to the plan step only. Nothing to set locally.
+- `fv-lab run gold --all --dry-run …` prints the plan: one `dry-run weights …` line (18 trees, 530.74 GB, at most
+  147.86 GB at once) and a `dry-run r2 <arm>: drop …; fetch …` line before each arm that fetches. The gold tier's
+  container disk (300 GB) holds the largest arm (`h3-8step`, 147.86 GB) plus the 120 GB every volume tier has
+  (`tests/gold_tier.rs` checks it).
+
+The full gold run, its smoke run and the cost: ADR-0019 §16.7 (about 1.5-3.1 h, $3.70-$7.70, at most $9.96 at the 4 h
+cap).
 
 ## Keeping it equal to the scripts
 

@@ -120,8 +120,8 @@
           "minimum": 0
         },
         "weights": {
-          "description": "Where the arms' weight trees come from: `volume` (the EU volume,\nmounted at `/workspace`, trees under `/workspace/weights`) today;\n`registry` (the registry's `hydrate`) later (ADR-0019 §4).",
-          "$ref": "#/$defs/WeightsSource"
+          "description": "Where the arms' weight trees come from: `volume` (the EU volume,\nmounted at `/workspace`, trees under `/workspace/weights`) or\n`volume+r2` (the volume's trees, and the rest fetched from the R2\nweights store per arm, ADR-0019 §16); the registry's `hydrate` later\n(§4).",
+          "$ref": "#/$defs/TierWeights"
         }
       },
       "additionalProperties": false,
@@ -148,15 +148,19 @@
         "runpod-pod"
       ]
     },
-    "WeightsSource": {
-      "description": "Where the weights come from (fv-boot's `FV_WEIGHTS_SOURCE`, ADR-0014 §3.3).\nC3a launches `volume` only (the region guard's rule); the other sources\nare typed so the schema does not change when they are allowed.",
-      "type": "string",
-      "enum": [
-        "volume",
-        "r2",
-        "hub",
-        "none",
-        "registry"
+    "TierWeights": {
+      "description": "Where a tier's arms read their weight trees (docs/adr/0019-fv-lab.md §4, §16).",
+      "oneOf": [
+        {
+          "description": "The EU volume, mounted at `/workspace`; `{weights}` is\n`/workspace/weights`, and a tree it lacks skips its arm.",
+          "type": "string",
+          "const": "volume"
+        },
+        {
+          "description": "The EU volume for the trees it holds, the R2 weights store for the\nrest: fetched onto the container disk before the arm that reads them;\n`{weights}` is `<scratch>/weights`, the volume's trees linked in.",
+          "type": "string",
+          "const": "volume+r2"
+        }
       ]
     }
   }
