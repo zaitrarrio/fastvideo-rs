@@ -38,6 +38,23 @@
 # `oracle` tier's tensor diffs against one upstream reference) in either run:
 #   - those lines are the same in both (they follow from the dumps, which
 #     follow from the frames' computation; timings are on other lines).
+# and for every derived-clip report (ADR-0019 §20: `<dir>/metrics.txt`, the
+# `oracle` tier's clip-metric targets, `oracle-<target>-frames/`) of either run,
+# each read with its run directory part `/runs/<family>/<tag>/` as
+# `/runs/<family>/<tag>/` (a `missing` line names the clip's path, and the two
+# runs' tags always differ):
+#   - the report exists in both and is the same, or has the same number of
+#     lines and every line pair is equal or differs only in a measured value:
+#     the same words before the last `: ` and, on both sides, a value of
+#     ffmpeg's SSIM / PSNR form (`SSIM Y:0.97 (15.8) … All:0.98 (16.5)`,
+#     `PSNR y:38.3 … average:39.6 min:35.3 max:43.9`). Such a report is
+#     reported (`metrics <file>: the same measurements, values differ`) and is
+#     no difference: the values read the clips' mp4 encodes, which the frames
+#     records do not cover (§20.6). Everything else is a difference: a line
+#     missing or added, another order, a probe line (`<label>: stream|…`:
+#     codec, size, frame count and rates follow from the frames) not
+#     byte-identical, an empty value or one of another form (`Conversion
+#     failed!`) unless the same in both, a report in one run only.
 # (`fv-lab pod fetch` takes these; on the runpod-http.sh side they need
 # FV_FETCH_TREE=1.) --expect-verdicts N fails unless at least N verdict files
 # compared the same: a tier with verdict cells whose files never arrived
@@ -268,7 +285,45 @@ while IFS= read -r r; do
   echo "same $r"
   nver=$((nver + 1))
 done < <({ vfiles "$A"; vfiles "$B"; } | LC_ALL=C sort -u)
-echo "$same arm(s) the same ($ran ran with byte-identical frames, $skipped skipped in both, $failed failed in both; $ndumps with the same compare-dumps lines), $nctl control arm(s) reported, $nrep report(s) the same, $nver verdict file(s) the same, $diffs difference(s)"
+# The derived-clip reports (ADR-0019 §20): metrics.txt, its run directory part
+# read alike, then line by line (see the header).
+mfiles() { (cd "$1" && for r in */metrics.txt; do [[ -f "$r" ]] && echo "$r"; done) | LC_ALL=C sort; }
+# The report with `/runs/<family>/<tag>/` read as `/runs/<family>/<tag>/`, then `.`
+# (trailing lines kept); fails on an unreadable file.
+mnorm() { sed -E 's#/runs/([^/ ]+)/[^/ ]+/#/runs/\1/<tag>/#g' "$1" && echo .; }
+# An ffmpeg SSIM / PSNR result (the value after a comparison line's last `: `).
+MVALUE_RE='^(SSIM|PSNR)( [A-Za-z]+:([0-9]+(\.[0-9]+)?|inf)( \(([0-9]+(\.[0-9]+)?|inf)\))?)+$'
+# mvalues <a> <b>: the two reports' lines differ only in measured values.
+mvalues() {
+  local -a la lb
+  local i wa wb
+  mapfile -t la <<<"$1"; mapfile -t lb <<<"$2"
+  (( ${#la[@]} == ${#lb[@]} )) || return 1
+  for i in "${!la[@]}"; do
+    [[ "${la[$i]}" == "${lb[$i]}" ]] && continue
+    [[ "${la[$i]}" == *': '* && "${lb[$i]}" == *': '* ]] || return 1
+    wa="${la[$i]%: *}" wb="${lb[$i]%: *}"
+    [[ "$wa" == "$wb" ]] || return 1
+    [[ "${la[$i]##*: }" =~ $MVALUE_RE && "${lb[$i]##*: }" =~ $MVALUE_RE ]] || return 1
+  done
+}
+nmet=0
+while IFS= read -r r; do
+  if [[ ! -f "$A/$r" ]]; then say "DIFF $r: only in the runpod-http run"; continue; fi
+  if [[ ! -f "$B/$r" ]]; then say "DIFF $r: only in the fv-lab run"; continue; fi
+  if ! ma="$(mnorm "$A/$r" 2>/dev/null)" || ! mb="$(mnorm "$B/$r" 2>/dev/null)"; then
+    say "DIFF $r: unreadable"; continue
+  fi
+  if [[ "$ma" == "$mb" ]]; then
+    echo "same $r"
+  elif mvalues "$ma" "$mb"; then
+    echo "metrics $r: the same measurements, values differ (reported, not judged: the clips' encodes)"
+  else
+    say "DIFF $r: other measurements, a probe line, or an empty or failed value (diff the two files)"; continue
+  fi
+  nmet=$((nmet + 1))
+done < <({ mfiles "$A"; mfiles "$B"; } | LC_ALL=C sort -u)
+echo "$same arm(s) the same ($ran ran with byte-identical frames, $skipped skipped in both, $failed failed in both; $ndumps with the same compare-dumps lines), $nctl control arm(s) reported, $nrep report(s) the same, $nver verdict file(s) the same, $nmet metrics report(s), $diffs difference(s)"
 if (( nver < EXPECT_VERDICTS )); then
   echo "expected at least $EXPECT_VERDICTS verdict file(s) the same, found $nver"
   exit 1

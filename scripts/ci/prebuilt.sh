@@ -126,7 +126,11 @@ cmd_fetch() {
     fi
   fi
   if [[ "$contexts" != *"lab-build="* ]] && [[ " $* " == *" gpucheck "* ]]; then
-    echo "::notice title=fv-lab not in $tag::the image's lab-build stage compiles fv-lab (ADR-0019) until a tools release carries it"
+    if (( ${#stale_arg[@]} )) && [[ -x "$dir/gpucheck/out/fv-lab" ]]; then
+      echo "::notice title=fv-lab compiled from this commit::$tag is older than this commit's tools inputs: its fv-lab is not used (it reads the run plan of its own commit, and the image ships this commit's lab/), so the lab-build stage compiles this checkout's"
+    else
+      echo "::notice title=fv-lab not in $tag::the image's lab-build stage compiles fv-lab (ADR-0019) until a tools release carries it"
+    fi
     compiles="${compiles/no cargo compile on this runner/only the lab-build stage compiles (fv-lab)}"
     [[ "$compiles" == *fv-lab* ]] || compiles="$compiles; the lab-build stage compiles (fv-lab)"
   fi
@@ -156,7 +160,11 @@ cmd_fetch() {
 # the refusal of a boot without a config); an older one paired with a newer Dockerfile
 # booted fv-serve's default config instead, and the serve-image smoke's refusal check
 # waited on that server forever (serve-image run 286, tools-v0.1.50 in c3ceb96c's images).
-# fv-lab (ADR-0019) rides in the gpucheck set the same way and replaces lab-build.
+# fv-lab (ADR-0019) rides in the gpucheck set the same way and replaces lab-build, and a
+# stale release's is not used either: the runtime image ships this commit's lab/ and its
+# smoke step runs `fv-lab check` on it, which an older fv-lab refuses as soon as the run
+# plan's schema gains a field (deny_unknown_fields; ADR-0019 §20's extra_cells / [[metric]]),
+# after the sha-<7> tag is pushed. So lab-build compiles this checkout's fv-lab.
 cmd_contexts() {
   local stale=0
   [[ "${1:-}" == --stale ]] && { stale=1; shift; }
@@ -166,6 +174,7 @@ cmd_contexts() {
     if [[ "$set" == gpucheck && -x "$dir/$set/out/fv-lab" ]]; then lab="$dir/$set"; fi
   done
   [[ "$stale" == 1 ]] || boot="$(release_boot "$dir" "$@")"
+  [[ "$stale" == 0 ]] || lab=""
   [[ -z "$boot" ]] || echo "boot-build=$boot"
   [[ -z "$lab" ]] || echo "lab-build=$lab"
 }

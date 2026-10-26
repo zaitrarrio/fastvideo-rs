@@ -64,7 +64,7 @@ dry run show what will run.
 | `ltxvae-gen` | `ltxvae`'s 4 + `ltxvae-gen-{4k5s,1080p20s}` | 16 | `ltxvae`, plus per workload a cold gen saving its latents and the streaming decoder on them | was `ltxvae`'s `FV_VAE_GEN=1`; restored (§12); shares `ltxvae`'s cells |
 | `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | byte identity across fresh processes at short configs, three runs per group and the timed-pick control; `determinism.txt` | D1d (§15); retired after its GPU check (§15.10); `wan` skips on the EU volume |
 | `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | byte identity of 1080p runs within one process and across two; prompt sets as files, hashes per run, stage digests | D1d (§15); retired after its GPU check (§15.10) |
-| `oracle` | `oracle-<target>` (9) | 32 | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; GPU check passed (`f93a961`), but **not retired**: the script branch stays whole for the clip-metric targets, `sfwan13` and `oracle.sh` (§15.10) |
+| `oracle` | `oracle-<target>` (9), and 10 extra cells | 32 (+46) | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`); on request (`extra_cells`, run when `--cells` names their arms) the ten LTX clip-metric targets with their ffmpeg / ffprobe `[[metric]]` reports (D1i, §20) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; GPU check passed (`f93a961`; the clip-metric targets': §20.7), but **not retired**: the script branch stays whole for `sfwan13` and `oracle.sh` (§15.10, §20.5) |
 | `fuse` | `fuse-{kernels,trace,switch}` | 10 | DiT block fusions: the kernels bit for bit (ungated), a traced step per workload, fusions off against on (`--off-identity`, `exact` gate) | D1f ([§17](../adr/0019-fv-lab.md)); retired after its GPU check (§17.6); 3 arms skip on the EU volume (`h3-8step`) |
 | `attn3` | `attn3-h3-ltx25` | 6 | flash v2 against cuDNN SDPA on FastH3 4-step dense and LTX-2.5 1080p20s dense, VSA bf16 in place against f32 | D1f (§17); retired after its GPU check (§17.6); `FV_ATTN3_ARMS` / `FV_ATTN3_VSA` refused (select by arm) |
 | `ltx` | `ltx-versions` | 3 | LTX-2.5 two-stage, LTX-2.3 two-stage, LTX-2.0 19B distilled | D1f (§17); retired after its GPU check (§17.6; the script gated its arms from D1f); `ltx23` / `ltx2` skip on the EU volume |
@@ -315,8 +315,8 @@ reads them), for `oracle` a `FASTVIDEO_DUMP_OPS` other than `0,1,24,47`, and for
 script ran the oracle first with it; the tier does not). `pod fetch`
 takes `determinism.txt`, `hashes.txt` and each arm's `hashes.txt` / `digests.txt`; `fv-lab-compare-runs.sh` compares
 the hashes files byte for byte and each arm's `compare-dumps` lines, except a `[repeats] controls` arm's (read from
-`lab/cells`), which are reported, not judged (ADR-0019 §15.7). Still in the script (§15.6): the oracle's ffmpeg
-clip-metric targets (`ltx25-{i2v,kf,ref2v,a2v*,retake*,extend}`, `sfwan13`), `FV_ORACLE_OWN_TEXT=1`, and
+`lab/cells`), which are reported, not judged (ADR-0019 §15.7). Still in the script (§15.6): `sfwan13` (§20.5; the
+ten LTX clip-metric targets are the tier's extra cells since §20, below), `FV_ORACLE_OWN_TEXT=1`, and
 `runpod-http.sh upstream` (the reference pods; `fv-lab oracle`, below, brings them up as fv-lab pods for the
 targets that are cells). So the `oracle` branch stays
 whole and `oracle.sh` keeps driving it (`FV_ORACLE_TARGETS`, `FV_POD_FILE`, `FV_CREATE_WAIT_S`, which `fv-lab pod up`
@@ -362,8 +362,39 @@ RUNPOD_API_KEY=… ./fv-lab oracle --sha <7> \
   covers `fv-lab-upstream-…` pods.
 
 The upstream pod's body is `runpod-http.sh upstream`'s (`runpod-http.sh plan-upstream`, the goldens
-`fixtures/runpod-http-upstream-<stack>.json`) but for the wall-cap watchdog every fv-lab pod carries. Not yet in
-fv-lab: the oracle's clip-metric targets and `sfwan13` (§19.9); for those `scripts/gpu/oracle.sh` is still the way.
+`fixtures/runpod-http-upstream-<stack>.json`) but for the wall-cap watchdog every fv-lab pod carries.
+`--fetch-tree [--fetch-skip ERE] [--fetch-max-mb N]` is passed to the runtime side's `pod up` (the whole run
+directory: the clip-metric targets' `metrics.txt` and clip copies, below). Not yet in fv-lab: `sfwan13` (§20.5); for
+it `scripts/gpu/oracle.sh` is still the way.
+
+## Derived-clip metrics and extra cells (D1i)
+
+[ADR-0019 §20](../adr/0019-fv-lab.md) (proposed until its GPU check, §20.7). The ten LTX clip-metric targets of the
+oracle (`ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,retake,retake-v,retake-a,extend,a2v-guided}`) are cells of the `oracle`
+tier, listed under its **`extra_cells`**: a tier's extra cells run after its `cells`, and only when `--cells` /
+`FV_CELLS` names one of their arms, so `fv-lab run oracle` without a selection (and its goldens) is the nine
+tensor-diff targets as before.
+
+```sh
+./fv-lab oracle --sha <7> --cells oracle-ltx25-retake,oracle-ltx25-retake-diff,oracle-ltx25-retake-ownenc,oracle-ltx25-retake-ownenc-diff \
+  --fetch-tree --fetch-skip '/frames/'                       # the plan: one sol-ltx25 pod, UP_STEPS weights:ltx25 oracle:ltx25-retake
+FV_CELLS=oracle-ltx25-kf,oracle-ltx25-kf-diff ./fv-lab run oracle --dry-run   # the arms and the metric commands
+```
+
+After its arms a clip-metric cell runs its **`[[metric]]`** list: each a pass over clips (`{label, path}`) into a
+report directory (`{runs}/oracle-<target>-frames/`): a clip that is not there writes `<label> missing <path>` (with
+`missing = true`), a present one is copied to `<label>.mp4` (`copy = true`) and measured, in order, by `probe`
+(ffprobe stream lines), `clip-vs-clip` (`against`), `kept-frames-vs-source` (`source`, an ffmpeg `select`, `fps`) or
+`frame-vs-image` (`frame`, `image`, `width`, `height`: cover and centre crop); each comparison writes `ssim` then
+`psnr` lines. `echo = true` copies the whole `metrics.txt` into the log as `[<tag>] <line>`. The commands are the
+script's, word for word, and a dry run lists them (`dry-run metric <tag>: ffmpeg …`). `metrics.txt` is a report:
+nothing judges it. `fv-lab-compare-runs.sh` compares it with the run tag read alike: the same, or reported when only
+ffmpeg's SSIM / PSNR values differ (the clips' mp4 encodes); a probe line, an empty or failed value, or another line
+set is a difference (ADR-0019 §20.6).
+
+The goldens: `oracle-extra-dry-run.txt` and `oracle-extra-gates.tsv` are the script's dry run with
+`FV_ORACLE_TARGETS` naming the ten (`tests/dry_run.rs`); `tests/repeats_oracle.rs` runs both runners on fakes of
+ffmpeg and ffprobe and compares every report and copy.
 
 ## `fuse`, `attn3`, `ltx` (D1f)
 
@@ -624,7 +655,9 @@ when the history has it, and every line of the script-side runs is checked to be
 
 For every tier of `lab/tiers.toml`, the fixtures are the script's dry run (`<tier>-dry-run.txt`), its weight gates
 (`<tier>-gates.tsv`: the cells the dry run gated, with their `verify-weights.sh --list` needs) and `runpod-http.sh
-plan`'s pod body (`runpod-http-<tier>.json`). For every stack of `lab/upstream.toml`, `runpod-http.sh
+plan`'s pod body (`runpod-http-<tier>.json`); for a tier with `extra_cells`, the script's dry run and gates under
+their settings too (`<tier>-extra-dry-run.txt`, `<tier>-extra-gates.tsv`; `oracle`'s ten clip-metric targets, ADR-0019
+§20.6). For every stack of `lab/upstream.toml`, `runpod-http.sh
 plan-upstream`'s pod body with `oracle.sh`'s settings (`runpod-http-upstream-<stack>.json`, ADR-0019 §19.3;
 `tests/oracle_driver.rs`).
 

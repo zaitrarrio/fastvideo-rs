@@ -1,0 +1,95 @@
+# runpod-matrix.sh `oracle`, clip-metric target ltx25-a2v-guided (docs/oracle.md; docs/adr/0019-fv-lab.md §15, §20): the upstream
+# reference's dump fetched into {ref}, its noise and text (and conditioning) injected into our run, our run dumped the
+# same way (blocks 0,1,24,47) and compared tensor by tensor (compare-dumps, its lines echoed into the log).
+# Then audio-to-video: -ownaud decodes and encodes the driving audio on our own (FASTVIDEO_INJECT_COND=0,
+# FASTVIDEO_INJECT_PIXELS=0); then the clips (ours, ownaud, the reference's) copied and probed (ffprobe stream lines)
+# and ours against the reference's (SSIM / PSNR), into oracle-<target>-frames/metrics.txt ([[metric]], ADR-0019 §20).
+# An extra cell of the `oracle` tier: run when --cells names its arms. After the cell the dumps and the reference are
+# removed (the clips stay in the report).
+schema = 1
+name = "oracle-ltx25-a2v-guided"
+description = "Oracle diff of LTX-2.5 guided audio-to-video (the dev transformer, the multimodal guider, the distilled LoRA at stage 2) at 512p, against the sol-ltx25 reference; the clips' streams and the clip against the reference's"
+
+[workload]
+model = "ltx2"
+prompt = "A close-up of a woman with short dark hair talking directly to the camera in a bright living room, natural light, she speaks clearly and calmly, her lips moving with every word."
+seed = 1024
+frames = 121
+width = 768
+height = 512
+note = "the talking head of ltx25-a2v (FV_LTX_A2V_PROMPT's default); --dense-stage2 --guided --audio, --dit ltx25-dev/transformer_full"
+
+[reference]
+target = "ltx25-a2v-guided"
+
+[lists]
+gen = [
+  "--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25-dev/transformer_full", "--height", "{height}", "--width", "{width}", "--num-frames",
+  "{frames}", "--dense-stage2", "--guided", "--audio", "{root}/scripts/gpu/fixtures/speech-flite-44k.flac",
+  "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--clip",
+  "{runs}/{arm}/frames"
+]
+
+[[arm]]
+name = "oracle-ltx25-a2v-guided"
+gate = "ltx25-a2v-guided"
+trees = ["ltx25", "ltx25-dev"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-ltx25-a2v-guided-dump"
+]
+argv = ["{@gen}"]
+fresh = ["{runs}/oracle-ltx25-a2v-guided-dump"]
+
+[[arm]]
+name = "oracle-ltx25-a2v-guided-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-ltx25-a2v-guided-dump"]
+requires = ["{ref}", "{runs}/oracle-ltx25-a2v-guided-dump"]
+echo = ["compare-dumps"]
+
+[[arm]]
+name = "oracle-ltx25-a2v-guided-ownaud"
+gate = "ltx25-a2v-guided"
+trees = ["ltx25", "ltx25-dev"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-ltx25-a2v-guided-dump-ownaud", "FASTVIDEO_INJECT_COND=0",
+  "FASTVIDEO_INJECT_PIXELS=0"
+]
+argv = ["{@gen}"]
+fresh = ["{runs}/oracle-ltx25-a2v-guided-dump-ownaud"]
+
+[[arm]]
+name = "oracle-ltx25-a2v-guided-ownaud-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-ltx25-a2v-guided-dump-ownaud"]
+requires = ["{ref}", "{runs}/oracle-ltx25-a2v-guided-dump-ownaud"]
+echo = ["compare-dumps"]
+
+# The clips copied and probed (streams, rates, frame counts).
+[[metric]]
+report = "{runs}/oracle-ltx25-a2v-guided-frames"
+tag = "ltx25-a2v-guided-frames"
+clips = [
+  { label = "ours", path = "{runs}/oracle-ltx25-a2v-guided/frames/output.mp4" },
+  { label = "ownaud", path = "{runs}/oracle-ltx25-a2v-guided-ownaud/frames/output.mp4" },
+  { label = "reference", path = "{ref}/ref.mp4" },
+]
+missing = true
+copy = true
+measure = [
+  { kind = "probe" },
+]
+
+# Ours against the reference's, every frame (both copies present).
+[[metric]]
+report = "{runs}/oracle-ltx25-a2v-guided-frames"
+tag = "ltx25-a2v-guided-frames"
+clips = [
+  { label = "ours", path = "{runs}/oracle-ltx25-a2v-guided-frames/ours.mp4" },
+]
+requires = ["{runs}/oracle-ltx25-a2v-guided-frames/reference.mp4"]
+measure = [
+  { kind = "clip-vs-clip", against = { label = "reference", path = "{runs}/oracle-ltx25-a2v-guided-frames/reference.mp4" } },
+]
+echo = true

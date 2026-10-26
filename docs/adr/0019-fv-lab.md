@@ -24,8 +24,9 @@
   retired from the script with no tier (`FV_SCRIPT_RETIRED`, refused with a pointer). §19 (D1h: `fv-lab oracle`, the driver of §15.6: the upstream reference pods of
   `lab/upstream.toml` on fv-deploy's guards, the `oracle` tier's runtime pod with `FV_ORACLE_URL`, their release on
   `ORACLE_REFS_DONE`, a bounded wait for it, a stock wait or any failure; payload goldens from `runpod-http.sh plan-upstream`) is proposed,
-  CPU-tested; its GPU check is §19.7. The clip-metric targets and `sfwan13` wait for a derived-clip step (§19.9), so
-  `oracle`'s branch stays whole
+  CPU-tested; its GPU check is §19.7. §20 (D1i, the coordinator's decisions on §19.9: a typed `[[metric]]` step in
+  the cell, `metrics.txt` a report, the ten LTX clip-metric targets as the `oracle` tier's `extra_cells`) is proposed,
+  CPU-tested; its GPU check is §20.7. `sfwan13` is a follow-up (§20.5), so `oracle`'s branch stays whole
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -43,6 +44,9 @@
 - §19: `crates/fastvideo-lab/src/oracle.rs`, `src/oracle_live.rs`, `src/upstream-start.sh.in`, `src/bin/fv-lab.rs` (`oracle`),
   `lab/upstream.toml`, `schemas/upstream.v1.json`, `scripts/gpu/runpod-http.sh plan-upstream`; tests
   `tests/oracle_driver.rs`, `tests/oracle_live.rs`, fixtures `runpod-http-upstream-*.json`
+- §20: `plan.rs` (`Metric`, `Measure`, `Step::Metric`, `Tier::extra_cells`), `run.rs` (`Runner::metric`), `oracle.rs`
+  (`runtime_fetch`), `lab/cells/oracle-ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,retake,retake-v,retake-a,extend,a2v-guided}.toml`;
+  tests `tests/dry_run.rs`, `tests/repeats_oracle.rs`; fixtures `oracle-extra-{dry-run.txt,gates.tsv}`
 - Plan: D1 (`docs/plan/2026-10-23-execution-plan.md`); review `docs/gaps/2026-10-22-architecture-review.md` §7.5
 
 ## Context
@@ -2801,7 +2805,7 @@ The name is equal (`fv-lab-upstream-<tag>`, the golden made with `FV_POD_PREFIX=
 | interrupt | the trap deletes the upstream pods; the runtime driver is left to its own | SIGTERM to the runtime side, the upstream pods deleted without a fetch, the runtime side waited for (600 s, then killed and its pod deleted) | nothing outlives the driver but what a backstop deletes |
 | upstream fetch | when the upstream run wrote `DONE` (before the release) | at the release | the dumps are served until then; the same tree and skip |
 | `UP_AFTER`, `FV_ORACLE_RUN_MODE=all`, `FV_ORACLE_FAMILY`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`, `FV_ORACLE_EXTRA_ENV` | yes | no (`--extra-env` for the runtime run, its refusals `pod up`'s) | not used by the tier's cells; `FV_ORACLE_F32` / `OWN_TEXT` are the tier's defaults (§15.5) |
-| clip-metric targets, `sfwan13` | yes (`runpod-matrix.sh oracle`) | not yet (§19.9) | |
+| clip-metric targets, `sfwan13` | yes (`runpod-matrix.sh oracle`) | the ten LTX clip-metric targets since §20 (the tier's extra cells); `sfwan13` not yet (§20.5) | |
 
 #### 19.5 Code and tests
 
@@ -2930,6 +2934,8 @@ After the check passes, in the next D1 PR:
 
 #### 19.9 Not in this slice: the clip-metric targets and `sfwan13` (a decision first)
 
+Decided by the coordinator on 2026-10-26 and done in §20 (the ten LTX targets; `sfwan13` a follow-up, §20.5).
+
 `ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,a2v-guided,retake,retake-v,retake-a,extend}` and `sfwan13` add, after their runs and
 `compare-dumps`, steps the cell schema has no field for: ffmpeg SSIM / PSNR of whole clips, of `select`ed kept frames
 against the source clip, of pinned frames against scaled and cropped conditioning images, `ffprobe` stream lines, the
@@ -2952,3 +2958,331 @@ architectural (CLAUDE.md "stop and ask"):
 
 Until then they run as they do (`oracle.sh` with `ORACLE_TARGETS`, the `sfwan` prelude), and `oracle`'s branch stays
 whole.
+
+### 20. D1i: the clip-metric targets as cells: `[[metric]]` and extra cells
+
+Status: proposed 2026-10-26 (draft PR from `claude/d1i-oracle-metrics`), CPU-tested; its GPU check is the
+coordinator's (§20.7). Decision-id FVID-2026-10-26-d1i-oracle-metrics. This is §19.9's slice: the ten LTX
+clip-metric targets of `runpod-matrix.sh oracle` become cells of the `oracle` tier. `sfwan13` does not (§20.5).
+Nothing is retired here.
+
+#### 20.1 The coordinator's decisions on §19.9 (2026-10-26)
+
+1. **Where the step lives: option (a)**, a typed `[[metric]]` list in the cell. The runner composes exactly the
+   ffmpeg / ffprobe argv the script does, the dry run lists them, and the goldens hold them byte for byte. The schema
+   change is additive (cell v1 keeps `deny_unknown_fields`; `schemas/cell.v1.json` regenerated). `hd` is to reuse it
+   later, so nothing in it is oracle-only.
+2. **`metrics.txt` stays a report**, as the script writes it: no threshold, no verdict.
+3. **`sfwan13`**: a sibling tier (`oracle-r2`, `weights = "volume+r2"`), so `oracle`'s pod body and fixtures stay; its
+   upstream side reads `/workspace/weights/sfwan21-1.3b`, which the EU volume lacks. If getting that tree from R2
+   onto the upstream pod's container disk is a small, typed addition, do it; else the ten LTX targets now and
+   `sfwan13` in a follow-up, saying exactly what it needs. It is not small (§20.5).
+
+#### 20.2 `[[metric]]` (cell v1, additive)
+
+A metric is one **pass over clips**, the script's `for src in "<label>:<path>" …` loops, into a report directory:
+
+```toml
+[[metric]]
+report = "{runs}/oracle-ltx25-retake-frames"   # below {runs}/: metrics.txt and the clip copies
+tag = "ltx25-retake-frames"                    # the echoed lines' prefix, the dry-run lines' name
+clips = [
+  { label = "ours", path = "{runs}/oracle-ltx25-retake/frames/output.mp4" },
+  { label = "ownenc", path = "{runs}/oracle-ltx25-retake-ownenc/frames/output.mp4" },
+  { label = "reference", path = "{ref}/ref.mp4" },
+]
+requires = []          # more files every clip's measures need (ltx25-ref2v: ["{ref}/ref.mp4"])
+missing = true         # a clip not there writes `<label> missing <path>` (+ ` or <file name>` per requires)
+copy = true            # each present clip copied to <report>/<label>.mp4 first
+measure = [
+  { kind = "probe" },
+  { kind = "kept-frames-vs-source", source = "{root}/scripts/gpu/fixtures/beach-push-768x512-24fps.mp4", select = 'lt(n\,33)+gte(n\,89)', fps = 24 },
+]
+echo = false           # after the pass: metrics.txt, all of it, into the log as `[<tag>] <line>`
+```
+
+For each clip in order: the clip and every `requires` file must be regular files, else (with `missing`) the line and
+the next clip; with `copy`, the copy; then every measure in order. The kinds, and the argv each composes (the
+script's, word for word; `<m>` is `ssim` then `psnr`, the script's `for m in ssim psnr`):
+
+| kind | argv | line written |
+|---|---|---|
+| `probe` | `ffprobe -v error -show_entries stream=codec_type,codec_name,sample_rate,channels,nb_frames,r_frame_rate,width,height -of compact <clip>` | each stdout line as `<label>: <line>` |
+| `clip-vs-clip` (`against = {label, path}`) | `ffmpeg -v info -nostats -i <clip> -i <against> -lavfi [0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]<m> -f null -` | `<label> vs <against label> clip <m>: <r>` |
+| `kept-frames-vs-source` (`source`, `select`, `fps`) | `ffmpeg -v info -nostats -i <clip> -i <source> -lavfi [0:v]select='<select>',setpts=N/<fps>/TB,format=yuv420p[a];[1:v]select='<select>',setpts=N/<fps>/TB,format=yuv420p[b];[a][b]<m> -f null -` | `<label> kept frames vs source <m>: <r>` |
+| `frame-vs-image` (`frame`, `image`, `width`, `height`) | `ffmpeg -v info -nostats -i <clip> -i <image> -lavfi [0:v]select=eq(n\,<frame>),setpts=N/TB[a];[1:v]scale=<w>:<h>:force_original_aspect_ratio=increase:flags=bilinear,crop=<w>:<h>,format=yuv420p[b];[a]format=yuv420p[c];[c][b]<m> -frames:v 1 -f null -` | `<label> frame <frame> <m>: <r>` |
+
+`<r>` is the script's `$(… 2>&1 | grep -E "Parsed_<m>" | tail -1)` then `${r##*] }`: the last line of ffmpeg's
+output (stdout and stderr together; `-f null -` writes nothing to stdout) holding `Parsed_<m>`, after its last `] `,
+empty without one (`run::metric_value`). The runner runs `ffmpeg` / `ffprobe` from the children's `PATH` (the runtime
+image's, as the script's; `RunConfig::ffmpeg` / `ffprobe`, which the tests point at fakes), each under `timeout` at
+the arm cap. A dry run prints every command as `dry-run metric <tag>: <printf %q argv>`, each clip assumed present.
+
+**Adjusted from §19.9's sketch, and why.** §19.9 named four kinds of step; here they are four kinds of *measure*
+inside one pass over clips. The script's loops interleave the measures per clip (`ltx25-retake*`: clip 1's probe and
+kept frames, then clip 2's, …), a missing clip writes one line and skips all its measures, and `metrics.txt`'s line
+order is that interleaving, which the byte-for-byte equality must keep. One-kind-per-entry would reorder the lines or
+need the missing rule twice. The trailing comparisons of the copies (`if [[ -f ours.mp4 && -f reference.mp4 ]]`) are a
+second pass whose `requires` names the reference copy and which writes nothing when it is absent (`missing = false`);
+`ltx25-ref2v`'s clip check includes the reference (`requires = ["{ref}/ref.mp4"]`, hence `… or ref.mp4`); and
+`a2v-i2v`'s two blocks are three passes, each block's last with `echo` (the script echoes the whole file after each
+block, so the first block's lines appear twice in the log, as in the script).
+
+Validation: `report` a directory below `{runs}/`; `tag` and labels `[a-z0-9][a-z0-9._-]*`, labels unique per metric;
+every path one placeholder of `{runs}` / `{scratch}` / `{ref}` / `{root}` then `/…`, no `.` / `..`, no quotes (`{ref}`
+only in a cell with a `[reference]`); `select` printable without quotes, braces, `;` or brackets (it sits in a
+quoted filter graph); every `,` written `\,` (a bare one ends the filter); `fps`, `width`, `height` positive; a metric measures or copies something; an unknown key or
+kind is refused (`deny_unknown_fields`, `probe` a struct variant so a stray key on it is refused too). Nothing
+names the oracle: `hd`'s keyframe metrics are passes over its arms' clips with these kinds or new ones.
+
+#### 20.3 Extra cells (tiers v1, additive): the default run unchanged
+
+**How the tier selects cells today.** A tier's `cells` is its default run: `fv-lab run oracle` without `--cells`
+runs all nine targets, and that run is the dry-run golden (`oracle-dry-run.txt`, 43 lines) the GPU checks were made
+against. `--cells` / `FV_CELLS` narrows it by arm (the unselected cells log `skip <cell> (no arm in FV_CELLS)`), and
+for this tier `pod up` and `fv-lab oracle` refuse to run without `--cells` (§15.5, §19.1).
+
+So the ten targets are **`extra_cells`**, a new optional tier field (`schemas/tiers.v1.json` regenerated,
+`deny_unknown_fields` kept, left out when empty): cells of the tier run after `cells`, in their order, and only when
+the selection names one of their arms (`Lab::resolve_selected`; `Lab::resolve` is the default run). Every reader
+of a tier's arms takes them (`Tier::all_cells`): `fv-lab run` (selection from `--cells` / `FV_CELLS`), `pod up`'s
+`--cells` check and the cells its pod runs, `fv-lab oracle`'s plan, `fv-lab gate` (the run's selection record picks
+them), the lab's validation (unique arms and reference targets over all of the tier's cells; a cell listed once),
+`fv-lab check` (`oracle: 9 cell(s), 32 arm(s) (+10 extra cell(s), 46 arm(s), on request)`). The default run is
+byte-identical: `oracle-dry-run.txt`, `oracle-gates.tsv` and `runpod-http-oracle.json` unchanged
+(`fv-lab-goldens.sh --check`), and `tests/dry_run.rs` holds `fv-lab run oracle` to the first. Why not the nine
+plus ten in `cells`: the default run would be nineteen targets, its golden another, and a `fv-lab run oracle`
+without `--cells` (a box, not a pod) four times as long. Why not a sibling tier: the coordinator's decision (they
+are the `oracle` tier's cells), and `fv-lab oracle`'s `--family oracle` default then covers every LTX target.
+
+#### 20.4 The ten cells and their references
+
+`lab/cells/oracle-ltx25-<target>.toml`, each the script's arms for its target (the reference injected as for T2V,
+`FASTVIDEO_DUMP_OPS=0,1,24,47`, `FASTVIDEO_H3_QUANT=off`, `--clip {runs}/{arm}/frames`; the prompts the script's
+`FV_LTX_*_PROMPT` defaults, the fixtures under `{root}/scripts/gpu/fixtures`), then its metrics:
+
+| target | arms (46 in all) | gate (trees) | metrics |
+|---|---|---|---|
+| `ltx25-i2v`, `ltx25-kf` | main, `-diff`, `-ownenc` (`INJECT_COND=0`), `-ownenc-diff`, `-ownimg` (`+ INJECT_PIXELS=0`), `-ownimg-diff` | `ltx25-two-stage` (`ltx25`) | ours / ownimg / reference: frame 0 vs the beach image (kf: and frame 120 vs its zoom), cover + crop to 768x512 |
+| `ltx25-ref2v` (1536x896) | as i2v | `ltx25-ref2v` (`ltx25`, `ltx25-ic-lora-ingredients`) | ours / ownimg vs `ref.mp4`, then `ref.mp4` copied |
+| `ltx25-a2v`, `ltx25-a2v-guided` (`--dit ltx25-dev/transformer_full`) | main, `-diff`, `-ownaud` (`INJECT_COND=0 INJECT_PIXELS=0`), `-ownaud-diff` | `ltx25-two-stage`; guided `ltx25-a2v-guided` (`ltx25`, `ltx25-dev`) | ours / ownaud / reference probed; ours vs reference |
+| `ltx25-a2v-i2v` | as a2v | `ltx25-two-stage` | as a2v; then frame 0 of ours / ownaud / reference vs the beach image |
+| `ltx25-retake`, `-retake-v`, `-retake-a`, `ltx25-extend` | main, `-diff`, `-ownenc` (`INJECT_COND=0 INJECT_PIXELS=0`), `-ownenc-diff` | `ltx25-two-stage` | ours / ownenc / reference probed and their kept frames vs the source (`lt(n\,33)+gte(n\,89)`; retake-a `lt(n\,121)`; extend `lt(n\,105)`, at 24 fps); ours vs reference |
+
+Every tree is on the EU volume (`tests/lab_files.rs`). `lab/upstream.toml`'s `sol-ltx25` stack gains the ten
+targets, in `scripts/gpu/upstream/oracle.sh run_oracle`'s order, with `oracle.sh`'s weight steps:
+`weights:ltx25-dev` for `ltx25-a2v-guided` (the dev DiT and the distilled LoRA), `weights:ltx25` for the others
+(ref2v's IC-LoRA is read from the volume as is). `fv-lab oracle --cells <the arms of ltx25-retake and ltx25-a2v-i2v>`
+plans one `sol-ltx25` pod with `UP_STEPS="info:box weights:ltx25 oracle:ltx25-a2v-i2v,ltx25-retake"`
+(`tests/oracle_driver.rs`).
+
+`knobs::SCRIPT_KNOBS` gains the five prompts these targets read (`FV_LTX_REF_PROMPT`, `FV_LTX_A2V_PROMPT`,
+`FV_LTX_A2V_I2V_PROMPT`, `FV_LTX_RETAKE_PROMPT`, `FV_LTX_EXTEND_PROMPT`): refused by fv-lab, read by the script.
+
+#### 20.5 `sfwan13`: a follow-up, and what it needs
+
+Not small, so not here (decision 3). What it needs:
+
+1. **Upstream, the tree.** `oracle_sfwan` (`scripts/gpu/upstream/oracle.sh`) reads `$W/sfwan21-1.3b`
+   (`/workspace/weights`, the volume; never written, CLAUDE.md), and the tree (28.93 GB, `weights-r2.tsv`) is R2-only
+   since 2026-10-13. It needs (a) a typed upstream step to fetch an R2 tree onto the container disk: a stack
+   target's `r2 = ["sfwan21-1.3b"]` in `lab/upstream.toml` (schema `upstream.v1.json`, additive), rendered as a
+   `UP_STEPS` step `r2:sfwan21-1.3b` that `scripts/gpu/upstream/pod.sh` runs as fv-lab's runner does (§16.4:
+   `r2-weights.py plan --pin weights-r2.tsv`, then `r2-fetch.py --root $UW`; the upstream image has a Python, so no
+   apt step); (b) the R2 key on that pod as Runpod secret references (`weights::r2_env_refs`, §16.5) in the upstream
+   launch, only when a selected target has an `r2` step, and handed to the plan step alone (a change to
+   `upstream-start.sh.in` and to `runpod-http.sh plan-upstream`'s golden for that selection); (c) `oracle_sfwan`
+   reading the tree from `$UW` when it is there (a script change on the upstream side); (d) the `fastvideo` stack's
+   container disk raised by about 30 GB for such a run (150 → 180 GB), or a per-target disk. Four changes over a
+   schema, a launch body, `pod.sh` and the upstream `oracle.sh`.
+2. **Runtime, the tier.** `oracle-r2`: the `oracle` tier's pod with `weights = "volume+r2"` (the 28.93 GB tree on
+   the container disk: 150 GB, the idle limit `weights::r2_idle_min`), one cell `oracle-sfwan13`: the main arm
+   (`FASTVIDEO_WAN_VAE=full`, `--clip-dir`), `-diff`, the f32 control (`FV_ORACLE_F32`'s default for `sfwan*`: `-f32`,
+   `-f32-diff`, `-bf16-vs-f32`), `-legacy` (`FASTVIDEO_WAN_CAUSAL_AR=0 FASTVIDEO_WAN_CAUSAL_FPB=1`) and its diff,
+   `-composed` (`FASTVIDEO_WAN_CAUSAL_FLASH=0`), its diff and `-flash-vs-composed`. And two steps the schema lacks:
+   a **`decode`** measure (`ffmpeg -loglevel error -y -i <clip> -start_number 0 <dir>/frame-%03d.png`: the
+   reference's `ref.mp4` into `<scratch>/oracle-ref/sfwan13/frames`, our mp4 into `{runs}/oracle-sfwan13/mp4frames`;
+   our clip is `ls frames/*.mp4 | head -1` in the script, so a named clip or a glob rule; the reference's frames sit
+   beside `{ref}`, so a placeholder for the reference directory), and a **`[[compare]]` of two frame directories**
+   that are not arms' (`compare_one oracle-sfwan13-frames-vs-ref <ref frames> <our frames>`, `-codec-floor`,
+   `-legacy-frames-vs-ref`). Its goldens: the script's dry run with `FV_ORACLE_TARGETS=sfwan13` (a second `fam_env`
+   of `fv-lab-goldens.sh`), and the pod body `runpod-http.sh plan` with the tier's disk and idle limit, its R2 env the
+   one allowed difference (as `gold`, §16.6). **Before that golden can be made, the script's `sfwan13` branch needs
+   two dry-run fixes** (not made here): `m="$(ls "$RUNS/oracle-$target"/frames/*.mp4 2>/dev/null | head -1)"` fails
+   under `pipefail` when there is no mp4 (`ls` exits 2), which ends the family, in a dry run (exit 2) and in a real
+   run whose arm wrote no mp4; and its two ffmpeg decode commands are not dry-run-aware (they run, or fail, in a dry
+   run instead of being logged as `metric_dry` logs the clip metrics).
+3. **The `sfwan` family's prelude** (`FV_ORACLE_TARGETS=sfwan13 bash runpod-matrix.sh oracle` with `FV_RUNS_DIR`)
+   becomes `fv-lab run oracle-r2 --cells <its arms> --runs-dir "$RUNS"` (that pod then needs the R2 key, or the
+   prelude is dropped and `sfwan13` runs on its own through `fv-lab oracle --family oracle-r2`).
+
+Until then `sfwan13` runs as it does (`oracle.sh` with `ORACLE_TARGETS=sfwan13`, the `sfwan` prelude).
+
+#### 20.6 Equality: goldens, script changes, fakes, the compare
+
+- **Goldens.** `fv-lab-goldens.sh` writes, for a tier with extra cells, `<tier>-extra-dry-run.txt` and
+  `<tier>-extra-gates.tsv` from the script under the extra cells' settings: `oracle` with `FV_ORACLE_TARGETS`
+  naming the ten (`FV_GEN_TIMEOUT_S=5400`). 145 lines, 87 of them metric commands. The pod body is the tier's (one
+  fixture). `tests/dry_run.rs::the_extra_cells_dry_run_as_the_script_with_their_targets`: `fv-lab run oracle
+  --dry-run` selecting the ten targets' arms is that file line for line after one `skip <cell> (no arm in
+  FV_CELLS)` per default cell (the script, given its targets, names no other), and its gated arms are the gates
+  file's.
+- **Script changes** (`runpod-matrix.sh oracle`):
+  - *dry run only*: each metric command is built as an array and passed to `metric_dry <tag> <cmd…>`, which in a dry
+    run logs `dry-run metric <tag>: <printf %q>` and skips it, and the clip checks pass in a dry run (before, the
+    dry run wrote `missing` lines into a scratch `metrics.txt`, echoed them, 35 un-prefixed `[<target>-frames] …
+    missing …` lines, and logged no command); the echo of `metrics.txt` is skipped when there is none (a dry run's
+    `sed: can't read …` ten times); a real run runs the same argv as before;
+  - *a real-run change, failures only*: the metric pipelines end in `|| true`. Under `set -euo pipefail` a
+    comparison whose ffmpeg printed no `Parsed_` line (`grep` exits 1) or a failing `ffprobe` ended the whole family
+    (`matrix_exit` non-zero, the targets after it never run). Now the value is empty and the run goes on; fv-lab
+    does the same;
+  - *a real-run change, disk only*: `$ours-ownaud` (the a2v targets' third dump, hundreds of MB, which the
+    `/dump/` fetch skip does not match) is removed with the others after the target; fv-lab removes it as a `fresh`
+    path.
+- **Fakes, both runners** (`tests/repeats_oracle.rs::clip_metrics_report_as_the_script`): the live branch and
+  `fv-lab run` on one fake box with fake `ffmpeg` / `ffprobe` (a checksum of their inputs' bytes and of the filter
+  graph, behind `] `), the fixtures, and references for all ten targets (`ltx25-retake-a`'s dump without `ref.mp4`;
+  `ltx25-a2v-guided`'s arms skipped on their weights, so its clips are missing). The two sides run under different
+  tags, as two real runs do. Every `metrics.txt` and clip copy is byte-identical (each side's run directory and
+  scratch read alike), the log's echoed reports equal, the `missing` and `or ref.mp4` lines, the double echo of
+  a2v-i2v, the dumps (`-ownaud` too) gone. The script copy's `PATH` line puts the fakes first (it
+  prepends `/usr/local/bin`, where a real ffmpeg would shadow them); `ORACLE_REFS_DONE` is fv-lab's alone in a run of
+  several targets (§15.5).
+- **A fix found by that test:** the log's lines are now written in one `write` each (`run::raw_line`). With five
+  references fetched at once, the fetch threads' `writeln!` (text, then newline) interleaved and split a line.
+- **`fv-lab-compare-runs.sh`** compares every `*/metrics.txt` of either run, each with its run directory part
+  `/runs/<family>/<tag>/` read alike (a `missing` line names the clip's path, and two runs' tags always differ):
+  the same; or the same number of lines, every pair equal or differing only in a **measured value**: the same words
+  before the last `: ` and, on both sides, a value of ffmpeg's SSIM / PSNR form (`SSIM Y:0.97 (15.8) … All:0.98
+  (16.5)`, `PSNR y:38.3 … average:39.6 min:35.3 max:43.9`, `inf` allowed). Such a report is reported (`metrics
+  <file>: the same measurements, values differ …`) and is no difference (the coordinator accepted the rule,
+  2026-10-26): the values read the clips' mp4 encodes, and those depend on more than the frames
+  (`frames.sha256.json` covers the PNGs; libx264's output depends on its thread count, which follows the pod's CPUs:
+  UNVERIFIED whether the two pods' encodes are byte-identical). Everything else is a difference: a line missing or
+  added, another order, a probe line (`<label>: stream|…`: codec, size, frame count and rates follow from the frames)
+  not byte-identical, an empty value or one of another form (`Conversion failed!`) unless the same in both, a report
+  in one run only. The summary gains `<n> metrics report(s)`. Self-tests in `fv-lab-goldens.sh` (each case).
+- **The runtime image's fv-lab** (review of #217, blocking). On main the image workflow takes the newest tools
+  release even when it is older than the commit (`FV_PREBUILT_STALE=latest`), and `scripts/ci/prebuilt.sh contexts`
+  passed that release's fv-lab as the `lab-build` stage; an fv-lab from before this change refuses `extra_cells` and
+  `[[metric]]` (`deny_unknown_fields`), so the smoke step's `fv-lab check` would fail after the `sha-<7>` tag was
+  pushed, and the tag would carry an fv-lab that cannot read its own `lab/`. Now a stale release's fv-lab is not used
+  (as its fv-boot was not, ADR-0014): `lab-build` compiles this commit's (`scripts/ci/test_tools_release.sh`:
+  `contexts --stale`). This closes the plan's D1 follow-up (1).
+- **`fv-lab oracle --fetch-tree [--fetch-skip ERE] [--fetch-max-mb N]`** passes `pod up`'s tree fetch to the
+  runtime side (`OraclePlan::runtime_fetch`): `metrics.txt` and the copies are files of the tree, not of the default
+  fetch's summaries (`runpod-http.sh` needs `FV_FETCH_TREE=1` for them too). Without it nothing changes.
+
+| | script | fv-lab | why |
+|---|---|---|---|
+| a metric command | runs on `PATH`, no cap | the same tool on the same `PATH`, under `timeout` at the arm cap | a hung ffmpeg would hold the pod to its backstop |
+| `FV_LTX_*_PROMPT` | change the arms | refused | the cells are the defaults (§15.5) |
+
+#### 20.7 The GPU check (the coordinator's)
+
+The fewest targets that run every kind: **`ltx25-a2v-i2v`** (probe, clip-vs-clip, frame-vs-image) and
+**`ltx25-retake`** (probe, kept-frames-vs-source, clip-vs-clip), 8 arms, one `sol-ltx25` upstream pod (two
+references), the cheapest of their kinds at 512p (retake is one distilled stage; ref2v at 1536x896 and the guided
+a2v on the dev DiT cost more and add no kind). Both runtime runners on one reference, as §19.7; the commit `SHA` on
+GitHub with `fastvideo-rs-runtime:sha-<7>` published (with this PR's `lab/` and fv-lab), `fv-lab` built on the build
+pod. RTX PRO 6000, EU-RO-1, on `bz0ofkfx45`.
+
+**Before it:** confirm the image's tools are this commit's: `docker buildx imagetools inspect
+ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$SHA --format '{{json .Image}}' | jq -r '.config.Labels["dev.fastvideo.tools"]'`
+must be `compiled` (a branch image, `FV_PREBUILT_STALE=compile`) or a tools release built from exactly `$SHA`'s tools
+inputs (`scripts/ci/tools-release.sh input-hash $SHA` equal to the release's `input-hash`). On main a stale release
+labels the image with its tag and ships its fv-gpucheck; only fv-lab and fv-boot are then compiled from the commit.
+Stop the build pod once fv-lab is built (`scripts/dev/build-pod.sh stop`).
+
+```sh
+SHA=<7>
+CELLS=oracle-ltx25-a2v-i2v,oracle-ltx25-a2v-i2v-diff,oracle-ltx25-a2v-i2v-ownaud,oracle-ltx25-a2v-i2v-ownaud-diff,oracle-ltx25-retake,oracle-ltx25-retake-diff,oracle-ltx25-retake-ownenc,oracle-ltx25-retake-ownenc-diff
+D=/tmp/fv-oracle-metrics; rm -rf $D; mkdir -p $D
+./fv-lab oracle --sha $SHA --cells $CELLS --upstream-wall-cap-s 7200 --wall-cap-s 3600 --fetch-tree --fetch-skip '/frames/'   # the plan: check it
+# fv-lab side: the sol-ltx25 upstream pod, both references, the runtime pod (tree fetch, no frame PNGs), the release
+RUNPOD_API_KEY=… ./fv-lab oracle --sha $SHA --cells $CELLS --upstream-wall-cap-s 7200 --wall-cap-s 3600 \
+  --fetch-tree --fetch-skip '/frames/' --url-file $D/urls --hold-upstream $D/hold --yes >$D/report.json 2>$D/lab.log & LAB=$!
+# script side: the same references (as §19.7), then lift the hold whatever happened
+until [ -s $D/urls ] || ! kill -0 $LAB 2>/dev/null; do sleep 20; done
+if [ -s $D/urls ]; then
+  RUNPOD_API_KEY=… FV_FAMILY=oracle FV_GEN_TIMEOUT_S=5400 FV_POD_CAP_S=3600 FV_FETCH_TREE=1 FV_FETCH_SKIP='/frames/' \
+    FV_EXTRA_ENV="FV_ORACLE_URL=$(cat $D/urls) FV_ORACLE_TARGETS='ltx25-a2v-i2v ltx25-retake' FASTVIDEO_DUMP_OPS=0,1,24,47" \
+    bash scripts/gpu/runpod-http.sh run $SHA >$D/script.log 2>&1
+fi
+touch $D/hold; wait $LAB; echo "fv-lab oracle rc=$?"
+L=artifacts/runpod/oracle/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/oracle/$SHA-<MMDDHHMM>
+bash scripts/gpu/fv-lab-compare-runs.sh $L $S
+jq '{served, missing, runtime_ok, runtime_exit_code, problems, upstream: [.upstream[] | {id, tag, released, deleted}]}' $D/report.json
+for r in $L $S; do grep -c '^\[ltx25-\(a2v-i2v\|retake\)-frames\] ' $r/live.log; done   # 36 each: a2v-i2v 8 + 14 (echoed after each part), retake 14
+grep -E 'runpod-pod-(created|deleted)' artifacts/fv-lab/ledger.tsv | tail -4    # both fv-lab pods created and deleted
+```
+
+**Pass:**
+
+- `fv-lab oracle rc=0`; the report `"served": ["ltx25-a2v-i2v", "ltx25-retake"]`, `"missing": []`, `"runtime_ok":
+  true`, one upstream entry released (`… the hold is lifted`) with `"deleted": {"Ok": null}`.
+- `fv-lab-compare-runs.sh` exit 0 with `same oracle-ltx25-a2v-i2v-frames/metrics.txt` and `same
+  oracle-ltx25-retake-frames/metrics.txt` (or, for either, `metrics <file>: the same measurements, values differ
+  (reported, not judged: the clips' encodes)`, §20.6) and the line "8 arm(s) the same (4 ran with byte-identical
+  frames, 0 skipped in both, 0 failed in both; 4 with the same compare-dumps lines), 0 control arm(s) reported, 0
+  report(s) the same, 0 verdict file(s) the same, 2 metrics report(s), 0 difference(s)". (If the two a2v-i2v
+  generation arms exit 1 on both sides, as on 2026-09-29 before `ltx2/gen.wav`'s size check was fixed, they count as
+  "failed in both" and the line reads 2 ran, 2 failed; the compare still passes on the retake arms.)
+- Each `metrics.txt`: a2v-i2v 6 probe lines (2 streams x ours, ownaud, reference), 2 `ours vs reference clip`, 6
+  `<label> frame 0 <m>`; retake 6 probe lines, 6 `kept frames vs source`, 2 `ours vs reference clip`; no `missing`
+  line; values not empty. Both `live.log`s carry them prefixed (a2v-i2v's first 8 twice).
+- Both runtime pods `matrix_exit=0`; the ledger shows the upstream and the fv-lab runtime pod created and deleted;
+  `fv-lab pod reap --account` lists nothing.
+
+**Estimate** ($2.49/hr): the upstream pod about 45-60 min (readiness, up to 15 min of a cold image pull on a new
+host, docs/oracle.md "LTX-2.5 audio-to-video"; `weights:ltx25`'s pack rebuild; two references of about 1-3 min each;
+then held while both runtime sides run), about $1.90-$2.50; each runtime pod about 20 min (5 min boot and preflight,
+two 512p two-stage and two one-stage LTX runs with dumps, four `compare-dumps`, 22 ffmpeg / ffprobe commands in
+seconds), about $0.85 each: **about $3.60-$4.20** in all. fv-lab's balance guard (§19.1) needs, at these caps, $8 +
+the upstream pod at $2.50/hr over 7,200 + 1,200 s ($5.83) + the runtime pod over 3,600 + 1,200 s ($3.33) = **$17.17**,
+plus what the account already spends over the 2 h cap: **stop the build pod first** (running at $0.96/hr it adds
+$1.92, so the guard needs about $19.09). The script side's pod has no such guard, so the starting balance must
+cover the worst case too: all three pods at their caps, the upstream pod 2 h and each runtime pod 1 h at the
+$2.50/hr price cap ($5.00 + $2.50 + $2.50) plus fv-deploy's two replaced readiness cycles for each fv-lab pod
+(2 x 600 s x 2 x $2.50/hr, $1.67) and the script side's own retries (up to $0.83): **about $12.50**, so **start at
+$20.50 or more** ($8 + $12.50). With lower caps (`--upstream-wall-cap-s 6000 --wall-cap-s 2700`, `FV_POD_CAP_S=2700`,
+which leaves the references 2,100 s, enough only if the upstream image is cached on the host) the worst case is
+about $10.40 and the start $18.40. The upstream cap stays at
+7,200 s: the references' wait is what the cap leaves after the stock wait and the fetch reserve (§19.1), 3,300 s at
+7,200, and a cold pull plus the pack rebuild may need most of it. The readiness risk of §19.4 (600 s per cycle)
+applies. Stop before the balance would fall below $8 (CLAUDE.md).
+
+#### 20.8 Then: the retirement of `oracle` (§15.10, §19.8)
+
+After §19.7's and this check pass, in the next D1 PR, `scripts/gpu/oracle.sh` runs `fv-lab oracle` for every
+target that is a cell (now nineteen: every default target and the ten here), mapping `ORACLE_TARGETS` to `--cells`
+(every arm of `oracle-<target>`), `FV_RUNTIME_STOCK_WAIT_S` to `--stock-wait-s`, `FV_POD_CAP_S` to the caps, and
+passing `--fetch-tree --fetch-skip '/frames/'`; it refuses `UP_AFTER`, `FV_ORACLE_RUN_MODE=all`,
+`FV_ORACLE_FAMILY`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT` and `FV_ORACLE_EXTRA_ENV` for them, and keeps its own path
+for `sfwan13` alone. `oracle` retires when `sfwan13` leaves the script path too (§20.5, its own check), in one PR:
+
+1. **Knobs.** `oracle` joins `FV_LAB_RETIRED`; `FV_ORACLE_TARGETS`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`,
+   `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT` and the five `FV_LTX_*_PROMPT` move from `SCRIPT_KNOBS` to `MODE_KNOBS`
+   (so into `runpod-http.sh`'s `FV_LAB_NOT_READ`, `tests/knobs.rs`); `runpod-http.sh run` / `plan` route `oracle`
+   (and `oracle-r2`) to `fv-lab pod up`, refusing `FV_ORACLE_TARGETS` with a pointer to `FV_CELLS`.
+2. **Fixtures freeze**: `oracle-dry-run.txt`, `oracle-gates.tsv`, `runpod-http-oracle.json`,
+   `oracle-extra-dry-run.txt`, `oracle-extra-gates.tsv` (and `oracle-r2`'s); `fv-lab-goldens.sh` stops writing them.
+3. **The branch goes**: the `oracle)` case, `metric_dry` and `oracle_run`; the `wan` family keeps `oracle_fetch` /
+   `oracle_diff`; the other families' dry runs compared before and after. `tests/repeats_oracle.rs`'s oracle tests run
+   a frozen copy of the branch (`fixtures/oracle-script/`, as §15.10's `det-script/`), with its dry runs held to the
+   frozen goldens.
+4. **`oracle.sh`** becomes `fv-lab oracle` (a wrapper with the mapping above, or deleted with a pointer in
+   docs/oracle.md).
+5. **The `sfwan` family's prelude** becomes `fv-lab run oracle-r2 --cells <sfwan13's arms> --runs-dir "$RUNS"`
+   (§20.5 item 3).
+
+`runpod-http.sh upstream` stays for the upstream benchmarks until they move (§19.8 item 3).
+
+#### 20.9 What does not change
+
+The `oracle` tier's default run, its three fixtures and pod body; every other tier; `fv-lab pod up`, `fv-lab oracle`
+without `--fetch-tree`; `oracle.sh`; the script's real runs of the tensor-diff targets; `runpod-http.sh`. Code:
+`plan.rs` (`Metric`, `Clip`, `Measure`, `Step::Metric`, `Tier::extra_cells`, `Lab::resolve_selected`), `run.rs`
+(`Runner::metric`, `metric_value`, the dry-run lines, `raw_line`), `oracle.rs` (`runtime_fetch`), `bin/fv-lab.rs`;
+tests in `plan.rs`, `run.rs`, `tests/{dry_run,repeats_oracle,oracle_driver,fv_lab_bin,lab_files}.rs`.

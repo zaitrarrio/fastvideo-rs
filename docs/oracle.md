@@ -80,10 +80,14 @@ the floor the Rust-vs-Python profile is judged against.
 Results: `artifacts/runpod/oracle/<tag>/oracle-<target>-diff/` (the stderr
 table and `gpucheck-out/*.json`); the dumps themselves stay on the pods.
 
-**With fv-lab** (ADR-0019 §19, proposed until its GPU check passes): the
-same run on fv-deploy's guards, for the targets that are cells of the
-`oracle` tier (the nine tensor-diff targets; not yet the clip-metric targets
-or `sfwan13`, which stay on `oracle.sh`):
+**With fv-lab** (ADR-0019 §19 and §20, proposed until their GPU checks
+pass): the same run on fv-deploy's guards, for the targets that are cells of
+the `oracle` tier: the nine tensor-diff targets, and the ten LTX clip-metric
+targets (`ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,retake,retake-v,retake-a,extend,a2v-guided}`,
+the tier's extra cells, run when `--cells` names their arms; their ffmpeg /
+ffprobe `[[metric]]` reports land in `oracle-<target>-frames/metrics.txt`,
+fetched with `--fetch-tree`). Not yet `sfwan13` (its tree is R2-only, §20.5),
+which stays on `oracle.sh`:
 
 ```
 ./fv-lab oracle --sha <7> --cells <arms>          # the plan: both pods' bodies, no key
@@ -106,6 +110,10 @@ Results: `artifacts/runpod/oracle/<tag>/` as above and
 `artifacts/runpod/upstream/<tag>/` (the reference run, without dumps or
 clips). `--url-file` / `--hold-upstream` let another reader (the GPU check's
 script side) use the same reference.
+For a clip-metric target add `--fetch-tree --fetch-skip '/frames/'`: the
+report and the clip copies (`ours.mp4`, `own*.mp4`, `reference.mp4`) are files
+of the run directory, not of the default fetch's summaries; the report is in
+`live.log` too, its lines prefixed `[<target>-frames]`, as the script's.
 
 Pass: step-1 per-block rel-L2 at bf16-rounding level (~2e-3) growing smoothly
 with depth, no block where it jumps. A jump is bisected with the block's op

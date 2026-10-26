@@ -38,6 +38,13 @@
         }
       }
     },
+    "metric": {
+      "description": "Derived-clip measurements after the cell's arms, compares and gates\n(ADR-0019 §20: the oracle's clip-metric targets; `hd` later): ffmpeg\nSSIM / PSNR and ffprobe stream lines into a report's `metrics.txt`,\nin order ([`Metric`]). A report, not a verdict.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Metric"
+      }
+    },
     "name": {
       "description": "The file stem.",
       "type": "string"
@@ -208,6 +215,24 @@
           "type": "string",
           "const": "baseline"
         }
+      ]
+    },
+    "Clip": {
+      "description": "One clip of a [`Metric`]: its label (the report's words and the copy's\nfile name `<label>.mp4`) and its path.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "path": {
+          "description": "Under `{runs}`, `{scratch}`, `{ref}` or `{root}`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "path"
       ]
     },
     "Compare": {
@@ -385,6 +410,161 @@
           "type": "string",
           "const": "bracket-prefixes"
         }
+      ]
+    },
+    "Measure": {
+      "description": "What a [`Metric`] measures of one clip. The comparisons run ffmpeg's\n`ssim` then `psnr` filter and write `<words> <filter>: <result>`, the\nresult the last `Parsed_<filter>` line of ffmpeg's output after its last\n`] ` (the script's `grep | tail -1` and `${r##*] }`).",
+      "oneOf": [
+        {
+          "description": "`ffprobe -v error -show_entries stream=codec_type,codec_name,\nsample_rate,channels,nb_frames,r_frame_rate,width,height -of compact\n<clip>`: each stdout line as `<label>: <line>`. (A struct variant,\nso `deny_unknown_fields` refuses a stray key on it too.)",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "probe"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The whole clip against another (both as yuv420p): `<label> vs\n<against label> clip <filter>: …`.",
+          "type": "object",
+          "properties": {
+            "against": {
+              "$ref": "#/$defs/Clip"
+            },
+            "kind": {
+              "type": "string",
+              "const": "clip-vs-clip"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "against"
+          ]
+        },
+        {
+          "description": "The frames `select` keeps of the clip against the same frames of\n`source` (both re-timed to `fps`): `<label> kept frames vs source\n<filter>: …`.",
+          "type": "object",
+          "properties": {
+            "fps": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "kept-frames-vs-source"
+            },
+            "select": {
+              "description": "An ffmpeg `select` expression (`lt(n\\,33)+gte(n\\,89)`), quoted\nwith `'` in the filter graph.",
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "source",
+            "select",
+            "fps"
+          ]
+        },
+        {
+          "description": "Frame `frame` of the clip against an image scaled to cover\n`width`x`height` (bilinear) and centre-cropped to it: `<label> frame\n<frame> <filter>: …`.",
+          "type": "object",
+          "properties": {
+            "frame": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "height": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "image": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "frame-vs-image"
+            },
+            "width": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "frame",
+            "image",
+            "width",
+            "height"
+          ]
+        }
+      ]
+    },
+    "Metric": {
+      "description": "A derived-clip measurement (docs/adr/0019-fv-lab.md §20): a pass over\nclips, as the script's `for src in \"<label>:<path>\" …` loops. Into the\nreport directory `report`, for each clip in order:\n\n1. the clip and every `requires` file must be regular files; else, with\n   `missing`, the line `<label> missing <path>` (and ` or <file name>` per\n   `requires` entry) is appended to `metrics.txt`, and the next clip;\n2. with `copy`, the clip is copied to `<report>/<label>.mp4`;\n3. each [`Measure`], in order, appends its lines (SSIM then PSNR for the\n   comparisons).\n\nThen, with `echo`, every line of `metrics.txt` (the whole file) goes into\nthe log as `[<tag>] <line>`. A dry run lists each ffmpeg / ffprobe command\nas `dry-run metric <tag>: <command>`, every clip assumed present. Nothing\njudges the numbers (ADR-0019 §20, decision 2).",
+      "type": "object",
+      "properties": {
+        "clips": {
+          "description": "The clips, in order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Clip"
+          }
+        },
+        "copy": {
+          "description": "Copy each present clip to `<report>/<label>.mp4` before its measures.",
+          "type": "boolean"
+        },
+        "echo": {
+          "description": "After the pass, `metrics.txt` (all of it) into the log.",
+          "type": "boolean"
+        },
+        "measure": {
+          "description": "What is measured of each present clip, in order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Measure"
+          }
+        },
+        "missing": {
+          "description": "Write `<label> missing …` for a clip that is not there (else nothing).",
+          "type": "boolean"
+        },
+        "report": {
+          "description": "The report directory, below `{runs}/` (`metrics.txt`, the copies).",
+          "type": "string"
+        },
+        "requires": {
+          "description": "Files every clip's measures need besides the clip.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tag": {
+          "description": "The echoed lines' prefix and the dry-run lines' name.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "report",
+        "tag",
+        "clips"
       ]
     },
     "PairedGate": {

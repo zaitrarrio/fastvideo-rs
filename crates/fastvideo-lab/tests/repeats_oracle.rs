@@ -100,6 +100,10 @@ else
   run "$clip"
 fi
 run "$clip/warmup"
+# An LTX clip's video (the clip-metric targets read it, ADR-0019 §20).
+if [ "$audio" = 1 ] && [ -z "$prompts" ] && [ -n "$clip" ]; then
+  printf 'mp4-%s-%s%s' "$salt" "${FASTVIDEO_INJECT_COND:-i}" "${FASTVIDEO_INJECT_PIXELS:-i}" >"$clip/output.mp4"
+fi
 echo "peak vram 1 MiB" >&2
 exit 0
 "#;
@@ -173,8 +177,8 @@ fn fake(name: &str, mode: &str) -> Fake {
     script(
         &gpu.join("verify-weights.sh"),
         &format!(
-            "echo \"verify $1\"\ncase \"$1\" in fasth3-8step | fastwan22-ti2v-5b) exit 1 ;; esac\ngrep -qw noh3 {} && [ \"$1\" = fasth3-4step-vsa ] && exit 1\nexit 0\n",
-            f.dir.join("mode").display()
+            "echo \"verify $1\"\ncase \"$1\" in fasth3-8step | fastwan22-ti2v-5b) exit 1 ;; esac\ngrep -qw noh3 {m} && [ \"$1\" = fasth3-4step-vsa ] && exit 1\ngrep -qw \"no-$1\" {m} && exit 1\nexit 0\n",
+            m = f.dir.join("mode").display()
         ),
     );
     std::fs::write(gpu.join("gate-policy.toml"), "# policy\n").unwrap();
@@ -323,8 +327,25 @@ fn read(p: &Path) -> Option<Vec<u8>> {
     std::fs::read(p).ok()
 }
 
+/// A run directory's scratch disk (`<side>/runs/<family>/<tag>`): the
+/// paths a report names differ by it alone between the two sides.
+fn side(runs: &Path) -> String {
+    runs.ancestors()
+        .nth(3)
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
+}
+
+/// `text` with the run directory `runs` (its tag differs between the sides)
+/// read as `<runs>`, then its scratch disk as `<scratch>`.
+fn norm_paths(runs: &Path, text: &str) -> String {
+    text.replace(&runs.display().to_string(), "<runs>")
+        .replace(&side(runs), "<scratch>")
+}
+
 /// The same bytes in both runs for every file that is a pure function of the
-/// outputs (not logs, timings or dates), and the same set of such files.
+/// outputs (not logs, timings or dates), and the same set of such files (a
+/// path into either side's scratch disk read as `<scratch>`).
 fn assert_same_outputs(a: &Path, b: &Path) {
     let keep = |f: &String| {
         let name = f.rsplit('/').next().unwrap_or(f);
@@ -352,8 +373,8 @@ fn assert_same_outputs(a: &Path, b: &Path) {
     );
     for f in &fa {
         assert_eq!(
-            read(&a.join(f)).map(|v| String::from_utf8_lossy(&v).into_owned()),
-            read(&b.join(f)).map(|v| String::from_utf8_lossy(&v).into_owned()),
+            read(&a.join(f)).map(|v| norm_paths(a, &String::from_utf8_lossy(&v))),
+            read(&b.join(f)).map(|v| norm_paths(b, &String::from_utf8_lossy(&v))),
             "{f}"
         );
     }
@@ -715,4 +736,229 @@ fn a_file_reference_url_is_refused_outside_the_tests() {
     assert!(!f.dir.join("lab/oracle-ref/fasth3-4step-vsa/dump").exists());
     let log = String::from_utf8_lossy(&read(&runs.join("live.log")).unwrap()).into_owned();
     assert!(log.contains("is not an http(s):// URL"), "{log}");
+}
+
+// ------------------------------------------------------------------ clip metrics
+
+/// The clip-metric targets the fakes run (ADR-0019 §20), all ten: every metric
+/// kind (pinned frames, the clip against the reference's with a required
+/// file, probes, kept frames), a reference without its `ref.mp4`
+/// (`retake-a`), a target that echoes its report twice (`a2v-i2v`), and one
+/// whose arms skip on their weights (`a2v-guided`: its clips are missing).
+/// The script side's run tag in the clip-metric test (fv-lab's is [`TAG`]).
+const SCRIPT_TAG: &str = "t2-script";
+
+const CLIP_TARGETS: &str = "ltx25-i2v ltx25-kf ltx25-ref2v ltx25-a2v ltx25-a2v-i2v ltx25-retake ltx25-retake-v ltx25-retake-a ltx25-extend ltx25-a2v-guided";
+
+/// ffmpeg on the fake box: the comparison's filter (`ssim` / `psnr`, the end
+/// of the graph) and a checksum of its inputs' bytes and of the graph, as the
+/// last line holding `Parsed_<filter>`, behind a `] `.
+const FFMPEG: &str = r#"graph=""; frames=""; prev=""; ins=""
+for a in "$@"; do
+  case "$prev" in -lavfi) graph="$a" ;; -i) ins="$ins $a" ;; esac
+  [ "$a" = "-frames:v" ] && frames=1
+  prev="$a"
+done
+m="${graph##*]}"
+sum="$(for f in $ins; do cat "$f" 2>/dev/null || echo none; done | cksum | cut -d' ' -f1)"
+g="$(printf '%s %s' "$graph" "$frames" | cksum | cut -d' ' -f1)"
+echo "[Parsed_${m}_1 @ 0x1] early" >&2
+echo "[Parsed_${m}_2 @ 0x55] ${m^^} all:$sum graph:$g" >&2
+echo "[out#0/null @ 0x9] video:1kB" >&2
+"#;
+
+/// ffprobe on the fake box: two stream lines from the clip's size.
+const FFPROBE: &str = r#"f=""; for a in "$@"; do f="$a"; done
+n="$(wc -c <"$f" | tr -d ' ')"
+echo "stream|codec_type=video|codec_name=h264|nb_frames=$n"
+echo "stream|codec_type=audio|codec_name=aac|sample_rate=44100|channels=2"
+echo "unused stderr" >&2
+"#;
+
+/// The fake box of [`fake`], plus ffmpeg / ffprobe, the repository's
+/// fixtures (the images and the source clip the metrics read), the script's
+/// `PATH` with the fakes first (it puts `/usr/local/bin` before the caller's
+/// `PATH`; a real ffmpeg there would shadow them), and the clip-metric
+/// targets' references, `ref.mp4` in each dump but `retake-a`'s.
+fn fake_clips(name: &str) -> Fake {
+    // The guided target's weight gate fails: its arms skip, its clips are missing.
+    let f = fake(name, "no-ltx25-a2v-guided");
+    for (tool, body) in [("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)] {
+        let p = f.bin().join(tool);
+        std::fs::write(&p, format!("#!/bin/bash\n{body}")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let fx = f.root().join("scripts/gpu/fixtures");
+    std::fs::create_dir_all(&fx).unwrap();
+    for e in std::fs::read_dir(repo_root().join("scripts/gpu/fixtures")).unwrap() {
+        let e = e.unwrap();
+        if e.path().is_file() {
+            std::fs::copy(e.path(), fx.join(e.file_name())).unwrap();
+        }
+    }
+    let m = f.root().join("scripts/gpu/runpod-matrix.sh");
+    let text = std::fs::read_to_string(&m).unwrap();
+    let line = "export PATH=\"/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:${PATH:-}\"";
+    assert_eq!(text.matches(line).count(), 1, "the script's PATH line");
+    std::fs::write(
+        &m,
+        text.replace(
+            line,
+            &format!(
+                "export PATH=\"{}:/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:${{PATH:-}}\"",
+                f.bin().display()
+            ),
+        ),
+    )
+    .unwrap();
+    for t in CLIP_TARGETS.split(' ') {
+        let d = f.up().join(format!("oracle-{t}"));
+        std::fs::create_dir_all(d.join("dump")).unwrap();
+        std::fs::write(d.join("dump/latent.bin"), "latent-rule").unwrap();
+        std::fs::write(d.join("dump/noise.bin"), "noise").unwrap();
+        if t != "ltx25-retake-a" {
+            std::fs::write(d.join("dump/ref.mp4"), format!("ref-{t}")).unwrap();
+        }
+        let st = Command::new("tar")
+            .arg("-cf")
+            .arg(d.join("oracle-dump.tar"))
+            .arg("-C")
+            .arg(&d)
+            .arg("dump")
+            .status()
+            .expect("tar");
+        assert!(st.success());
+        std::fs::remove_dir_all(d.join("dump")).unwrap();
+        std::fs::write(d.join("ORACLE_DONE"), "").unwrap();
+    }
+    f
+}
+
+#[test]
+fn clip_metrics_report_as_the_script() {
+    let f = fake_clips("oracle-clips");
+    let path = format!(
+        "{}:{}",
+        f.bin().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let o = Command::new("bash")
+        .arg(f.root().join("scripts/gpu/runpod-matrix.sh"))
+        .arg("oracle")
+        .env_clear()
+        .env("FV_ORACLE_URL", url(&f))
+        .env("FV_ORACLE_WAIT_S", "0")
+        .env("FV_ORACLE_TARGETS", CLIP_TARGETS)
+        .env("PATH", path)
+        .env("HOME", &f.dir)
+        .env("LC_ALL", "C")
+        .env("FV_WORK", f.dir.join("work"))
+        .env("FV_SCRATCH", f.dir.join("script"))
+        // Another tag than fv-lab's: the `missing` lines name the run directory.
+        .env("FV_RUN_TAG", SCRIPT_TAG)
+        .env("FV_GPUCHECK", f.bin().join("fv-gpucheck"))
+        .env("FV_GEN_TIMEOUT_S", "60")
+        .output()
+        .expect("bash runs");
+    assert!(
+        o.status.success(),
+        "runpod-matrix.sh oracle: {}\n{}\n{}",
+        o.status,
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let s = f.dir.join("script/runs/oracle").join(SCRIPT_TAG);
+    let lab = lab();
+    let only: Vec<String> = CLIP_TARGETS
+        .split(' ')
+        .flat_map(|t| lab.cells[&format!("oracle-{t}")].arms.iter())
+        .map(|a| a.name.clone())
+        .collect();
+    let (_, cells) = lab
+        .resolve_selected("oracle", None, Some(&only))
+        .expect("tier");
+    let mut cfg = config(&f, "oracle");
+    cfg.only = Some(only);
+    cfg.ffmpeg = f.bin().join("ffmpeg").display().to_string();
+    cfg.ffprobe = f.bin().join("ffprobe").display().to_string();
+    let steps = Lab::steps(&cells, &cfg.bin, &cfg.paths()).expect("render");
+    Runner::new(cfg).run(&steps).expect("fv-lab run");
+    let l = f.dir.join("lab/runs/oracle").join(TAG);
+    // fv-lab publishes ORACLE_REFS_DONE once every reference is fetched; the
+    // script's watcher can miss it in a run of several targets (§15.5).
+    assert!(l.join("ORACLE_REFS_DONE").is_file());
+    let _ = std::fs::remove_file(s.join("ORACLE_REFS_DONE"));
+    std::fs::remove_file(l.join("ORACLE_REFS_DONE")).unwrap();
+    // metrics.txt, the clip copies, the arms' records: the same bytes.
+    assert_same_outputs(&s, &l);
+    let norm = |runs: &Path| -> Vec<String> {
+        raw_lines(runs)
+            .into_iter()
+            .map(|x| norm_paths(runs, &x))
+            .collect()
+    };
+    // The reports echoed into live.log (and the compare-dumps lines), as tee'd.
+    assert_eq!(norm(&s), norm(&l));
+    let metrics = |t: &str| -> String {
+        String::from_utf8_lossy(
+            &read(&l.join(format!("oracle-{t}-frames/metrics.txt"))).unwrap_or_default(),
+        )
+        .into_owned()
+    };
+    let kf = metrics("ltx25-kf");
+    for want in [
+        "ours frame 0 ssim: SSIM all:",
+        "ownimg frame 120 psnr: PSNR all:",
+        "reference frame 120 ssim: SSIM all:",
+    ] {
+        assert!(kf.contains(want), "{want}\n{kf}");
+    }
+    assert_eq!(kf.lines().count(), 12, "{kf}");
+    let r2v = metrics("ltx25-ref2v");
+    assert!(
+        r2v.contains("ownimg vs reference clip psnr: PSNR all:"),
+        "{r2v}"
+    );
+    assert!(l.join("oracle-ltx25-ref2v-frames/reference.mp4").is_file());
+    let retake = metrics("ltx25-retake");
+    for want in [
+        "ownenc: stream|codec_type=video|codec_name=h264|nb_frames=",
+        "reference kept frames vs source psnr: PSNR all:",
+        "ours vs reference clip ssim: SSIM all:",
+    ] {
+        assert!(retake.contains(want), "{want}\n{retake}");
+    }
+    // No reference clip: one line for it, and no clip comparison.
+    let ra = metrics("ltx25-retake-a");
+    assert!(
+        ra.contains("reference missing ") && ra.contains("ltx25-retake-a/dump/ref.mp4"),
+        "{ra}"
+    );
+    assert!(!ra.contains("vs reference clip"), "{ra}");
+    // The guided target's arms skipped: its two clips are missing (in the run
+    // directory, whose tag differs between the sides), the reference probed.
+    let guided = metrics("ltx25-a2v-guided");
+    assert!(
+        guided.contains("ours missing ") && guided.contains("ownaud missing "),
+        "{guided}"
+    );
+    assert!(guided.contains("reference: stream|"), "{guided}");
+    assert!(!guided.contains("vs reference clip"), "{guided}");
+    for t in CLIP_TARGETS.split(' ') {
+        assert!(
+            l.join(format!("oracle-{t}-frames/metrics.txt")).is_file(),
+            "{t}"
+        );
+    }
+    // a2v-i2v echoes its report after each part: the probe lines twice.
+    let echoed = norm(&l)
+        .into_iter()
+        .filter(|x| x.starts_with("[ltx25-a2v-i2v-frames] ours: stream|codec_type=video"))
+        .count();
+    assert_eq!(echoed, 2);
+    // The dumps, ownaud's too, and the references are gone after a target.
+    for runs in [&s, &l] {
+        assert!(!runs.join("oracle-ltx25-a2v-i2v-dump-ownaud").exists());
+        assert!(!runs.join("oracle-ltx25-retake-dump-ownenc").exists());
+    }
 }

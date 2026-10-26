@@ -1,0 +1,95 @@
+# runpod-matrix.sh `oracle`, clip-metric target ltx25-retake-a (docs/oracle.md; docs/adr/0019-fv-lab.md §15, §20): the upstream
+# reference's dump fetched into {ref}, its noise and text (and conditioning) injected into our run, our run dumped the
+# same way (blocks 0,1,24,47) and compared tensor by tensor (compare-dumps, its lines echoed into the log).
+# Then retake / extend: -ownenc decodes and encodes the source (video and audio) on our own; then the clips
+# (ours, ownenc, the reference's) copied and probed, their kept frames (outside the regenerated window) against the
+# source, and ours against the reference's, into oracle-<target>-frames/metrics.txt ([[metric]], ADR-0019 §20).
+# An extra cell of the `oracle` tier: run when --cells names its arms. After the cell the dumps and the reference are
+# removed (the clips stay in the report).
+schema = 1
+name = "oracle-ltx25-retake-a"
+description = "Oracle diff of LTX-2.5 retake of [1.5, 3.5) s of the audio only (the video frozen), against the sol-ltx25 reference; the clips' streams, every frame against the source, the clip against the reference's"
+
+[workload]
+model = "ltx2"
+prompt = "A huge wave crashes over the dark rocks at golden hour, white spray bursting high into the air, a narrator speaks calmly."
+seed = 1024
+frames = 121
+width = 768
+height = 512
+note = "one distilled stage at the source size; LTX_RETAKE_PROMPT of scripts/gpu/upstream/oracle.sh (FV_LTX_RETAKE_PROMPT's default)"
+
+[reference]
+target = "ltx25-retake-a"
+
+[lists]
+gen = [
+  "--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--height", "{height}", "--width", "{width}", "--num-frames", "{frames}", "--edit",
+  "retake:{root}/scripts/gpu/fixtures/beach-push-768x512-24fps.mp4:1.5:3.5:a", "--prompt", "{prompt}",
+  "--seed", "{seed}", "--text", "streamed", "--clip", "{runs}/{arm}/frames"
+]
+
+[[arm]]
+name = "oracle-ltx25-retake-a"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-ltx25-retake-a-dump"
+]
+argv = ["{@gen}"]
+fresh = ["{runs}/oracle-ltx25-retake-a-dump"]
+
+[[arm]]
+name = "oracle-ltx25-retake-a-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-ltx25-retake-a-dump"]
+requires = ["{ref}", "{runs}/oracle-ltx25-retake-a-dump"]
+echo = ["compare-dumps"]
+
+[[arm]]
+name = "oracle-ltx25-retake-a-ownenc"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_INJECT_DIR={ref}", "FASTVIDEO_DUMP_OPS=0,1,24,47", "FASTVIDEO_H3_QUANT=off",
+  "FASTVIDEO_DUMP_DIR={runs}/oracle-ltx25-retake-a-dump-ownenc", "FASTVIDEO_INJECT_COND=0",
+  "FASTVIDEO_INJECT_PIXELS=0"
+]
+argv = ["{@gen}"]
+fresh = ["{runs}/oracle-ltx25-retake-a-dump-ownenc"]
+
+[[arm]]
+name = "oracle-ltx25-retake-a-ownenc-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/oracle-ltx25-retake-a-dump-ownenc"]
+requires = ["{ref}", "{runs}/oracle-ltx25-retake-a-dump-ownenc"]
+echo = ["compare-dumps"]
+
+# The clips copied and probed, and the frames kept from the source (outside the regenerated window) against it.
+[[metric]]
+report = "{runs}/oracle-ltx25-retake-a-frames"
+tag = "ltx25-retake-a-frames"
+clips = [
+  { label = "ours", path = "{runs}/oracle-ltx25-retake-a/frames/output.mp4" },
+  { label = "ownenc", path = "{runs}/oracle-ltx25-retake-a-ownenc/frames/output.mp4" },
+  { label = "reference", path = "{ref}/ref.mp4" },
+]
+missing = true
+copy = true
+measure = [
+  { kind = "probe" },
+  { kind = "kept-frames-vs-source", source = "{root}/scripts/gpu/fixtures/beach-push-768x512-24fps.mp4", select = 'lt(n\,121)', fps = 24 },
+]
+
+# Ours against the reference's, every frame (both copies present).
+[[metric]]
+report = "{runs}/oracle-ltx25-retake-a-frames"
+tag = "ltx25-retake-a-frames"
+clips = [
+  { label = "ours", path = "{runs}/oracle-ltx25-retake-a-frames/ours.mp4" },
+]
+requires = ["{runs}/oracle-ltx25-retake-a-frames/reference.mp4"]
+measure = [
+  { kind = "clip-vs-clip", against = { label = "reference", path = "{runs}/oracle-ltx25-retake-a-frames/reference.mp4" } },
+]
+echo = true

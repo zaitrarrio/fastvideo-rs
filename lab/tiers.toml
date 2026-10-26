@@ -452,8 +452,8 @@ tae = true
 cells = ["determinism-ltx-t2v", "determinism-ltx-i2v", "determinism-h3"]
 
 # runpod-matrix.sh `oracle` with FV_ORACLE_TARGETS naming its nine tensor-diff
-# targets (the clip-metric targets, ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,a2v-guided,
-# retake*,extend} and sfwan13, stay in the script, §15.6): one cell per target,
+# targets (sfwan13 stays in the script, §20.5; the clip-metric targets are the
+# extra cells below, §20): one cell per target,
 # its reference fetched from FV_ORACLE_URL. cell_timeout_s 5400 as
 # scripts/gpu/oracle.sh passes FV_GEN_TIMEOUT_S. `pod up` needs FV_ORACLE_URL
 # (--extra-env) and --cells (the targets the upstream pods make).
@@ -474,6 +474,12 @@ weights = "volume"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["oracle-fasth3-8step", "oracle-fasth3-8step-vsa0", "oracle-fasth3-4step-vsa", "oracle-fasth3-4step-dense", "oracle-h3-ref2va-4step", "oracle-ltx25-512p", "oracle-ltx25-512p-dense", "oracle-ltx25-4k", "oracle-ltx25-4k-dense"]
+# The clip-metric targets (ADR-0019 §20): their arms and compare-dumps as above,
+# then the derived-clip metrics ([[metric]]: ffmpeg SSIM / PSNR, ffprobe) into
+# oracle-<target>-frames/metrics.txt. Extra cells: run only when --cells names
+# their arms, so the default run above (its goldens, the GPU-checked plan) is
+# unchanged; their goldens are oracle-extra-dry-run.txt / -gates.tsv.
+extra_cells = ["oracle-ltx25-i2v", "oracle-ltx25-kf", "oracle-ltx25-ref2v", "oracle-ltx25-a2v", "oracle-ltx25-a2v-i2v", "oracle-ltx25-retake", "oracle-ltx25-retake-v", "oracle-ltx25-retake-a", "oracle-ltx25-extend", "oracle-ltx25-a2v-guided"]
 
 # ---- D1f (docs/adr/0019-fv-lab.md §17): three more runpod-matrix.sh families as
 # tiers, each held equal to the script's dry run by a golden (fv-lab-goldens.sh).

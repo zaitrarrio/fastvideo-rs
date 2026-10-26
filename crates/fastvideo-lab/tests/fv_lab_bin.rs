@@ -1131,6 +1131,53 @@ fn oracle_without_yes_is_the_plan_and_needs_no_key() {
             .unwrap();
         assert!(!o.status.success(), "{bad:?}");
     }
+    // --fetch-tree reaches the runtime side's `pod up`; a skip pattern
+    // fv-lab cannot read is refused before anything (ADR-0019 §20.6).
+    let tree = stdout(fv_lab().args([
+        "oracle",
+        "--sha",
+        "1234567",
+        "--up-sha",
+        UP,
+        "--cells",
+        cells,
+        "--fetch-tree",
+        "--fetch-skip",
+        "/frames/",
+    ]));
+    let tv: serde_json::Value = serde_json::from_str(&tree).expect("plan JSON");
+    let targv: Vec<&str> = tv["runtime"]["command"]
+        .as_array()
+        .expect("runtime command")
+        .iter()
+        .filter_map(|x| x.as_str())
+        .collect();
+    assert!(
+        targv.ends_with(&[
+            "--fetch-tree",
+            "--fetch-skip",
+            "/frames/",
+            "--yes",
+            "--wait"
+        ]),
+        "{targv:?}"
+    );
+    let bad = fv_lab()
+        .args([
+            "oracle",
+            "--sha",
+            "1234567",
+            "--up-sha",
+            UP,
+            "--cells",
+            cells,
+            "--fetch-tree",
+            "--fetch-skip",
+            "a\\db",
+        ])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
     let nokey = fv_lab()
         .args([
             "oracle", "--sha", "1234567", "--up-sha", UP, "--cells", cells, "--yes",
@@ -1142,7 +1189,12 @@ fn oracle_without_yes_is_the_plan_and_needs_no_key() {
     // `check` reads lab/upstream.toml too.
     let out = stdout(fv_lab().arg("check"));
     assert!(out.contains("upstream fastvideo: 5 target(s)"), "{out}");
-    assert!(out.contains("upstream sol-ltx25: 4 target(s)"), "{out}");
+    assert!(out.contains("upstream sol-ltx25: 14 target(s)"), "{out}");
+    // The oracle tier's clip-metric targets are extra cells (ADR-0019 §20.3).
+    assert!(
+        out.contains("oracle: 9 cell(s), 32 arm(s) (+10 extra cell(s), 46 arm(s), on request)"),
+        "{out}"
+    );
 }
 
 /// The runtime image's smoke step runs `fv-lab check` (and a dry run) in

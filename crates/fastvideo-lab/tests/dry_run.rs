@@ -247,6 +247,89 @@ fn arms_and_gates_are_the_scripts_and_arms_name_their_trees() {
     assert_eq!((tae_arms, gates_seen), (16, 28));
 }
 
+/// A tier's extra cells (ADR-0019 §20.3: `extra_cells`, run on request):
+/// `fv-lab run oracle --dry-run` selecting every arm of the ten clip-metric
+/// targets prints `FV_DRY_RUN=1 runpod-matrix.sh oracle` with
+/// `FV_ORACLE_TARGETS` naming them (`fixtures/oracle-extra-dry-run.txt`),
+/// line for line, the derived-clip metric commands (`dry-run metric <tag>:
+/// <ffmpeg / ffprobe …>`) included, after a `skip <cell> (no arm in
+/// FV_CELLS)` per default cell (the script, given its targets, names no
+/// other); its gates are `oracle-extra-gates.tsv`'s. Without a selection
+/// the extra cells do not run (the default run is `oracle-dry-run.txt`,
+/// above).
+#[test]
+fn the_extra_cells_dry_run_as_the_script_with_their_targets() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier("oracle").expect("oracle");
+    assert_eq!(tier.extra_cells.len(), 10);
+    let extra_arms: Vec<String> = tier
+        .extra_cells
+        .iter()
+        .flat_map(|c| &lab.cells[c].arms)
+        .map(|a| a.name.clone())
+        .collect();
+    let mut cfg = config("oracle");
+    cfg.only = Some(extra_arms.clone());
+    let (_, cells) = lab
+        .resolve_selected("oracle", None, cfg.only.as_deref())
+        .expect("tier");
+    assert_eq!(cells.len(), 19);
+    let steps = Lab::steps(&cells, &cfg.bin, &cfg.paths()).expect("render");
+    let ours = dry_run_lines(&cfg, &steps);
+    let skips: Vec<String> = tier
+        .cells
+        .iter()
+        .map(|c| format!("[oracle] skip {c} (no arm in FV_CELLS)"))
+        .collect();
+    assert_eq!(
+        ours[1..=skips.len()],
+        skips[..],
+        "the default cells, skipped"
+    );
+    let mut rest = vec![ours[0].clone()];
+    rest.extend(ours[skips.len() + 1..].iter().cloned());
+    let theirs = dry_run_fixture("oracle-extra");
+    for (i, (a, b)) in rest.iter().zip(&theirs).enumerate() {
+        assert_eq!(a, b, "oracle-extra: line {i} differs");
+    }
+    assert_eq!(rest.len(), theirs.len(), "oracle-extra: line count");
+    let metrics = rest
+        .iter()
+        .filter(|l| l.contains("] dry-run metric "))
+        .count();
+    // i2v 6, kf 12, ref2v 4, a2v 5, a2v-i2v 11, retake* and extend 4 x 11, guided 5.
+    assert_eq!(metrics, 6 + 12 + 4 + 5 + 11 + 4 * 11 + 5);
+    // Each kind: ffprobe, a whole clip, kept frames, a pinned frame.
+    for k in [
+        "ffprobe -v error",
+        r"format=yuv420p\[b\]\;\[a\]\[b\]ssim",
+        r"select=\'lt\(n\\\,33\)",
+        r"select=eq\(n\\\,120\)",
+    ] {
+        assert!(rest.iter().any(|l| l.contains(k)), "{k}");
+    }
+    // The gates: every gated arm of the ten targets, as the script recorded.
+    let rows: Vec<Vec<String>> = fixture("oracle-extra-gates.tsv")
+        .lines()
+        .map(|l| l.split('\t').take(3).map(str::to_owned).collect())
+        .collect();
+    let gated: Vec<Vec<String>> = Step::flatten(&steps)
+        .into_iter()
+        .filter_map(|s| match s {
+            Step::Arm {
+                name,
+                gate: Some(g),
+                ..
+            } if extra_arms.contains(name) => Some(vec!["arm".to_owned(), name.clone(), g.clone()]),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(gated, rows);
+    // Without a selection the tier is its nine cells, as before.
+    let (_, default) = lab.resolve("oracle", None).expect("tier");
+    assert_eq!(default.len(), 9);
+}
+
 /// `FV_LAB_RETIRED` of `scripts/gpu/fv-lab-retired.sh`.
 fn retired() -> Vec<String> {
     let p = repo_root().join("scripts/gpu/fv-lab-retired.sh");
