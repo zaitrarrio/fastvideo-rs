@@ -1308,13 +1308,20 @@ and a compare-report window rule when those experiments become cells); h3arms' r
   script under fixed settings: `oracle` is generated with `FV_ORACLE_TARGETS` set to its nine targets and
   `FV_GEN_TIMEOUT_S=5400` (`fam_env` in the script). `tests/{dry_run,payload_golden}.rs` hold fv-lab to them; the gates
   test skips ungated arms as `FV_DRY_RUN_GATES` does.
-- **Script changes**, none of which changes what a real run computes:
+- **Script changes.** They change no generation, hash or report a finished run writes; one changes how a run with a
+  failed reference arm ends (the second item):
   - dry run only: a dry `oracle_fetch` logs `dry-run reference <target>: <dump>` and fetches nothing (before, the dry
     run needed a URL and, without one, skipped every target); the prefetch does not start in a dry run; a dry
     `oracle_diff` logs its command; a dry `det_hash` returns (before, it failed under `set -e` on the arm directory a
     dry run does not make, after the first arm, so the dry run had one arm);
-  - `determinism`'s verdict reads `|| true` like `det-short`'s: a model that did not run (`FV_DET_CELLS`) ended the
-    family under `pipefail` before `determinism.txt` and `matrix done`;
+  - `determinism`'s verdict reads `|| true` like `det-short`'s. **A real-run change** (review of #202): on main a model
+    that did not run (`FV_DET_CELLS`), or whose `-ab` arm was skipped or crashed (an empty `hashes.txt`), killed the
+    verdict subshell under `pipefail` and the family with it, so `matrix_exit` was non-zero and `determinism.txt` cut
+    short. Now the family goes on to `matrix done` (`matrix_exit=0`), and a reference arm that ran without run1 hashes
+    says so: `<model>-ab: no run1 hashes` in `determinism.txt` and `live.log` (its other runs follow as `DIFFERENT`).
+    fv-lab writes the same line (`<ref arm>: no <run> hashes`), and its typed verdict leaves the cell undecided when
+    the reference arm did not run, a fail when it ran without frames; `tests/repeats_oracle.rs` (`noh3`) holds both
+    byte-equal;
   - `det-short`'s arms pass one flat `env` (`env FASTVIDEO_CACHE=… XDG_CACHE_HOME=… [FASTVIDEO_SDPA_AUTO=timed]
     FASTVIDEO_WAN_VAE=full …`) where they nested two (`env … env FASTVIDEO_WAN_VAE=full …`): the same environment in the
     same order, a cell's one `env` list.
@@ -1341,6 +1348,7 @@ and a compare-report window rule when those experiments become cells); h3arms' r
 | `FV_DET_REPEATS`, `FV_DET_PROMPT`, `FV_DET_T2V_PROMPT`, `FV_DET_I2V_PROMPT`, `FV_REF2VA_PROMPT`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT` | change the arms | refused (`knobs::SCRIPT_KNOBS`) | the tiers are the defaults; a variant is another tier (§12's way) |
 | `FV_ORACLE_PREFETCH=0` | sequential fetches | refused: always in the background | the result is the same; only the upstream pods' lifetime differs |
 | `FASTVIDEO_DUMP_OPS` other than `0,1,24,47` for `oracle` | the dumped blocks | refused | every arm sets it; another value would be overridden |
+| `ORACLE_REFS_DONE` | written by a watcher once every target's `dump/` exists at the same moment (polled every 20 s up to `FV_ORACLE_WAIT_S`); the loop's cleanup removes each target's dump after its cell, so in a run of several targets an early target's dump can be gone before the last arrives and the file is never written (a script bug for multi-target runs, which then keep the upstream pods to the end) | written when every selected reference has been fetched (a count of successful fetches) | the meaning `oracle.sh` waits for: every reference is here, the upstream pods can go |
 | a reference whose prefetch failed | fetched again inline (another `FV_ORACLE_WAIT_S`) | the cell skipped | the prefetch already waited and tried three downloads; a second 3 h wait on a GPU pod buys nothing |
 | `FV_CELLS` naming some arms of an oracle target | the target's reference fetched all the same | fetched only when one of its arms is selected; other targets `skip <cell> (no arm in FV_CELLS)` | selection by arm |
 | `oracle-h3-ref2va-*`'s `-dump-cond` after the cell | left on the container disk | removed with the other dumps | disk only |
@@ -1383,7 +1391,7 @@ boot and preflight ~5 min per side.
 SHA=<7>
 # det-short, the h3 group: three fresh processes and the timed control, hashes and determinism.txt
 RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family det-short --cells h3-r1,h3-r2,h3-r3,h3-timed --yes --wait
-RUNPOD_API_KEY=… FV_FAMILY=det-short FV_EXTRA_ENV="FV_DET_CELLS=h3" FV_FETCH_TREE=1 FV_FETCH_SKIP='/frames/|/cache/' \
+RUNPOD_API_KEY=… FV_FAMILY=det-short FV_EXTRA_ENV="FV_DET_CELLS=h3" FV_FETCH_TREE=1 FV_FETCH_SKIP='/frames/|/cache/|adaln\.cache$' \
   bash scripts/gpu/runpod-http.sh run $SHA
 L=artifacts/runpod/det-short/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/det-short/$SHA-<MMDDHHMM>
 bash scripts/gpu/fv-lab-compare-runs.sh --expect-verdicts 6 $L $S     # determinism.txt, hashes.txt, 4 hashes.json
@@ -1405,18 +1413,20 @@ bash scripts/gpu/fv-lab-compare-runs.sh --expect-verdicts 4 $L $S     # determin
 RUNPOD_API_KEY=… FV_KEEP_POD=1 FV_POD_FILE=/tmp/up.pod UP_IMAGE_TARGET=fastvideo UP_IMAGE_TAG=latest \
   UP_STEPS="info:box weights:h3-diffusers oracle:fasth3-4step-vsa" UP_CELL_TIMEOUT_S=7200 \
   FV_EXTRA_ENV="FASTVIDEO_DUMP_OPS=0,1,24,47" FV_FETCH_SKIP='oracle-dump\.tar|/dump/|\.mp4$' FV_CONTAINER_DISK_GB=150 \
-  bash scripts/gpu/runpod-http.sh upstream $SHA &          # keeps the pod; writes "<id> <tag>" to /tmp/up.pod
+  bash scripts/gpu/runpod-http.sh upstream $SHA & UPD=$!   # keeps the pod; writes "<id> <tag>" to /tmp/up.pod
 until [ -s /tmp/up.pod ]; do sleep 20; done; read -r UP UPTAG </tmp/up.pod
 URL=https://$UP-8000.proxy.runpod.net/upstream/$UPTAG
 until curl -sf -o /dev/null $URL/oracle-fasth3-4step-vsa/ORACLE_DONE; do sleep 30; done   # the reference is served
-( while sleep 60; do curl -s -o /dev/null https://$UP-8000.proxy.runpod.net/keepalive.bin; done ) & KA=$!   # oracle.sh's keepalive
+# oracle.sh's keepalive (its traffic keeps the upstream pod's net watchdog from deleting it), bounded to 90 min
+# whatever happens below, so a stuck runtime side cannot hold the upstream pod forever:
+timeout 5400 bash -c "while sleep 60; do curl -s -o /dev/null https://$UP-8000.proxy.runpod.net/keepalive.bin; done" & KA=$!
 CELLS=oracle-fasth3-4step-vsa,oracle-fasth3-4step-vsa-diff,oracle-fasth3-4step-vsa-f32,oracle-fasth3-4step-vsa-f32-diff,oracle-fasth3-4step-vsa-bf16-vs-f32
-RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family oracle --cells $CELLS --extra-env FV_ORACLE_URL=$URL --yes --wait &
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family oracle --cells $CELLS --extra-env FV_ORACLE_URL=$URL --yes --wait & LAB=$!
 RUNPOD_API_KEY=… FV_FAMILY=oracle FV_GEN_TIMEOUT_S=5400 \
   FV_EXTRA_ENV="FV_ORACLE_URL=$URL FV_ORACLE_TARGETS=fasth3-4step-vsa FASTVIDEO_DUMP_OPS=0,1,24,47" \
-  bash scripts/gpu/runpod-http.sh run $SHA &
-wait %2 %3                                                 # both runtime pods done (each fetched the dump first)
-kill $KA; bash scripts/gpu/runpod-http.sh down $UP         # the upstream pod: only after both
+  bash scripts/gpu/runpod-http.sh run $SHA & SCR=$!
+wait $LAB $SCR                                             # both runtime pods done (each fetched the dump first)
+kill $KA; RUNPOD_API_KEY=… bash scripts/gpu/runpod-http.sh down $UP; wait $UPD   # the upstream pod: only after both
 L=artifacts/runpod/oracle/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/oracle/$SHA-<MMDDHHMM>
 bash scripts/gpu/fv-lab-compare-runs.sh $L $S
 ```
@@ -1450,3 +1460,20 @@ deleted (and, for `oracle`, only its moved targets: the clip-metric targets keep
 or the branch stays whole and the tier is the moved part's equal; to be decided with the result), its fixtures
 freeze, `knobs::SCRIPT_KNOBS` joins `FV_LAB_NOT_READ`, and `oracle.sh`'s runtime side passes `FV_CELLS` instead of
 `FV_ORACLE_TARGETS`.
+
+#### 14.9 Review of #202
+
+- The oracle check's commands (§14.7) wait on the two runtime sides by PID, and the keepalive loop has its own
+  90-minute bound, so the upstream pod is always deleted after them.
+- `determinism`'s `|| true` is a real-run change, stated in §14.4, and a reference arm without run1 hashes is reported
+  (`<model>-ab: no run1 hashes`) by both runners.
+- `FV_ORACLE_URL` is `http(s)://` only: `fv-lab run` and `pod up --extra-env` refuse anything else (a `file://` URL, a
+  value that would read as a curl option), and every curl call passes `--proto =http,https --proto-redir =http,https
+  --url <u>`. The tests' fake upstream is a `file://` URL through `RunConfig::allow_file_urls`, which no flag or
+  variable of the binary sets.
+- Validation: a cell with both `[reference]` and `[verdict]` is refused (its verdict would never run), and so are two
+  cells of one tier with the same `reference.target` (one `oracle-ref` directory, fetched twice at once). A `fresh`
+  path must name something below `{runs}/`: at least one component, none empty, `.` or `..` (`{runs}/` or `{runs}/.`
+  would have removed the run directory).
+- §14.5 gains the `ORACLE_REFS_DONE` row; the det-short check's script side skips the AdaLN caches
+  (`adaln\.cache$`).

@@ -574,6 +574,16 @@ fn cmd_run(a: &RunArgs) -> Result<ExitCode, String> {
     cfg.oracle_urls = env_nonempty("FV_ORACLE_URL")
         .map(|u| oracle_urls(&u))
         .unwrap_or_default();
+    // http(s) only: the upstream pods' proxy (review of #202).
+    if let Some(u) = cfg
+        .oracle_urls
+        .iter()
+        .find(|u| !fastvideo_lab::run::oracle_url_ok(u, false))
+    {
+        return Err(format!(
+            "FV_ORACLE_URL entry `{u}` is not an http(s):// URL (the upstream pods' base URL)"
+        ));
+    }
     if let Some(w) = env_nonempty("FV_ORACLE_WAIT_S") {
         cfg.oracle_wait_s = w
             .parse()
@@ -900,14 +910,22 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     // without their URL every cell is skipped, and a reference the upstream
     // pods never make is waited for (FV_ORACLE_WAIT_S, 3 h) on a GPU pod.
     if cells.iter().any(|c| c.reference.is_some()) {
-        let url = so
+        let urls: Vec<String> = so
             .extra_env
             .iter()
             .flat_map(|e| e.split_whitespace())
-            .any(|e| {
-                e.strip_prefix("FV_ORACLE_URL=")
-                    .is_some_and(|v| !v.is_empty())
-            });
+            .filter_map(|e| e.strip_prefix("FV_ORACLE_URL="))
+            .flat_map(oracle_urls)
+            .collect();
+        if let Some(u) = urls
+            .iter()
+            .find(|u| !fastvideo_lab::run::oracle_url_ok(u, false))
+        {
+            return Err(format!(
+                "--extra-env FV_ORACLE_URL entry `{u}` is not an http(s):// URL (the upstream pods' base URL)"
+            ));
+        }
+        let url = !urls.is_empty();
         if !url || so.cells.is_empty() {
             return Err(format!(
                 "tier `{}` reads upstream references: pass --extra-env FV_ORACLE_URL=<base URL>[,<base URL>] (the upstream pods, scripts/gpu/oracle.sh) and --cells with the arms of the targets they make (each missing reference is waited for up to FV_ORACLE_WAIT_S)",

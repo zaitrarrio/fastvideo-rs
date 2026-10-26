@@ -1118,8 +1118,15 @@ impl CellFile {
                 })
         };
         for f in &arm.fresh {
-            // Removed with rm -rf: only below the run directory.
-            if !f.starts_with("{runs}/") || !path_ok(f, &["{runs}"]) {
+            // Removed with rm -rf: only below the run directory, never the
+            // run directory itself (`{runs}/`, `{runs}/.`, `{runs}//x/..`).
+            let below = f.strip_prefix("{runs}/").is_some_and(|rest| {
+                !rest.is_empty()
+                    && rest
+                        .split('/')
+                        .all(|c| !c.is_empty() && c != "." && c != "..")
+            });
+            if !below || !path_ok(f, &["{runs}"]) {
                 return Err(field(
                     file,
                     at("fresh"),
@@ -1159,6 +1166,15 @@ impl CellFile {
 
     /// `[reference]`, `[[prompt_file]]` and `[repeats]` (D1d §14).
     fn validate_d1d(&self, file: &str) -> Result<(), LabError> {
+        // A reference cell runs as its own step: a verdict on it would never
+        // be evaluated.
+        if self.reference.is_some() && self.verdict.is_some() {
+            return Err(field(
+                file,
+                "reference",
+                "a cell with a [reference] takes no [verdict]",
+            ));
+        }
         if let Some(r) = &self.reference {
             if !is_name(&r.target) {
                 return Err(field(
@@ -1675,7 +1691,24 @@ impl Lab {
             let mut arms = BTreeSet::new();
             let mut prompt_files = BTreeSet::new();
             let mut hashes = BTreeSet::new();
+            let mut targets = BTreeSet::new();
             for c in t.cells.iter().filter_map(|c| self.cells.get(c)) {
+                // Two cells of one target would fetch into one directory at
+                // once, and the first to finish would remove it.
+                if let Some(r) = c
+                    .reference
+                    .as_ref()
+                    .filter(|r| !targets.insert(r.target.as_str()))
+                {
+                    return Err(field(
+                        TIERS_PATH,
+                        format!("tier `{}`.cells", t.name),
+                        format!(
+                            "reference target `{}` in two cells (one oracle-ref directory)",
+                            r.target
+                        ),
+                    ));
+                }
                 for pf in &c.prompt_files {
                     if !prompt_files.insert(pf.file.as_str()) {
                         return Err(field(
@@ -2474,6 +2507,24 @@ keep = ["frame-000.png"]
             "fresh = [\"{runs}/../x\"]",
             "below `{runs}/`",
         );
+        for whole in [
+            "{runs}/",
+            "{runs}/.",
+            "{runs}//x",
+            "{runs}/x/./y",
+            "{runs}/x/",
+        ] {
+            bad(
+                "fresh = [\"{runs}/o1-dump\"]",
+                &format!("fresh = [\"{whole}\"]"),
+                "below `{runs}/`",
+            );
+        }
+        bad(
+            "[reference]\n",
+            "[verdict]\nfamily = \"f\"\narms = [\"o1-main\"]\ndescribe = \"d\"\n\n[reference]\n",
+            "takes no [verdict]",
+        );
         bad(
             "requires = [\"{ref}\"",
             "requires = [\"/etc\"",
@@ -2523,6 +2574,36 @@ keep = ["frame-000.png"]
         .unwrap_err()
         .to_string();
         assert!(e.contains("needs workload.seed"), "{e}");
+    }
+
+    #[test]
+    fn one_reference_target_per_tier() {
+        let cell = |name: &str, target: &str| {
+            CellFile::parse(
+                &ORACLE
+                    .replace("o1", name)
+                    .replace("p-ab.json", &format!("{name}.json"))
+                    .replace("target = \"t1\"", &format!("target = \"{target}\"")),
+                "x.toml",
+            )
+            .unwrap()
+        };
+        let lab = |t2: &str| Lab {
+            root: PathBuf::new(),
+            tiers: Tiers::parse(
+                &TIERS.replace("cells = [\"c1\"]", "cells = [\"o1\", \"o2\"]"),
+                "tiers.toml",
+            )
+            .unwrap(),
+            cells: [
+                ("o1".into(), cell("o1", "t1")),
+                ("o2".into(), cell("o2", t2)),
+            ]
+            .into(),
+        };
+        let e = lab("t1").validate().unwrap_err().to_string();
+        assert!(e.contains("reference target `t1` in two cells"), "{e}");
+        assert!(lab("t2").validate().is_ok());
     }
 
     #[test]

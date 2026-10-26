@@ -129,6 +129,28 @@ pub struct RunConfig {
     pub oracle_retry: Duration,
     /// `curl` (a test points it at a fake).
     pub curl: String,
+    /// Also take `file://` reference URLs (tests only: no flag or variable of
+    /// the binary sets it; a run reads `http(s)://` only, [`oracle_url_ok`]).
+    pub allow_file_urls: bool,
+}
+
+/// Whether `url` is a base URL a reference may come from: `http://` or
+/// `https://` (the upstream pods' proxy), or with `allow_file` also
+/// `file://` (the tests' fake upstream).
+pub fn oracle_url_ok(url: &str, allow_file: bool) -> bool {
+    let rest = ["http://", "https://"]
+        .iter()
+        .chain(if allow_file {
+            &["file://"][..]
+        } else {
+            &[][..]
+        })
+        .find_map(|p| url.strip_prefix(p));
+    rest.is_some_and(|r| {
+        !r.is_empty()
+            && r.bytes()
+                .all(|b| b.is_ascii_graphic() && !matches!(b, b'\'' | b'"' | b'\\' | b'`'))
+    })
 }
 
 impl RunConfig {
@@ -156,6 +178,7 @@ impl RunConfig {
             oracle_poll: Duration::from_secs(30),
             oracle_retry: Duration::from_secs(10),
             curl: "curl".into(),
+            allow_file_urls: false,
         }
     }
 
@@ -605,6 +628,7 @@ impl Runner {
             poll: self.cfg.oracle_poll,
             retry: self.cfg.oracle_retry,
             curl: self.cfg.curl.clone(),
+            allow_file_urls: self.cfg.allow_file_urls,
             fetch_log: self.cfg.scratch.join("oracle-ref"),
         }
     }
@@ -1872,6 +1896,7 @@ struct Fetcher {
     poll: Duration,
     retry: Duration,
     curl: String,
+    allow_file_urls: bool,
     /// `<scratch>/oracle-ref`: `<target>.fetch.log` holds curl's and tar's
     /// messages.
     fetch_log: PathBuf,
@@ -1911,6 +1936,23 @@ impl Fetcher {
             self.log("oracle: FV_ORACLE_URL unset");
             return false;
         }
+        if let Some(u) = self
+            .urls
+            .iter()
+            .find(|u| !oracle_url_ok(u, self.allow_file_urls))
+        {
+            self.log(&format!(
+                "oracle: FV_ORACLE_URL entry `{u}` is not an http(s):// URL; nothing fetched"
+            ));
+            return false;
+        }
+        // curl reads only these protocols, redirects included, and the URL is
+        // an argument of --url, never an option.
+        let proto = if self.allow_file_urls {
+            "=http,https,file"
+        } else {
+            "=http,https"
+        };
         let _ = fs::create_dir_all(&self.fetch_log);
         let flog = self.fetch_log.join(format!("{target}.fetch.log"));
         let t0 = Instant::now();
@@ -1919,7 +1961,20 @@ impl Fetcher {
                 let url = format!("{u}/oracle-{target}/ORACLE_DONE");
                 self.quiet(
                     &self.curl,
-                    &["-sS", "--max-time", "30", "--fail", "-o", "/dev/null", &url],
+                    &[
+                        "-sS",
+                        "--proto",
+                        proto,
+                        "--proto-redir",
+                        proto,
+                        "--max-time",
+                        "30",
+                        "--fail",
+                        "-o",
+                        "/dev/null",
+                        "--url",
+                        &url,
+                    ],
                     None,
                 )
             });
@@ -1947,6 +2002,10 @@ impl Fetcher {
                 &self.curl,
                 &[
                     "-sS",
+                    "--proto",
+                    proto,
+                    "--proto-redir",
+                    proto,
                     "--fail",
                     "--retry",
                     "3",
@@ -1954,6 +2013,7 @@ impl Fetcher {
                     "3600",
                     "-o",
                     &tar_s,
+                    "--url",
                     &url,
                 ],
                 Some(&flog),
@@ -2165,6 +2225,23 @@ fn lpips_summary(err: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reference_urls_are_http_only_unless_a_test_allows_files() {
+        for (u, http, file) in [
+            ("https://abc-8000.proxy.runpod.net/upstream/t", true, true),
+            ("http://10.0.0.1:8000/upstream/t", true, true),
+            ("file:///tmp/up", false, true),
+            ("-o/etc/passwd", false, false),
+            ("https://", false, false),
+            ("ftp://x/y", false, false),
+            ("https://x/$(id)'", false, false),
+            ("https://x/a b", false, false),
+        ] {
+            assert_eq!(oracle_url_ok(u, false), http, "{u}");
+            assert_eq!(oracle_url_ok(u, true), file, "{u}");
+        }
+    }
 
     #[test]
     fn fail_tail_drops_progress_and_keeps_twelve() {

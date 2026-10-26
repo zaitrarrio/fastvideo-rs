@@ -252,7 +252,7 @@ through both runners (§14.7); their goldens come from the live branches (`fv-la
   needed). No verdict file is written (the script writes none; the GPU comparison is file for file).
 - **`[[prompt_file]]`** (determinism): the prompt set an arm reads as `{runs}/<file>`, written as the script's `det_set`.
 - **`[reference]`** (oracle): the upstream dump of `oracle-<target>`, fetched from `FV_ORACLE_URL` (space or comma
-  separated base URLs; `FV_ORACLE_WAIT_S`, default 3 h) in the background from the start, read as `{ref}`; the run
+  separated `http(s)://` base URLs, anything else refused; `FV_ORACLE_WAIT_S`, default 3 h) in the background from the start, read as `{ref}`; the run
   directory gets `ORACLE_REFS_DONE` once every selected reference is here. Unavailable: the cell's first arm is
   recorded as skipped (`reference dump unavailable`). After the cell the dumps (`fresh`) and the reference are removed.
 - **Ungated arms** (no `gate`): `compare-dumps` of two dumps, run only when both exist (`requires`), their

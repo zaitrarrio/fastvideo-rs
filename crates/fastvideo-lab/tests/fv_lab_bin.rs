@@ -887,4 +887,18 @@ fn the_oracle_pod_needs_its_references_and_the_d1d_knobs_are_refused() {
     );
     assert_ne!(code, Some(0));
     assert!(err.contains("FV_DET_REPEATS: no tier reads it"), "{err}");
+    // http(s) references only (review of #202): a file:// URL or one that
+    // would read as a curl option is refused, by pod up and by run.
+    for bad in ["FV_ORACLE_URL=file:///etc", "FV_ORACLE_URL=-o/tmp/x"] {
+        let (code, _, err) = out_err(fv_lab().args(up).args(cells).args(["--extra-env", bad]));
+        assert_ne!(code, Some(0), "{bad}");
+        assert!(err.contains("is not an http(s):// URL"), "{bad}: {err}");
+    }
+    let (code, _, err) = out_err(
+        fv_lab()
+            .args(["run", "oracle", "--dry-run"])
+            .env("FV_ORACLE_URL", "file:///etc"),
+    );
+    assert_ne!(code, Some(0));
+    assert!(err.contains("is not an http(s):// URL"), "{err}");
 }

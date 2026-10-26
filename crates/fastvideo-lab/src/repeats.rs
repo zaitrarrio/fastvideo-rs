@@ -349,6 +349,11 @@ pub fn report_run(
         let (want_f, want_a) = (field("frames", 3), field("audio", 2));
         let ref_count = field("frames", 2);
         let mut why = String::new();
+        // The script's line for a reference arm that ran (a hashes.txt)
+        // without hashes of the reference run (skipped, crashed).
+        if read(reference).is_some() && want_f.is_empty() {
+            out.push_str(&format!("{reference}: no {run} hashes\n"));
+        }
         if want_f.is_empty() || ref_count == "0" {
             why.push_str(&format!(" {reference}/{run}:no-frames"));
         }

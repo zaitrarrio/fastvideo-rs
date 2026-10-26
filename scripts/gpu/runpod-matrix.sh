@@ -2207,10 +2207,15 @@ Audio: male speech, clear voice, quiet room"
     # other; the timed control's too, for reference) against run1.
     {
       for m in ltx-t2v ltx-i2v h3; do
-        # (|| true: a model that did not run has no hashes.txt, and pipefail +
-        # set -e would end the family there, before `matrix done`.)
+        # (|| true: a model that did not run has no hashes.txt, and an -ab arm
+        # that was skipped or crashed an empty one; pipefail + set -e ended
+        # the family there, before `matrix done`. The family now goes on, and
+        # a reference arm without run1 hashes says so in determinism.txt.)
         ref="$(grep -h '^run1 frames' "$RUNS/$m-ab/hashes.txt" 2>/dev/null | awk '{print $4}' || true)"
         refa="$(grep -h '^run1 audio' "$RUNS/$m-ab/hashes.txt" 2>/dev/null | awk '{print $3}' || true)"
+        if [[ -f "$RUNS/$m-ab/hashes.txt" && -z "$ref" ]]; then
+          echo "$m-ab: no run1 hashes"
+        fi
         for f in "$RUNS/$m-ab/hashes.txt" "$RUNS/$m-c/hashes.txt" "$RUNS/$m-timed/hashes.txt"; do
           [[ -f "$f" ]] || continue
           c="$(basename "$(dirname "$f")")"

@@ -130,7 +130,10 @@ fn fake(name: &str, mode: &str) -> Fake {
     // The EU volume lacks h3-8step and fastwan22-ti2v-5b.
     script(
         &gpu.join("verify-weights.sh"),
-        "echo \"verify $1\"\ncase \"$1\" in fasth3-8step | fastwan22-ti2v-5b) exit 1 ;; esac\nexit 0\n",
+        &format!(
+            "echo \"verify $1\"\ncase \"$1\" in fasth3-8step | fastwan22-ti2v-5b) exit 1 ;; esac\ngrep -qw noh3 {} && [ \"$1\" = fasth3-4step-vsa ] && exit 1\nexit 0\n",
+            f.dir.join("mode").display()
+        ),
     );
     std::fs::write(gpu.join("gate-policy.toml"), "# policy\n").unwrap();
     script(
@@ -231,6 +234,8 @@ fn config(f: &Fake, family: &str) -> RunConfig {
     c.oracle_wait_s = 0;
     c.oracle_poll = Duration::from_millis(1);
     c.oracle_retry = Duration::from_millis(1);
+    // The fake upstream is a file:// URL (a run reads http(s) only).
+    c.allow_file_urls = true;
     c
 }
 
@@ -417,7 +422,9 @@ fn det_short_hashes_and_report_as_the_script() {
 
 #[test]
 fn determinism_hashes_runs_and_reports_as_the_script() {
-    for mode in ["", "flaky"] {
+    // `noh3`: the h3 model's arms skip on their weights, so its reference
+    // arm has no run1 hashes (the script ended the family there before §14).
+    for mode in ["", "flaky", "noh3"] {
         let f = fake(&format!("determinism{mode}"), mode);
         let s = script_run(&f, "determinism");
         let l = lab_run(&f, "determinism", None);
@@ -432,15 +439,20 @@ fn determinism_hashes_runs_and_reports_as_the_script() {
             det.contains("ltx-t2v-c/run3 frames DIFFERENT"),
             mode == "flaky"
         );
+        assert_eq!(
+            det.contains("h3-ab: no run1 hashes\n"),
+            mode == "noh3",
+            "{det}"
+        );
         // Three keyframes kept per run, the digests read from stderr.
-        assert!(l.join("h3-ab/frames/run1/frame-072.png").is_file());
-        assert!(!l.join("h3-ab/frames/run1/frame-001.png").exists());
+        assert!(l.join("ltx-t2v-ab/frames/run1/frame-072.png").is_file());
+        assert!(!l.join("ltx-t2v-ab/frames/run1/frame-001.png").exists());
         assert!(
-            l.join("h3-ab/frames/warmup/frame-001.png").is_file(),
+            l.join("ltx-t2v-ab/frames/warmup/frame-001.png").is_file(),
             "warm-up untouched"
         );
         assert_eq!(
-            read(&l.join("h3-ab/digests.txt")).unwrap(),
+            read(&l.join("ltx-t2v-ab/digests.txt")).unwrap(),
             b"sha=rule\n".to_vec()
         );
         assert_eq!(raw_lines(&s), raw_lines(&l));
@@ -457,9 +469,14 @@ fn determinism_hashes_runs_and_reports_as_the_script() {
             } else {
                 Decision::Pass
             };
+            let h3 = if mode == "noh3" {
+                Decision::Skipped
+            } else {
+                Decision::Pass
+            };
             assert_eq!(
                 outcomes.iter().map(|(_, d)| *d).collect::<Vec<_>>(),
-                [t2v, Decision::Pass, Decision::Pass],
+                [t2v, Decision::Pass, h3],
                 "{side}: {outcomes:?}"
             );
         }
@@ -532,4 +549,28 @@ fn oracle_fetches_compares_dumps_and_cleans_up_as_the_script() {
         .join(TAG)
         .join("ORACLE_REFS_DONE");
     assert!(done.is_file(), "ORACLE_REFS_DONE");
+}
+
+/// A run reads http(s) references only (review of #202): without the tests'
+/// escape the file:// upstream is refused and the target skipped, nothing
+/// fetched.
+#[test]
+fn a_file_reference_url_is_refused_outside_the_tests() {
+    let f = fake("oracle-file", "");
+    let lab = lab();
+    let mut cfg = config(&f, "oracle");
+    cfg.allow_file_urls = false;
+    cfg.only = Some(oracle_arms(&lab));
+    let (_, cells) = lab.resolve("oracle", None).unwrap();
+    let steps = Lab::steps(&cells, &cfg.bin, &cfg.paths()).unwrap();
+    Runner::new(cfg).run(&steps).unwrap();
+    let runs = f.dir.join("lab/runs/oracle").join(TAG);
+    let sum = String::from_utf8_lossy(
+        &read(&runs.join("oracle-fasth3-4step-vsa/summary.json")).unwrap_or_default(),
+    )
+    .into_owned();
+    assert!(sum.contains("reference dump unavailable"), "{sum}");
+    assert!(!f.dir.join("lab/oracle-ref/fasth3-4step-vsa/dump").exists());
+    let log = String::from_utf8_lossy(&read(&runs.join("live.log")).unwrap()).into_owned();
+    assert!(log.contains("is not an http(s):// URL"), "{log}");
 }
