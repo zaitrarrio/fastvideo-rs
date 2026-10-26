@@ -1,7 +1,10 @@
 # ADR-0021: One disk prompt cache
 
 - Status: Accepted (plan B4c, `docs/plan/2026-10-23-execution-plan.md`);
-  amended by B4c2 (the key gaps closed, section "B4c2")
+  amended by B4c2 (the key gaps closed, section "B4c2"). The GPU gate
+  families `runpod-matrix.sh b4c` / `b4c2` and their verdict script
+  (`b4-verdict.sh`, its test) are retired with no tier since their gates
+  passed (ADR-0019 §18; `git show b019ccb2:scripts/gpu/b4-verdict.sh`)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-prompt-cache
 - Source: `docs/gaps/2026-10-22-architecture-review.md` §3 ("three separate

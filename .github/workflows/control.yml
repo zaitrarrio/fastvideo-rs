@@ -209,10 +209,10 @@ jobs:
       - name: the experiment tiers run their one-off's own pod-script commands (ADR-0019 §14)
         working-directory: .
         run: bash scripts/gpu/tests/fv-lab-experiment-goldens.sh --check
-      - name: runpod-http.sh routes the retired families to fv-lab, refusing what fv-lab would not honour (ADR-0019 §10)
+      - name: runpod-http.sh routes the retired families to fv-lab, refusing what fv-lab would not honour and the families retired with no tier (ADR-0019 §10, §18)
         working-directory: .
         run: bash scripts/gpu/tests/fv-lab-route.test.sh
-      - name: runpod.sh gpu / matrix run a retired family's tier with fv-lab, never runpod-matrix.sh, and stop before any pod on a family nothing runs (ADR-0019 §17.6)
+      - name: runpod.sh gpu / matrix run a retired family's tier with fv-lab, never runpod-matrix.sh, and stop before any pod on a family nothing runs (ADR-0019 §17.6, §18)
         working-directory: .
         run: bash scripts/gpu/tests/runpod-plan.test.sh
       - name: the pod scripts send a config the serve images can boot (one image, ADR-0011)

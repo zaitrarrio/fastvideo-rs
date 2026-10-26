@@ -10,7 +10,11 @@
 #                                ltxvae, precision; the restored modes precision-nvfp4,
 #                                ltxvae-gen) runs `fv-lab pod up --yes --wait`
 #                                instead (docs/adr/0019-fv-lab.md §10, §12); FV_DRY_RUN=1
-#                                prints the route and the command, creates nothing
+#                                prints the route and the command, creates nothing.
+#                                A family retired with no tier (fv-lab-retired.sh
+#                                FV_SCRIPT_RETIRED, §18: h3, b4b, writer, ...) is
+#                                refused (exit 2) with what replaces it, as are
+#                                `all` and `plan` for it
 #   runpod-http.sh weights       weight gate only (verify-weights.sh), no cells
 #   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
 #   runpod-http.sh all [sha]     kernels, then the $FV_FAMILY cells, on one pod
@@ -98,6 +102,13 @@ CAP_S="${FV_POD_CAP_S:-14400}"
 FAMILY="${FV_FAMILY:-rtx6000}"
 [[ "${1:-}" == upstream ]] && FAMILY="${FV_FAMILY:-upstream}"
 OUT_ROOT="$ROOT/artifacts/runpod/$FAMILY"
+# A family retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
+# docs/adr/0019-fv-lab.md §18) has no branch and no tier: nothing to run, plan
+# or route. Refused (exit 2) before the key, any lookup or a pod.
+if [[ "${1:-}" == run || "${1:-}" == all || "${1:-}" == plan ]] && fv_script_retired "$FAMILY"; then
+  echo "runpod-http: $FAMILY is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): $(fv_script_retired_why "$FAMILY")" >&2
+  exit 2
+fi
 # A dry run (FV_DRY_RUN=1: the route and the command, nothing created) needs no key.
 [[ "${FV_DRY_RUN:-0}" == 1 ]] || : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 

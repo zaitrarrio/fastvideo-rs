@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # runpod.sh `gpu` and `matrix` (the SSH drivers of the first volume fill)
-# after the D1 retirements (docs/adr/0019-fv-lab.md §10, §17.6), without a
-# key, a network or a pod. runpod.sh is sourced (FV_SOURCE_ONLY=1) and its
+# after the D1 retirements (docs/adr/0019-fv-lab.md §10, §17.6, §18), without
+# a key, a network or a pod. runpod.sh is sourced (FV_SOURCE_ONLY=1) and its
 # Runpod, ssh and rsync calls are stubbed to record what they were given, so
 # the commands checked are the ones cmd_gpu / cmd_matrix send to the pods:
+#   - the lists are `gpu` (ltx) and `matrix` (ltx wan): h3 and hunyuan left
+#     them when they retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
+#     §18), and no family of that list is in them;
 #   - a family retired to fv-lab (fv-lab-retired.sh, here ltx) runs the
 #     image's `fv-lab run <tier>` and never runpod-matrix.sh, which refuses it;
-#     h3, hunyuan and wan run runpod-matrix.sh as before; `matrix` gives the
-#     retired family the tier's per-arm cap (no FV_GEN_TIMEOUT_S=300);
+#     wan runs runpod-matrix.sh as before; `matrix` gives the retired family
+#     the tier's per-arm cap (no FV_GEN_TIMEOUT_S=300);
 #   - `gpu` creates one pod per family of its list and starts each;
 #   - `plan gpu|matrix` prints those commands, and fails on a family nothing
 #     can run;
-#   - such a family (an experiment tier, gold, an unknown name) stops `gpu` /
-#     `matrix` before the key is read or a pod is created;
+#   - such a family (one retired with no tier, an experiment tier, gold, an
+#     unknown name) stops `gpu` / `matrix` before the key is read or a pod is
+#     created, and no recorded command starts runpod-matrix.sh for any retired
+#     family; `runpod.sh b200` is refused (exit 2) without a key;
 #   - the ltx command, as the pod's shell runs it, calls fv-lab as `run ltx`
 #     with FV_WORK=/workspace; without fv-lab it exits 2 naming fv-lab pod up.
 #
@@ -80,11 +85,11 @@ rc=0; drive gpu cmd_gpu || rc=$?
 d="$TMP/gpu"
 if [[ "$rc" == 0 ]]; then ok "gpu: cmd_gpu runs to the end on the stubs"; else bad "gpu: exit $rc: $(cat "$d/out")"; fi
 pods="$(grep -c '^create ' "$d/pods.log" || true)"
-[[ "$pods" == 3 && "$(grep -c '^create fv-gpu-ltx-' "$d/pods.log")" == 1 && "$(grep -c '^create fv-gpu-hy-' "$d/pods.log")" == 1 ]] \
-  && ok "gpu: three pods (h3, ltx, hy)" || bad "gpu: pods: $(cat "$d/pods.log")"
-grep -q '^backstop pod-fv-gpu-ltx-[0-9]* 7200$' "$d/pods.log" && grep -q '^backstop pod-fv-gpu-h3-[0-9]* 5400$' "$d/pods.log" \
-  && ok "gpu: backstops 5400 / 7200 s as before" || bad "gpu: backstops: $(grep backstop "$d/pods.log")"
-for fam in h3 ltx hunyuan; do
+[[ "$pods" == 1 && "$(grep -c '^create fv-gpu-ltx-' "$d/pods.log")" == 1 ]] \
+  && ok "gpu: one pod (ltx)" || bad "gpu: pods: $(cat "$d/pods.log")"
+grep -q '^backstop pod-fv-gpu-ltx-[0-9]* 7200$' "$d/pods.log" && [[ "$(grep -c '^backstop ' "$d/pods.log")" == 1 ]] \
+  && ok "gpu: ltx's backstop 7200 s as before" || bad "gpu: backstops: $(grep backstop "$d/pods.log")"
+for fam in ltx; do
   line="$(grep -F "/workspace/runs/$fam/driver.log" "$d/ssh.log" | cut -f2- || true)"
   if fv_lab_retired "$fam"; then
     if [[ "$line" == "nohup bash -c 'lab=$LAB;"*"\"\$lab\" run $fam' > /workspace/runs/$fam/driver.log 2>&1 & echo \$! > /workspace/runs/$fam/pid" ]]; then
@@ -99,11 +104,11 @@ for fam in h3 ltx hunyuan; do
   fi
 done
 
-# 2. matrix: the real cmd_matrix, its four families in turn.
+# 2. matrix: the real cmd_matrix, its two families in turn.
 rc=0; drive matrix cmd_matrix || rc=$?
 d="$TMP/matrix"
 if [[ "$rc" == 0 ]]; then ok "matrix: cmd_matrix runs to the end on the stubs"; else bad "matrix: exit $rc: $(cat "$d/out")"; fi
-for fam in h3 ltx hunyuan wan; do
+for fam in ltx wan; do
   line="$(grep -F 'export FV_WORK=/workspace' "$d/ssh.log" | cut -f2- \
     | grep -E "(runpod-matrix\.sh $fam|run $fam')\$" || true)"
   if fv_lab_retired "$fam"; then
@@ -120,10 +125,11 @@ for fam in h3 ltx hunyuan wan; do
 done
 
 # 3. No recorded command, remote or local, starts runpod-matrix.sh for a
-#    retired family.
+#    retired family (to fv-lab or with no tier), and neither list holds a
+#    family retired with no tier.
 for mode in gpu matrix; do
   hits=""
-  for fam in $FV_LAB_RETIRED; do
+  for fam in $FV_LAB_RETIRED $FV_SCRIPT_RETIRED; do
     hits+="$(matrix_call "$TMP/$mode/ssh.log" "$fam")$(matrix_call "$TMP/$mode/local.log" "$fam")"
   done
   [[ -z "$hits" ]] && ok "$mode: no runpod-matrix.sh start of a retired family, over ssh or locally" \
@@ -134,17 +140,17 @@ done
 for mode in gpu matrix; do
   rc=0
   out="$(env -i PATH="$PATH" HOME="$TMP/home" LC_ALL=C bash "$RP" plan "$mode")" || rc=$?
-  want="h3 ltx hunyuan"; [[ "$mode" == matrix ]] && want="h3 ltx hunyuan wan"
+  want="ltx"; [[ "$mode" == matrix ]] && want="ltx wan"
   got="$(cut -f1 <<<"$out" | tr '\n' ' ' | sed 's/ $//')"
   ltxcmd="$(awk -F'\t' '$1 == "ltx" { print $2 }' <<<"$out")"
   if [[ "$rc" == 0 && "$got" == "$want" && "$ltxcmd" == *"\"\$lab\" run ltx'" && "$ltxcmd" != *runpod-matrix.sh* ]] \
-    && grep -qxF "h3	bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh h3" <<<"$out"; then
+    && { [[ "$mode" == gpu ]] || grep -qxF "wan	bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh wan" <<<"$out"; }; then
     ok "plan $mode: $want, ltx through fv-lab"
   else
     bad "plan $mode: exit $rc: $out"
   fi
 done
-rc=0; drive plan-bad 'RP_GPU_FAMILIES=(h3 nope ltx); cmd_plan gpu' || rc=$?
+rc=0; drive plan-bad 'RP_GPU_FAMILIES=(ltx nope); cmd_plan gpu' || rc=$?
 if [[ "$rc" != 0 && "$(cat "$TMP/plan-bad/out")" == *"FATAL: nope is neither"* && "$(cat "$TMP/plan-bad/out")" != *$'nope\t'* ]]; then
   ok "plan: an unknown family fails it (exit $rc), nothing printed for it"
 else
@@ -152,12 +158,15 @@ else
 fi
 
 # 5. A family nothing can run stops gpu / matrix before the key and any pod.
+#    A family retired with no tier (§18) says so and names what replaces it.
 for mode in gpu matrix; do
   v=RP_GPU_FAMILIES; [[ "$mode" == matrix ]] && v=RP_MATRIX_FAMILIES
-  for fam in gold h3-graphs nope; do
-    rc=0; drive "$mode-$fam" "$v=(h3 $fam); cmd_$mode" || rc=$?
+  for fam in gold h3-graphs nope $FV_SCRIPT_RETIRED; do
+    rc=0; drive "$mode-$fam" "$v=(ltx $fam); cmd_$mode" || rc=$?
     d="$TMP/$mode-$fam"
-    if [[ "$rc" == 2 && "$(cat "$d/out")" == *"FATAL: $fam is neither a runpod-matrix.sh family nor a retired one"* \
+    want="FATAL: $fam is neither a runpod-matrix.sh family nor a retired one"
+    fv_script_retired "$fam" && want="FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): nothing runs it on the pod; $(fv_script_retired_why "$fam")"
+    if [[ "$rc" == 2 && "$(cat "$d/out")" == *"$want"* \
       && ! -s "$d/pods.log" && ! -s "$d/ssh.log" && ! -s "$d/local.log" ]]; then
       ok "$mode: $fam refused before the key or a pod"
     else
@@ -165,6 +174,13 @@ for mode in gpu matrix; do
     fi
   done
 done
+rc=0
+out="$(env -i PATH="$PATH" HOME="$TMP/home" LC_ALL=C bash "$RP" b200 2>&1)" || rc=$?
+if [[ "$rc" == 2 && "$out" == *"FATAL: b200 is retired with no tier"*"the US volume it ran on is gone"* ]]; then
+  ok "runpod.sh b200: refused (exit 2), no key read"
+else
+  bad "runpod.sh b200: exit $rc, $out"
+fi
 
 # 6. The ltx command as the pod's shell runs it (`nohup <cmd> > driver.log &`),
 #    fv-lab's path pointed at a stand-in.

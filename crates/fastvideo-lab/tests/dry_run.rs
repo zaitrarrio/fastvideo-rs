@@ -259,6 +259,19 @@ fn retired() -> Vec<String> {
     line.split_whitespace().map(str::to_owned).collect()
 }
 
+/// `FV_SCRIPT_RETIRED` of `scripts/gpu/fv-lab-retired.sh`: the families
+/// retired with no tier (ADR-0019 §18).
+fn script_retired() -> Vec<String> {
+    let p = repo_root().join("scripts/gpu/fv-lab-retired.sh");
+    let t = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let line = t
+        .lines()
+        .find_map(|l| l.strip_prefix("FV_SCRIPT_RETIRED=\""))
+        .and_then(|l| l.strip_suffix('"'))
+        .expect("FV_SCRIPT_RETIRED=\"…\"");
+    line.split_whitespace().map(str::to_owned).collect()
+}
+
 /// A label of runpod-matrix.sh's top-level `case "$FAMILY" in` naming `f`:
 /// two-space indent, `f)`, `f )`, `a|f)` and a trailing comment all count;
 /// nested cases' labels (deeper indent) do not (fv-lab-goldens.sh `has_branch`).
@@ -290,6 +303,57 @@ fn branch_labels_are_read_as_bash_reads_them() {
         assert!(!has_branch(&m(no), "trace"), "{no}");
     }
     assert!(!has_branch("  trace)\n", "trace"), "outside the case");
+}
+
+#[test]
+fn families_retired_with_no_tier_have_no_branch_and_no_tier() {
+    // D1g (ADR-0019 §18): h3 (§17.4), the B4 families (§17.3 option (b)) and
+    // §14.7's rows left runpod-matrix.sh with no tier: no branch, no tier of
+    // lab/tiers.toml, no fixtures, and in neither FV_LAB_RETIRED nor
+    // FV_LAB_EXPERIMENTS (runpod-http.sh refuses them instead of routing).
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let matrix = std::fs::read_to_string(repo_root().join("scripts/gpu/runpod-matrix.sh"))
+        .expect("runpod-matrix.sh");
+    let gone = script_retired();
+    assert_eq!(
+        gone,
+        [
+            "h3",
+            "hunyuan",
+            "sana-video",
+            "b200",
+            "writer",
+            "precision-debug",
+            "identity",
+            "b4b",
+            "b4c",
+            "b4c2",
+            "h3attn",
+        ]
+    );
+    let tiers: Vec<&str> = lab.tiers.tiers.iter().map(|t| t.name.as_str()).collect();
+    let retired = retired();
+    let experiments = common::experiments();
+    for f in &gone {
+        assert!(
+            !has_branch(&matrix, f),
+            "{f}: its runpod-matrix.sh branch is gone"
+        );
+        assert!(
+            !tiers.contains(&f.as_str()),
+            "{f}: no tier of lab/tiers.toml"
+        );
+        assert!(!retired.contains(f), "{f}: not in FV_LAB_RETIRED");
+        assert!(!experiments.contains(f), "{f}: not in FV_LAB_EXPERIMENTS");
+        for fx in [
+            format!("{f}-dry-run.txt"),
+            format!("{f}-gates.tsv"),
+            format!("runpod-http-{f}.json"),
+        ] {
+            let p = repo_root().join("crates/fastvideo-lab/fixtures").join(&fx);
+            assert!(!p.exists(), "{fx}: no fixture for a family with no tier");
+        }
+    }
 }
 
 #[test]

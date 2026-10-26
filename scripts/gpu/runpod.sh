@@ -1,24 +1,26 @@
 #!/usr/bin/env bash
-# Runpod driver for the H3 / LTX / Hunyuan sweep.
+# Runpod driver for the H3 / LTX volume fill and the SSH GPU runs.
 # Weights first on a 1 TB network volume (cheap CPU pod + hf-fm). GPU pods
 # only after every tree has a .complete marker. Hard cap: 3 GPU pods.
 #
 #   runpod.sh fetch     volume + CPU download + verify
 #   runpod.sh verify    re-check shards on a live fetch pod or via SSH
 #   runpod.sh manifest  print dests from weights-manifest.tsv
-#   runpod.sh gpu       three PRO 6000 96 GB pods (refuses if volume incomplete)
+#   runpod.sh gpu       one PRO 6000 96 GB pod per family (ltx; refuses if volume incomplete)
 #   runpod.sh smoke     cheap Blackwell nvrtc+kernels, then destroy
-#   runpod.sh matrix    one PRO 6000; restart between H3/LTX/Hunyuan/Wan
+#   runpod.sh matrix    one PRO 6000; restart between LTX/Wan
 #   runpod.sh plan gpu|matrix   what `gpu` / `matrix` start on each pod, one
 #                       line per family (no key, no pod): a family retired to
 #                       fv-lab (fv-lab-retired.sh, e.g. ltx) runs `fv-lab run`
-#                       from the image, the others runpod-matrix.sh
+#                       from the image, the others runpod-matrix.sh; h3 and
+#                       hunyuan are retired with no tier (FV_SCRIPT_RETIRED,
+#                       docs/adr/0019-fv-lab.md §18) and left the lists
 #   runpod.sh rtx6000   retired with the rtx6000 family's runpod-matrix.sh
 #                       branch (docs/adr/0019-fv-lab.md §10): fv-lab pod up
 #                       --family rtx6000, or runpod-http.sh run
-#   runpod.sh b200      US volume + H3/FastH3/LTX fetch + 1× B200 warm E2E
-#                       (refused while the US volume is unset: it was deleted
-#                       2026-10, EU only; scripts/gpu/volumes.sh)
+#   runpod.sh b200      retired with the b200 family's runpod-matrix.sh
+#                       branch (no tier: the US volume is gone,
+#                       docs/adr/0019-fv-lab.md §18)
 #   runpod.sh offers    probe B200 / PRO 6000 stock (US DCs)
 #   runpod.sh status    volume / pods / cost
 #   runpod.sh reap      destroy fv-* GPU and fetch pods (keeps the volume)
@@ -47,9 +49,7 @@ RP_VOL_GB="${RUNPOD_VOLUME_GB:-1000}"
 RP_MAX_GPU_PODS=3
 RP_GPU_MAX_DPH="${RUNPOD_GPU_MAX_DPH:-20}"
 RP_B200_TYPE="${RUNPOD_B200_TYPE:-NVIDIA B200}"
-RP_B200_VOL_NAME="${RUNPOD_B200_VOLUME_NAME:-$FV_US_VOLUME_NAME}" # empty while US is unavailable
 RP_EUR_VOLUME_KEEP="$FV_EU_VOLUME_ID"
-RP_B200_DESTS="${RUNPOD_FETCH_DESTS:-h3-8step h3-base FastH3-4-step-Preview-v1-LoRA upscaler h3-to-ltx ltx2 ltx25 ltx23}"
 RP_US_DCS="${RUNPOD_US_DCS:-US-CA-2 US-CA-1 US-GA-1 US-GA-2 US-TX-3 US-IL-1 US-KS-2 US-WA-1 US-NC-1 US-OR-1 US-DE-1 US-NE-1 US-MD-1 US-MO-2 US-NC-2 US-TX-1 US-TX-4}"
 MOUNT="/workspace"
 WEIGHTS="$MOUNT/weights"
@@ -221,78 +221,6 @@ rp_probe_gpu_dc() {
   price="$(jq -r '.data.gpuTypes[0].lowestPrice.uninterruptablePrice // empty' <<<"$resp")"
   rp_log "offer $gpu dc=$dc stock=${stock:-none} \$${price:-?}/hr"
   printf '%s\t%s\t%s\t%s\n' "$gpu" "$dc" "${stock:-none}" "${price:-}"
-}
-
-rp_pick_us_b200_dc() {
-  if [[ -n "${RUNPOD_DATACENTER:-}" ]]; then
-    echo "$RUNPOD_DATACENTER"
-    return 0
-  fi
-  local dc stock price best_dc="" best_price=""
-  local line
-  for dc in $RP_US_DCS; do
-    line="$(rp_probe_gpu_dc "$RP_B200_TYPE" "$dc")"
-    stock="$(cut -f3 <<<"$line")"
-    price="$(cut -f4 <<<"$line")"
-    if [[ -z "$stock" || "$stock" == "none" || "$stock" == "null" ]]; then
-      continue
-    fi
-    if [[ -z "$price" || "$price" == "null" ]]; then
-      continue
-    fi
-    if awk -v p="$price" -v cap="$RP_GPU_MAX_DPH" 'BEGIN{exit !(p+0 > cap+0)}'; then
-      rp_log "skip $dc \$${price}/hr above ceiling \$${RP_GPU_MAX_DPH}"
-      continue
-    fi
-    if [[ -z "$best_dc" ]] || awk -v p="$price" -v b="$best_price" 'BEGIN{exit !(p+0 < b+0)}'; then
-      best_dc="$dc"
-      best_price="$price"
-    fi
-  done
-  [[ -n "$best_dc" ]] || return 1
-  rp_log "pick B200 dc=$best_dc \$${best_price}/hr (cap \$${RP_GPU_MAX_DPH})"
-  echo "$best_dc"
-}
-
-rp_create_us_volume() {
-  local name="$1" dc="$2"
-  local vols existing id
-  vols="$(rp_rest GET /networkvolumes)"
-  existing="$(jq -r --arg n "$name" --arg dc "$dc" --arg keep "$RP_EUR_VOLUME_KEEP" \
-    '.[] | select(.name==$n and .dataCenterId==$dc and .id!=$keep) | "\(.id)\t\(.dataCenterId)\t\(.size)"' <<<"$vols" | head -1)"
-  if [[ -n "$existing" ]]; then
-    id="${existing%%$'\t'*}"
-    [[ "$id" != "$RP_EUR_VOLUME_KEEP" ]] || die "refusing to reuse EUR volume $RP_EUR_VOLUME_KEEP"
-    rp_log "reuse US volume $existing"
-    printf '%s\n' "$id"
-    jq -n --arg id "$id" --arg raw "$existing" '{id:$id, reuse:true, us:true}' >"$RP_STATE/volume-b200.json"
-    return 0
-  fi
-  rp_log "create US volume name=$name size=${RP_VOL_GB}GB dc=$dc"
-  local payload resp
-  payload="$(jq -n --arg name "$name" --argjson size "$RP_VOL_GB" --arg dc "$dc" \
-    '{name:$name, size:$size, dataCenterId:$dc}')"
-  resp="$(rp_rest POST /networkvolumes "$payload")"
-  id="$(jq -r '.id // empty' <<<"$resp")"
-  [[ -n "$id" ]] || die "volume create returned no id: $resp"
-  [[ "$id" != "$RP_EUR_VOLUME_KEEP" ]] || die "refusing to reuse EUR volume $RP_EUR_VOLUME_KEEP"
-  rp_log "volume id=$id name=$name ${RP_VOL_GB}GB dc=$dc"
-  printf '%s\n' "$resp" >"$RP_STATE/volume-b200.json"
-  printf '%s\n' "$id"
-}
-
-rp_log_box_image() {
-  local host="$1" port="$2" role="$3"
-  local box
-  box="$(rp_ssh "$host" "$port" "cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo missing")"
-  rp_log "$role pin=$RP_IMAGE box_build_id=$box"
-  if [[ "$RP_IMAGE" == *":build-"* ]]; then
-    local want="${RP_IMAGE##*:build-}"
-    if [[ "$box" != "$want" ]]; then
-      rp_log "FATAL: $role build-id $box != pinned $want ($RP_IMAGE)"
-      return 1
-    fi
-  fi
 }
 
 rp_volume_dc() {
@@ -662,14 +590,14 @@ rp_create_gpu_pod() {
 
 # The families `gpu` starts (one pod each) and `matrix` runs (in turn on one
 # pod). Constants: cmd_gpu, cmd_matrix and cmd_plan all read these lists, so
-# `plan` prints what the commands start, and each checks exactly those.
-RP_GPU_FAMILIES=(h3 ltx hunyuan)
-RP_MATRIX_FAMILIES=(h3 ltx hunyuan wan)
+# `plan` prints what the commands start, and each checks exactly those. h3 and
+# hunyuan left them when they retired with no tier (fv-lab-retired.sh
+# FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18).
+RP_GPU_FAMILIES=(ltx)
+RP_MATRIX_FAMILIES=(ltx wan)
 
 # rp_gpu_cap_s <family>: `gpu`'s backstop for that family's pod (s).
 rp_gpu_cap_s() { case "$1" in ltx) echo 7200 ;; *) echo 5400 ;; esac; }
-# rp_gpu_pod_tag <family>: the family in `gpu`'s pod name (hunyuan: hy).
-rp_gpu_pod_tag() { case "$1" in hunyuan) echo hy ;; *) echo "$1" ;; esac; }
 
 # rp_destroy_pods <pod...>: the pods `gpu` created before one failed (none
 # has its backstop yet: rp_start_family arms it).
@@ -696,11 +624,14 @@ rp_has_branch() {
 # it, docs/adr/0019-fv-lab.md §10, §17.6) runs as its tier with the image's
 # fv-lab (/opt/fastvideo-rs/target/release/fv-lab, lab/ beside it), writing
 # /workspace/runs/<family> as the script did; a family with a branch runs
-# runpod-matrix.sh. Anything else (an experiment tier, gold, an unknown name)
-# dies here, before a pod exists.
+# runpod-matrix.sh. A family retired with no tier (FV_SCRIPT_RETIRED, §18)
+# and anything else (an experiment tier, gold, an unknown name) dies here,
+# before a pod exists.
 rp_family_cmd() {
   local family="$1"
-  if fv_lab_retired "$family"; then
+  if fv_script_retired "$family"; then
+    die "$family is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): nothing runs it on the pod; $(fv_script_retired_why "$family")"
+  elif fv_lab_retired "$family"; then
     printf '%s' "bash -c 'lab=/opt/fastvideo-rs/target/release/fv-lab; [ -x \"\$lab\" ] || { echo \"FATAL: no fv-lab in this image (\$lab): $family is fv-lab only; fv-lab pod up --family $family from a host\" >&2; exit 2; }; exec env FV_WORK=/workspace \"\$lab\" run $family'"
   elif rp_has_branch "$family"; then
     printf '%s' "bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $family"
@@ -796,7 +727,7 @@ cmd_gpu() {
   local i f id hp stamp host port started="" ids=() hps=()
   stamp="$(date -u +%Y%m%d%H%M%S)"
   for f in "${RP_GPU_FAMILIES[@]}"; do
-    id="$(rp_create_gpu_pod "${GPU_NAME_PREFIX}-$(rp_gpu_pod_tag "$f")-$stamp" "$vol" "$dc" "$auth")" \
+    id="$(rp_create_gpu_pod "${GPU_NAME_PREFIX}-$f-$stamp" "$vol" "$dc" "$auth")" \
       || { rp_destroy_pods ${ids[@]+"${ids[@]}"}; die "$f GPU create failed"; }
     ids+=("$id")
   done
@@ -813,7 +744,7 @@ cmd_gpu() {
   done
 
   rp_log "gpu jobs started$started"
-  rp_log "CPU fetch pod left up for ltx23 extra/logs — destroy after Hunyuan skip or extra fetch ends"
+  rp_log "CPU fetch pod left up for extra fetches/logs — destroy it once they end"
 }
 
 cmd_smoke() {
@@ -904,7 +835,7 @@ cmd_matrix() {
   dc="$(rp_volume_dc "$vol")"
   auth="$(rp_ensure_registry_auth)"
   name="fv-gpu-matrix-$(date -u +%Y%m%d%H%M%S)"
-  rp_log "▶ matrix: one PRO 6000, restart between H3/LTX/Hunyuan/Wan  image=$RP_IMAGE"
+  rp_log "▶ matrix: one PRO 6000, restart between families (${RP_MATRIX_FAMILIES[*]})  image=$RP_IMAGE"
   id="$(rp_create_gpu_pod "$name" "$vol" "$dc" "$auth" "$RP_GPU_TYPE" 0)" || die "matrix GPU create failed"
   echo "$id" >"$RP_STATE/gpu-matrix.id"
   rp_backstop "$id" 10800
@@ -921,9 +852,6 @@ cmd_matrix() {
     rp_log "▶ family $family on $id root@$host:$port"
     rp_ssh "$host" "$port" "nvidia-smi --query-gpu=name,memory.used,driver_version --format=csv,noheader; mkdir -p /workspace/runs/$family /workspace/gpucheck-out/logs"
     rp_rsync "$host" "$port" "$FV_ROOT/scripts/gpu/" "/opt/fastvideo-rs/scripts/gpu/" --exclude '.env*'
-    if [[ "$family" == h3 ]]; then
-      rp_ssh "$host" "$port" "python3 -c 'import json; print(json.load(open(\"/workspace/gpucheck-out/nvrtc.json\")).get(\"context\",{}).get(\"aot_sms\"))' 2>/dev/null || true" || true
-    fi
     cmd="$(rp_family_cmd "$family")" || exit 2
     # A script family: 4 cells × 300s + load slack. A retired family runs its
     # tier through fv-lab, which reads FV_GEN_TIMEOUT_S as its per-arm cap: it
@@ -1004,95 +932,6 @@ cmd_offers() {
   done
 }
 
-cmd_b200() {
-  # The B200 run needs the US volume; while it is unset, refuse rather than
-  # create a new 2 TB US volume and fetch into it (owner decision 2026-10-06).
-  fv_us_available || fv_us_gone
-  require_tools curl jq ssh rsync python3 git
-  rp_load_key
-  [[ -f "$RP_SSH_KEY" ]] || die "ssh key $RP_SSH_KEY missing"
-  export RUNPOD_GPU_MAX_DPH="${RUNPOD_GPU_MAX_DPH:-$RP_GPU_MAX_DPH}"
-  export RUNPOD_FETCH_DESTS="${RUNPOD_FETCH_DESTS:-$RP_B200_DESTS}"
-  export RUNPOD_VOLUME_NAME="${RUNPOD_VOLUME_NAME:-$RP_B200_VOL_NAME}"
-  RP_VOL_NAME="$RUNPOD_VOLUME_NAME"
-  RP_GPU_TYPE="$RP_B200_TYPE"
-  rp_log "▶ b200: vol_name=$RP_VOL_NAME dests=$RUNPOD_FETCH_DESTS cap=\$${RP_GPU_MAX_DPH} image=$RP_IMAGE"
-  rp_log "keep EUR volume $RP_EUR_VOLUME_KEEP (never detach/delete)"
-
-  local dc vol auth pod host port have_b200=0
-  if dc="$(rp_pick_us_b200_dc)"; then
-    have_b200=1
-  else
-    rp_log "no US B200 under \$${RP_GPU_MAX_DPH} — still creating US volume + fetch"
-    cmd_offers
-    dc="${RUNPOD_DATACENTER:-US-CA-2}"
-  fi
-  export RUNPOD_DATACENTER="$dc"
-  vol="$(rp_create_us_volume "$RP_VOL_NAME" "$dc")"
-  echo "$vol" >"$RP_STATE/volume-b200.id"
-  rp_log "US volume $vol dc=$dc name=$RP_VOL_NAME"
-
-  auth="$(rp_ensure_registry_auth)"
-  pod="$(rp_create_cpu_pod "$vol" "$dc" "$auth")"
-  echo "$pod" >"$RP_STATE/fetch-pod.id"
-  nohup bash -c "sleep 25200; curl -sS -X DELETE -H 'Authorization: Bearer ${RUNPOD_API_KEY}' '${RUNPOD_API_BASE}/pods/${pod}' >/dev/null" >/dev/null 2>&1 &
-  read -r host port < <(rp_wait_ssh "$pod" 900)
-  echo "$host $port" >"$RP_STATE/fetch-ssh"
-  rp_log_box_image "$host" "$port" "fetch-cpu" || die "fetch pod image is not the pinned runtime"
-  rp_seed_token "$host" "$port"
-  rp_ssh "$host" "$port" "df -h $MOUNT; echo CPU_ONLY"
-  if rp_ssh "$host" "$port" "command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1"; then
-    rp_log "FATAL: fetch pod has a GPU — destroying $pod"
-    rp_destroy_pod "$pod"
-    die "CPU fetch pod was a GPU"
-  fi
-  rp_remote_fetch_all "$host" "$port"
-  rp_verify_remote "$host" "$port"
-  if ! rp_ssh "$host" "$port" "test -f $WEIGHTS/taeh3/.complete -o -f $WEIGHTS/taeh3/taeh3.safetensors"; then
-    rp_log "FATAL: taeh3 missing after fetch"
-    return 1
-  fi
-  jq -n --arg vol "$vol" --arg dc "$dc" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{volume:$vol, datacenter:$dc, ready_at:$at, status:"ready", us:true}' >"$RP_STATE/volume-b200-ready.json"
-  rp_log "volume ready  id=$vol  dc=$dc"
-  rp_log "destroying CPU fetch pod $pod"
-  rp_destroy_pod "$pod"
-
-  if [[ "$have_b200" -eq 0 ]]; then
-    rp_log "stop: US volume $vol dc=$dc fetched; no B200 under \$${RP_GPU_MAX_DPH}"
-    return 0
-  fi
-
-  local name id gpu_host gpu_port
-  name="fv-gpu-b200-$(date -u +%Y%m%d%H%M%S)"
-  if ! rp_gpu_offer "$dc" >/dev/null; then
-    rp_log "stop: stock gone after fetch. US volume $vol dc=$dc kept."
-    return 0
-  fi
-  id="$(rp_create_gpu_pod "$name" "$vol" "$dc" "$auth" "$RP_B200_TYPE" 1)" || die "B200 GPU create failed"
-  echo "$id" >"$RP_STATE/gpu-b200.id"
-  nohup bash -c "sleep 21600; curl -sS -X DELETE -H 'Authorization: Bearer ${RUNPOD_API_KEY}' '${RUNPOD_API_BASE}/pods/${id}' >/dev/null" >/dev/null 2>&1 &
-  read -r gpu_host gpu_port < <(rp_wait_ssh "$id" 900)
-  echo "$gpu_host $gpu_port" >"$RP_STATE/gpu-b200-ssh"
-  rp_log "b200 ssh root@$gpu_host:$gpu_port pod=$id"
-  rp_log_box_image "$gpu_host" "$gpu_port" "b200-gpu" || die "B200 pod image is not the pinned runtime"
-  rp_ssh "$gpu_host" "$gpu_port" "nvidia-smi -L; nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader"
-  rp_log "stage start b200-warm pod=$id"
-  rp_ssh "$gpu_host" "$gpu_port" "mkdir -p /workspace/runs/b200 /workspace/gpucheck-out/logs"
-  rp_rsync "$gpu_host" "$gpu_port" "$FV_ROOT/scripts/gpu/" "/opt/fastvideo-rs/scripts/gpu/" --exclude '.env*'
-  if ! rp_ssh "$gpu_host" "$gpu_port" "export FV_WORK=/workspace FV_GEN_TIMEOUT_S=3600 PATH=/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:\$PATH
-    bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh b200"; then
-    rp_log "b200 matrix returned non-zero (cells continue-on-fail inside the script)"
-  fi
-  rp_ssh "$gpu_host" "$gpu_port" "tail -80 /workspace/runs/b200/live.log" | tee -a "$RP_LIVE" >&2 || true
-  mkdir -p "$RP_STATE/b200/runs"
-  rsync -az -e "ssh -i $RP_SSH_KEY -p $gpu_port -o IdentitiesOnly=yes ${FV_SSH_OPTS[*]}" \
-    "root@$gpu_host:/workspace/runs/b200/" "$RP_STATE/b200/runs/" || true
-  rp_log "destroying B200 pod $id"
-  rp_destroy_pod "$id"
-  rp_log "b200 PASS (see $RP_STATE/b200/runs) — volumes kept ($vol and $RP_EUR_VOLUME_KEEP)"
-}
-
 # Sourced with FV_SOURCE_ONLY=1 (tests/runpod-plan.test.sh): the functions
 # only, no command dispatched (as docker.sh and validate.sh).
 [[ -n "${FV_SOURCE_ONLY:-}" && "${BASH_SOURCE[0]}" != "$0" ]] && return 0
@@ -1109,7 +948,7 @@ case "${1:-}" in
   matrix) cmd_matrix ;;
   plan) cmd_plan "${2:-}" ;;
   rtx6000) die "rtx6000 is fv-lab only (scripts/gpu/fv-lab-retired.sh, docs/adr/0019-fv-lab.md §10): fv-lab pod up --sha <7> --family rtx6000 --yes --wait, or runpod-http.sh run <7>" ;;
-  b200) cmd_b200 ;;
+  b200) die "b200 is retired with no tier (scripts/gpu/fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): the US volume it ran on is gone (CLAUDE.md, owner decision 2026-10-06)" ;;
   offers) cmd_offers ;;
   status) cmd_status ;;
   reap) cmd_reap ;;

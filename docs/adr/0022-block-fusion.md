@@ -1,6 +1,9 @@
 # ADR-0022: One block-fusion module with a rounding policy
 
-- Status: Accepted (plan B4b, `docs/plan/2026-10-23-execution-plan.md`)
+- Status: Accepted (plan B4b, `docs/plan/2026-10-23-execution-plan.md`). The
+  GPU gate family `runpod-matrix.sh b4b` and its verdict script
+  (`b4-verdict.sh`, its test) are retired with no tier since the gate passed
+  (ADR-0019 §18; `git show b019ccb2:scripts/gpu/b4-verdict.sh`)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-block-fusion
 - Source: `docs/gaps/2026-10-22-architecture-review.md` §3 ("the block fusion

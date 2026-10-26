@@ -11,6 +11,9 @@
 #
 # Read by:
 #   runpod-http.sh             `run` / `plan` for one of these call fv-lab pod up
+#                              (FV_SCRIPT_RETIRED below: refused)
+#   runpod.sh                  `gpu` / `matrix`: fv-lab run for these, refused for
+#                              FV_SCRIPT_RETIRED
 #   tests/fv-lab-goldens.sh    their fixtures are frozen (no longer regenerated
 #                              from the scripts, only checked to be present)
 #   crates/fastvideo-lab/tests/dry_run.rs   the same list, the same checks
@@ -39,6 +42,16 @@ FV_LAB_RESTORED="precision-nvfp4:precision:FV_PRECISION_ARM=ltx-nvfp4 ltxvae-gen
 # and `all` for them and names the fv-lab command.
 FV_LAB_EXPERIMENTS="h3-graphs"
 
+# The runpod-matrix.sh families retired with no tier (ADR-0019 §18, D1g,
+# coordinator decision 2026-10-26): finished experiments and one-time
+# measurements whose evidence is committed or recorded, families the EU volume
+# cannot run, and ones another tier covers. Their `case` branches are deleted
+# and nothing runs them: runpod-matrix.sh, runpod-http.sh run / all / plan and
+# runpod.sh gpu / matrix refuse them (exit 2) with fv_script_retired_why's
+# pointer, never route them to fv-lab (they are no tier of lab/tiers.toml).
+# A family joins this list in the PR that deletes its branch.
+FV_SCRIPT_RETIRED="h3 hunyuan sana-video b200 writer precision-debug identity b4b b4c b4c2 h3attn"
+
 # fv_lab_retired <family>: true when the family is fv-lab only.
 fv_lab_retired() {
   [[ " $FV_LAB_RETIRED " == *" ${1:-} "* ]]
@@ -47,4 +60,24 @@ fv_lab_retired() {
 # fv_lab_experiment <tier>: true for a tier made from a port one-off.
 fv_lab_experiment() {
   [[ " $FV_LAB_EXPERIMENTS " == *" ${1:-} "* ]]
+}
+
+# fv_script_retired <family>: true when the family is retired with no tier.
+fv_script_retired() {
+  [[ " $FV_SCRIPT_RETIRED " == *" ${1:-} "* ]]
+}
+
+# fv_script_retired_why <family>: what replaces a family retired with no tier
+# (ADR-0019 §18), for the refusals; empty for any other name.
+fv_script_retired_why() {
+  case "${1:-}" in
+    h3) echo "the rtx6000 tier runs its arms (ADR-0019 §17.4, §18): fv-lab pod up --family rtx6000, or FV_FAMILY=rtx6000 runpod-http.sh run" ;;
+    b4b | b4c | b4c2) echo "a finished experiment: its GPU gate passed when its change merged (b4b #179, b4c #177, b4c2 #178; artifacts/runpod/$1/); a later change to the fusions or the prompt cache gets its own byte-identity run (the b4a / techniques tiers' baseline-vs-this-build shape) and the CPU fixtures (rt/prompt_cache/equality.rs, rt/fuse/equality.rs) (ADR-0019 §17.3, §18)" ;;
+    hunyuan | sana-video) echo "its trees are not on the EU volume and nothing serves it; the gold files and served variants decide what runs (fv-lab pod up --family gold) (ADR-0019 §14.7, §18)" ;;
+    b200) echo "the US volume it ran on is gone (CLAUDE.md, owner decision 2026-10-06) (ADR-0019 §14.7, §18)" ;;
+    writer) echo "a one-time measurement of the frame writer (commit a8ecfec6); its commands: git show b019ccb2:scripts/gpu/runpod-matrix.sh (ADR-0019 §14.7, §18)" ;;
+    precision-debug) echo "the precision and precision-nvfp4 tiers cover it (ADR-0019 §14.7, §18)" ;;
+    identity) echo "the det-short and determinism tiers cover it (ADR-0019 §14.7, §18)" ;;
+    h3attn) echo "its arms are measured and recorded (docs/techniques.md \"H3 attention arms\"; the served variants' gold files); no attention arm of it is open (ADR-0019 §14.7, §18)" ;;
+  esac
 }

@@ -493,8 +493,13 @@ and a served variant's in its gold file (`lab/gold/<variant>.toml`, e.g.
 `sol-h3`, `fasth3-4step-vsa`). No default changed.
 
 ```bash
-FV_FAMILY=h3attn FV_PROMPTS=5 FV_LPIPS=1 scripts/gpu/runpod-http.sh run <sha7>
+FV_FAMILY=h3attn FV_PROMPTS=5 FV_LPIPS=1 scripts/gpu/runpod-http.sh run <sha7>   # until b019ccb2
 ```
+
+The `h3attn` family is retired with no tier since `docs/adr/0019-fv-lab.md`
+§18 (2026-10-26): its arms are measured here, no attention arm of it is open
+(the FP8 follow-up below closed with SageAttention), and the command above is
+refused (exit 2). Its branch is in `git show b019ccb2:scripts/gpu/runpod-matrix.sh`.
 
 The 8-step baseline's `total_s` (140.3 s) includes the first-time streamed
 encode of four prompts. With a cached prompt it is denoise + about 7 s, the
