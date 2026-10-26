@@ -2469,8 +2469,10 @@ the committed run directories and its output saved next to them with its command
   present on both, and its own status is `fail` on both, for the same two checks: `performance/speedup` (the warm
   denoise, fusions on against off, 18.54 to 17.13 s on the fv-lab side and 18.74 to 17.36 s on the script side,
   1.08×: over the gate policy's 1.03 experimental floor, under its 1.10 promotion bar) and `lpips_available` (no
-  `--lpips` in §17.5's commands). That is the switch's promotion verdict, not its identity (the gate's
-  `off_identity` check passed), and both runners agree on it.
+  `--lpips` in §17.5's commands). The gate is the fusion knob's promotion decision (should the switch be promoted
+  on speed and quality), not a parity or correctness verdict: parity is the compare's off-identity `ok` (and the
+  gate's own `off_identity` check passed), both runners agree on the gate, and it is not a finding against the
+  retirement (accepted by the coordinator, 2026-10-26).
 - **`attn3`**: fv-lab `artifacts/runpod/attn3/762ce4d-1026124004-04fa` (pod `2euds1fn4gfyt8`), script
   `artifacts/runpod/attn3/762ce4d-10261240` (pod `vir27fw4n6g0vp`). Exit 0: "2 arm(s) the same (2 ran with
   byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s)
@@ -2515,7 +2517,13 @@ as §15.10 did for `det-short` and `determinism`:
   refused, `plan` fv-lab's, `runpod-matrix.sh` refusing each (exit 2), and `h3`, `b4c`, `b4c2` still on the script
   path.
 - `lab/tiers.toml` and the five cells say "was runpod-matrix.sh …".
-- Not changed: `scripts/gpu/runpod.sh gpu` (`cmd_gpu`, the SSH driver of the first volume fill) still starts
-  `runpod-matrix.sh ltx` on one of its three pods, which now refuses it (exit 2) while its `h3` and `hunyuan` pods
-  run as before. Its `ltx` stage is left for the coordinator: point it at `fv-lab pod up --family ltx`, or drop the
-  stage, or retire `cmd_gpu` with `h3` (§17.4).
+- `scripts/gpu/runpod.sh` (`gpu` and `matrix`, the SSH drivers of the first volume fill) started `runpod-matrix.sh
+  ltx` on a paid pod, which would now refuse it (coordinator, 2026-10-26: fixed here). Each family's pod command is
+  `rp_family_cmd`'s: a family of `FV_LAB_RETIRED` runs its tier with the image's fv-lab (`FV_WORK=/workspace
+  /opt/fastvideo-rs/target/release/fv-lab run ltx`; the runtime image ships it with `lab/` beside it,
+  `docker/gpucheck.Dockerfile`), into the same `/workspace/runs/ltx` with the same `driver.log` / `pid`; without
+  fv-lab in the image the pod's line stops with exit 2 and names `fv-lab pod up --family ltx`. A family with a
+  `runpod-matrix.sh` branch (`h3`, `hunyuan`, `wan`) runs the script as before; anything else (an experiment tier,
+  `gold`, an unknown name) stops `gpu` / `matrix` before the key is read or a pod is created
+  (`rp_check_families` at the top of both). `runpod.sh plan gpu|matrix` prints each pod's command;
+  `scripts/gpu/tests/runpod-plan.test.sh` (in `control.yml`) holds it: `ltx` never reaches `runpod-matrix.sh`.
