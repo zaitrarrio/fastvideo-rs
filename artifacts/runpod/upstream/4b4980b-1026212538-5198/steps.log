@@ -1,0 +1,19 @@
+uv 0.13.1 (x86_64-unknown-linux-gnu)
+21:28:55 plan: 1 tree(s), 28.93 GB, URLs valid 7800s -> /root/.r2-state/plan-sfwan21-1.3b.json
+21:28:55 [r2-fetch] 1 tree(s) to fetch, 28.93 GB in 230 GETs of up to 2 x 64 MiB, concurrency 64, 224 CPUs; 0 present
+21:29:00 [r2-fetch] r2 7.2/28.9 GB, 1444 MB/s, eta 15s, trees 0/1 (now 1445 MB/s)
+21:29:03 [r2-fetch] sfwan21-1.3b/text_encoder/model-00002-of-00005.safetensors part 18: slow: 4.2 MB/s after 8s (recent parts 28 MB/s): fetched again on a new connection
+21:29:05 [r2-fetch] r2 14.9/28.9 GB, 1491 MB/s, eta 9s, trees 0/1 (now 1538 MB/s)
+21:29:10 [r2-fetch] r2 22.5/28.9 GB, 1501 MB/s, eta 4s, trees 0/1 (now 1520 MB/s)
+21:29:13 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 36: slow: 1.2 MB/s after 7s (recent parts 28 MB/s): fetched again on a new connection
+21:29:14 [r2-fetch] sfwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 18: slow: 6.4 MB/s after 7s (recent parts 29 MB/s): fetched again on a new connection
+21:29:15 [r2-fetch] r2 28.4/28.9 GB, 1419 MB/s, eta 0s, trees 0/1 (now 1174 MB/s)
+21:29:16 [r2-fetch] sfwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 48: slow: 0.0 MB/s after 7s (recent parts 31 MB/s): fetched again on a new connection
+21:29:20 [r2-fetch] r2 28.8/28.9 GB, 1150 MB/s, eta 0s, trees 0/1 (now 74 MB/s)
+21:29:21 [r2-fetch] sfwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 18: slow: 3.0 MB/s after 7s (recent parts 31 MB/s): fetched again on a new connection
+21:29:24 [r2-fetch] tree sfwan21-1.3b: ready at 4b44356635ae5e927ca552a220f768022be76004 (28.93 GB, 17 files, 30s since start)
+21:29:24 [r2-fetch] weights ready: 1 tree(s), 28.93 GB fetched in 29.7s (973 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 5
+r2:sfwan21-1.3b: 4b44356635ae5e927ca552a220f768022be76004 at /root/upstream-weights/sfwan21-1.3b
+[21:29:27] ▶ cell oracle-sfwan13
+[21:30:11] ok oracle-sfwan13 44s peak 35458MiB ram 12174 MiB of 269889 MiB
+170M	/root/runs/upstream/4b4980b-1026212538-5198/oracle-sfwan13/dump

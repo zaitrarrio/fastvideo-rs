@@ -1,0 +1,123 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "dit_residency": "resident",
+        "mem_used_mib": 12738,
+        "moe": null,
+        "seconds": 25.896346544
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 3.01875349,
+        "decoder": "wan-vae",
+        "denoise_s": 2.684995095,
+        "frames_sha256": "b0eca501ffd4ef1e41e8a0c06b9cb576c1248e9531acdba9e8bea037010b1d62",
+        "peak_mib": 27364,
+        "step_s": [
+          0.735532992,
+          0.649946424,
+          0.649843125,
+          0.649565444
+        ],
+        "text_cache": "miss",
+        "text_s": 0.473031669,
+        "total_s": 6.202590917999999,
+        "video_encode_s": 0.031485522,
+        "video_push_s": 0.000050549999999999995,
+        "video_rgb_s": 0.029859558000436996,
+        "video_vae_s": 2.9810913925170897,
+        "video_wait_s": 0.7371228919999999,
+        "write_s": 0.043131069
+      }
+    },
+    {
+      "limits": {
+        "expected": 81
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 81,
+        "written": 81
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-legacy/frames/frame-040.png",
+        "mean": 0.5412769111065979,
+        "std": 0.2583625456054882
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-legacy/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast",
+    "request": {
+      "cond_cache": true,
+      "dmd": true,
+      "dmd_steps": [
+        1000,
+        750,
+        500,
+        250
+      ],
+      "flow_shift": 5.0,
+      "guidance": 1.0,
+      "guidance_2": null,
+      "height": 480,
+      "num_frames": 81,
+      "plug": null,
+      "preset": "sf_wan_t2v_1_3b",
+      "prompt_set": null,
+      "step_distill": null,
+      "steps": 4,
+      "text_cache": "/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-legacy/text-cache",
+      "unipc_sigmas": "fastvideo",
+      "vae": "full",
+      "vsa": false,
+      "warm": false,
+      "weights": "/fvscratch/weights/sfwan21-1.3b",
+      "width": 832
+    }
+  },
+  "elapsed_s": 32.680793454,
+  "env": {
+    "FASTVIDEO_DUMP_DIR": "/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-legacy",
+    "FASTVIDEO_DUMP_OPS": "0,1,24,47",
+    "FASTVIDEO_H3_QUANT": "off",
+    "FASTVIDEO_INJECT_DIR": "/fvscratch/oracle-ref/sfwan13/dump",
+    "FASTVIDEO_WAN_CAUSAL_AR": "0",
+    "FASTVIDEO_WAN_CAUSAL_FPB": "1",
+    "FASTVIDEO_WAN_VAE": "full"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "wan",
+  "status": "pass"
+}

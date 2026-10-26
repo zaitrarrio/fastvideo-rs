@@ -1,0 +1,10 @@
+21:31:43 plan: 1 tree(s), 28.93 GB, URLs valid 2362s -> /fvscratch/r2/plan.json
+21:31:43 [r2-fetch] 1 tree(s) to fetch, 28.93 GB in 230 GETs of up to 2 x 64 MiB, concurrency 64, 256 CPUs; 0 present
+21:31:48 [r2-fetch] r2 7.5/28.9 GB, 1503 MB/s, eta 14s, trees 0/1 (now 1503 MB/s)
+21:31:53 [r2-fetch] r2 16.0/28.9 GB, 1602 MB/s, eta 8s, trees 0/1 (now 1700 MB/s)
+21:31:58 [r2-fetch] r2 22.9/28.9 GB, 1523 MB/s, eta 4s, trees 0/1 (now 1367 MB/s)
+21:32:03 [r2-fetch] r2 28.7/28.9 GB, 1432 MB/s, eta 0s, trees 0/1 (now 1160 MB/s)
+21:32:06 [r2-fetch] sfwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 80: slow: 2.4 MB/s after 7s (recent parts 31 MB/s): fetched again on a new connection
+21:32:08 [r2-fetch] r2 28.8/28.9 GB, 1153 MB/s, eta 0s, trees 0/1 (now 34 MB/s)
+21:32:11 [r2-fetch] tree sfwan21-1.3b: ready at 4b44356635ae5e927ca552a220f768022be76004 (28.93 GB, 17 files, 27s since start)
+21:32:11 [r2-fetch] weights ready: 1 tree(s), 28.93 GB fetched in 27.4s (1057 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 1

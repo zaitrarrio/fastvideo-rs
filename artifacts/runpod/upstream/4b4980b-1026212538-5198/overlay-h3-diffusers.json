@@ -1,0 +1,51 @@
+{
+ "linked": 50,
+ "downloaded": [
+  [
+   "audio_scheduler/scheduler_config.json",
+   96
+  ],
+  [
+   "modular_model_index.json",
+   2935
+  ],
+  [
+   "processor/chat_template.json",
+   5499
+  ],
+  [
+   "processor/merges.txt",
+   1671839
+  ],
+  [
+   "processor/preprocessor_config.json",
+   390
+  ],
+  [
+   "processor/tokenizer.json",
+   7032403
+  ],
+  [
+   "processor/tokenizer_config.json",
+   11003
+  ],
+  [
+   "processor/video_preprocessor_config.json",
+   385
+  ],
+  [
+   "processor/vocab.json",
+   2776833
+  ],
+  [
+   "scheduler/scheduler_config.json",
+   97
+  ],
+  [
+   "text_encoder/merges.txt",
+   1671839
+  ]
+ ],
+ "present": 0,
+ "missing": []
+}

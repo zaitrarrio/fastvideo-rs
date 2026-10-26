@@ -1,0 +1,27 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] wan load: host peak RSS 75.3 GiB (eager dit)
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":12738,"moe":null,"seconds":23.30870199}
+[fastvideo] generate preset=sf_wan_t2v_1_3b tiny=false 832x480 frames=81 steps=4 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] inject: sf_latents_in [1, 16, 21, 60, 104] from the reference
+[fastvideo] inject: text_hidden [1, 512, 4096] from the reference
+[fastvideo] denoise=dmd steps=4
+[fastvideo] sdpa: block-causal mma B=1 H=12 Sq=32760 Sk=32760 D=128 block=1560 window=0 sink=0
+[fastvideo] sdpa auto (sm_12x rule): bh=12 sq=32760 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=32760 Sk=512 D=128
+[fastvideo] dmd step 1/4 t=1000 done in 726ms
+[fastvideo] dmd step 2/4 t=750 done in 649ms
+[fastvideo] dmd step 3/4 t=500 done in 649ms
+[fastvideo] dmd step 4/4 t=250 done in 649ms
+[fastvideo] dmd 4 steps done in 2675ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] vae.decode done in 2255ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.08s, 0.04 GiB, synced), ffmpeg feed blocked 0.14s, mp4 tail 0.05s, buffered peak 0.09 GiB of 41.37
+[fastvideo] wrote mp4 /fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-legacy/frames/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-legacy/frames (text 0.42s, denoise 2.68s, decode+mp4 3.05s, png 0.08s)
+[fastvideo] generate done in 6254ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":3.048094432,"decoder":"wan-vae","denoise_s":2.677509938,"frames_sha256":"b0eca501ffd4ef1e41e8a0c06b9cb576c1248e9531acdba9e8bea037010b1d62","peak_mib":27364,"step_s":[0.727896247,0.649804944,0.649996643,0.649686244],"text_cache":"miss","text_s":0.424816632,"total_s":6.172068336,"video_encode_s":0.051487997,"video_push_s":0.00003295,"video_rgb_s":0.027459227001075653,"video_vae_s":2.990134162902832,"video_wait_s":0.737436093,"write_s":0.082563017}
+wan gen default: total 6.17s (text 0.42s, denoise 2.68s, decode 3.05s) png 0.08s peak Some(27364) MiB frames b0eca501ffd4ef1e41e8a0c06b9cb576c1248e9531acdba9e8bea037010b1d62
+[PASS] wan/frames {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-legacy/frames/frame-040.png","mean":0.5412769111065979,"std":0.2583625456054882} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13-legacy/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (30.1s)

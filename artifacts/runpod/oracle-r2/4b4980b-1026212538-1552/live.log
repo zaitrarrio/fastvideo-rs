@@ -1,0 +1,1176 @@
+[21:31:34] [oracle-r2] matrix start image=ffec90df911daaa2
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-e9995f0e-3d8f-8376-b854-272c8503244f)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[21:31:34] [oracle-r2] pod memory: cgroup v2 /sys/fs/cgroup, limit 89645 MiB, oom_kills 0
+[21:31:34] [oracle-r2] weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees (28.93 GB) fetched before the arms that read them, at most 28.93 GB on the container disk at once
+[21:31:34] [oracle-r2] oracle: fetching https://beelfsmgjfn15i-8000.proxy.runpod.net/upstream/4b4980b-1026212538-5198/oracle-sfwan13/oracle-dump.tar
+[21:31:36] [oracle-r2] oracle: sfwan13 reference 170M
+[21:31:36] [oracle-r2] r2: no python3 in the image: apt-get install python3 (r2-apt.log)
+[21:31:42] [oracle-r2] r2 oracle-sfwan13: fetch sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004 (28.93 GB) into /fvscratch/weights
+[21:32:11] [oracle-r2] r2 oracle-sfwan13: weights ready: 1 tree(s), 28.93 GB fetched in 27.4s (1057 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 1
+[21:32:11] [oracle-r2] ▶ oracle-sfwan13  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/sfwan13/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13/frames  (wall cap 2333s; 0=none)
+[21:32:42] [oracle-r2] ok oracle-sfwan13  31s  /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13/stderr.log:wan gen default: total 7.95s (text 0.42s, denoise 4.50s, decode 3.01s) png 0.04s peak Some(27684) MiB frames ae12e082dee4d1def42636c9d6c8e716315b927c7a238d3a96e167809cae95a8
+[21:32:42] [oracle-r2] ram oracle-sfwan13: ram 56260 MiB of 89645 MiB, oom_kills 0
+[21:32:42] [oracle-r2] ▶ oracle-sfwan13-diff  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/oracle-ref/sfwan13/dump --candidate /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump  (wall cap 2302s; 0=none)
+[21:32:43] [oracle-r2] ok oracle-sfwan13-diff  0s  
+[21:32:43] [oracle-r2] ram oracle-sfwan13-diff: ram 4 MiB of 89645 MiB, oom_kills 0
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_b0_attn_x          rel_l2 1.905e-1  cosine 0.981950  max_abs 8.938e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_b0_kwin            rel_l2 3.823e-2  cosine 0.999269  max_abs 2.969e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_b1_attn_x          rel_l2 1.821e-1  cosine 0.983465  max_abs 2.293e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_b1_kwin            rel_l2 9.263e-2  cosine 0.995708  max_abs 5.500e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_b24_attn_x         rel_l2 3.405e-1  cosine 0.942497  max_abs 3.117e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_b24_kwin           rel_l2 2.721e-1  cosine 0.962952  max_abs 6.438e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_0            rel_l2 8.642e-2  cosine 0.996259  max_abs 4.570e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_1            rel_l2 1.096e-1  cosine 0.994006  max_abs 4.812e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_2            rel_l2 1.167e-1  cosine 0.993211  max_abs 4.898e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_3            rel_l2 1.385e-1  cosine 0.990418  max_abs 5.086e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_4            rel_l2 1.352e-1  cosine 0.990827  max_abs 5.109e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_5            rel_l2 1.462e-1  cosine 0.989264  max_abs 5.094e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_6            rel_l2 1.559e-1  cosine 0.987838  max_abs 5.195e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_7            rel_l2 1.441e-1  cosine 0.989580  max_abs 5.188e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_8            rel_l2 1.630e-1  cosine 0.986699  max_abs 5.203e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_9            rel_l2 1.661e-1  cosine 0.986144  max_abs 5.234e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_10           rel_l2 1.646e-1  cosine 0.986369  max_abs 5.266e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_11           rel_l2 1.649e-1  cosine 0.986387  max_abs 5.266e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_12           rel_l2 1.734e-1  cosine 0.984959  max_abs 5.242e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_13           rel_l2 1.834e-1  cosine 0.983126  max_abs 5.250e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_14           rel_l2 2.111e-1  cosine 0.977542  max_abs 5.242e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_15           rel_l2 1.815e-1  cosine 0.983540  max_abs 5.195e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_16           rel_l2 1.601e-1  cosine 0.987157  max_abs 6.750e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_17           rel_l2 2.107e-1  cosine 0.977665  max_abs 8.125e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_18           rel_l2 1.754e-1  cosine 0.984549  max_abs 5.055e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_19           rel_l2 1.301e-1  cosine 0.991558  max_abs 4.938e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_20           rel_l2 1.449e-1  cosine 0.989471  max_abs 4.836e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_21           rel_l2 1.786e-1  cosine 0.983935  max_abs 8.625e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_22           rel_l2 1.607e-1  cosine 0.987080  max_abs 4.602e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_23           rel_l2 1.892e-1  cosine 0.981949  max_abs 1.306e1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_24           rel_l2 1.639e-1  cosine 0.986576  max_abs 6.250e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_25           rel_l2 1.479e-1  cosine 0.989049  max_abs 4.258e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_26           rel_l2 1.703e-1  cosine 0.985541  max_abs 4.625e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_27           rel_l2 1.542e-1  cosine 0.988175  max_abs 8.250e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_28           rel_l2 1.690e-1  cosine 0.985742  max_abs 6.000e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_ctx_block_29           rel_l2 1.918e-1  cosine 0.981647  max_abs 4.750e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_out                    rel_l2 1.528e-1  cosine 0.988322  max_abs 2.680e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_b0_attn_x           rel_l2 1.141e-2  cosine 0.999935  max_abs 6.250e-2  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_b0_kwin             rel_l2 4.562e-3  cosine 0.999990  max_abs 9.375e-2  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_b1_attn_x           rel_l2 2.015e-2  cosine 0.999816  max_abs 9.766e-2  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_b1_kwin             rel_l2 7.584e-3  cosine 0.999971  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_b24_attn_x          rel_l2 5.930e-2  cosine 0.998245  max_abs 3.164e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_b24_kwin            rel_l2 5.350e-2  cosine 0.998569  max_abs 1.500e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_0             rel_l2 7.643e-3  cosine 0.999982  max_abs 3.750e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_1             rel_l2 6.510e-3  cosine 0.999980  max_abs 3.125e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_2             rel_l2 6.920e-3  cosine 0.999977  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_3             rel_l2 6.429e-3  cosine 0.999980  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_4             rel_l2 6.838e-3  cosine 0.999977  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_5             rel_l2 6.371e-3  cosine 0.999980  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_6             rel_l2 8.493e-3  cosine 0.999970  max_abs 3.750e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_7             rel_l2 8.501e-3  cosine 0.999965  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_8             rel_l2 1.361e-2  cosine 0.999910  max_abs 1.750e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_9             rel_l2 1.522e-2  cosine 0.999900  max_abs 7.500e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_10            rel_l2 1.562e-2  cosine 0.999883  max_abs 2.000e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_11            rel_l2 1.451e-2  cosine 0.999897  max_abs 1.500e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_12            rel_l2 1.738e-2  cosine 0.999849  max_abs 2.000e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_13            rel_l2 2.410e-2  cosine 0.999710  max_abs 2.875e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_14            rel_l2 2.526e-2  cosine 0.999681  max_abs 3.000e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_15            rel_l2 2.601e-2  cosine 0.999678  max_abs 2.500e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_16            rel_l2 2.575e-2  cosine 0.999669  max_abs 2.250e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_17            rel_l2 4.088e-2  cosine 0.999244  max_abs 7.750e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_18            rel_l2 3.151e-2  cosine 0.999512  max_abs 2.875e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_19            rel_l2 2.339e-2  cosine 0.999731  max_abs 6.250e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_20            rel_l2 2.537e-2  cosine 0.999678  max_abs 5.000e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_21            rel_l2 3.621e-2  cosine 0.999344  max_abs 3.625e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_22            rel_l2 3.290e-2  cosine 0.999459  max_abs 2.000e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_23            rel_l2 3.264e-2  cosine 0.999468  max_abs 1.750e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_24            rel_l2 3.292e-2  cosine 0.999458  max_abs 1.188e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_25            rel_l2 2.734e-2  cosine 0.999626  max_abs 5.000e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_26            rel_l2 2.862e-2  cosine 0.999590  max_abs 5.625e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_27            rel_l2 2.324e-2  cosine 0.999730  max_abs 5.000e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_28            rel_l2 2.452e-2  cosine 0.999700  max_abs 6.250e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_block_29            rel_l2 1.649e-2  cosine 0.999865  max_abs 7.500e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_flow                rel_l2 1.880e-2  cosine 0.999825  max_abs 1.992e-1  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c0_s0_x0                  rel_l2 2.955e-2  cosine 0.999567  max_abs 1.992e-1  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c0_s1_flow                rel_l2 4.359e-2  cosine 0.999051  max_abs 1.664e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c0_s1_x0                  rel_l2 6.582e-2  cosine 0.997834  max_abs 1.561e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c0_s2_flow                rel_l2 9.051e-2  cosine 0.995903  max_abs 2.828e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c0_s2_x0                  rel_l2 1.273e-1  cosine 0.991903  max_abs 2.453e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c0_s3_flow                rel_l2 1.161e-1  cosine 0.993255  max_abs 3.508e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c0_s3_x0                  rel_l2 1.528e-1  cosine 0.988322  max_abs 2.680e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c1_out                    rel_l2 2.406e-1  cosine 0.970941  max_abs 4.047e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_b0_attn_x           rel_l2 2.851e-2  cosine 0.999594  max_abs 5.312e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_b0_kwin             rel_l2 2.748e-2  cosine 0.999622  max_abs 2.969e0  n 225792
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_b1_attn_x           rel_l2 7.541e-2  cosine 0.997153  max_abs 1.246e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_b1_kwin             rel_l2 6.680e-2  cosine 0.997768  max_abs 5.500e0  n 225792
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_b24_attn_x          rel_l2 3.374e-1  cosine 0.943367  max_abs 2.336e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_b24_kwin            rel_l2 2.470e-1  cosine 0.969473  max_abs 6.438e0  n 225792
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_0             rel_l2 9.431e-3  cosine 0.999967  max_abs 3.750e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_1             rel_l2 1.288e-2  cosine 0.999921  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_2             rel_l2 1.497e-2  cosine 0.999891  max_abs 2.896e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_3             rel_l2 1.483e-2  cosine 0.999894  max_abs 3.027e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_4             rel_l2 2.237e-2  cosine 0.999750  max_abs 1.062e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_5             rel_l2 2.715e-2  cosine 0.999632  max_abs 8.750e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_6             rel_l2 2.976e-2  cosine 0.999563  max_abs 6.875e-1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_7             rel_l2 3.610e-2  cosine 0.999349  max_abs 1.625e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_8             rel_l2 3.421e-2  cosine 0.999424  max_abs 1.375e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_9             rel_l2 3.924e-2  cosine 0.999234  max_abs 1.875e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_10            rel_l2 4.718e-2  cosine 0.998892  max_abs 2.750e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_11            rel_l2 5.169e-2  cosine 0.998663  max_abs 1.250e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_12            rel_l2 5.417e-2  cosine 0.998532  max_abs 2.000e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_13            rel_l2 7.638e-2  cosine 0.997079  max_abs 3.125e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_14            rel_l2 8.747e-2  cosine 0.996183  max_abs 4.500e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_15            rel_l2 9.030e-2  cosine 0.995926  max_abs 5.500e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_16            rel_l2 8.808e-2  cosine 0.996113  max_abs 3.125e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_17            rel_l2 1.522e-1  cosine 0.988393  max_abs 1.077e1  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_18            rel_l2 1.121e-1  cosine 0.993697  max_abs 7.812e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_19            rel_l2 8.021e-2  cosine 0.996789  max_abs 1.272e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_20            rel_l2 9.700e-2  cosine 0.995291  max_abs 1.125e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_21            rel_l2 1.309e-1  cosine 0.991398  max_abs 5.844e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_22            rel_l2 1.223e-1  cosine 0.992529  max_abs 2.188e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_23            rel_l2 1.457e-1  cosine 0.989338  max_abs 8.875e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_24            rel_l2 1.358e-1  cosine 0.990755  max_abs 3.750e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_25            rel_l2 1.272e-1  cosine 0.991923  max_abs 2.211e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_26            rel_l2 1.424e-1  cosine 0.989871  max_abs 3.125e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_27            rel_l2 1.415e-1  cosine 0.990012  max_abs 6.000e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_28            rel_l2 1.545e-1  cosine 0.988074  max_abs 5.125e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_block_29            rel_l2 9.228e-2  cosine 0.995738  max_abs 3.883e0  n 113664
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_flow                rel_l2 1.140e-1  cosine 0.993531  max_abs 3.148e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c1_s0_x0                  rel_l2 1.627e-1  cosine 0.986824  max_abs 3.148e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c1_s1_flow                rel_l2 1.677e-1  cosine 0.985942  max_abs 3.648e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c1_s1_x0                  rel_l2 2.296e-1  cosine 0.973652  max_abs 3.477e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c1_s2_flow                rel_l2 1.709e-1  cosine 0.985358  max_abs 4.406e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c1_s2_x0                  rel_l2 2.345e-1  cosine 0.972431  max_abs 3.988e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c1_s3_flow                rel_l2 1.778e-1  cosine 0.984153  max_abs 4.398e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c1_s3_x0                  rel_l2 2.406e-1  cosine 0.970941  max_abs 4.047e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c2_out                    rel_l2 1.711e-1  cosine 0.985357  max_abs 3.375e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c2_s0_flow                rel_l2 1.135e-1  cosine 0.993572  max_abs 3.492e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c2_s0_x0                  rel_l2 1.634e-1  cosine 0.986673  max_abs 3.492e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c2_s1_flow                rel_l2 1.142e-1  cosine 0.993488  max_abs 3.527e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c2_s1_x0                  rel_l2 1.613e-1  cosine 0.987008  max_abs 3.391e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c2_s2_flow                rel_l2 1.184e-1  cosine 0.992996  max_abs 3.617e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c2_s2_x0                  rel_l2 1.661e-1  cosine 0.986217  max_abs 3.520e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c2_s3_flow                rel_l2 1.250e-1  cosine 0.992186  max_abs 3.672e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c2_s3_x0                  rel_l2 1.711e-1  cosine 0.985357  max_abs 3.375e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c3_out                    rel_l2 1.813e-1  cosine 0.983534  max_abs 3.055e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c3_s0_flow                rel_l2 1.159e-1  cosine 0.993288  max_abs 2.566e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c3_s0_x0                  rel_l2 1.670e-1  cosine 0.986069  max_abs 2.574e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c3_s1_flow                rel_l2 1.219e-1  cosine 0.992564  max_abs 2.840e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c3_s1_x0                  rel_l2 1.722e-1  cosine 0.985161  max_abs 2.820e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c3_s2_flow                rel_l2 1.281e-1  cosine 0.991785  max_abs 2.977e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c3_s2_x0                  rel_l2 1.792e-1  cosine 0.983908  max_abs 2.945e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c3_s3_flow                rel_l2 1.300e-1  cosine 0.991536  max_abs 3.266e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c3_s3_x0                  rel_l2 1.813e-1  cosine 0.983534  max_abs 3.055e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c4_out                    rel_l2 2.155e-1  cosine 0.976702  max_abs 3.982e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c4_s0_flow                rel_l2 1.442e-1  cosine 0.989608  max_abs 2.840e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c4_s0_x0                  rel_l2 2.089e-1  cosine 0.978162  max_abs 2.847e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c4_s1_flow                rel_l2 1.451e-1  cosine 0.989464  max_abs 3.758e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c4_s1_x0                  rel_l2 2.058e-1  cosine 0.978793  max_abs 3.633e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c4_s2_flow                rel_l2 1.514e-1  cosine 0.988520  max_abs 3.840e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c4_s2_x0                  rel_l2 2.120e-1  cosine 0.977459  max_abs 3.722e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c4_s3_flow                rel_l2 1.553e-1  cosine 0.987923  max_abs 4.625e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c4_s3_x0                  rel_l2 2.155e-1  cosine 0.976702  max_abs 3.982e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c5_out                    rel_l2 2.803e-1  cosine 0.960779  max_abs 3.668e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c5_s0_flow                rel_l2 1.416e-1  cosine 0.989981  max_abs 2.709e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c5_s0_x0                  rel_l2 2.052e-1  cosine 0.978953  max_abs 2.711e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c5_s1_flow                rel_l2 1.727e-1  cosine 0.985065  max_abs 3.188e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c5_s1_x0                  rel_l2 2.433e-1  cosine 0.970406  max_abs 3.047e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c5_s2_flow                rel_l2 1.924e-1  cosine 0.981478  max_abs 3.758e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c5_s2_x0                  rel_l2 2.656e-1  cosine 0.964750  max_abs 3.570e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c5_s3_flow                rel_l2 2.081e-1  cosine 0.978330  max_abs 4.008e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c5_s3_x0                  rel_l2 2.803e-1  cosine 0.960779  max_abs 3.668e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c6_out                    rel_l2 2.987e-1  cosine 0.955255  max_abs 4.016e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c6_s0_flow                rel_l2 1.651e-1  cosine 0.986371  max_abs 3.484e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c6_s0_x0                  rel_l2 2.391e-1  cosine 0.971462  max_abs 3.477e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c6_s1_flow                rel_l2 1.908e-1  cosine 0.981796  max_abs 3.969e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c6_s1_x0                  rel_l2 2.675e-1  cosine 0.964206  max_abs 3.773e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c6_s2_flow                rel_l2 2.081e-1  cosine 0.978313  max_abs 3.922e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c6_s2_x0                  rel_l2 2.909e-1  cosine 0.957562  max_abs 3.724e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c6_s3_flow                rel_l2 2.152e-1  cosine 0.976794  max_abs 4.438e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_c6_s3_x0                  rel_l2 2.987e-1  cosine 0.955255  max_abs 4.016e0  n 299520
+[oracle-sfwan13-diff] compare-dumps sf_latents_in: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_latents_out               rel_l2 2.294e-1  cosine 0.973644  max_abs 4.047e0  n 2096640
+[oracle-sfwan13-diff] compare-dumps sf_noise_000: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_001: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_002: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_003: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_004: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_005: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_006: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_007: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_008: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_009: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_010: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_011: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_012: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_013: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_014: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_015: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_016: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_017: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_018: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_019: missing in candidate
+[oracle-sfwan13-diff] compare-dumps sf_noise_020: missing in candidate
+[oracle-sfwan13-diff] compare-dumps text_hidden                  rel_l2 1.995e-2  cosine 0.999802  max_abs 8.204e-2  n 2097152
+[oracle-sfwan13-diff] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.1s)
+[21:32:43] [oracle-r2] ▶ oracle-sfwan13-f32  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/sfwan13/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-f32 FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-f32/frames  (wall cap 2301s; 0=none)
+[21:33:17] [oracle-r2] ok oracle-sfwan13-f32  33s  /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-f32/stderr.log:wan gen default: total 9.00s (text 0.43s, denoise 5.53s, decode 3.02s) png 0.05s peak Some(28868) MiB frames fe81111f094dba5e8fb3e568968cbbd30acc80566d45fbf2a3d4b504a7ca1cc3
+[21:33:17] [oracle-r2] ram oracle-sfwan13-f32: ram 56505 MiB of 89645 MiB, oom_kills 0
+[21:33:17] [oracle-r2] ▶ oracle-sfwan13-f32-diff  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/oracle-ref/sfwan13/dump --candidate /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-f32  (wall cap 2267s; 0=none)
+[21:33:17] [oracle-r2] ok oracle-sfwan13-f32-diff  0s  
+[21:33:17] [oracle-r2] ram oracle-sfwan13-f32-diff: ram 21 MiB of 89645 MiB, oom_kills 0
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_b0_attn_x          rel_l2 2.072e-1  cosine 0.978688  max_abs 9.488e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_b0_kwin            rel_l2 4.112e-2  cosine 0.999155  max_abs 3.056e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_b1_attn_x          rel_l2 1.956e-1  cosine 0.980812  max_abs 2.306e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_b1_kwin            rel_l2 9.865e-2  cosine 0.995131  max_abs 5.675e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_b24_attn_x         rel_l2 3.716e-1  cosine 0.930812  max_abs 2.513e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_b24_kwin           rel_l2 3.107e-1  cosine 0.951714  max_abs 7.729e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_0            rel_l2 9.350e-2  cosine 0.995620  max_abs 4.655e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_1            rel_l2 1.180e-1  cosine 0.993019  max_abs 4.910e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_2            rel_l2 1.254e-1  cosine 0.992132  max_abs 4.998e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_3            rel_l2 1.486e-1  cosine 0.988930  max_abs 5.224e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_4            rel_l2 1.453e-1  cosine 0.989396  max_abs 5.283e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_5            rel_l2 1.569e-1  cosine 0.987622  max_abs 5.287e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_6            rel_l2 1.671e-1  cosine 0.985995  max_abs 5.359e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_7            rel_l2 1.537e-1  cosine 0.988121  max_abs 5.395e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_8            rel_l2 1.750e-1  cosine 0.984626  max_abs 5.426e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_9            rel_l2 1.797e-1  cosine 0.983776  max_abs 5.433e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_10           rel_l2 1.799e-1  cosine 0.983683  max_abs 5.466e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_11           rel_l2 1.814e-1  cosine 0.983502  max_abs 5.452e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_12           rel_l2 1.898e-1  cosine 0.981934  max_abs 5.454e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_13           rel_l2 1.967e-1  cosine 0.980494  max_abs 5.467e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_14           rel_l2 2.294e-1  cosine 0.973411  max_abs 5.460e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_15           rel_l2 1.957e-1  cosine 0.980790  max_abs 5.444e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_16           rel_l2 1.727e-1  cosine 0.985046  max_abs 6.578e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_17           rel_l2 2.252e-1  cosine 0.974513  max_abs 8.050e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_18           rel_l2 1.916e-1  cosine 0.981489  max_abs 5.521e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_19           rel_l2 1.446e-1  cosine 0.989527  max_abs 5.239e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_20           rel_l2 1.584e-1  cosine 0.987383  max_abs 5.159e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_21           rel_l2 1.909e-1  cosine 0.981613  max_abs 8.633e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_22           rel_l2 1.756e-1  cosine 0.984500  max_abs 5.294e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_23           rel_l2 2.065e-1  cosine 0.978534  max_abs 1.275e1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_24           rel_l2 1.757e-1  cosine 0.984478  max_abs 6.510e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_25           rel_l2 1.593e-1  cosine 0.987269  max_abs 4.623e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_26           rel_l2 1.842e-1  cosine 0.983069  max_abs 6.383e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_27           rel_l2 1.653e-1  cosine 0.986399  max_abs 9.650e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_28           rel_l2 1.803e-1  cosine 0.983801  max_abs 7.105e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_ctx_block_29           rel_l2 2.059e-1  cosine 0.978996  max_abs 6.300e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_out                    rel_l2 1.702e-1  cosine 0.985519  max_abs 2.721e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_b0_attn_x           rel_l2 1.206e-2  cosine 0.999927  max_abs 6.704e-2  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_b0_kwin             rel_l2 4.402e-3  cosine 0.999990  max_abs 7.944e-2  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_b1_attn_x           rel_l2 2.804e-2  cosine 0.999634  max_abs 9.268e-2  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_b1_kwin             rel_l2 8.099e-3  cosine 0.999967  max_abs 1.556e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_b24_attn_x          rel_l2 1.018e-1  cosine 0.994819  max_abs 9.348e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_b24_kwin            rel_l2 1.096e-1  cosine 0.993998  max_abs 6.993e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_0             rel_l2 7.337e-3  cosine 0.999981  max_abs 3.695e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_1             rel_l2 7.110e-3  cosine 0.999976  max_abs 2.533e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_2             rel_l2 7.918e-3  cosine 0.999970  max_abs 2.193e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_3             rel_l2 8.076e-3  cosine 0.999970  max_abs 2.421e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_4             rel_l2 9.330e-3  cosine 0.999964  max_abs 3.142e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_5             rel_l2 8.349e-3  cosine 0.999969  max_abs 3.878e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_6             rel_l2 8.867e-3  cosine 0.999961  max_abs 3.166e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_7             rel_l2 9.973e-3  cosine 0.999952  max_abs 4.299e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_8             rel_l2 1.969e-2  cosine 0.999832  max_abs 1.880e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_9             rel_l2 2.328e-2  cosine 0.999747  max_abs 2.872e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_10            rel_l2 2.578e-2  cosine 0.999702  max_abs 2.561e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_11            rel_l2 2.359e-2  cosine 0.999726  max_abs 3.124e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_12            rel_l2 2.836e-2  cosine 0.999614  max_abs 3.617e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_13            rel_l2 4.889e-2  cosine 0.998863  max_abs 9.735e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_14            rel_l2 5.422e-2  cosine 0.998576  max_abs 1.296e1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_15            rel_l2 4.684e-2  cosine 0.998905  max_abs 8.973e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_16            rel_l2 5.394e-2  cosine 0.998613  max_abs 1.037e1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_17            rel_l2 1.210e-1  cosine 0.992774  max_abs 2.888e1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_18            rel_l2 5.504e-2  cosine 0.998502  max_abs 7.451e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_19            rel_l2 4.556e-2  cosine 0.998962  max_abs 1.215e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_20            rel_l2 4.894e-2  cosine 0.998802  max_abs 1.203e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_21            rel_l2 7.187e-2  cosine 0.997421  max_abs 6.480e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_22            rel_l2 7.001e-2  cosine 0.997546  max_abs 4.265e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_23            rel_l2 8.648e-2  cosine 0.996353  max_abs 1.337e1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_24            rel_l2 6.847e-2  cosine 0.997677  max_abs 6.889e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_25            rel_l2 4.821e-2  cosine 0.998838  max_abs 7.454e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_26            rel_l2 4.825e-2  cosine 0.998837  max_abs 1.034e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_27            rel_l2 3.756e-2  cosine 0.999296  max_abs 6.981e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_28            rel_l2 3.777e-2  cosine 0.999293  max_abs 7.545e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_block_29            rel_l2 2.473e-2  cosine 0.999694  max_abs 1.478e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_flow                rel_l2 2.996e-2  cosine 0.999551  max_abs 3.104e-1  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s0_x0                  rel_l2 4.705e-2  cosine 0.998898  max_abs 3.102e-1  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s1_flow                rel_l2 6.263e-2  cosine 0.998044  max_abs 1.784e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s1_x0                  rel_l2 9.474e-2  cosine 0.995506  max_abs 1.669e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s2_flow                rel_l2 1.026e-1  cosine 0.994743  max_abs 2.811e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s2_x0                  rel_l2 1.463e-1  cosine 0.989292  max_abs 2.439e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s3_flow                rel_l2 1.277e-1  cosine 0.991848  max_abs 3.347e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c0_s3_x0                  rel_l2 1.702e-1  cosine 0.985519  max_abs 2.721e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_out                    rel_l2 2.460e-1  cosine 0.969726  max_abs 4.420e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_b0_attn_x           rel_l2 3.132e-2  cosine 0.999510  max_abs 5.739e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_b0_kwin             rel_l2 2.951e-2  cosine 0.999565  max_abs 3.056e0  n 225792
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_b1_attn_x           rel_l2 8.724e-2  cosine 0.996197  max_abs 1.271e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_b1_kwin             rel_l2 7.113e-2  cosine 0.997469  max_abs 5.675e0  n 225792
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_b24_attn_x          rel_l2 3.968e-1  cosine 0.920999  max_abs 3.129e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_b24_kwin            rel_l2 2.867e-1  cosine 0.958897  max_abs 7.729e0  n 225792
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_0             rel_l2 1.037e-2  cosine 0.999959  max_abs 3.516e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_1             rel_l2 1.425e-2  cosine 0.999899  max_abs 2.849e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_2             rel_l2 1.706e-2  cosine 0.999855  max_abs 3.382e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_3             rel_l2 1.716e-2  cosine 0.999853  max_abs 3.553e-1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_4             rel_l2 2.612e-2  cosine 0.999666  max_abs 1.115e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_5             rel_l2 3.155e-2  cosine 0.999503  max_abs 1.290e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_6             rel_l2 3.453e-2  cosine 0.999404  max_abs 1.064e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_7             rel_l2 4.160e-2  cosine 0.999137  max_abs 2.017e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_8             rel_l2 4.042e-2  cosine 0.999219  max_abs 1.630e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_9             rel_l2 4.289e-2  cosine 0.999080  max_abs 1.081e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_10            rel_l2 5.341e-2  cosine 0.998591  max_abs 2.274e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_11            rel_l2 5.802e-2  cosine 0.998324  max_abs 1.548e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_12            rel_l2 5.704e-2  cosine 0.998377  max_abs 1.259e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_13            rel_l2 7.721e-2  cosine 0.997017  max_abs 2.110e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_14            rel_l2 8.660e-2  cosine 0.996281  max_abs 3.366e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_15            rel_l2 8.876e-2  cosine 0.996054  max_abs 3.628e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_16            rel_l2 8.788e-2  cosine 0.996138  max_abs 1.924e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_17            rel_l2 1.484e-1  cosine 0.989013  max_abs 1.058e1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_18            rel_l2 1.209e-1  cosine 0.992660  max_abs 8.437e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_19            rel_l2 9.053e-2  cosine 0.995895  max_abs 1.520e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_20            rel_l2 1.124e-1  cosine 0.993667  max_abs 2.487e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_21            rel_l2 1.508e-1  cosine 0.988571  max_abs 8.246e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_22            rel_l2 1.450e-1  cosine 0.989470  max_abs 3.965e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_23            rel_l2 1.706e-1  cosine 0.985337  max_abs 1.246e1  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_24            rel_l2 1.609e-1  cosine 0.986979  max_abs 3.544e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_25            rel_l2 1.462e-1  cosine 0.989318  max_abs 2.409e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_26            rel_l2 1.642e-1  cosine 0.986545  max_abs 3.519e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_27            rel_l2 1.616e-1  cosine 0.987006  max_abs 5.871e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_28            rel_l2 1.768e-1  cosine 0.984466  max_abs 6.261e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_block_29            rel_l2 1.066e-1  cosine 0.994321  max_abs 5.293e0  n 113664
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_flow                rel_l2 1.499e-1  cosine 0.988823  max_abs 3.339e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s0_x0                  rel_l2 2.140e-1  cosine 0.977243  max_abs 3.339e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s1_flow                rel_l2 1.735e-1  cosine 0.985038  max_abs 3.674e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s1_x0                  rel_l2 2.410e-1  cosine 0.971067  max_abs 3.565e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s2_flow                rel_l2 1.735e-1  cosine 0.984972  max_abs 4.601e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s2_x0                  rel_l2 2.409e-1  cosine 0.970975  max_abs 4.335e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s3_flow                rel_l2 1.810e-1  cosine 0.983639  max_abs 4.649e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c1_s3_x0                  rel_l2 2.460e-1  cosine 0.969726  max_abs 4.420e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c2_out                    rel_l2 1.853e-1  cosine 0.982995  max_abs 3.909e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c2_s0_flow                rel_l2 1.191e-1  cosine 0.992922  max_abs 3.429e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c2_s0_x0                  rel_l2 1.715e-1  cosine 0.985344  max_abs 3.429e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c2_s1_flow                rel_l2 1.265e-1  cosine 0.992077  max_abs 3.488e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c2_s1_x0                  rel_l2 1.782e-1  cosine 0.984284  max_abs 3.481e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c2_s2_flow                rel_l2 1.290e-1  cosine 0.991740  max_abs 4.436e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c2_s2_x0                  rel_l2 1.808e-1  cosine 0.983782  max_abs 3.916e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c2_s3_flow                rel_l2 1.354e-1  cosine 0.990898  max_abs 4.136e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c2_s3_x0                  rel_l2 1.853e-1  cosine 0.982995  max_abs 3.909e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c3_out                    rel_l2 1.852e-1  cosine 0.983062  max_abs 3.852e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c3_s0_flow                rel_l2 1.215e-1  cosine 0.992654  max_abs 3.083e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c3_s0_x0                  rel_l2 1.750e-1  cosine 0.984821  max_abs 3.083e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c3_s1_flow                rel_l2 1.234e-1  cosine 0.992472  max_abs 2.651e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c3_s1_x0                  rel_l2 1.744e-1  cosine 0.985016  max_abs 2.594e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c3_s2_flow                rel_l2 1.302e-1  cosine 0.991573  max_abs 3.436e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c3_s2_x0                  rel_l2 1.816e-1  cosine 0.983691  max_abs 3.147e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c3_s3_flow                rel_l2 1.349e-1  cosine 0.990967  max_abs 4.428e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c3_s3_x0                  rel_l2 1.852e-1  cosine 0.983062  max_abs 3.852e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c4_out                    rel_l2 2.082e-1  cosine 0.978645  max_abs 3.832e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c4_s0_flow                rel_l2 1.405e-1  cosine 0.990205  max_abs 2.890e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c4_s0_x0                  rel_l2 2.036e-1  cosine 0.979587  max_abs 2.892e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c4_s1_flow                rel_l2 1.391e-1  cosine 0.990448  max_abs 3.682e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c4_s1_x0                  rel_l2 1.985e-1  cosine 0.980651  max_abs 3.601e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c4_s2_flow                rel_l2 1.475e-1  cosine 0.989218  max_abs 3.984e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c4_s2_x0                  rel_l2 2.071e-1  cosine 0.978863  max_abs 3.859e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c4_s3_flow                rel_l2 1.487e-1  cosine 0.989039  max_abs 4.446e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c4_s3_x0                  rel_l2 2.082e-1  cosine 0.978645  max_abs 3.832e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c5_out                    rel_l2 2.809e-1  cosine 0.961283  max_abs 3.732e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c5_s0_flow                rel_l2 1.466e-1  cosine 0.989361  max_abs 2.968e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c5_s0_x0                  rel_l2 2.125e-1  cosine 0.977836  max_abs 2.968e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c5_s1_flow                rel_l2 1.854e-1  cosine 0.983089  max_abs 3.996e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c5_s1_x0                  rel_l2 2.607e-1  cosine 0.966737  max_abs 3.796e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c5_s2_flow                rel_l2 1.976e-1  cosine 0.980710  max_abs 4.127e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c5_s2_x0                  rel_l2 2.736e-1  cosine 0.963198  max_abs 3.969e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c5_s3_flow                rel_l2 2.056e-1  cosine 0.979138  max_abs 4.185e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c5_s3_x0                  rel_l2 2.809e-1  cosine 0.961283  max_abs 3.732e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c6_out                    rel_l2 2.579e-1  cosine 0.967724  max_abs 3.543e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c6_s0_flow                rel_l2 1.521e-1  cosine 0.988599  max_abs 2.966e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c6_s0_x0                  rel_l2 2.203e-1  cosine 0.976372  max_abs 2.966e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c6_s1_flow                rel_l2 1.668e-1  cosine 0.986423  max_abs 3.682e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c6_s1_x0                  rel_l2 2.343e-1  cosine 0.973503  max_abs 3.558e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c6_s2_flow                rel_l2 1.775e-1  cosine 0.984524  max_abs 3.831e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c6_s2_x0                  rel_l2 2.481e-1  cosine 0.970121  max_abs 3.602e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c6_s3_flow                rel_l2 1.890e-1  cosine 0.982451  max_abs 3.986e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_c6_s3_x0                  rel_l2 2.579e-1  cosine 0.967724  max_abs 3.543e0  n 299520
+[oracle-sfwan13-f32-diff] compare-dumps sf_latents_in: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_latents_out               rel_l2 2.253e-1  cosine 0.974929  max_abs 4.420e0  n 2096640
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_000: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_001: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_002: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_003: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_004: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_005: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_006: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_007: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_008: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_009: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_010: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_011: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_012: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_013: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_014: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_015: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_016: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_017: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_018: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_019: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps sf_noise_020: missing in candidate
+[oracle-sfwan13-f32-diff] compare-dumps text_hidden                  rel_l2 1.995e-2  cosine 0.999802  max_abs 8.204e-2  n 2097152
+[oracle-sfwan13-f32-diff] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.1s)
+[21:33:17] [oracle-r2] ▶ oracle-sfwan13-bf16-vs-f32  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-f32 --candidate /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump  (wall cap 2267s; 0=none)
+[21:33:17] [oracle-r2] ok oracle-sfwan13-bf16-vs-f32  0s  
+[21:33:17] [oracle-r2] ram oracle-sfwan13-bf16-vs-f32: ram 21 MiB of 89645 MiB, oom_kills 0
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_b0_attn_x          rel_l2 8.596e-2  cosine 0.996301  max_abs 1.978e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_b0_kwin            rel_l2 1.961e-2  cosine 0.999808  max_abs 6.159e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_b1_attn_x          rel_l2 9.275e-2  cosine 0.995741  max_abs 8.032e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_b1_kwin            rel_l2 4.374e-2  cosine 0.999043  max_abs 1.409e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_b24_attn_x         rel_l2 2.738e-1  cosine 0.962910  max_abs 1.983e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_b24_kwin           rel_l2 2.393e-1  cosine 0.971352  max_abs 5.675e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_0            rel_l2 5.043e-2  cosine 0.998731  max_abs 1.366e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_1            rel_l2 6.288e-2  cosine 0.998037  max_abs 1.328e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_2            rel_l2 6.780e-2  cosine 0.997716  max_abs 1.261e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_3            rel_l2 7.749e-2  cosine 0.997013  max_abs 1.117e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_4            rel_l2 7.656e-2  cosine 0.997079  max_abs 1.055e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_5            rel_l2 8.281e-2  cosine 0.996580  max_abs 1.017e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_6            rel_l2 9.349e-2  cosine 0.995648  max_abs 1.222e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_7            rel_l2 9.013e-2  cosine 0.995971  max_abs 1.341e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_8            rel_l2 1.042e-1  cosine 0.994590  max_abs 1.987e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_9            rel_l2 1.104e-1  cosine 0.993917  max_abs 1.171e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_10           rel_l2 1.159e-1  cosine 0.993313  max_abs 1.510e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_11           rel_l2 1.224e-1  cosine 0.992528  max_abs 2.116e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_12           rel_l2 1.301e-1  cosine 0.991574  max_abs 2.784e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_13           rel_l2 1.458e-1  cosine 0.989462  max_abs 3.897e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_14           rel_l2 1.718e-1  cosine 0.985331  max_abs 6.114e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_15           rel_l2 1.438e-1  cosine 0.989714  max_abs 3.445e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_16           rel_l2 1.253e-1  cosine 0.992155  max_abs 5.227e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_17           rel_l2 1.601e-1  cosine 0.987169  max_abs 6.789e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_18           rel_l2 1.370e-1  cosine 0.990714  max_abs 6.271e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_19           rel_l2 9.964e-2  cosine 0.995061  max_abs 3.680e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_20           rel_l2 1.073e-1  cosine 0.994275  max_abs 2.677e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_21           rel_l2 1.265e-1  cosine 0.992053  max_abs 3.306e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_22           rel_l2 1.164e-1  cosine 0.993277  max_abs 5.544e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_23           rel_l2 1.293e-1  cosine 0.991609  max_abs 8.909e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_24           rel_l2 1.092e-1  cosine 0.994131  max_abs 1.539e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_25           rel_l2 9.583e-2  cosine 0.995424  max_abs 1.041e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_26           rel_l2 1.088e-1  cosine 0.994086  max_abs 1.758e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_27           rel_l2 9.395e-2  cosine 0.995589  max_abs 1.400e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_28           rel_l2 1.040e-1  cosine 0.994585  max_abs 1.385e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_ctx_block_29           rel_l2 1.209e-1  cosine 0.992662  max_abs 1.859e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_out                    rel_l2 1.002e-1  cosine 0.994984  max_abs 1.530e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_b0_attn_x           rel_l2 1.160e-2  cosine 0.999933  max_abs 8.135e-2  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_b0_kwin             rel_l2 3.677e-3  cosine 0.999993  max_abs 6.902e-2  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_b1_attn_x           rel_l2 2.067e-2  cosine 0.999788  max_abs 6.989e-2  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_b1_kwin             rel_l2 7.034e-3  cosine 0.999975  max_abs 1.313e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_b24_attn_x          rel_l2 8.789e-2  cosine 0.996145  max_abs 1.038e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_b24_kwin            rel_l2 9.972e-2  cosine 0.995028  max_abs 6.899e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_0             rel_l2 4.941e-3  cosine 0.999988  max_abs 2.420e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_1             rel_l2 7.465e-3  cosine 0.999978  max_abs 3.977e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_2             rel_l2 7.973e-3  cosine 0.999973  max_abs 2.732e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_3             rel_l2 7.959e-3  cosine 0.999974  max_abs 3.715e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_4             rel_l2 9.107e-3  cosine 0.999967  max_abs 4.110e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_5             rel_l2 7.840e-3  cosine 0.999974  max_abs 3.878e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_6             rel_l2 9.473e-3  cosine 0.999962  max_abs 3.543e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_7             rel_l2 9.867e-3  cosine 0.999956  max_abs 4.163e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_8             rel_l2 1.421e-2  cosine 0.999913  max_abs 8.002e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_9             rel_l2 2.045e-2  cosine 0.999791  max_abs 3.372e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_10            rel_l2 2.075e-2  cosine 0.999801  max_abs 2.127e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_11            rel_l2 2.194e-2  cosine 0.999773  max_abs 3.624e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_12            rel_l2 2.565e-2  cosine 0.999691  max_abs 3.867e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_13            rel_l2 5.069e-2  cosine 0.998791  max_abs 1.149e1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_14            rel_l2 5.808e-2  cosine 0.998395  max_abs 1.546e1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_15            rel_l2 4.955e-2  cosine 0.998825  max_abs 1.122e1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_16            rel_l2 5.773e-2  cosine 0.998420  max_abs 1.262e1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_17            rel_l2 1.526e-1  cosine 0.989344  max_abs 3.663e1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_18            rel_l2 6.126e-2  cosine 0.998206  max_abs 1.033e1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_19            rel_l2 4.277e-2  cosine 0.999094  max_abs 1.840e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_20            rel_l2 4.515e-2  cosine 0.998986  max_abs 7.959e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_21            rel_l2 6.735e-2  cosine 0.997760  max_abs 8.253e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_22            rel_l2 6.461e-2  cosine 0.997921  max_abs 4.890e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_23            rel_l2 8.270e-2  cosine 0.996614  max_abs 1.387e1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_24            rel_l2 6.093e-2  cosine 0.998145  max_abs 6.201e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_25            rel_l2 4.222e-2  cosine 0.999108  max_abs 7.074e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_26            rel_l2 4.166e-2  cosine 0.999132  max_abs 1.096e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_27            rel_l2 3.133e-2  cosine 0.999510  max_abs 7.370e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_28            rel_l2 3.061e-2  cosine 0.999533  max_abs 7.115e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_block_29            rel_l2 1.977e-2  cosine 0.999805  max_abs 9.780e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_flow                rel_l2 2.286e-2  cosine 0.999743  max_abs 1.809e-1  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s0_x0                  rel_l2 3.606e-2  cosine 0.999376  max_abs 1.801e-1  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s1_flow                rel_l2 3.487e-2  cosine 0.999392  max_abs 8.345e-1  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s1_x0                  rel_l2 5.316e-2  cosine 0.998592  max_abs 7.858e-1  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s2_flow                rel_l2 5.779e-2  cosine 0.998329  max_abs 1.300e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s2_x0                  rel_l2 8.051e-2  cosine 0.996762  max_abs 1.114e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s3_flow                rel_l2 8.140e-2  cosine 0.996685  max_abs 2.014e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c0_s3_x0                  rel_l2 1.002e-1  cosine 0.994984  max_abs 1.530e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_out                    rel_l2 1.389e-1  cosine 0.990321  max_abs 2.803e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_b0_attn_x           rel_l2 1.683e-2  cosine 0.999859  max_abs 1.611e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_b0_kwin             rel_l2 1.424e-2  cosine 0.999899  max_abs 6.159e-1  n 225792
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_b1_attn_x           rel_l2 4.507e-2  cosine 0.998998  max_abs 3.327e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_b1_kwin             rel_l2 3.195e-2  cosine 0.999490  max_abs 1.409e0  n 225792
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_b24_attn_x          rel_l2 3.051e-1  cosine 0.953882  max_abs 1.949e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_b24_kwin            rel_l2 2.295e-1  cosine 0.973658  max_abs 5.675e0  n 225792
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_0             rel_l2 5.331e-3  cosine 0.999986  max_abs 1.963e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_1             rel_l2 9.977e-3  cosine 0.999955  max_abs 2.748e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_2             rel_l2 1.215e-2  cosine 0.999931  max_abs 2.384e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_3             rel_l2 1.250e-2  cosine 0.999926  max_abs 2.488e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_4             rel_l2 1.733e-2  cosine 0.999854  max_abs 2.752e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_5             rel_l2 2.388e-2  cosine 0.999719  max_abs 7.272e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_6             rel_l2 2.850e-2  cosine 0.999608  max_abs 8.870e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_7             rel_l2 3.373e-2  cosine 0.999441  max_abs 1.497e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_8             rel_l2 3.195e-2  cosine 0.999502  max_abs 7.552e-1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_9             rel_l2 3.692e-2  cosine 0.999322  max_abs 1.174e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_10            rel_l2 4.652e-2  cosine 0.998926  max_abs 1.690e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_11            rel_l2 5.207e-2  cosine 0.998659  max_abs 1.426e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_12            rel_l2 5.215e-2  cosine 0.998651  max_abs 1.392e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_13            rel_l2 7.138e-2  cosine 0.997466  max_abs 2.057e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_14            rel_l2 7.945e-2  cosine 0.996859  max_abs 4.320e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_15            rel_l2 7.728e-2  cosine 0.997030  max_abs 3.371e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_16            rel_l2 7.554e-2  cosine 0.997160  max_abs 3.205e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_17            rel_l2 1.461e-1  cosine 0.989287  max_abs 1.554e1  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_18            rel_l2 1.034e-1  cosine 0.994688  max_abs 3.092e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_19            rel_l2 7.830e-2  cosine 0.996955  max_abs 1.384e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_20            rel_l2 9.461e-2  cosine 0.995544  max_abs 1.362e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_21            rel_l2 1.297e-1  cosine 0.991582  max_abs 5.348e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_22            rel_l2 1.190e-1  cosine 0.992947  max_abs 2.935e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_23            rel_l2 1.277e-1  cosine 0.991823  max_abs 5.461e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_24            rel_l2 1.244e-1  cosine 0.992332  max_abs 2.919e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_25            rel_l2 1.081e-1  cosine 0.994166  max_abs 1.284e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_26            rel_l2 1.200e-1  cosine 0.992785  max_abs 1.936e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_27            rel_l2 1.120e-1  cosine 0.993723  max_abs 2.636e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_28            rel_l2 1.211e-1  cosine 0.992649  max_abs 4.148e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_block_29            rel_l2 7.276e-2  cosine 0.997352  max_abs 3.531e0  n 113664
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_flow                rel_l2 9.434e-2  cosine 0.995546  max_abs 2.036e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s0_x0                  rel_l2 1.345e-1  cosine 0.990941  max_abs 2.034e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s1_flow                rel_l2 8.426e-2  cosine 0.996445  max_abs 2.649e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s1_x0                  rel_l2 1.169e-1  cosine 0.993148  max_abs 2.516e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s2_flow                rel_l2 9.931e-2  cosine 0.995057  max_abs 3.709e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s2_x0                  rel_l2 1.325e-1  cosine 0.991194  max_abs 3.208e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s3_flow                rel_l2 1.052e-1  cosine 0.994450  max_abs 3.187e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c1_s3_x0                  rel_l2 1.389e-1  cosine 0.990321  max_abs 2.803e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c2_out                    rel_l2 1.573e-1  cosine 0.987569  max_abs 3.476e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c2_s0_flow                rel_l2 1.055e-1  cosine 0.994430  max_abs 2.755e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c2_s0_x0                  rel_l2 1.518e-1  cosine 0.988464  max_abs 2.755e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c2_s1_flow                rel_l2 1.019e-1  cosine 0.994791  max_abs 3.241e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c2_s1_x0                  rel_l2 1.446e-1  cosine 0.989496  max_abs 3.193e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c2_s2_flow                rel_l2 1.102e-1  cosine 0.993905  max_abs 3.779e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c2_s2_x0                  rel_l2 1.539e-1  cosine 0.988105  max_abs 3.278e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c2_s3_flow                rel_l2 1.145e-1  cosine 0.993429  max_abs 3.877e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c2_s3_x0                  rel_l2 1.573e-1  cosine 0.987569  max_abs 3.476e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c3_out                    rel_l2 1.813e-1  cosine 0.983447  max_abs 3.832e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c3_s0_flow                rel_l2 1.116e-1  cosine 0.993759  max_abs 2.513e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c3_s0_x0                  rel_l2 1.602e-1  cosine 0.987105  max_abs 2.515e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c3_s1_flow                rel_l2 1.166e-1  cosine 0.993181  max_abs 2.701e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c3_s1_x0                  rel_l2 1.647e-1  cosine 0.986352  max_abs 2.591e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c3_s2_flow                rel_l2 1.291e-1  cosine 0.991627  max_abs 3.234e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c3_s2_x0                  rel_l2 1.787e-1  cosine 0.983911  max_abs 3.036e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c3_s3_flow                rel_l2 1.316e-1  cosine 0.991301  max_abs 4.460e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c3_s3_x0                  rel_l2 1.813e-1  cosine 0.983447  max_abs 3.832e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c4_out                    rel_l2 2.142e-1  cosine 0.976831  max_abs 3.973e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c4_s0_flow                rel_l2 1.396e-1  cosine 0.990212  max_abs 2.497e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c4_s0_x0                  rel_l2 2.011e-1  cosine 0.979594  max_abs 2.497e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c4_s1_flow                rel_l2 1.413e-1  cosine 0.989962  max_abs 3.385e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c4_s1_x0                  rel_l2 1.999e-1  cosine 0.979834  max_abs 3.263e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c4_s2_flow                rel_l2 1.505e-1  cosine 0.988606  max_abs 4.003e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c4_s2_x0                  rel_l2 2.098e-1  cosine 0.977778  max_abs 3.558e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c4_s3_flow                rel_l2 1.551e-1  cosine 0.987911  max_abs 4.299e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c4_s3_x0                  rel_l2 2.142e-1  cosine 0.976831  max_abs 3.973e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c5_out                    rel_l2 3.345e-1  cosine 0.943351  max_abs 3.738e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c5_s0_flow                rel_l2 1.614e-1  cosine 0.986908  max_abs 3.059e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c5_s0_x0                  rel_l2 2.324e-1  cosine 0.972717  max_abs 3.056e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c5_s1_flow                rel_l2 2.175e-1  cosine 0.976125  max_abs 3.760e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c5_s1_x0                  rel_l2 3.031e-1  cosine 0.953428  max_abs 3.556e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c5_s2_flow                rel_l2 2.340e-1  cosine 0.972381  max_abs 4.220e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c5_s2_x0                  rel_l2 3.238e-1  cosine 0.946954  max_abs 3.705e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c5_s3_flow                rel_l2 2.456e-1  cosine 0.969566  max_abs 4.021e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c5_s3_x0                  rel_l2 3.345e-1  cosine 0.943351  max_abs 3.738e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c6_out                    rel_l2 3.189e-1  cosine 0.948160  max_abs 3.857e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c6_s0_flow                rel_l2 1.985e-1  cosine 0.980154  max_abs 3.365e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c6_s0_x0                  rel_l2 2.849e-1  cosine 0.958847  max_abs 3.366e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c6_s1_flow                rel_l2 2.038e-1  cosine 0.979020  max_abs 3.405e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c6_s1_x0                  rel_l2 2.856e-1  cosine 0.958509  max_abs 3.272e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c6_s2_flow                rel_l2 2.228e-1  cosine 0.974922  max_abs 3.900e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c6_s2_x0                  rel_l2 3.100e-1  cosine 0.951049  max_abs 3.790e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c6_s3_flow                rel_l2 2.317e-1  cosine 0.972858  max_abs 4.378e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_c6_s3_x0                  rel_l2 3.189e-1  cosine 0.948160  max_abs 3.857e0  n 299520
+[oracle-sfwan13-bf16-vs-f32] compare-dumps sf_latents_out               rel_l2 2.278e-1  cosine 0.973805  max_abs 3.973e0  n 2096640
+[oracle-sfwan13-bf16-vs-f32] compare-dumps text_hidden                  rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 2097152
+[oracle-sfwan13-bf16-vs-f32] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.1s)
+[21:33:17] [oracle-r2] compare oracle-sfwan13-frames-vs-ref exit=0 "psnr_mean":25.462358698685506 
+[21:33:18] [oracle-r2] compare oracle-sfwan13-codec-floor exit=0 "psnr_mean":39.05967506960081 
+[21:33:18] [oracle-r2] ▶ oracle-sfwan13-legacy  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/sfwan13/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-legacy FASTVIDEO_WAN_CAUSAL_AR=0 FASTVIDEO_WAN_CAUSAL_FPB=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-legacy/frames  (wall cap 2266s; 0=none)
+[21:33:51] [oracle-r2] ok oracle-sfwan13-legacy  32s  /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-legacy/stderr.log:wan gen default: total 6.20s (text 0.47s, denoise 2.68s, decode 3.02s) png 0.04s peak Some(27364) MiB frames b0eca501ffd4ef1e41e8a0c06b9cb576c1248e9531acdba9e8bea037010b1d62
+[21:33:51] [oracle-r2] ram oracle-sfwan13-legacy: ram 58145 MiB of 89645 MiB, oom_kills 0
+[21:33:51] [oracle-r2] ▶ oracle-sfwan13-legacy-diff  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/oracle-ref/sfwan13/dump --candidate /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-legacy  (wall cap 2233s; 0=none)
+[21:33:51] [oracle-r2] ok oracle-sfwan13-legacy-diff  0s  
+[21:33:51] [oracle-r2] ram oracle-sfwan13-legacy-diff: ram 5 MiB of 89645 MiB, oom_kills 0
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_b0_attn_x: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_b0_kwin: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_b1_attn_x: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_b1_kwin: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_b24_attn_x: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_b24_kwin: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_1: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_2: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_3: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_4: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_5: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_6: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_7: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_8: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_9: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_10: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_11: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_12: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_13: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_14: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_15: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_16: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_17: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_18: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_19: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_20: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_21: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_22: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_23: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_24: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_25: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_26: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_27: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_28: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_ctx_block_29: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_out: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_b0_attn_x: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_b0_kwin: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_b1_attn_x: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_b1_kwin: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_b24_attn_x: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_b24_kwin: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_1: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_2: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_3: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_4: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_5: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_6: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_7: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_8: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_9: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_10: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_11: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_12: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_13: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_14: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_15: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_16: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_17: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_18: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_19: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_20: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_21: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_22: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_23: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_24: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_25: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_26: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_27: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_28: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_block_29: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_flow                rel_l2 4.000e-1  cosine 0.919489  max_abs 2.648e0  n 299520
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s0_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s1_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s1_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s2_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s2_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s3_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c0_s3_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_out: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_b0_attn_x: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_b0_kwin: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_b1_attn_x: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_b1_kwin: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_b24_attn_x: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_b24_kwin: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_1: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_2: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_3: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_4: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_5: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_6: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_7: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_8: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_9: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_10: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_11: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_12: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_13: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_14: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_15: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_16: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_17: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_18: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_19: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_20: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_21: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_22: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_23: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_24: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_25: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_26: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_27: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_28: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_block_29: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s0_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s1_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s1_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s2_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s2_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s3_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c1_s3_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c2_out: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c2_s0_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c2_s0_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c2_s1_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c2_s1_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c2_s2_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c2_s2_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c2_s3_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c2_s3_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c3_out: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c3_s0_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c3_s0_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c3_s1_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c3_s1_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c3_s2_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c3_s2_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c3_s3_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c3_s3_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c4_out: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c4_s0_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c4_s0_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c4_s1_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c4_s1_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c4_s2_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c4_s2_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c4_s3_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c4_s3_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c5_out: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c5_s0_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c5_s0_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c5_s1_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c5_s1_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c5_s2_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c5_s2_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c5_s3_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c5_s3_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c6_out: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c6_s0_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c6_s0_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c6_s1_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c6_s1_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c6_s2_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c6_s2_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c6_s3_flow: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_c6_s3_x0: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_latents_in: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_latents_out               rel_l2 9.713e-1  cosine 0.515530  max_abs 4.974e0  n 2096640
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_000: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_001: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_002: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_003: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_004: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_005: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_006: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_007: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_008: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_009: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_010: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_011: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_012: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_013: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_014: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_015: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_016: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_017: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_018: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_019: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps sf_noise_020: missing in candidate
+[oracle-sfwan13-legacy-diff] compare-dumps text_hidden                  rel_l2 1.995e-2  cosine 0.999802  max_abs 8.204e-2  n 2097152
+[oracle-sfwan13-legacy-diff] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.0s)
+[21:33:51] [oracle-r2] compare oracle-sfwan13-legacy-frames-vs-ref exit=0 "psnr_mean":11.81597680220357 
+[21:33:51] [oracle-r2] ▶ oracle-sfwan13-composed  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/sfwan13/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_WAN_VAE=full FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-composed FASTVIDEO_WAN_CAUSAL_FLASH=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --clip-dir /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-composed/frames  (wall cap 2233s; 0=none)
+[21:34:46] [oracle-r2] ok oracle-sfwan13-composed  55s  /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-composed/stderr.log:wan gen default: total 31.26s (text 0.41s, denoise 27.83s, decode 3.01s) png 0.04s peak Some(41348) MiB frames 7740d9ac9415dfd839af48dec45a4ff4331fe0700ad7b64cc98c667c2ca2b8fc
+[21:34:46] [oracle-r2] ram oracle-sfwan13-composed: ram 57329 MiB of 89645 MiB, oom_kills 0
+[21:34:46] [oracle-r2] ▶ oracle-sfwan13-composed-diff  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/oracle-ref/sfwan13/dump --candidate /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-composed  (wall cap 2178s; 0=none)
+[21:34:47] [oracle-r2] ok oracle-sfwan13-composed-diff  0s  
+[21:34:47] [oracle-r2] ram oracle-sfwan13-composed-diff: ram 21 MiB of 89645 MiB, oom_kills 0
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_b0_attn_x          rel_l2 1.995e-1  cosine 0.980194  max_abs 9.000e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_b0_kwin            rel_l2 4.087e-2  cosine 0.999165  max_abs 3.000e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_b1_attn_x          rel_l2 1.949e-1  cosine 0.981016  max_abs 2.301e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_b1_kwin            rel_l2 9.824e-2  cosine 0.995172  max_abs 5.549e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_b24_attn_x         rel_l2 3.728e-1  cosine 0.931139  max_abs 3.007e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_b24_kwin           rel_l2 3.079e-1  cosine 0.952559  max_abs 6.484e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_0            rel_l2 9.341e-2  cosine 0.995628  max_abs 4.602e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_1            rel_l2 1.182e-1  cosine 0.993017  max_abs 4.844e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_2            rel_l2 1.264e-1  cosine 0.992024  max_abs 4.930e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_3            rel_l2 1.490e-1  cosine 0.988895  max_abs 5.117e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_4            rel_l2 1.454e-1  cosine 0.989386  max_abs 5.141e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_5            rel_l2 1.573e-1  cosine 0.987568  max_abs 5.125e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_6            rel_l2 1.687e-1  cosine 0.985754  max_abs 5.227e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_7            rel_l2 1.552e-1  cosine 0.987909  max_abs 5.219e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_8            rel_l2 1.752e-1  cosine 0.984644  max_abs 5.234e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_9            rel_l2 1.793e-1  cosine 0.983829  max_abs 5.266e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_10           rel_l2 1.795e-1  cosine 0.983765  max_abs 5.297e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_11           rel_l2 1.793e-1  cosine 0.983899  max_abs 5.297e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_12           rel_l2 1.877e-1  cosine 0.982341  max_abs 5.273e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_13           rel_l2 1.968e-1  cosine 0.980532  max_abs 5.281e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_14           rel_l2 2.308e-1  cosine 0.973026  max_abs 8.625e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_15           rel_l2 1.940e-1  cosine 0.981187  max_abs 5.227e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_16           rel_l2 1.716e-1  cosine 0.985263  max_abs 5.875e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_17           rel_l2 2.225e-1  cosine 0.975167  max_abs 7.062e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_18           rel_l2 1.885e-1  cosine 0.982202  max_abs 5.102e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_19           rel_l2 1.398e-1  cosine 0.990242  max_abs 4.984e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_20           rel_l2 1.561e-1  cosine 0.987779  max_abs 4.883e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_21           rel_l2 1.908e-1  cosine 0.981630  max_abs 8.625e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_22           rel_l2 1.726e-1  cosine 0.985071  max_abs 4.648e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_23           rel_l2 2.011e-1  cosine 0.979579  max_abs 1.306e1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_24           rel_l2 1.748e-1  cosine 0.984671  max_abs 6.375e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_25           rel_l2 1.590e-1  cosine 0.987335  max_abs 4.305e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_26           rel_l2 1.831e-1  cosine 0.983297  max_abs 4.500e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_27           rel_l2 1.644e-1  cosine 0.986562  max_abs 8.250e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_28           rel_l2 1.799e-1  cosine 0.983834  max_abs 5.938e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_ctx_block_29           rel_l2 2.036e-1  cosine 0.979348  max_abs 4.625e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_out                    rel_l2 1.656e-1  cosine 0.986258  max_abs 2.680e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_b0_attn_x           rel_l2 1.140e-2  cosine 0.999935  max_abs 6.250e-2  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_b0_kwin             rel_l2 4.562e-3  cosine 0.999990  max_abs 9.375e-2  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_b1_attn_x           rel_l2 1.989e-2  cosine 0.999821  max_abs 8.594e-2  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_b1_kwin             rel_l2 7.563e-3  cosine 0.999971  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_b24_attn_x          rel_l2 6.577e-2  cosine 0.997837  max_abs 5.508e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_b24_kwin            rel_l2 6.901e-2  cosine 0.997618  max_abs 2.000e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_0             rel_l2 7.681e-3  cosine 0.999981  max_abs 3.750e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_1             rel_l2 6.555e-3  cosine 0.999980  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_2             rel_l2 6.960e-3  cosine 0.999977  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_3             rel_l2 6.490e-3  cosine 0.999979  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_4             rel_l2 6.829e-3  cosine 0.999977  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_5             rel_l2 6.466e-3  cosine 0.999979  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_6             rel_l2 8.792e-3  cosine 0.999968  max_abs 3.750e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_7             rel_l2 8.430e-3  cosine 0.999965  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_8             rel_l2 1.494e-2  cosine 0.999889  max_abs 2.000e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_9             rel_l2 1.673e-2  cosine 0.999877  max_abs 7.500e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_10            rel_l2 1.754e-2  cosine 0.999850  max_abs 2.500e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_11            rel_l2 1.630e-2  cosine 0.999868  max_abs 1.750e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_12            rel_l2 2.007e-2  cosine 0.999799  max_abs 2.500e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_13            rel_l2 3.094e-2  cosine 0.999534  max_abs 4.000e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_14            rel_l2 3.411e-2  cosine 0.999423  max_abs 5.000e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_15            rel_l2 3.285e-2  cosine 0.999462  max_abs 3.750e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_16            rel_l2 3.445e-2  cosine 0.999416  max_abs 4.500e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_17            rel_l2 6.397e-2  cosine 0.997957  max_abs 1.325e1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_18            rel_l2 4.009e-2  cosine 0.999199  max_abs 4.125e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_19            rel_l2 2.948e-2  cosine 0.999573  max_abs 8.750e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_20            rel_l2 3.224e-2  cosine 0.999480  max_abs 8.750e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_21            rel_l2 5.215e-2  cosine 0.998640  max_abs 5.688e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_22            rel_l2 4.214e-2  cosine 0.999113  max_abs 2.375e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_23            rel_l2 4.371e-2  cosine 0.999047  max_abs 3.750e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_24            rel_l2 4.170e-2  cosine 0.999135  max_abs 2.375e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_25            rel_l2 3.338e-2  cosine 0.999443  max_abs 5.000e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_26            rel_l2 3.498e-2  cosine 0.999388  max_abs 6.875e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_27            rel_l2 2.776e-2  cosine 0.999615  max_abs 4.502e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_28            rel_l2 2.871e-2  cosine 0.999589  max_abs 6.582e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_block_29            rel_l2 1.929e-2  cosine 0.999815  max_abs 9.297e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_flow                rel_l2 2.567e-2  cosine 0.999672  max_abs 3.027e-1  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s0_x0                  rel_l2 4.033e-2  cosine 0.999188  max_abs 3.008e-1  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s1_flow                rel_l2 5.186e-2  cosine 0.998656  max_abs 1.680e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s1_x0                  rel_l2 7.863e-2  cosine 0.996907  max_abs 1.568e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s2_flow                rel_l2 9.915e-2  cosine 0.995079  max_abs 2.812e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s2_x0                  rel_l2 1.399e-1  cosine 0.990205  max_abs 2.438e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s3_flow                rel_l2 1.254e-1  cosine 0.992127  max_abs 3.481e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c0_s3_x0                  rel_l2 1.656e-1  cosine 0.986258  max_abs 2.680e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_out                    rel_l2 2.492e-1  cosine 0.968757  max_abs 4.086e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_b0_attn_x           rel_l2 2.966e-2  cosine 0.999561  max_abs 5.312e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_b0_kwin             rel_l2 2.935e-2  cosine 0.999569  max_abs 3.000e0  n 225792
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_b1_attn_x           rel_l2 8.379e-2  cosine 0.996484  max_abs 1.258e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_b1_kwin             rel_l2 7.086e-2  cosine 0.997489  max_abs 5.549e0  n 225792
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_b24_attn_x          rel_l2 3.732e-1  cosine 0.930549  max_abs 2.359e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_b24_kwin            rel_l2 2.776e-1  cosine 0.961456  max_abs 6.484e0  n 225792
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_0             rel_l2 9.880e-3  cosine 0.999963  max_abs 3.750e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_1             rel_l2 1.444e-2  cosine 0.999900  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_2             rel_l2 1.683e-2  cosine 0.999862  max_abs 2.930e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_3             rel_l2 1.690e-2  cosine 0.999861  max_abs 4.375e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_4             rel_l2 2.515e-2  cosine 0.999684  max_abs 1.000e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_5             rel_l2 3.392e-2  cosine 0.999428  max_abs 2.000e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_6             rel_l2 3.585e-2  cosine 0.999362  max_abs 7.500e-1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_7             rel_l2 5.081e-2  cosine 0.998711  max_abs 2.938e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_8             rel_l2 4.633e-2  cosine 0.998931  max_abs 1.375e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_9             rel_l2 5.148e-2  cosine 0.998681  max_abs 1.750e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_10            rel_l2 6.040e-2  cosine 0.998177  max_abs 3.250e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_11            rel_l2 6.512e-2  cosine 0.997878  max_abs 1.375e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_12            rel_l2 6.636e-2  cosine 0.997797  max_abs 2.125e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_13            rel_l2 8.923e-2  cosine 0.996014  max_abs 3.500e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_14            rel_l2 9.369e-2  cosine 0.995603  max_abs 3.125e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_15            rel_l2 9.796e-2  cosine 0.995214  max_abs 5.500e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_16            rel_l2 9.447e-2  cosine 0.995528  max_abs 2.375e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_17            rel_l2 1.632e-1  cosine 0.986714  max_abs 1.189e1  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_18            rel_l2 1.246e-1  cosine 0.992214  max_abs 7.000e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_19            rel_l2 9.060e-2  cosine 0.995898  max_abs 1.375e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_20            rel_l2 1.091e-1  cosine 0.994042  max_abs 1.312e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_21            rel_l2 1.453e-1  cosine 0.989386  max_abs 6.250e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_22            rel_l2 1.360e-1  cosine 0.990753  max_abs 2.250e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_23            rel_l2 1.584e-1  cosine 0.987376  max_abs 9.688e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_24            rel_l2 1.493e-1  cosine 0.988828  max_abs 3.688e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_25            rel_l2 1.383e-1  cosine 0.990448  max_abs 2.383e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_26            rel_l2 1.544e-1  cosine 0.988093  max_abs 3.500e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_27            rel_l2 1.530e-1  cosine 0.988333  max_abs 6.625e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_28            rel_l2 1.671e-1  cosine 0.986062  max_abs 5.750e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_block_29            rel_l2 1.004e-1  cosine 0.994950  max_abs 4.242e0  n 113664
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_flow                rel_l2 1.315e-1  cosine 0.991373  max_abs 3.219e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s0_x0                  rel_l2 1.877e-1  cosine 0.982397  max_abs 3.219e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s1_flow                rel_l2 1.739e-1  cosine 0.984861  max_abs 3.695e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s1_x0                  rel_l2 2.397e-1  cosine 0.971195  max_abs 3.523e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s2_flow                rel_l2 1.773e-1  cosine 0.984220  max_abs 4.367e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s2_x0                  rel_l2 2.441e-1  cosine 0.970054  max_abs 4.023e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s3_flow                rel_l2 1.833e-1  cosine 0.983140  max_abs 4.295e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c1_s3_x0                  rel_l2 2.492e-1  cosine 0.968757  max_abs 4.086e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c2_out                    rel_l2 1.802e-1  cosine 0.983709  max_abs 3.461e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c2_s0_flow                rel_l2 1.212e-1  cosine 0.992656  max_abs 3.523e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c2_s0_x0                  rel_l2 1.744e-1  cosine 0.984756  max_abs 3.523e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c2_s1_flow                rel_l2 1.232e-1  cosine 0.992407  max_abs 3.539e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c2_s1_x0                  rel_l2 1.742e-1  cosine 0.984801  max_abs 3.406e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c2_s2_flow                rel_l2 1.242e-1  cosine 0.992275  max_abs 3.602e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c2_s2_x0                  rel_l2 1.754e-1  cosine 0.984580  max_abs 3.500e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c2_s3_flow                rel_l2 1.313e-1  cosine 0.991372  max_abs 3.734e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c2_s3_x0                  rel_l2 1.802e-1  cosine 0.983709  max_abs 3.461e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c3_out                    rel_l2 1.855e-1  cosine 0.982710  max_abs 3.055e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c3_s0_flow                rel_l2 1.208e-1  cosine 0.992695  max_abs 2.660e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c3_s0_x0                  rel_l2 1.741e-1  cosine 0.984823  max_abs 2.668e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c3_s1_flow                rel_l2 1.263e-1  cosine 0.992008  max_abs 2.816e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c3_s1_x0                  rel_l2 1.785e-1  cosine 0.984020  max_abs 2.785e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c3_s2_flow                rel_l2 1.300e-1  cosine 0.991525  max_abs 2.875e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c3_s2_x0                  rel_l2 1.826e-1  cosine 0.983260  max_abs 2.855e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c3_s3_flow                rel_l2 1.333e-1  cosine 0.991089  max_abs 3.328e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c3_s3_x0                  rel_l2 1.855e-1  cosine 0.982710  max_abs 3.055e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c4_out                    rel_l2 2.214e-1  cosine 0.975340  max_abs 4.007e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c4_s0_flow                rel_l2 1.488e-1  cosine 0.988906  max_abs 2.930e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c4_s0_x0                  rel_l2 2.157e-1  cosine 0.976658  max_abs 2.937e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c4_s1_flow                rel_l2 1.503e-1  cosine 0.988675  max_abs 3.600e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c4_s1_x0                  rel_l2 2.132e-1  cosine 0.977168  max_abs 3.512e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c4_s2_flow                rel_l2 1.571e-1  cosine 0.987623  max_abs 4.035e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c4_s2_x0                  rel_l2 2.205e-1  cosine 0.975540  max_abs 3.927e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c4_s3_flow                rel_l2 1.580e-1  cosine 0.987472  max_abs 4.633e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c4_s3_x0                  rel_l2 2.214e-1  cosine 0.975340  max_abs 4.007e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c5_out                    rel_l2 2.353e-1  cosine 0.972221  max_abs 3.211e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c5_s0_flow                rel_l2 1.356e-1  cosine 0.990804  max_abs 2.727e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c5_s0_x0                  rel_l2 1.965e-1  cosine 0.980652  max_abs 2.729e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c5_s1_flow                rel_l2 1.496e-1  cosine 0.988786  max_abs 3.023e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c5_s1_x0                  rel_l2 2.118e-1  cosine 0.977493  max_abs 2.922e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c5_s2_flow                rel_l2 1.621e-1  cosine 0.986829  max_abs 3.289e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c5_s2_x0                  rel_l2 2.242e-1  cosine 0.974768  max_abs 3.062e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c5_s3_flow                rel_l2 1.766e-1  cosine 0.984370  max_abs 3.844e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c5_s3_x0                  rel_l2 2.353e-1  cosine 0.972221  max_abs 3.211e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c6_out                    rel_l2 2.815e-1  cosine 0.960169  max_abs 4.062e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c6_s0_flow                rel_l2 1.570e-1  cosine 0.987663  max_abs 3.664e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c6_s0_x0                  rel_l2 2.274e-1  cosine 0.974130  max_abs 3.664e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c6_s1_flow                rel_l2 1.785e-1  cosine 0.984061  max_abs 3.656e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c6_s1_x0                  rel_l2 2.502e-1  cosine 0.968620  max_abs 3.500e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c6_s2_flow                rel_l2 1.953e-1  cosine 0.980867  max_abs 3.945e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c6_s2_x0                  rel_l2 2.722e-1  cosine 0.962752  max_abs 3.720e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c6_s3_flow                rel_l2 2.039e-1  cosine 0.979148  max_abs 4.711e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_c6_s3_x0                  rel_l2 2.815e-1  cosine 0.960169  max_abs 4.062e0  n 299520
+[oracle-sfwan13-composed-diff] compare-dumps sf_latents_in: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_latents_out               rel_l2 2.231e-1  cosine 0.974989  max_abs 4.086e0  n 2096640
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_000: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_001: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_002: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_003: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_004: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_005: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_006: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_007: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_008: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_009: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_010: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_011: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_012: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_013: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_014: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_015: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_016: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_017: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_018: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_019: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps sf_noise_020: missing in candidate
+[oracle-sfwan13-composed-diff] compare-dumps text_hidden                  rel_l2 1.995e-2  cosine 0.999802  max_abs 8.204e-2  n 2097152
+[oracle-sfwan13-composed-diff] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.1s)
+[21:34:47] [oracle-r2] ▶ oracle-sfwan13-flash-vs-composed  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump-composed --candidate /fvscratch/runs/oracle-r2/4b4980b-1026212538-1552/oracle-sfwan13-dump  (wall cap 2177s; 0=none)
+[21:34:47] [oracle-r2] ok oracle-sfwan13-flash-vs-composed  0s  
+[21:34:47] [oracle-r2] ram oracle-sfwan13-flash-vs-composed: ram 21 MiB of 89645 MiB, oom_kills 0
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_b0_attn_x          rel_l2 4.829e-2  cosine 0.998835  max_abs 1.180e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_b0_kwin            rel_l2 1.322e-2  cosine 0.999913  max_abs 6.172e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_b1_attn_x          rel_l2 6.272e-2  cosine 0.998038  max_abs 7.461e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_b1_kwin            rel_l2 2.884e-2  cosine 0.999584  max_abs 9.961e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_b24_attn_x         rel_l2 1.703e-1  cosine 0.985491  max_abs 1.537e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_b24_kwin           rel_l2 1.487e-1  cosine 0.988946  max_abs 3.674e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_0            rel_l2 3.369e-2  cosine 0.999433  max_abs 9.492e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_1            rel_l2 4.261e-2  cosine 0.999093  max_abs 9.492e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_2            rel_l2 4.666e-2  cosine 0.998914  max_abs 7.891e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_3            rel_l2 5.332e-2  cosine 0.998579  max_abs 7.695e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_4            rel_l2 5.370e-2  cosine 0.998559  max_abs 7.009e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_5            rel_l2 5.916e-2  cosine 0.998254  max_abs 1.000e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_6            rel_l2 6.498e-2  cosine 0.997891  max_abs 7.529e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_7            rel_l2 6.072e-2  cosine 0.998156  max_abs 7.520e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_8            rel_l2 7.175e-2  cosine 0.997424  max_abs 1.000e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_9            rel_l2 7.870e-2  cosine 0.996909  max_abs 1.000e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_10           rel_l2 8.648e-2  cosine 0.996272  max_abs 1.500e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_11           rel_l2 8.957e-2  cosine 0.995994  max_abs 1.250e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_12           rel_l2 9.770e-2  cosine 0.995239  max_abs 2.125e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_13           rel_l2 1.097e-1  cosine 0.993991  max_abs 3.875e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_14           rel_l2 1.352e-1  cosine 0.990980  max_abs 8.125e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_15           rel_l2 1.054e-1  cosine 0.994447  max_abs 2.625e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_16           rel_l2 9.014e-2  cosine 0.995932  max_abs 2.750e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_17           rel_l2 1.149e-1  cosine 0.993377  max_abs 4.375e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_18           rel_l2 9.058e-2  cosine 0.995890  max_abs 2.125e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_19           rel_l2 6.190e-2  cosine 0.998085  max_abs 8.750e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_20           rel_l2 6.930e-2  cosine 0.997602  max_abs 1.014e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_21           rel_l2 8.177e-2  cosine 0.996675  max_abs 2.375e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_22           rel_l2 7.335e-2  cosine 0.997313  max_abs 1.500e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_23           rel_l2 7.861e-2  cosine 0.996932  max_abs 2.125e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_24           rel_l2 7.281e-2  cosine 0.997367  max_abs 3.625e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_25           rel_l2 6.369e-2  cosine 0.997973  max_abs 9.102e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_26           rel_l2 7.266e-2  cosine 0.997359  max_abs 9.097e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_27           rel_l2 6.150e-2  cosine 0.998109  max_abs 9.570e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_28           rel_l2 6.792e-2  cosine 0.997693  max_abs 9.570e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_ctx_block_29           rel_l2 7.755e-2  cosine 0.996990  max_abs 1.500e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_out                    rel_l2 5.640e-2  cosine 0.998414  max_abs 1.484e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_b0_attn_x           rel_l2 1.518e-3  cosine 0.999999  max_abs 1.562e-2  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_b0_kwin             rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_b1_attn_x           rel_l2 6.301e-3  cosine 0.999980  max_abs 3.027e-2  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_b1_kwin             rel_l2 2.870e-3  cosine 0.999996  max_abs 9.375e-2  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_b24_attn_x          rel_l2 5.226e-2  cosine 0.998637  max_abs 7.383e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_b24_kwin            rel_l2 6.419e-2  cosine 0.997940  max_abs 2.098e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_0             rel_l2 1.730e-3  cosine 0.999999  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_1             rel_l2 2.377e-3  cosine 0.999997  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_2             rel_l2 3.061e-3  cosine 0.999995  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_3             rel_l2 3.041e-3  cosine 0.999995  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_4             rel_l2 3.499e-3  cosine 0.999994  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_5             rel_l2 3.900e-3  cosine 0.999992  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_6             rel_l2 4.133e-3  cosine 0.999991  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_7             rel_l2 4.602e-3  cosine 0.999989  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_8             rel_l2 6.197e-3  cosine 0.999981  max_abs 2.500e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_9             rel_l2 8.857e-3  cosine 0.999961  max_abs 1.250e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_10            rel_l2 8.977e-3  cosine 0.999960  max_abs 5.000e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_11            rel_l2 1.015e-2  cosine 0.999949  max_abs 1.500e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_12            rel_l2 1.277e-2  cosine 0.999919  max_abs 1.500e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_13            rel_l2 2.828e-2  cosine 0.999612  max_abs 5.750e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_14            rel_l2 3.480e-2  cosine 0.999404  max_abs 7.500e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_15            rel_l2 3.330e-2  cosine 0.999458  max_abs 6.000e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_16            rel_l2 3.731e-2  cosine 0.999312  max_abs 6.750e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_17            rel_l2 8.983e-2  cosine 0.996180  max_abs 2.100e1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_18            rel_l2 4.618e-2  cosine 0.998937  max_abs 7.000e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_19            rel_l2 2.810e-2  cosine 0.999605  max_abs 1.125e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_20            rel_l2 3.067e-2  cosine 0.999530  max_abs 1.000e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_21            rel_l2 5.452e-2  cosine 0.998513  max_abs 6.938e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_22            rel_l2 4.010e-2  cosine 0.999196  max_abs 3.188e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_23            rel_l2 3.943e-2  cosine 0.999225  max_abs 4.250e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_24            rel_l2 3.799e-2  cosine 0.999279  max_abs 3.312e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_25            rel_l2 2.920e-2  cosine 0.999574  max_abs 5.781e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_26            rel_l2 2.902e-2  cosine 0.999579  max_abs 7.500e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_27            rel_l2 2.165e-2  cosine 0.999766  max_abs 5.586e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_28            rel_l2 2.193e-2  cosine 0.999759  max_abs 5.859e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_block_29            rel_l2 1.442e-2  cosine 0.999896  max_abs 6.279e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_flow                rel_l2 1.531e-2  cosine 0.999883  max_abs 1.821e-1  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s0_x0                  rel_l2 2.409e-2  cosine 0.999711  max_abs 1.797e-1  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s1_flow                rel_l2 2.002e-2  cosine 0.999800  max_abs 3.984e-1  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s1_x0                  rel_l2 3.073e-2  cosine 0.999528  max_abs 3.672e-1  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s2_flow                rel_l2 3.253e-2  cosine 0.999472  max_abs 1.248e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s2_x0                  rel_l2 4.556e-2  cosine 0.998966  max_abs 1.045e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s3_flow                rel_l2 4.661e-2  cosine 0.998915  max_abs 2.187e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c0_s3_x0                  rel_l2 5.640e-2  cosine 0.998414  max_abs 1.484e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_out                    rel_l2 6.335e-2  cosine 0.998002  max_abs 1.609e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_b0_attn_x           rel_l2 7.215e-3  cosine 0.999974  max_abs 1.094e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_b0_kwin             rel_l2 9.434e-3  cosine 0.999956  max_abs 6.172e-1  n 225792
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_b1_attn_x           rel_l2 3.238e-2  cosine 0.999477  max_abs 4.922e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_b1_kwin             rel_l2 2.091e-2  cosine 0.999781  max_abs 9.961e-1  n 225792
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_b24_attn_x          rel_l2 1.742e-1  cosine 0.984864  max_abs 1.504e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_b24_kwin            rel_l2 1.373e-1  cosine 0.990578  max_abs 3.674e0  n 225792
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_0             rel_l2 2.518e-3  cosine 0.999997  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_1             rel_l2 6.120e-3  cosine 0.999981  max_abs 1.250e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_2             rel_l2 7.431e-3  cosine 0.999972  max_abs 1.309e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_3             rel_l2 7.776e-3  cosine 0.999970  max_abs 3.750e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_4             rel_l2 1.233e-2  cosine 0.999924  max_abs 4.375e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_5             rel_l2 2.109e-2  cosine 0.999778  max_abs 1.438e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_6             rel_l2 2.342e-2  cosine 0.999726  max_abs 8.750e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_7             rel_l2 3.668e-2  cosine 0.999327  max_abs 1.812e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_8             rel_l2 3.336e-2  cosine 0.999443  max_abs 7.500e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_9             rel_l2 3.470e-2  cosine 0.999398  max_abs 6.602e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_10            rel_l2 3.683e-2  cosine 0.999322  max_abs 8.750e-1  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_11            rel_l2 4.077e-2  cosine 0.999169  max_abs 1.250e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_12            rel_l2 4.030e-2  cosine 0.999188  max_abs 2.000e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_13            rel_l2 5.220e-2  cosine 0.998637  max_abs 1.250e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_14            rel_l2 6.117e-2  cosine 0.998128  max_abs 4.250e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_15            rel_l2 5.840e-2  cosine 0.998293  max_abs 3.875e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_16            rel_l2 5.458e-2  cosine 0.998510  max_abs 2.375e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_17            rel_l2 8.013e-2  cosine 0.996786  max_abs 6.354e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_18            rel_l2 6.572e-2  cosine 0.997841  max_abs 1.125e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_19            rel_l2 4.793e-2  cosine 0.998853  max_abs 1.625e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_20            rel_l2 5.696e-2  cosine 0.998378  max_abs 1.250e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_21            rel_l2 7.120e-2  cosine 0.997463  max_abs 1.562e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_22            rel_l2 6.533e-2  cosine 0.997867  max_abs 1.750e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_23            rel_l2 7.193e-2  cosine 0.997410  max_abs 3.094e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_24            rel_l2 6.956e-2  cosine 0.997580  max_abs 3.000e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_25            rel_l2 6.122e-2  cosine 0.998127  max_abs 1.375e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_26            rel_l2 6.947e-2  cosine 0.997585  max_abs 1.266e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_27            rel_l2 6.643e-2  cosine 0.997793  max_abs 1.512e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_28            rel_l2 7.177e-2  cosine 0.997423  max_abs 1.750e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_block_29            rel_l2 4.340e-2  cosine 0.999059  max_abs 2.484e0  n 113664
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_flow                rel_l2 5.027e-2  cosine 0.998739  max_abs 1.577e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s0_x0                  rel_l2 7.184e-2  cosine 0.997432  max_abs 1.574e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s1_flow                rel_l2 4.378e-2  cosine 0.999045  max_abs 1.520e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s1_x0                  rel_l2 6.129e-2  cosine 0.998130  max_abs 1.520e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s2_flow                rel_l2 4.441e-2  cosine 0.999016  max_abs 1.592e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s2_x0                  rel_l2 6.172e-2  cosine 0.998104  max_abs 1.584e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s3_flow                rel_l2 4.806e-2  cosine 0.998848  max_abs 2.266e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c1_s3_x0                  rel_l2 6.335e-2  cosine 0.998002  max_abs 1.609e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c2_out                    rel_l2 6.780e-2  cosine 0.997713  max_abs 1.664e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c2_s0_flow                rel_l2 4.678e-2  cosine 0.998912  max_abs 1.636e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c2_s0_x0                  rel_l2 6.748e-2  cosine 0.997741  max_abs 1.633e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c2_s1_flow                rel_l2 4.606e-2  cosine 0.998943  max_abs 1.665e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c2_s1_x0                  rel_l2 6.573e-2  cosine 0.997851  max_abs 1.652e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c2_s2_flow                rel_l2 4.790e-2  cosine 0.998856  max_abs 1.695e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c2_s2_x0                  rel_l2 6.782e-2  cosine 0.997712  max_abs 1.684e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c2_s3_flow                rel_l2 4.873e-2  cosine 0.998816  max_abs 1.682e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c2_s3_x0                  rel_l2 6.780e-2  cosine 0.997713  max_abs 1.664e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c3_out                    rel_l2 7.515e-2  cosine 0.997188  max_abs 1.562e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c3_s0_flow                rel_l2 4.828e-2  cosine 0.998837  max_abs 1.584e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c3_s0_x0                  rel_l2 6.967e-2  cosine 0.997583  max_abs 1.587e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c3_s1_flow                rel_l2 5.019e-2  cosine 0.998743  max_abs 1.604e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c3_s1_x0                  rel_l2 7.140e-2  cosine 0.997461  max_abs 1.605e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c3_s2_flow                rel_l2 5.232e-2  cosine 0.998634  max_abs 1.609e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c3_s2_x0                  rel_l2 7.363e-2  cosine 0.997301  max_abs 1.603e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c3_s3_flow                rel_l2 5.435e-2  cosine 0.998526  max_abs 1.730e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c3_s3_x0                  rel_l2 7.515e-2  cosine 0.997188  max_abs 1.562e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c4_out                    rel_l2 8.817e-2  cosine 0.996135  max_abs 2.086e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c4_s0_flow                rel_l2 5.274e-2  cosine 0.998613  max_abs 1.588e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c4_s0_x0                  rel_l2 7.660e-2  cosine 0.997079  max_abs 1.592e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c4_s1_flow                rel_l2 5.583e-2  cosine 0.998445  max_abs 1.598e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c4_s1_x0                  rel_l2 7.959e-2  cosine 0.996847  max_abs 1.594e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c4_s2_flow                rel_l2 5.961e-2  cosine 0.998229  max_abs 2.070e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c4_s2_x0                  rel_l2 8.294e-2  cosine 0.996578  max_abs 1.904e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c4_s3_flow                rel_l2 6.687e-2  cosine 0.997772  max_abs 2.881e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c4_s3_x0                  rel_l2 8.817e-2  cosine 0.996135  max_abs 2.086e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c5_out                    rel_l2 1.908e-1  cosine 0.981910  max_abs 3.502e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c5_s0_flow                rel_l2 6.409e-2  cosine 0.997950  max_abs 1.641e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c5_s0_x0                  rel_l2 9.307e-2  cosine 0.995688  max_abs 1.633e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c5_s1_flow                rel_l2 1.026e-1  cosine 0.994744  max_abs 3.143e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c5_s1_x0                  rel_l2 1.427e-1  cosine 0.989867  max_abs 3.039e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c5_s2_flow                rel_l2 1.289e-1  cosine 0.991710  max_abs 3.668e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c5_s2_x0                  rel_l2 1.726e-1  cosine 0.985188  max_abs 3.217e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c5_s3_flow                rel_l2 1.489e-1  cosine 0.988942  max_abs 3.676e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c5_s3_x0                  rel_l2 1.908e-1  cosine 0.981910  max_abs 3.502e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c6_out                    rel_l2 1.575e-1  cosine 0.987629  max_abs 3.328e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c6_s0_flow                rel_l2 8.123e-2  cosine 0.996704  max_abs 2.512e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c6_s0_x0                  rel_l2 1.177e-1  cosine 0.993095  max_abs 2.512e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c6_s1_flow                rel_l2 8.913e-2  cosine 0.996032  max_abs 2.898e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c6_s1_x0                  rel_l2 1.249e-1  cosine 0.992224  max_abs 2.742e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c6_s2_flow                rel_l2 1.104e-1  cosine 0.993911  max_abs 3.344e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c6_s2_x0                  rel_l2 1.491e-1  cosine 0.988910  max_abs 3.117e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c6_s3_flow                rel_l2 1.187e-1  cosine 0.992960  max_abs 3.463e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_c6_s3_x0                  rel_l2 1.575e-1  cosine 0.987629  max_abs 3.328e0  n 299520
+[oracle-sfwan13-flash-vs-composed] compare-dumps sf_latents_out               rel_l2 1.131e-1  cosine 0.993630  max_abs 3.502e0  n 2096640
+[oracle-sfwan13-flash-vs-composed] compare-dumps text_hidden                  rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 2097152
+[oracle-sfwan13-flash-vs-composed] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.1s)
+[21:34:47] [oracle-r2] matrix done

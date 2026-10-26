@@ -1,0 +1,239 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "frame_counts",
+      "ok": true,
+      "values": {
+        "baseline": 81,
+        "candidate": 81,
+        "match": true,
+        "pairs": 81
+      }
+    },
+    {
+      "limits": {},
+      "name": "frame_shape",
+      "ok": true,
+      "values": {
+        "shape_mismatch": null
+      }
+    },
+    {
+      "limits": {},
+      "name": "pixel_metrics",
+      "ok": true,
+      "values": {
+        "mean_abs_pixel_diff": 2.0315807555463237,
+        "mse_max": 9.566390391292735,
+        "mse_mean": 8.084987482028861,
+        "pairs": 81,
+        "patch_boundary_ratio_by_size_max": {
+          "16": 1.2060420890657706,
+          "32": 1.2141107549528325,
+          "8": 1.1814414361767114
+        },
+        "patch_boundary_ratio_by_size_mean": {
+          "16": 1.0638363601459289,
+          "32": 1.0543371125268022,
+          "8": 1.0443471692716617
+        },
+        "patch_boundary_ratio_max": 1.2141107549528325,
+        "patch_boundary_ratio_mean": 1.0642980354281837,
+        "psnr_mean": 39.05967506960081,
+        "psnr_min": 38.32332261007197,
+        "sharpness_ratio_mean": 0.9301476885305956,
+        "status": "ok",
+        "temporal_delta_error_max": 1.6544713207799144,
+        "temporal_delta_error_mean": 1.2785438263721955,
+        "temporal_jitter_ratio_max": 0.9669170975999994,
+        "temporal_jitter_ratio_mean": 0.8651918013320703,
+        "temporal_jitter_ratio_min": 0.7120790384938143
+      }
+    },
+    {
+      "limits": {},
+      "name": "off_identity",
+      "ok": true,
+      "values": {
+        "max_abs_diff_uint8": 66,
+        "nonidentical_frames": 81,
+        "pairs": 81,
+        "status": "different"
+      }
+    }
+  ],
+  "context": {
+    "baseline": {
+      "dir": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13/frames",
+      "frames": 81,
+      "frames_dir": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13/frames",
+      "log": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13/stderr.log",
+      "mp4": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13/frames/output.mp4",
+      "notes": [],
+      "status": "completed"
+    },
+    "candidate": {
+      "dir": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13/mp4frames",
+      "frames": 81,
+      "frames_dir": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13/mp4frames",
+      "log": "/fvscratch/runs/oracle/4b4980b-10262131/oracle-sfwan13/stderr.log",
+      "mp4": null,
+      "notes": [
+        "run log exists but output.mp4 is missing or empty"
+      ],
+      "status": "failed"
+    },
+    "cuda_feature": true,
+    "lpips": {
+      "reason": "disabled (pass --lpips <weights dir>)",
+      "status": "deferred"
+    },
+    "mode": "exact",
+    "off_identity": {
+      "max_abs_diff_uint8": 66,
+      "nonidentical_frames": 81,
+      "pairs": 81,
+      "status": "different"
+    },
+    "pixel_metrics": {
+      "mean_abs_pixel_diff": 2.0315807555463237,
+      "mse_max": 9.566390391292735,
+      "mse_mean": 8.084987482028861,
+      "pairs": 81,
+      "patch_boundary_ratio_by_size_max": {
+        "16": 1.2060420890657706,
+        "32": 1.2141107549528325,
+        "8": 1.1814414361767114
+      },
+      "patch_boundary_ratio_by_size_mean": {
+        "16": 1.0638363601459289,
+        "32": 1.0543371125268022,
+        "8": 1.0443471692716617
+      },
+      "patch_boundary_ratio_max": 1.2141107549528325,
+      "patch_boundary_ratio_mean": 1.0642980354281837,
+      "psnr_mean": 39.05967506960081,
+      "psnr_min": 38.32332261007197,
+      "psnr_per_frame": [
+        40.02027948742761,
+        39.02977170593598,
+        39.17321777298539,
+        39.062858718793294,
+        39.24063272785834,
+        38.96529978169285,
+        39.24361609245476,
+        39.05412119458451,
+        39.47588470484402,
+        38.81468445644466,
+        39.05419965890597,
+        38.96197170287719,
+        39.26783070632509,
+        38.92913058500752,
+        39.002850225604824,
+        38.88234662107054,
+        39.171713426500915,
+        38.83230241090149,
+        39.09992639457223,
+        39.00256975145462,
+        39.38627011101066,
+        38.895175873531514,
+        39.04789922975854,
+        38.96497076837545,
+        39.268567850437634,
+        39.074999127439874,
+        39.263553971923606,
+        39.0786674920802,
+        39.35321321596588,
+        38.842664077781464,
+        39.09122800669857,
+        38.897699221617756,
+        39.22038538980206,
+        39.00782955118715,
+        39.198510152208016,
+        39.09671135735455,
+        39.33451012061947,
+        39.01234829210822,
+        39.11422946441728,
+        38.926934190574094,
+        39.25519062591629,
+        38.88425238276596,
+        39.087622670253396,
+        38.963368228138215,
+        39.37559748891745,
+        39.04286349143274,
+        39.17491349430529,
+        39.01605698458306,
+        39.250498941014996,
+        38.99687468458253,
+        39.14064029172954,
+        39.20426857781579,
+        39.430465114311,
+        39.09507576358665,
+        39.206112980611145,
+        38.895923299328885,
+        39.17886567887785,
+        38.84571560857991,
+        38.92590105424932,
+        38.88903059247014,
+        39.191708216385656,
+        39.113991708749076,
+        39.084590105388784,
+        38.86238023142812,
+        39.139052083172224,
+        38.66282234122274,
+        38.809107894926,
+        38.94593664043953,
+        39.3439450636963,
+        38.94718977895353,
+        39.131692996539066,
+        38.93999036646981,
+        39.220469245652716,
+        38.98203763045309,
+        38.950305164945924,
+        38.831983320135755,
+        39.03296432143522,
+        38.738862644842754,
+        38.854756752337735,
+        38.50575797581567,
+        38.32332261007197
+      ],
+      "sharpness_ratio_mean": 0.9301476885305956,
+      "status": "ok",
+      "temporal_delta_error_max": 1.6544713207799144,
+      "temporal_delta_error_mean": 1.2785438263721955,
+      "temporal_jitter_ratio_max": 0.9669170975999994,
+      "temporal_jitter_ratio_mean": 0.8651918013320703,
+      "temporal_jitter_ratio_min": 0.7120790384938143
+    },
+    "thresholds": {
+      "gemini_absolute_threshold": "disabled_for_lossy_generative_dimensions",
+      "lpips_absolute_threshold": "disabled_for_lossy_generative_dimensions",
+      "off_identity": "not requested",
+      "pixel_metrics": "telemetry (no absolute threshold)",
+      "quality_ranking": {
+        "primary": "aligned_pairwise_gemini_max_artifact_severity",
+        "secondary": "aligned_lpips_max",
+        "tie_breaker": "higher_speedup"
+      },
+      "selection": "best_quality_at_or_above_speed_target",
+      "source": "sol-engine evals/tiers.toml",
+      "speedup_targets": {
+        "high": 3.0,
+        "low": 1.5,
+        "medium": 2.0
+      }
+    }
+  },
+  "elapsed_s": 0.124789917,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_DUMP_OPS": "0,1,24,47",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "compare-clips-oracle-sfwan13-codec-floor",
+  "status": "pass"
+}
