@@ -16,7 +16,7 @@ seed = 1024
 seconds = 10
 width = 1920
 height = 1088
-note = "runpod-matrix.sh's default PROMPT and SEED; the served 1080P canvas at 10 s. Each recipe's arm reads the AdaLN cache file of hd-canvases' arms of that recipe ({runs}/<recipe>-adaln.cache), as the script's: inert for these adapter recipes (ADR-0019 §22.2), kept for equality"
+note = "runpod-matrix.sh's default PROMPT and SEED; the served 1080P canvas at 10 s. Each recipe's arm reads the AdaLN cache file of the canvas arms of that recipe in the same run ({runs}/<recipe>-adaln.cache: hd-canvases' under hd, hd5-canvases' under hd5), as the script's: inert for these adapter recipes (ADR-0019 §22.2), kept for equality"
 
 [lists]
 tail = ["--height", "{height}", "--width", "{width}", "--oversize-canvas", "--seconds", "{seconds}", "--prompt", "{prompt}",

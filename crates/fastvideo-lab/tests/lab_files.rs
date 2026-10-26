@@ -236,10 +236,19 @@ fn every_cell_file_belongs_to_exactly_one_tier() {
     // hd, whose 10 s arms that setting does not reach: it shares exactly hd's
     // `hd-10s`. No other tier shares any.
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
-    let hd = &lab.tier("hd").expect("hd").cells;
-    let hd5 = &lab.tier("hd5").expect("hd5").cells;
+    let cells = |t: &str| -> Vec<&str> {
+        lab.tier(t)
+            .unwrap_or_else(|| panic!("{t}"))
+            .all_cells()
+            .map(String::as_str)
+            .collect()
+    };
+    let (hd, hd5) = (cells("hd"), cells("hd5"));
     assert_eq!(
-        hd5.iter().filter(|c| hd.contains(c)).collect::<Vec<_>>(),
+        hd5.iter()
+            .filter(|c| hd.contains(c))
+            .copied()
+            .collect::<Vec<_>>(),
         ["hd-10s"],
         "hd5 shares hd's 10 s cell only"
     );
@@ -274,12 +283,10 @@ fn every_cell_file_belongs_to_exactly_one_tier() {
     for c in gen
         .iter()
         .filter(|c| !ltxvae.contains(c))
-        .chain(hd5.iter().filter(|c| !hd.contains(c)))
+        .map(String::as_str)
+        .chain(hd5.iter().copied().filter(|c| !hd.contains(c)))
     {
-        assert!(
-            seen.insert(c.as_str()),
-            "lab/cells/{c}.toml is in two tiers"
-        );
+        assert!(seen.insert(c), "lab/cells/{c}.toml is in two tiers");
     }
 }
 

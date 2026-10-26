@@ -441,7 +441,8 @@ prune are gone (their findings are in `docs/serve/h3-1080p-and-upscaler.md`; the
 (`run`'s environment, `pod up --extra-env`), `runpod-http.sh` (both paths) and `runpod-matrix.sh`.
 
 `hd5` is the 1080P serve gate: the script ran it as `FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json`, which
-fv-lab refuses (a cell's workload is its prompts, ADR-0019 §7), so the prompt set is a cell's `workload.prompt_set`
+fv-lab does not read (`fv-lab run` ignores it with a warning, `pod up --extra-env` refuses it: a cell's workload is its
+prompts, ADR-0019 §7), so the prompt set is a cell's `workload.prompt_set`
 (`hd5-canvases`). It is a tier of its own, not extra cells of `hd`: its arms keep the script's names, which
 `hd_report.py` and `fv-lab report summary --kind hd` read, and a tier's arm names are unique. Its 10 s arms are `hd`'s
 cell (`FV_PROMPTS` never reached them).
@@ -451,7 +452,7 @@ cell (`FV_PROMPTS` never reached them).
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family hd --yes --wait
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family hd5 \
   --cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s --yes --wait   # the 1080P gate
-./fv-lab report summary --kind hd artifacts/runpod/hd/<tag>
+./fv-lab report summary --kind hd artifacts/runpod/hd/<tag>    # the gate's run: artifacts/runpod/hd5/<tag>
 ```
 
 The script's per-arm timing line in `live.log` (`<arm> "denoise_s": …`) is log only and not copied: the numbers are each

@@ -666,7 +666,7 @@ fn the_oracle_r2_tier_dry_runs_as_the_oracle_family_with_sfwan13() {
 /// The six canvas arms read the prompt set `scripts/gpu/prompts-hd.json`; the
 /// two 10 s arms one prompt. `hd5`, its sibling, is the family with
 /// `FV_PROMPTS=scripts/gpu/prompts-hd5.json` (the 1080P serve gate's five
-/// prompts, which fv-lab refuses as a setting and takes from a cell): the same
+/// prompts, which fv-lab does not read as a setting and takes from a cell): the same
 /// eight arms with that prompt set, sharing hd's 10 s cell; of its fixture
 /// only the script's `prompt set:` line is not fv-lab's, and it names the
 /// cell's prompt set.

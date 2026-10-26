@@ -608,7 +608,8 @@ cells = ["hd-canvases", "hd-10s"]
 
 # runpod-matrix.sh `hd` with FV_PROMPTS=scripts/gpu/prompts-hd5.json: the 1080P
 # serve gate's five prompts (docs/serve/h3-1080p-and-upscaler.md "Gate run"),
-# which fv-lab takes from a cell (it refuses FV_PROMPTS, §9.4). A sibling tier of
+# which fv-lab takes from a cell (fv-lab run ignores FV_PROMPTS with a warning,
+# pod up --extra-env refuses it, §7, §9.4). A sibling tier of
 # the hd family (fv-lab-retired.sh FV_LAB_SIBLINGS): its goldens are the
 # script's dry run with that FV_PROMPTS. The arms keep the script's names, which
 # the hd reports read, so it is a tier, not extra cells of hd. Its 10 s arms

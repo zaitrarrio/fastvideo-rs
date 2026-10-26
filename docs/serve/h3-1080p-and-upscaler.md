@@ -816,23 +816,25 @@ the 768p clips' Lanczos upscale and its compares with the native 1080p clips, th
 (`FV_HD_POST_URL`, now refused) and the keyframe prune left `runpod-matrix.sh` in the same change. Their results
 stand above; their commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh` (the `hd)` branch) and
 `scripts/gpu/hd-upscaler.sh`. The 1080P serve gate's `FV_PROMPTS=…/prompts-hd5.json` is the `hd5` tier (its prompt
-set in a cell: fv-lab refuses `FV_PROMPTS`). The image must be one of a commit that has both tiers (`lab/`, fv-lab).
+set in a cell: `fv-lab run` ignores `FV_PROMPTS` with a warning and `pod up --extra-env` refuses it). The image must be one of a commit that has both tiers (`lab/`, fv-lab).
 
 ```bash
 # the eight arms (prompts-hd.json; the 10 s arms one prompt)
-RUNPOD_API_KEY=… ./fv-lab pod up --sha <sha> --family hd --fetch-tree --fetch-skip '\.cache$' --yes --wait
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <sha> --family hd --fetch-tree --fetch-skip '\.png$|\.cache$' --yes --wait
 # the 1080P serve gate: five prompts, the landscape and 10 s arms
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <sha> --family hd5 \
   --cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s \
-  --fetch-tree --fetch-skip '\.cache$' --yes --wait
-./fv-lab report summary --kind hd artifacts/runpod/hd/<tag>   # or: python3 scripts/gpu/hd_report.py (numpy, Pillow)
+  --fetch-tree --fetch-skip '\.png$|\.cache$' --yes --wait
+./fv-lab report summary --kind hd artifacts/runpod/hd/<tag>   # the gate: artifacts/runpod/hd5/<tag>
+# or: python3 scripts/gpu/hd_report.py <run dir> (numpy, Pillow)
 ```
 
 Until the `hd` branch is deleted (ADR-0019 §22.6, S7) the script runs the same arms: `FV_FAMILY=hd
 scripts/gpu/runpod-http.sh run <sha>`, and for the gate `FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
-FV_CELLS="turbo-768p turbo-1080p max-768p max-1080p turbo-1080p-10s max-1080p-10s"` with it. The fetched tree now
-holds every PNG frame (no prune): skip `frames/.*\.png$` in `--fetch-skip` when only the timings, the MP4s and the
-reports are wanted.
+FV_CELLS="turbo-768p turbo-1080p max-768p max-1080p turbo-1080p-10s max-1080p-10s"` with it (and
+`FV_FETCH_TREE=1 FV_FETCH_SKIP='\.png$|\.cache$'`). With no prune on the pod any more, the commands skip the PNG
+frames (about 1-1.5 GB per 1080p arm) and keep the MP4s, `benchmark.json`, `frames.sha256.json` and the logs; drop
+`\.png$|` from the skip to fetch the frames as well.
 
 The run behind this page used `FV_FETCH_SKIP='frames/[^/]+/frame-[0-9]+\.png$|\.cache$'`.
 That pattern also matched `keyframes/`, so the PNG keyframes were not

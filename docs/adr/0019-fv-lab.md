@@ -4155,7 +4155,7 @@ cache file, and the tiers keep the paths for equality.
 - *If wanted later*: (b), after a tier field `lpips = true` and an `{lpips}` placeholder.
 
 **`hd`** (rpm:1694-1790): **(a)**, with the derived step dropped from the script in the same PR. This is a real-run
-change, like §17.2's `ltx` gating. Done in S2 (§22.8; its GPU check §22.9).
+change, like §17.2's `ltx` gating. Done in S2 (§22.8; its GPU check §22.9, `turbo-768p turbo-1080p max-1080p`).
 - *Measures*: H3 at the served 1080P canvas (`hd_1080p = true` for `sol-h3` and `fasth3-4step-vsa`,
   `families/h3.toml:66-75, 140-149`):
   - turbo and max at 768p and at 1088x1920 (`--oversize-canvas`), portrait, and 10 s, over the prompts of
@@ -4483,7 +4483,8 @@ Built on `claude/d1-s2-hd` from `4f8822a0`, as the `hd` row of §22.3 and §22.6
      dropped Lanczos baselines) says it is kept for the record and how to re-run it.
   2. The "Reproduce" section of `docs/serve/h3-1080p-and-upscaler.md`: the tier commands (`pod up --family hd`, the
      gate through `hd5`), the script's equivalent until S7, and where the dropped commands are.
-  3. The 1080P gate's `FV_PROMPTS=…/prompts-hd5.json` (`docs/serve/h3-1080p-and-upscaler.md:174, 269`): **the
+  3. The 1080P gate's `FV_PROMPTS=…/prompts-hd5.json` (`docs/serve/h3-1080p-and-upscaler.md:174, 269`; `fv-lab run`
+     ignores `FV_PROMPTS` with a warning, `pod up --extra-env` refuses it, §7): **the
      `hd5` tier**, a prompt-set cell (`hd5-canvases`: `hd-canvases` word for word with `prompt_set =
      "scripts/gpu/prompts-hd5.json"`) plus `hd`'s `hd-10s`, which `FV_PROMPTS` never reached (the one shared cell
      besides `ltxvae-gen`'s, `tests/lab_files.rs`). The gate: `fv-lab run hd5 --cells
@@ -4503,7 +4504,9 @@ Built on `claude/d1-s2-hd` from `4f8822a0`, as the `hd` row of §22.3 and §22.6
 - **Before and after** (the §22.1 dry runs of every family, with no `FV_ORACLE_URL` and no `FV_LAB_BIN`, on main
   `4f8822a0` and on this branch): the fifteen other families' dry runs, exit codes and gate records are byte for byte
   the same; `hd` lost exactly its eight empty timing lines (18 lines to 10). The gate's form (`FV_PROMPTS=…hd5.json
-  FV_CELLS=<six arms>`) likewise lost only its eight (the line followed skipped arms too). The derived step was never in a dry run (it needs frames).
+  FV_CELLS=<six arms>`) likewise lost only its eight (the line followed skipped arms too). The Lanczos step and the
+  prune never showed in a dry run (they need frames); the post script did when `FV_HD_POST_URL` was set (the base's
+  dry run ran its `curl` and logged `post script …`), and is refused now.
 - **Lost**, as §22.3 said: re-running the Lanczos comparison, the post-script hook and the keyframe sheets in one
   command. Kept: `hd_report.py` and `report summary --kind hd` (their compare and keyframe sections are empty for a
   new run).
@@ -4517,40 +4520,42 @@ Server Edition per side, EU-RO-1 on `bz0ofkfx45`, about $2.49/hr; pod boot and p
 tree these arms read is on the volume (`h3-base`, `FastH3-4-step-Preview-v1-LoRA`); nothing is fetched. The build pod
 is stopped first (§21.7).
 
-The arms: **`max-1080p`**, the part only `hd` checks (Sol-H3 at 1920x1088 with `--oversize-canvas`, §22.3), and
-**`turbo-768p`**, the cheapest other arm. With the Lanczos compares gone the tier has no compare of its own, so the
-compare exercised is the runners': `fv-lab-compare-runs.sh` over the arms' `frames.sha256.json`. `turbo-768p` is the
-other recipe and technique profile (FastH3 4-step VSA, `h3/fasth3_4step_vsa`) at the trained canvas, over the same
-prompt set, and it runs first, so it fills the shared text cache (`{scratch}/h3-text-cache`) that `max-1080p` then
-reads, as in the full run. §22.3's `turbo-1080p` was there for the 768p → 1080p Lanczos pair, which is gone.
+The arms (coordinator's decision on review, as §22.3 and §22.6 accepted them): **`turbo-768p`, `turbo-1080p`,
+`max-1080p`**. `max-1080p` is the part only `hd` checks (Sol-H3 at 1920x1088 with `--oversize-canvas`, §22.3);
+`turbo-1080p` covers FastH3 4-step VSA (`h3/fasth3_4step_vsa`) at the same oversize canvas; `turbo-768p` the trained
+canvas, and it runs first, so it fills the shared text cache (`{scratch}/h3-text-cache`) that the other two read, as in
+the full run. All three run the prompt set. With the Lanczos compares gone the tier has no compare of its own, so the
+compare exercised is the runners': `fv-lab-compare-runs.sh` over the arms' `frames.sha256.json`.
 
 ```sh
 SHA=<7>
-# hd: the 4-step VSA arm at 768p (first: the text cache) and Sol-H3 at 1920x1088, three prompts each
-RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family hd --cells turbo-768p,max-1080p --wall-cap-s 3600 --yes --wait
-RUNPOD_API_KEY=… FV_FAMILY=hd FV_CELLS="turbo-768p max-1080p" FV_POD_CAP_S=3600 \
+# hd: FastH3 4-step VSA at 768p (first: the text cache) and 1920x1088, Sol-H3 at 1920x1088; three prompts each
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family hd --cells turbo-768p,turbo-1080p,max-1080p --wall-cap-s 3600 --yes --wait
+RUNPOD_API_KEY=… FV_FAMILY=hd FV_CELLS="turbo-768p turbo-1080p max-1080p" FV_POD_CAP_S=3600 \
   bash scripts/gpu/runpod-http.sh run $SHA
 bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/hd/$SHA-<MMDDHHMMSS>-<hex> artifacts/runpod/hd/$SHA-<MMDDHHMM>
 ```
 
 Pass: `fv-lab-compare-runs.sh` exits 0 and both pods end `matrix_exit=0`. No verdict step, so no `--expect-verdicts`;
-no `FV_FETCH_TREE` (both fetches take every file compared). Expected summary line:
+no `FV_FETCH_TREE` / `--fetch-tree`: both fetches take every file compared and no PNG frame (with the prune gone the
+frames stay on the pod; a tree fetch, if wanted, skips them on both sides with `FV_FETCH_SKIP='\.png$|\.cache$'` /
+`--fetch-skip '\.png$|\.cache$'`, about 1-1.5 GB per 1080p arm otherwise). Expected summary line:
 
-"2 arm(s) the same (2 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same
-compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 difference(s)":
-each arm 372 PNG frames (three prompts of 124, as `d46ca17-09282023`'s `benchmark.json` `num_frames`) under
-`frames/<prompt>/`, byte-identical across the runners; no `compare/` or `gate/` report on either side (the script's
-run no longer writes `turbo-768p-lanczos/` or `keyframes/`, so the two run directories hold the same arms). Each
-preflight's `weights.log` ends `exit=1` (`h3-8step` incomplete), as on every run on this volume. A difference in the
-frames is a finding about the build (byte identity on one GPU class from one `SHA`, docs/perf/determinism.md), not
-about the runners: report it and keep the branch.
+"3 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same
+compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics
+report(s), 0 difference(s)": each arm 372 PNG frames (three prompts of 124, as `d46ca17-09282023`'s `benchmark.json`
+`num_frames`) under `frames/<prompt>/`, byte-identical across the runners; no `compare/`, `gate/` or `metrics.txt`
+report on either side (the script's run no longer writes `turbo-768p-lanczos/` or `keyframes/`, so the two run
+directories hold the same arms). Each preflight's `weights.log` ends `exit=1` (`h3-8step` incomplete), as on every run
+on this volume. A difference in the frames is a finding about the build (byte identity on one GPU class from one `SHA`,
+docs/perf/determinism.md), not about the runners: report it and keep the branch.
 
-**Cost** ($2.49/hr, UNVERIFIED until run): per side, boot and preflight ~5 min, `turbo-768p` ~7 min (406 s in
-`d46ca17-09282023`, the first arm, with the 75 s text encode) and `max-1080p` ~5.5 min (321 s there), so ~18 min; with
-margin ~20 min a side, **~$0.83 a side, ~$1.66 both** (§22.5's figure; three arms there, two here). Bounded by the caps
-above at $2.49 a pod, $4.98 both. **Balance needed**: at least $9.70 before starting at the estimate ($8 floor +
-$1.66), and $13 to stay above the floor even if both pods ran to their 1 h caps (CLAUDE.md: stop before the balance
-would drop below $8).
+**Cost** ($2.49/hr, UNVERIFIED until run): per side, boot and preflight ~5 min, then the arms as in
+`d46ca17-09282023`: `turbo-768p` ~7 min (406 s, the first arm, with the 75 s text encode), `turbo-1080p` ~5 min (285 s)
+and `max-1080p` ~5.5 min (321 s), so ~22 min; with margin ~24 min a side, **~$1.00 a side, ~$2.00 both** (§22.5's
+three arms; its $1.66 assumed 20 min a side). Bounded by the caps above at $2.49 a pod, $4.98 both. **Balance
+needed**: at least $10.00 before starting at the estimate ($8 floor + $2.00), and $13 to stay above the floor even if
+both pods ran to their 1 h caps (CLAUDE.md: stop before the balance would drop below $8).
 
 **Then (S7, not this slice)**: on a pass, `hd` joins `FV_LAB_RETIRED`, its branch is deleted and its three
 fixtures frozen (§10's way); `hd5`, a sibling of the family, is frozen with it (out of `FV_LAB_SIBLINGS`, into

@@ -166,6 +166,9 @@ mx "matrix: ltxvae-gen was never a script family" "ltxvae-gen is an fv-lab tier 
 mx "matrix: hd refuses FV_HD_POST_URL" \
   "FATAL: FV_HD_POST_URL: the hd family's post-script hook was dropped with its derived step" \
   FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh hd
+mx "matrix: hd refuses FV_HD_POST_TIMEOUT_S" \
+  "FATAL: FV_HD_POST_TIMEOUT_S: the hd family's post-script hook was dropped with its derived step" \
+  FV_HD_POST_TIMEOUT_S=5400 hd
 mx "matrix: hd5 is no script family" "FATAL: unknown family hd5" hd5
 mx "matrix: precision alone is the retired family" "FATAL: precision is retired to fv-lab (fv-lab-retired.sh): fv-lab run precision " \
   FV_PRECISION_ARM=all precision
@@ -199,9 +202,11 @@ expect "h3-graphs: plan is runpod-http.sh's body" 0 '"name": "fv-lab-h3-graphs-a
 # A sibling tier (fv-lab-retired.sh FV_LAB_SIBLINGS, ADR-0019 §21: oracle-r2,
 # the oracle family's sfwan13 on a volume+r2 pod): like gold, never the script
 # path (its targets run there as FV_FAMILY=oracle); its plan the script's body.
+# FV_DRY_RUN=1: a refusal that broke would print the script path's dry run,
+# never reach the API.
 for mode in run all; do
-  expect "oracle-r2: $mode refused" 1 "fv-lab oracle --family oracle-r2 --sha abc1234" -- RUNPOD_API_KEY=x FV_FAMILY=oracle-r2 bash "$HTTP" "$mode" abc1234
-  expect "oracle-r2: $mode names the script family" 1 "the script runs them as FV_FAMILY=oracle" -- RUNPOD_API_KEY=x FV_FAMILY=oracle-r2 bash "$HTTP" "$mode" abc1234
+  expect "oracle-r2: $mode refused" 1 "fv-lab oracle --family oracle-r2 --sha abc1234" -- FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=oracle-r2 bash "$HTTP" "$mode" abc1234
+  expect "oracle-r2: $mode names the script family" 1 "the script runs them as FV_FAMILY=oracle" -- FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=oracle-r2 bash "$HTTP" "$mode" abc1234
 done
 expect "oracle-r2: plan is runpod-http.sh's body" 0 '"name": "fv-lab-oracle-r2-abc1234-t"' -- RUNPOD_API_KEY=x \
   FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=oracle-r2 bash "$HTTP" plan abc1234 abc1234-t
@@ -210,10 +215,10 @@ expect "oracle-r2: plan is runpod-http.sh's body" 0 '"name": "fv-lab-oracle-r2-a
 # never the script path; the refusal names fv-lab's command and the script's
 # form of the same run; its plan the script's body.
 for mode in run all; do
-  expect "hd5: $mode refused" 1 "fv-lab pod up --sha abc1234 --family hd5" -- RUNPOD_API_KEY=x FV_FAMILY=hd5 bash "$HTTP" "$mode" abc1234
+  expect "hd5: $mode refused" 1 "fv-lab pod up --sha abc1234 --family hd5" -- FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=hd5 bash "$HTTP" "$mode" abc1234
   expect "hd5: $mode names the script's form" 1 \
     "the script runs it as FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json" -- \
-    RUNPOD_API_KEY=x FV_FAMILY=hd5 bash "$HTTP" "$mode" abc1234
+    FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=hd5 bash "$HTTP" "$mode" abc1234
 done
 expect "hd5: plan is runpod-http.sh's body" 0 '"name": "fv-lab-hd5-abc1234-t"' -- RUNPOD_API_KEY=x \
   FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=hd5 bash "$HTTP" plan abc1234 abc1234-t

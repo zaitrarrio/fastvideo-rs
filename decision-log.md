@@ -2157,5 +2157,5 @@ Project code: FVID
 - Reversibility: high (cells, fixtures; the dropped commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`)
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §22.8, §22.9
-- Verification: `tests/dry_run.rs` (the two tiers' dry runs and gates equal the script's), `tests/payload_golden.rs`, `tests/lab_files.rs`, `knobs::tests`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, every family's dry run before and after; GPU: §22.9 (the coordinator's; `turbo-768p max-1080p`, ~$1.66)
+- Verification: `tests/dry_run.rs` (the two tiers' dry runs and gates equal the script's), `tests/payload_golden.rs`, `tests/lab_files.rs`, `knobs::tests`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, every family's dry run before and after; GPU: §22.9 (the coordinator's; `turbo-768p turbo-1080p max-1080p`, ~$2.00)
 - Open: S7 (after §22.9 passes): `hd` into `FV_LAB_RETIRED`, its branch deleted, `hd5` frozen with it
