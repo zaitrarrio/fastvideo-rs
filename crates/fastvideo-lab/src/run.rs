@@ -2878,7 +2878,8 @@ mod tests {
     }
 
     /// `b4-verdict.sh`'s `b4_exit_ok` and `b4_identical` on the stub shapes
-    /// of `scripts/gpu/tests/b4-verdict.test.sh` (pretty-printed reports).
+    /// of its shell test (pretty-printed reports). Both went with the B4
+    /// branches (ADR-0019 §18); the script is frozen in `fixtures/b4a-script/`.
     #[test]
     fn exit_and_identity_read_as_b4_verdict_sh() {
         let d = std::env::temp_dir().join(format!("fv-lab-b4-pieces-{}", std::process::id()));

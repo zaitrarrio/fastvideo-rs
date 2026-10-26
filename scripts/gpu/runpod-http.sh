@@ -10,7 +10,11 @@
 #                                ltxvae, precision; the restored modes precision-nvfp4,
 #                                ltxvae-gen) runs `fv-lab pod up --yes --wait`
 #                                instead (docs/adr/0019-fv-lab.md §10, §12); FV_DRY_RUN=1
-#                                prints the route and the command, creates nothing
+#                                prints the route and the command, creates nothing.
+#                                A family retired with no tier (fv-lab-retired.sh
+#                                FV_SCRIPT_RETIRED, §18: h3, b4b, writer, ...) is
+#                                refused (exit 2) with what replaces it, as are
+#                                `all` and `plan` for it
 #   runpod-http.sh weights       weight gate only (verify-weights.sh), no cells
 #   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
 #   runpod-http.sh all [sha]     kernels, then the $FV_FAMILY cells, on one pod
@@ -79,8 +83,17 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -z "${FV_HTTP_COPY:-}" ]]; then
   copy="$(mktemp "${TMPDIR:-/tmp}/runpod-http.XXXXXX")"
   cp "${BASH_SOURCE[0]}" "$copy"
-  FV_HTTP_COPY=1 FV_HTTP_HERE="$HERE" exec bash "$copy" "$@"
+  FV_HTTP_COPY="$copy" FV_HTTP_HERE="$HERE" exec bash "$copy" "$@"
 fi
+# The private copy is removed when this run ends: at exit (the trap; bash
+# reads nothing more of the script then) or just before `exec fv-lab`. Only
+# the copy this run was started as: when this file is not FV_HTTP_COPY (the
+# repository's script, run with FV_HTTP_COPY already set), nothing is removed.
+# No background process of this run reads the script (the pod's start
+# commands are heredocs sent to the pod; the backstop is its own bash -c).
+OWN_COPY=""
+[[ "${BASH_SOURCE[0]}" == "${FV_HTTP_COPY:-}" ]] && OWN_COPY="$FV_HTTP_COPY"
+trap '[[ -z "$OWN_COPY" ]] || rm -f -- "$OWN_COPY"' EXIT
 HERE="${FV_HTTP_HERE:-$HERE}"
 # shellcheck source-path=SCRIPTDIR source=runpod-price.sh
 source "$HERE/runpod-price.sh"
@@ -103,6 +116,13 @@ CAP_S="${FV_POD_CAP_S:-14400}"
 FAMILY="${FV_FAMILY:-rtx6000}"
 [[ "${1:-}" == upstream || "${1:-}" == plan-upstream ]] && FAMILY="${FV_FAMILY:-upstream}"
 OUT_ROOT="$ROOT/artifacts/runpod/$FAMILY"
+# A family retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
+# docs/adr/0019-fv-lab.md §18) has no branch and no tier: nothing to run, plan
+# or route. Refused (exit 2) before the key, any lookup or a pod.
+if [[ "${1:-}" == run || "${1:-}" == all || "${1:-}" == plan ]] && fv_script_retired "$FAMILY"; then
+  echo "runpod-http: $FAMILY is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18): $(fv_script_retired_why "$FAMILY")" >&2
+  exit 2
+fi
 # A dry run (FV_DRY_RUN=1: the route and the command, nothing created) needs no key.
 [[ "${FV_DRY_RUN:-0}" == 1 ]] || : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 
@@ -711,6 +731,9 @@ fv_lab_route() {
   fi
   lab="$(fv_lab_bin)" || die "$FAMILY runs through fv-lab, and no fv-lab was found (FV_LAB_BIN, PATH, $ROOT/fv-lab). Build it on the build pod: bash scripts/dev/build-pod.sh run . -- cargo build --release --locked -p fastvideo-lab --features cli --bin fv-lab, then bash scripts/dev/build-pod.sh fetch . release/fv-lab ./fv-lab (docs/dev/fv-lab.md)"
   log "$FAMILY is fv-lab only (fv-lab-retired.sh): $(printf '%q ' "$lab" "${args[@]}")"
+  # exec runs no EXIT trap: remove the private copy first (this function is
+  # already read; nothing more of the script is).
+  [[ -z "$OWN_COPY" ]] || rm -f -- "$OWN_COPY"
   exec "$lab" "${args[@]}"
 }
 

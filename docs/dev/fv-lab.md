@@ -13,6 +13,8 @@ is a tier whose script branch stays whole ([below](#determinism-and-the-oracle-d
 `attn3` and `ltx` (D1f) are retired too (GPU checks passed on `762ce4d`, §17.6; [below](#fuse-attn3-ltx-d1f)). `gold` is fv-lab's
 own: every gold variant's canonical cell (ADR-0023).
 `precision-nvfp4` and `ltxvae-gen` are two modes of retired families, restored as tiers ([ADR-0019 §12](../adr/0019-fv-lab.md)).
+Eleven more families left the script with no tier (`h3`, `hunyuan`, `sana-video`, `b200`, `writer`, `precision-debug`,
+`identity`, `b4b`, `b4c`, `b4c2`, `h3attn`; D1g, ADR-0019 §18): every driver refuses them ([below](#retired-with-no-tier-d1g)).
 
 ## Build
 
@@ -71,7 +73,8 @@ dry run show what will run.
 
 All eleven above `precision-nvfp4`, `det-short` and `determinism`, and `fuse`, `attn3` and `ltx` are **retired from
 the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10; `b4a` §11.6; `det-short`, `determinism` §15.10; `fuse`,
-`attn3`, `ltx` §17.6): their `runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps the other families.
+`attn3`, `ltx` §17.6): their `runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps sixteen other families
+(the eleven retired with no tier went in D1g, [below](#retired-with-no-tier-d1g)).
 ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is not on the EU volume (`h3-8step`)
 is recorded as skipped (`weights incomplete`), as the script recorded it.
 
@@ -175,7 +178,8 @@ on `PATH`, else `./fv-lab` at the repository root ([Build](#build)); without one
 FV_DRY_RUN=1 FV_FAMILY=b6 FV_BASELINE_SHA=e93e357 bash scripts/gpu/runpod-http.sh run <7>   # prints the fv-lab command
 FV_DRY_RUN=1 FV_FAMILY=b4a FV_CELLS="b4a-h3-4step-tea-base b4a-h3-4step-tea-pr" FV_BASELINE_SHA=e93e357 \
   bash scripts/gpu/runpod-http.sh run <7>                           # b4a's GPU gate cell, through fv-lab
-FV_DRY_RUN=1 FV_FAMILY=b4b bash scripts/gpu/runpod-http.sh run <7>   # a script family: says what it would run
+FV_DRY_RUN=1 FV_FAMILY=eval bash scripts/gpu/runpod-http.sh run <7>   # a script family: says what it would run
+FV_DRY_RUN=1 FV_FAMILY=h3 bash scripts/gpu/runpod-http.sh run <7>     # retired with no tier: refused (exit 2), names rtx6000
 ```
 
 `FV_DRY_RUN=1` never creates a pod and needs no key. `runpod.sh rtx6000` is retired with the branch (the Taskfile's
@@ -384,9 +388,33 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family ltx --yes --wait
 copied (log only: both are in the arms' `stderr.log`).
 
 Not moved (§17.3): `b4b`, `b4c`, `b4c2`. Each cell's verdict reads what no `[verdict]` list types today
-(`benchmark.json` fields, cache-directory listings under `$SCRATCH`, CUPTI kernel tables); a typed check list or
-their retirement is the coordinator's call. `h3` is proposed for retirement with no tier (§17.4: `rtx6000` covers it
-but for the refiner-less Spark fallback, which nothing serves).
+(`benchmark.json` fields, cache-directory listings under `$SCRATCH`, CUPTI kernel tables). They and `h3` (§17.4:
+`rtx6000` covers it but for the refiner-less Spark fallback, which nothing serves) are retired with no tier
+([below](#retired-with-no-tier-d1g)).
+
+## Retired with no tier (D1g)
+
+[ADR-0019 §18](../adr/0019-fv-lab.md) (coordinator decision 2026-10-26). Eleven `runpod-matrix.sh` families left the
+script without becoming tiers, listed in `FV_SCRIPT_RETIRED` (`scripts/gpu/fv-lab-retired.sh`), which says what
+replaces each (`fv_script_retired_why`):
+
+| family | what replaces it |
+|---|---|
+| `h3` | the `rtx6000` tier runs every arm but the refiner-less Spark fallback and the cold streamed-encoder runs, which nothing serves; the `h3` commands: `git show b019ccb2:scripts/gpu/runpod-matrix.sh` |
+| `b4b`, `b4c`, `b4c2` | nothing: finished experiments, their GPU gates passed when their changes merged (#179, #177, #178; `artifacts/runpod/{b4b,b4c,b4c2}/`); a later change to the fusions or the prompt cache gets its own byte-identity run (the `b4a` / `techniques` shape) and the CPU fixtures (`rt/prompt_cache/equality.rs`, `rt/fuse/equality.rs`) |
+| `hunyuan`, `sana-video` | nothing runs them: trees not on the EU volume, no variant or gold file serves them; their arms by hand: `docs/ports/sana-video.md` (`sana-video`), or `git show b019ccb2:scripts/gpu/runpod-matrix.sh` |
+| `b200` | nothing: the US volume is gone (`runpod.sh b200` is refused too) |
+| `writer` | nothing: a one-time measurement (commit `a8ecfec6`) |
+| `precision-debug` | the `precision` tiers run the same precision variants, but not its per-step CUPTI trace (`FASTVIDEO_GPU_TRACE_STEP`) or its `FASTVIDEO_DUMP_DIR` + `compare-dumps` diffs; those by hand: `git show b019ccb2:scripts/gpu/runpod-matrix.sh` |
+| `identity` | the `det-short` / `determinism` tiers |
+| `h3attn` | nothing: its arms are recorded in `docs/techniques.md` "H3 attention arms", none open |
+
+They are not fv-lab tiers, so nothing routes them to fv-lab: `runpod-matrix.sh <family>`, `runpod-http.sh run` / `all`
+/ `plan` (dry run or not, before the key) and `runpod.sh gpu` / `matrix` / `plan` refuse them with exit 2 and that
+pointer. `runpod.sh gpu` starts `ltx` only now and `matrix` runs `ltx` then `wan`. Their branches are in
+`git show b019ccb2:scripts/gpu/runpod-matrix.sh`; `b4-verdict.sh` went with the B4 branches (`b4a`'s verdict is held
+to its frozen copy, `fixtures/b4a-script/`). `fv-lab-route.test.sh`, `runpod-plan.test.sh` and `tests/dry_run.rs` hold
+this.
 
 ## On a GPU box: `fv-lab run`
 
