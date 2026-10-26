@@ -1,0 +1,16 @@
+{
+  "stage": "clip-ltx-cold",
+  "status": "pass",
+  "elapsed_s": 5,
+  "context": {
+    "spec": {
+      "width": 768
+    },
+    "timings": {
+      "warm": false,
+      "total_s": 61.5,
+      "load_s": null
+    },
+    "artifacts": {}
+  }
+}

@@ -8,6 +8,8 @@ outputs/
 artifacts/
 *.mp4
 !scripts/gpu/fixtures/*.mp4
+# fv-lab report summary --kind hd: stand-in mp4s the ffprobe stand-in answers for
+!crates/fastvideo-lab/fixtures/report/hd-run/**/*.mp4
 .env
 .env.*
 !*.env.example

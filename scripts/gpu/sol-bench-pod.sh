@@ -327,7 +327,7 @@ case "$SET" in
     # tokens, ~2.5k s of refiner alone) cannot fit one 1-hour pod, so the
     # refiner runs --refiner-steps 1, i.e. 3 of the 8 official sigmas (0.85 +
     # 2 tail): every baseline refiner step costs the same (dense, CFG), and
-    # sol_bench_table.py scales the refiner denoise by 8/3 (as wan14 base-s15).
+    # fv-lab report table --kind sol-bench scales the refiner denoise by 8/3 (as wan14 base-s15).
     cell lingbot-router lingbot-moe 60 "$BIN" --mode fast sol lingbot-router
     lingbot baseline 2700 -rs3 --refiner-steps 1
     ;;

@@ -1,0 +1,12 @@
+compare-clips-fasth3-4step-vsa-768p-base--fasth3-4step-vsa-768p-env.json: "status":"skipped" 
+compare-clips-fasth3-4step-vsa-768p-base--fasth3-4step-vsa-768p-prof.json: "status":"skipped" 
+compare-clips-fasth3-8step-768p-base--fasth3-8step-768p-env.json: "status":"skipped" 
+compare-clips-fasth3-8step-768p-base--fasth3-8step-768p-prof.json: "status":"skipped" 
+compare-clips-h3-480p-fullopt-base--h3-480p-fullopt-env.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+compare-clips-h3-480p-fullopt-base--h3-480p-fullopt-prof.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+compare-clips-ltx25-512p-sol-base--ltx25-512p-sol-env.json: "status":"skipped" 
+compare-clips-ltx25-512p-sol-base--ltx25-512p-sol-prof.json: "status":"skipped" 
+compare-clips-ltx25-512p-sol-env--ltx25-512p-sol-cache.json: "status":"skipped" 
+h3-480p-fullopt-base "denoise_s":23.442579273 "total_s":25.94286342 
+h3-480p-fullopt-env "denoise_s":23.259654991 "total_s":26.127157164 
+h3-480p-fullopt-prof "denoise_s":23.211129963 "total_s":25.740598509 

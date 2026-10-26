@@ -1,0 +1,29 @@
+{
+  "stage": "clip-wan-t2v",
+  "status": "pass",
+  "elapsed_s": 99.9,
+  "context": {
+    "spec": {
+      "frames": 81,
+      "width": 832,
+      "height": 480,
+      "steps": 50
+    },
+    "timings": {
+      "warm": true,
+      "load_s": 12.3456789,
+      "denoise_s": 45.67891234,
+      "per_step_s": 0.913578,
+      "vae_decode_s": 3.21,
+      "write_s": 0.5,
+      "generate_s": 50.123456,
+      "seconds_per_video_second": 10.0247,
+      "peak_mib": {
+        "denoise": 40960
+      }
+    },
+    "artifacts": {
+      "mp4": "/root/fv/gpucheck-out/clip-wan-t2v/out.mp4"
+    }
+  }
+}

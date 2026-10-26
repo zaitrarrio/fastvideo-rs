@@ -786,6 +786,361 @@ pub fn fetch_run(
     Ok(cells)
 }
 
+/// `FV_FETCH_SKIP`: the relative paths `runpod-http.sh fetch_tree` leaves out
+/// (`grep -qE "$FV_FETCH_SKIP" <<<"$rel$e"`), in the subset of extended
+/// regular expressions fv-lab reads without a regex engine: alternatives
+/// (`|`), each of literal characters (a backslash makes the next
+/// non-alphanumeric character literal), `.` for any character, `^` at an
+/// alternative's start and `$` at its end. Brackets, groups, repetition,
+/// back-references and the GNU escapes (`\d`, `\w`, `\b`, …) are refused, so
+/// a pattern either means what grep would match or is an error before any pod
+/// exists (docs/adr/0019-fv-lab.md §13). Every skip the repository's scripts
+/// and docs pass is in the subset (`/frames/`, `\.cache$`, `png`,
+/// `oracle-dump\.tar|/dump/|\.mp4$`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchSkip {
+    alts: Vec<SkipAlt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkipAlt {
+    start: bool,
+    end: bool,
+    /// `None`: `.`, any byte.
+    atoms: Vec<Option<u8>>,
+}
+
+impl FetchSkip {
+    /// Parse a pattern; refuse what the subset does not cover.
+    pub fn parse(pattern: &str) -> Result<FetchSkip, String> {
+        let refuse = |why: &str| {
+            Err(format!(
+                "fetch skip `{pattern}`: {why} (fv-lab reads alternatives of literal text, `.`, `\\`-escapes of punctuation, `^` and `$`; docs/dev/fv-lab.md)"
+            ))
+        };
+        let b = pattern.as_bytes();
+        let mut alts = Vec::new();
+        let mut cur = SkipAlt {
+            start: false,
+            end: false,
+            atoms: Vec::new(),
+        };
+        let mut i = 0;
+        let mut at_start = true;
+        while let Some(&c) = b.get(i) {
+            match c {
+                b'|' => {
+                    if cur.atoms.is_empty() && !cur.start && !cur.end {
+                        return refuse("an empty alternative matches every path");
+                    }
+                    alts.push(std::mem::replace(
+                        &mut cur,
+                        SkipAlt {
+                            start: false,
+                            end: false,
+                            atoms: Vec::new(),
+                        },
+                    ));
+                    at_start = true;
+                    i += 1;
+                    continue;
+                }
+                _ if cur.end => return refuse("`$` is only read at the end of an alternative"),
+                b'^' if at_start => cur.start = true,
+                b'^' => return refuse("`^` is only read at the start of an alternative"),
+                b'$' => {
+                    if b.get(i + 1).is_some_and(|n| *n != b'|') {
+                        return refuse("`$` is only read at the end of an alternative");
+                    }
+                    cur.end = true;
+                }
+                b'.' => cur.atoms.push(None),
+                b'\\' => {
+                    let Some(&n) = b.get(i + 1) else {
+                        return refuse("a trailing backslash");
+                    };
+                    if n.is_ascii_alphanumeric() {
+                        return refuse(
+                            "a backslash before a letter or digit is a GNU class or back-reference",
+                        );
+                    }
+                    if matches!(n, b'<' | b'>' | b'`' | b'\'') {
+                        return refuse("`\\<`, `\\>`, `` \\` `` and `\\'` are GNU anchors");
+                    }
+                    cur.atoms.push(Some(n));
+                    i += 1;
+                }
+                b'[' | b']' | b'(' | b')' | b'{' | b'}' | b'*' | b'+' | b'?' => {
+                    return refuse("brackets, groups and repetition are not read");
+                }
+                c => cur.atoms.push(Some(c)),
+            }
+            at_start = false;
+            i += 1;
+        }
+        if cur.atoms.is_empty() && !cur.start && !cur.end {
+            return refuse("an empty alternative matches every path");
+        }
+        alts.push(cur);
+        Ok(FetchSkip { alts })
+    }
+
+    /// Whether grep -E would match `path` (one line, as bytes).
+    pub fn matches(&self, path: &str) -> bool {
+        let p = path.as_bytes();
+        self.alts.iter().any(|a| {
+            let n = a.atoms.len();
+            let starts: Vec<usize> = if a.start {
+                vec![0]
+            } else {
+                (0..=p.len()).collect()
+            };
+            starts.into_iter().any(|s| {
+                s + n <= p.len()
+                    && (!a.end || s + n == p.len())
+                    && a.atoms
+                        .iter()
+                        .zip(&p[s..s + n])
+                        .all(|(atom, c)| atom.is_none_or(|x| x == *c) && *c != b'\n')
+            })
+        })
+    }
+}
+
+/// `runpod-http.sh fetch_tree`'s options: `FV_FETCH_SKIP` and
+/// `FV_FETCH_MAX_MB` (default 400; 0: no limit, as curl reads it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeFetch {
+    pub skip: Option<FetchSkip>,
+    pub max_mb: u64,
+}
+
+impl Default for TreeFetch {
+    fn default() -> Self {
+        TreeFetch {
+            skip: None,
+            max_mb: 400,
+        }
+    }
+}
+
+/// How deep [`fetch_tree`] descends below the run directory (the deepest
+/// run file today is `<arm>/frames/<prompt>/frame-*.png`, three levels).
+pub const TREE_DEPTH: usize = 16;
+
+/// `printf '%b' "${e//%/\\x}"`: a listing's href decoded (`%HH`). A `%` not
+/// followed by two hex digits, or bytes that are not UTF-8, is refused: the
+/// script would write such a name by `printf` rules (`%2` stays, `%Ag` is a
+/// one-digit `\xA` then `g`), a server's listing never holds one
+/// (`urllib.parse.quote`), and a name fv-lab cannot spell is not guessed.
+fn href_name(e: &str) -> Result<String, String> {
+    let b = e.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let v = b
+                .get(i + 1..i + 3)
+                .and_then(|h| std::str::from_utf8(h).ok())
+                .filter(|h| h.bytes().all(|c| c.is_ascii_hexdigit()))
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                .ok_or_else(|| format!("a malformed escape at byte {i}"))?;
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8(out).map_err(|_| "not UTF-8 once decoded".to_owned())
+}
+
+/// A name that stays one component inside the directory it is joined to.
+fn one_component(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0'])
+}
+
+/// A listing entry as [`fetch_tree`] takes it: the local name (a directory
+/// keeps the listing's spelling, as the script's `"$dest/${e%/}"`; a file its
+/// decoded name) and whether it is a directory; `Err` says why it is refused.
+/// Refused: an entry whose spelling or decoded name is empty, `.`, `..`, or
+/// holds `/`, `\` or a NUL (an absolute path, `..%2F..`, `%2Fhome%2F…` would
+/// otherwise write outside the run's directory, and `./` would recurse
+/// forever), and a malformed escape ([`href_name`]).
+pub fn tree_entry(e: &str) -> Result<(String, bool), String> {
+    let (raw, dir) = match e.strip_suffix('/') {
+        Some(r) => (r, true),
+        None => (e, false),
+    };
+    let decoded = href_name(raw)?;
+    if !one_component(raw) || !one_component(&decoded) {
+        return Err("not a single name inside the run directory".into());
+    }
+    Ok((if dir { raw.to_owned() } else { decoded }, dir))
+}
+
+/// The files [`judge_run`] reads, which the tree fetch takes whatever the
+/// skip pattern says: [`RUN_FILES`] and `DONE`.
+fn judged_files() -> impl Iterator<Item = &'static str> {
+    RUN_FILES.into_iter().chain(["DONE"])
+}
+
+/// `FV_FETCH_TREE=1`: `runpod-http.sh fetch_tree`, the whole run directory
+/// mirrored from the pod's listing (`<family>/<tag>/`), recursively. Entries
+/// `../`, absolute and query hrefs are passed over (as the script does), and
+/// so is any entry [`tree_entry`] refuses (logged; the script would follow
+/// it); a path (`<family>/<tag>/…`, as the listing spells it) that `skip`
+/// matches is not fetched; a file over `max_mb` MiB, or one whose download
+/// fails, is left out (`curl --fail --max-filesize … || rm -f`), the size
+/// checked while it streams, written under a temporary name and renamed.
+///
+/// Beyond the script (it must not lose a run that `up --wait` deletes next):
+/// the top-level listing is retried 5 times, 10 s apart, as [`fetch_run`]'s;
+/// the files [`judge_run`] reads ([`RUN_FILES`], `DONE`) are fetched whatever
+/// `skip` matches; a listing that stays empty is an error after those files
+/// are fetched. At most [`TREE_DEPTH`] levels. Returns the number of files
+/// written.
+#[allow(clippy::too_many_arguments)]
+pub fn fetch_tree(
+    http: &dyn Http,
+    base: &str,
+    family: &str,
+    tag: &str,
+    dest: &Path,
+    opts: &TreeFetch,
+    clock: &dyn Clock,
+    log: &dyn LogSink,
+) -> Result<usize, PodError> {
+    let ioe = |p: &Path, e: std::io::Error| PodError::Io {
+        path: p.to_path_buf(),
+        why: e.to_string(),
+    };
+    std::fs::create_dir_all(dest).map_err(|e| ioe(dest, e))?;
+    let rel = format!("{family}/{tag}/");
+    let mut listing = None;
+    for attempt in 1..=5 {
+        listing = get_text(http, &format!("{base}/{rel}")).filter(|l| !hrefs(l).is_empty());
+        if listing.is_some() {
+            break;
+        }
+        log.line(&format!(
+            "[fv-lab] run directory listing empty (attempt {attempt}); retrying"
+        ));
+        clock.sleep(Duration::from_secs(10));
+    }
+    let mut n = 0;
+    let walked = match &listing {
+        Some(l) => tree_dir(http, base, &rel, l, dest, dest, opts, 0, log, &mut n),
+        None => Ok(()),
+    };
+    for f in judged_files() {
+        let p = dest.join(f);
+        if !p.exists() && save(http, &format!("{base}/{rel}{f}"), &p) {
+            n += 1;
+        }
+    }
+    walked?;
+    if listing.is_none() {
+        return Err(PodError::Fetch {
+            url: format!("{base}/{rel}"),
+            why: format!(
+                "the run directory's listing stayed empty (5 attempts); only {} of the judged files were fetched",
+                judged_files().filter(|f| dest.join(f).exists()).count()
+            ),
+        });
+    }
+    log.line(&format!("[fv-lab] results -> {}", dest.display()));
+    Ok(n)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tree_dir(
+    http: &dyn Http,
+    base: &str,
+    rel: &str,
+    listing: &str,
+    dest: &Path,
+    top: &Path,
+    opts: &TreeFetch,
+    depth: usize,
+    log: &dyn LogSink,
+    n: &mut usize,
+) -> Result<(), PodError> {
+    let ioe = |p: &Path, e: std::io::Error| PodError::Io {
+        path: p.to_path_buf(),
+        why: e.to_string(),
+    };
+    std::fs::create_dir_all(dest).map_err(|e| ioe(dest, e))?;
+    for e in hrefs(listing) {
+        if e.is_empty() || e == "../" || e.starts_with('/') || e.starts_with('?') {
+            continue;
+        }
+        let path = format!("{rel}{e}");
+        if opts.skip.as_ref().is_some_and(|s| s.matches(&path)) {
+            continue;
+        }
+        let (name, dir) = match tree_entry(&e) {
+            Ok(x) => x,
+            Err(why) => {
+                log.line(&format!("[fv-lab] tree fetch: refused `{path}`: {why}"));
+                continue;
+            }
+        };
+        let local = dest.join(&name);
+        // One validated component per level: still under the run's directory.
+        if !local.starts_with(top) || local.parent() != Some(dest) {
+            log.line(&format!(
+                "[fv-lab] tree fetch: refused `{path}`: outside the run directory"
+            ));
+            continue;
+        }
+        if dir {
+            if depth + 1 > TREE_DEPTH {
+                log.line(&format!(
+                    "[fv-lab] tree fetch: `{path}` is deeper than {TREE_DEPTH} levels; not descended"
+                ));
+                continue;
+            }
+            let sub = get_text(http, &format!("{base}/{path}")).unwrap_or_default();
+            tree_dir(
+                http,
+                base,
+                &path,
+                &sub,
+                &local,
+                top,
+                opts,
+                depth + 1,
+                log,
+                n,
+            )?;
+            continue;
+        }
+        let max = if opts.max_mb == 0 {
+            u64::MAX
+        } else {
+            opts.max_mb.saturating_mul(1 << 20)
+        };
+        let part = dest.join(format!(".{name}.fv-lab-part"));
+        let ok = http
+            .download_capped(
+                &format!("{base}/{path}"),
+                &part,
+                Duration::from_secs(900),
+                max,
+            )
+            .is_ok()
+            && std::fs::rename(&part, &local).is_ok();
+        if ok {
+            *n += 1;
+        } else {
+            let _ = std::fs::remove_file(&part);
+            let _ = std::fs::remove_file(&local);
+        }
+    }
+    Ok(())
+}
+
 /// A file of the verdict step (`plan::Verdict`) the fetch takes: in the run
 /// directory (`top`) a verdict (`*.verdict.json`), an evidence diff (`*.diff`)
 /// or the run's arm selection (`*.arms.json`); in an arm's directory an
@@ -1210,10 +1565,14 @@ cells = ["c"]
             req: &Request,
         ) -> Result<fastvideo_deploy::boot::sys::Response, fastvideo_deploy::boot::sys::SysError>
         {
-            Ok(match self.0.get(&req.url) {
+            let self_listing = req
+                .url
+                .ends_with("/a/")
+                .then(|| "<a href=\"a/\">a/</a>".to_owned());
+            Ok(match self.0.get(&req.url).cloned().or(self_listing) {
                 Some(b) => fastvideo_deploy::boot::sys::Response {
                     status: 200,
-                    body: b.clone().into_bytes(),
+                    body: b.into_bytes(),
                 },
                 None => fastvideo_deploy::boot::sys::Response {
                     status: 404,
@@ -1224,13 +1583,25 @@ cells = ["c"]
         fn download(
             &self,
             url: &str,
-            _: &Path,
+            dest: &Path,
             _: Duration,
         ) -> Result<u64, fastvideo_deploy::boot::sys::SysError> {
-            Err(fastvideo_deploy::boot::sys::SysError::Http {
-                url: url.into(),
-                why: "no".into(),
-            })
+            let body = self.0.get(url).cloned().or_else(|| {
+                // `…/a/a/…/`: a directory that lists itself, at any depth.
+                url.ends_with("/a/")
+                    .then(|| "<a href=\"a/\">a/</a>".to_owned())
+            });
+            match body {
+                Some(b) => {
+                    std::fs::write(dest, &b)
+                        .map_err(|e| fastvideo_deploy::boot::sys::SysError::io(dest, e))?;
+                    Ok(b.len() as u64)
+                }
+                None => Err(fastvideo_deploy::boot::sys::SysError::Status {
+                    url: url.into(),
+                    status: 404,
+                }),
+            }
         }
     }
 
@@ -1305,6 +1676,208 @@ cells = ["c"]
         assert!(!dest.join("baseline-fetch.log").exists());
         assert!(!dest.join("a/other.log").exists());
         assert!(judge_run(&dest, "t1").is_empty());
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn the_fetch_skip_is_greps_ere_subset() {
+        let m = |pat: &str, path: &str| FetchSkip::parse(pat).unwrap().matches(path);
+        assert!(m("/frames/", "b4a/t1/arm/frames/"));
+        assert!(!m("/frames/", "b4a/t1/arm/frames.sha256.json"));
+        assert!(m(r"\.cache$", "h3/t1/a/h3.cache"));
+        assert!(!m(r"\.cache$", "h3/t1/a/h3.cache.json"));
+        assert!(m("png", "x/t/a/frames/f.png"));
+        let o = r"oracle-dump\.tar|/dump/|\.mp4$";
+        assert!(m(o, "o/t/oracle-dump.tar"));
+        assert!(!m(o, "o/t/oracle-dumpXtar"));
+        assert!(m(o, "o/t/a/dump/"));
+        assert!(m(o, "o/t/a/out.mp4"));
+        assert!(!m(o, "o/t/a/out.mp4.json"));
+        assert!(m("^fam/", "fam/t/x"));
+        assert!(!m("^am/", "fam/t/x"));
+        assert!(m("a.c", "xabcx"));
+        assert!(!m("a.c", "ac"));
+        for bad in [
+            "", "a|", "|a", "[ab]", "a*", "(a)", "a+", "a?", "a{2}", r"\d", "a$b", "a^b", "a\\",
+            r"\<a", r"a\>", r"\`a", r"a\'",
+        ] {
+            assert!(FetchSkip::parse(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(href_name("my%20file").unwrap(), "my file");
+        for bad in ["my%2", "%Ag", "%e9"] {
+            assert!(href_name(bad).is_err(), "{bad}");
+        }
+    }
+
+    struct Lines(std::sync::Mutex<Vec<String>>);
+    impl LogSink for Lines {
+        fn line(&self, s: &str) {
+            self.0.lock().unwrap().push(s.to_owned());
+        }
+    }
+
+    fn files(items: Vec<(String, String)>) -> Files {
+        Files(items.into_iter().collect())
+    }
+
+    fn dir_listing(entries: &[&str]) -> String {
+        entries
+            .iter()
+            .map(|e| format!("<li><a href=\"{e}\">x</a></li>\n"))
+            .collect()
+    }
+
+    #[test]
+    fn the_tree_fetch_stays_inside_the_run_directory() {
+        let base = std::env::temp_dir().join(format!("fv-lab-tree-escape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dest = base.join("runs/fam/t1");
+        let evil = base.join("evil");
+        let abs: String = evil
+            .to_string_lossy()
+            .bytes()
+            .map(|c| format!("%{c:02X}"))
+            .collect();
+        let run = "https://p/fam/t1";
+        let top = dir_listing(&[
+            abs.as_str(),
+            "..%2F..%2Fescaped",
+            "../../escaped/",
+            "./",
+            "%2E%2E/",
+            "a%5Cb",
+            "nul%00x",
+            "bad%2",
+            "ok%20file.txt",
+            "sub/",
+            "a/",
+            "DONE",
+        ]);
+        let f = files(vec![
+            (format!("{run}/"), top.to_string()),
+            (format!("{run}/{abs}"), "pwned".to_string()),
+            (format!("{run}/..%2F..%2Fescaped"), "pwned".to_string()),
+            (format!("{run}/ok%20file.txt"), "ok".to_string()),
+            (
+                format!("{run}/sub/"),
+                dir_listing(&["./", "deep.txt"]).to_string(),
+            ),
+            (format!("{run}/sub/deep.txt"), "deep".to_string()),
+            (format!("{run}/DONE"), "done t1\n".to_string()),
+            (format!("{run}/matrix.out"), "matrix_exit=0\n".to_string()),
+        ]);
+        let log = Lines(std::sync::Mutex::new(Vec::new()));
+        let n = fetch_tree(
+            &f,
+            "https://p",
+            "fam",
+            "t1",
+            &dest,
+            &TreeFetch::default(),
+            &Still,
+            &log,
+        )
+        .unwrap();
+        assert!(!evil.exists());
+        assert!(!base.join("runs/escaped").exists() && !base.join("escaped").exists());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("ok file.txt")).unwrap(),
+            "ok"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("sub/deep.txt")).unwrap(),
+            "deep"
+        );
+        // The judged files whatever the listing held (matrix.out was not listed).
+        assert!(dest.join("DONE").is_file() && dest.join("matrix.out").is_file());
+        assert!(judge_run(&dest, "t1").is_empty());
+        // A self-listing directory stops at the depth cap.
+        let mut depth = 0;
+        let mut p = dest.join("a");
+        while p.is_dir() {
+            depth += 1;
+            p = p.join("a");
+        }
+        assert_eq!(depth, TREE_DEPTH);
+        let lines = log.0.lock().unwrap().join("\n");
+        for refused in [
+            "..%2F..%2Fescaped",
+            "./",
+            "%2E%2E/",
+            "a%5Cb",
+            "nul%00x",
+            "bad%2",
+            "sub/./",
+        ] {
+            assert!(
+                lines.contains(&format!("{refused}`: ")),
+                "{refused} not refused:\n{lines}"
+            );
+        }
+        assert!(lines.contains("deeper than 16 levels"));
+        assert_eq!(n, 4, "ok file, deep.txt, DONE, matrix.out");
+        // No temporary file is left.
+        assert!(!std::fs::read_dir(&dest)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().ends_with(".fv-lab-part")));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_tree_fetch_without_a_listing_still_takes_the_judged_files_and_fails() {
+        let dest = std::env::temp_dir().join(format!("fv-lab-tree-nolist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dest);
+        let run = "https://p/fam/t1";
+        let f = files(vec![
+            (format!("{run}/DONE"), "done t1\n".to_string()),
+            (format!("{run}/matrix.out"), "matrix_exit=0\n".to_string()),
+            (format!("{run}/live.log"), "x\n".to_string()),
+        ]);
+        let log = Lines(std::sync::Mutex::new(Vec::new()));
+        let e = fetch_tree(
+            &f,
+            "https://p",
+            "fam",
+            "t1",
+            &dest,
+            &TreeFetch::default(),
+            &Still,
+            &log,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("stayed empty (5 attempts)"), "{e}");
+        assert_eq!(log.0.lock().unwrap().len(), 5);
+        assert!(dest.join("DONE").is_file() && dest.join("live.log").is_file());
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn a_tree_fetch_leaves_out_files_over_the_limit_and_skips_but_not_the_judged_ones() {
+        let dest = std::env::temp_dir().join(format!("fv-lab-tree-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dest);
+        let run = "https://p/fam/t1";
+        let big = "x".repeat((1 << 20) + 1);
+        let f = files(vec![
+            (
+                format!("{run}/"),
+                dir_listing(&["big.bin", "small.bin", "live.log", "DONE"]).to_string(),
+            ),
+            (format!("{run}/big.bin"), big.to_string()),
+            (format!("{run}/small.bin"), "s".to_string()),
+            (format!("{run}/live.log"), "log\n".to_string()),
+            (format!("{run}/DONE"), "done t1\n".to_string()),
+        ]);
+        let opts = TreeFetch {
+            skip: Some(FetchSkip::parse(r"\.log$").unwrap()),
+            max_mb: 1,
+        };
+        fetch_tree(&f, "https://p", "fam", "t1", &dest, &opts, &Still, &Quiet).unwrap();
+        assert!(!dest.join("big.bin").exists());
+        assert!(dest.join("small.bin").is_file());
+        // Skipped by the pattern, fetched as a judged file all the same.
+        assert!(dest.join("live.log").is_file());
         let _ = std::fs::remove_dir_all(&dest);
     }
 

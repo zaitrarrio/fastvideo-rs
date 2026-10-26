@@ -1,0 +1,521 @@
+[b6-solh3-merge-base] [fastvideo] h3 text encoder: auto -> resident-fp8: 94.3 GiB free before load >= need 87.0 GiB = fp8 encoder 22.7 + max(resident weights 30.8 [dit mxfp8 resident, vae bf16+mxfp8, extra 2.0] + denoise reserve 27.6 for 1344x768x124 (38734 rows) + runtime 2.0; plan peak 48.7; the DiT placement's 62.3 + extra)
+[b6-solh3-merge-base] [fastvideo] h3 dit: quantizing at load (FASTVIDEO_H3_DIT_TREE=off)
+[b6-solh3-merge-base] [fastvideo] load/io h3 text_encoder {"wall_s":93.36,"viewed_gb":25.95,"prefetch_read_gb":26.20,"prefetch_skipped_gb":0.00,"prefetch_busy_s":1526.4,"viewed_gbps":0.28,"window_wait_s":0.0,"fill_s":0.3,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":80.6,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[b6-solh3-merge-base] [fastvideo] h3 sol-h3: fuse 362 pairs rank=64 alpha=64 scale=1 diffs=85 (/workspace/weights/FastH3-4-step-Preview-v1-LoRA/dense-datafree/adapter_model.safetensors)
+[b6-solh3-merge-base] [fastvideo] h3 i2v encoder: resident (71.5 GiB free covers the vision tower (2.0 GiB) and the resident plan (62.3 GiB)): vision tower 1.09 GiB loaded in 75.7 s; the language model is the resident text encoder (ResidentFp8), 70.4 GiB free now
+[b6-solh3-merge-base] [fastvideo] h3 dit offload: auto -> resident (resident plan 62.3 GiB, 70.4 GiB free before load)
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 1/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 2/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 3/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 4/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 5/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 6/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 7/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 8/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 9/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 10/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 11/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 12/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 13/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 14/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 15/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 16/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 17/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 18/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 19/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 20/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 21/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 22/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 23/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 24/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 25/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 26/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 27/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 28/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 29/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 30/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 31/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 32/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 33/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 34/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 35/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 36/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 37/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 38/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 39/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 40/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 41/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 42/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 43/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 44/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 45/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 46/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 47/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 48/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 49/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: block 50/50 resident
+[b6-solh3-merge-base] [fastvideo] h3 dit: 50 blocks resident
+[b6-solh3-merge-base] [fastvideo] h3 lora merge: device
+[b6-solh3-merge-base] [fastvideo] load/io h3 dit {"wall_s":552.66,"viewed_gb":94.91,"prefetch_read_gb":93.08,"prefetch_skipped_gb":0.00,"prefetch_busy_s":9166.5,"viewed_gbps":0.17,"window_wait_s":0.0,"fill_s":75.4,"h2d_wait_s":0.5,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":329.8,"read_wait_s":418.9,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[b6-solh3-merge-base] [fastvideo] load/io h3 total {"wall_s":593.04,"viewed_gb":104.86,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":9819.8,"viewed_gbps":0.18,"window_wait_s":0.0,"fill_s":75.4,"h2d_wait_s":0.5,"h2d_pageable_s":0.2,"convert_s":0.0,"lora_s":329.8,"read_wait_s":457.5,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 1/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 2/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 3/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 4/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 5/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 6/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 7/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 8/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 9/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 10/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 11/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 12/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 13/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 14/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 15/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 16/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 17/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 18/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 19/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 20/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 21/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 22/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 23/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 24/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 25/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 26/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 27/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 28/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 29/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 30/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 31/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 32/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 33/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 34/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 35/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 36/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 37/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 38/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 39/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 40/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 41/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 42/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 43/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 44/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 45/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 46/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 47/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 48/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 49/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 0: block 50/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 1/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 2/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 3/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 4/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 5/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 6/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 7/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 8/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 9/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 10/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 11/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 12/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 13/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 14/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 15/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 16/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 17/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 18/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 19/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 20/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 21/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 22/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 23/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 24/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 25/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 26/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 27/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 28/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 29/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 30/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 31/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 32/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 33/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 34/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 35/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 36/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 37/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 38/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 39/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 40/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 41/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 42/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 43/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 44/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 45/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 46/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 47/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 48/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 49/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 1: block 50/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 1/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 2/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 3/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 4/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 5/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 6/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 7/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 8/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 9/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 10/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 11/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 12/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 13/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 14/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 15/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 16/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 17/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 18/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 19/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 20/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 21/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 22/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 23/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 24/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 25/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 26/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 27/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 28/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 29/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 30/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 31/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 32/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 33/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 34/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 35/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 36/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 37/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 38/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 39/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 40/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 41/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 42/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 43/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 44/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 45/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 46/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 47/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 48/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 49/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 2: block 50/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 1/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 2/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 3/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 4/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 5/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 6/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 7/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 8/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 9/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 10/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 11/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 12/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 13/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 14/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 15/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 16/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 17/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 18/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 19/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 20/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 21/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 22/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 23/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 24/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 25/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 26/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 27/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 28/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 29/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 30/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 31/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 32/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 33/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 34/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 35/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 36/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 37/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 38/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 39/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 40/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 41/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 42/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 43/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 44/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 45/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 46/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 47/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 48/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 49/50
+[b6-solh3-merge-base] [fastvideo] h3 dit step 3: block 50/50
+[b6-solh3-merge-pr] [fastvideo] h3 text encoder: auto -> resident-fp8: 94.3 GiB free before load >= need 87.0 GiB = fp8 encoder 22.7 + max(resident weights 30.8 [dit mxfp8 resident, vae bf16+mxfp8, extra 2.0] + denoise reserve 27.6 for 1344x768x124 (38734 rows) + runtime 2.0; plan peak 48.7; the DiT placement's 62.3 + extra)
+[b6-solh3-merge-pr] [fastvideo] h3 dit: quantizing at load (FASTVIDEO_H3_DIT_TREE=off)
+[b6-solh3-merge-pr] [fastvideo] load/io h3 text_encoder {"wall_s":137.59,"viewed_gb":25.95,"prefetch_read_gb":26.17,"prefetch_skipped_gb":0.00,"prefetch_busy_s":2253.0,"viewed_gbps":0.19,"window_wait_s":0.0,"fill_s":0.3,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":125.0,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[b6-solh3-merge-pr] [fastvideo] h3 sol-h3: fuse 362 pairs rank=64 alpha=64 scale=1 diffs=85 (/workspace/weights/FastH3-4-step-Preview-v1-LoRA/dense-datafree/adapter_model.safetensors)
+[b6-solh3-merge-pr] [fastvideo] h3 i2v encoder: resident (71.5 GiB free covers the vision tower (2.0 GiB) and the resident plan (62.3 GiB)): vision tower 1.09 GiB loaded in 74.7 s; the language model is the resident text encoder (ResidentFp8), 70.4 GiB free now
+[b6-solh3-merge-pr] [fastvideo] h3 dit offload: auto -> resident (resident plan 62.3 GiB, 70.4 GiB free before load)
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 1/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 2/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 3/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 4/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 5/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 6/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 7/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 8/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 9/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 10/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 11/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 12/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 13/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 14/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 15/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 16/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 17/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 18/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 19/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 20/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 21/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 22/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 23/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 24/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 25/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 26/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 27/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 28/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 29/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 30/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 31/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 32/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 33/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 34/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 35/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 36/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 37/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 38/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 39/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 40/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 41/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 42/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 43/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 44/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 45/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 46/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 47/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 48/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 49/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: block 50/50 resident
+[b6-solh3-merge-pr] [fastvideo] h3 dit: 50 blocks resident
+[b6-solh3-merge-pr] [fastvideo] load/io h3 dit {"wall_s":530.83,"viewed_gb":94.91,"prefetch_read_gb":93.45,"prefetch_skipped_gb":0.00,"prefetch_busy_s":8780.9,"viewed_gbps":0.18,"window_wait_s":0.0,"fill_s":75.2,"h2d_wait_s":0.5,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":264.3,"read_wait_s":398.4,"fetch_wait_s":0.0,"mem_mode":true,"prefetch":true}
+[b6-solh3-merge-pr] [fastvideo] load/io h3 total {"wall_s":560.98,"viewed_gb":104.86,"prefetch_read_gb":102.24,"prefetch_skipped_gb":0.00,"prefetch_busy_s":9264.2,"viewed_gbps":0.19,"window_wait_s":0.0,"fill_s":75.2,"h2d_wait_s":0.5,"h2d_pageable_s":0.4,"convert_s":0.0,"lora_s":264.3,"read_wait_s":426.5,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[b6-solh3-merge-pr] [fastvideo] h3 lora merge: device
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 1/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 2/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 3/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 4/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 5/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 6/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 7/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 8/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 9/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 10/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 11/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 12/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 13/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 14/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 15/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 16/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 17/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 18/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 19/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 20/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 21/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 22/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 23/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 24/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 25/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 26/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 27/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 28/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 29/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 30/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 31/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 32/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 33/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 34/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 35/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 36/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 37/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 38/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 39/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 40/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 41/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 42/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 43/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 44/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 45/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 46/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 47/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 48/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 49/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 0: block 50/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 1/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 2/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 3/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 4/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 5/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 6/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 7/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 8/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 9/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 10/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 11/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 12/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 13/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 14/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 15/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 16/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 17/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 18/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 19/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 20/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 21/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 22/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 23/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 24/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 25/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 26/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 27/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 28/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 29/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 30/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 31/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 32/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 33/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 34/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 35/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 36/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 37/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 38/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 39/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 40/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 41/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 42/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 43/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 44/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 45/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 46/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 47/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 48/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 49/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 1: block 50/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 1/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 2/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 3/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 4/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 5/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 6/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 7/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 8/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 9/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 10/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 11/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 12/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 13/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 14/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 15/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 16/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 17/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 18/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 19/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 20/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 21/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 22/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 23/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 24/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 25/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 26/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 27/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 28/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 29/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 30/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 31/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 32/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 33/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 34/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 35/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 36/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 37/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 38/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 39/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 40/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 41/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 42/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 43/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 44/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 45/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 46/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 47/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 48/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 49/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 2: block 50/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 1/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 2/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 3/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 4/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 5/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 6/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 7/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 8/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 9/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 10/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 11/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 12/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 13/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 14/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 15/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 16/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 17/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 18/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 19/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 20/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 21/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 22/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 23/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 24/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 25/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 26/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 27/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 28/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 29/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 30/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 31/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 32/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 33/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 34/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 35/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 36/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 37/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 38/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 39/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 40/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 41/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 42/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 43/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 44/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 45/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 46/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 47/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 48/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 49/50
+[b6-solh3-merge-pr] [fastvideo] h3 dit step 3: block 50/50
+compare-clips-b6-solh3-merge-base--b6-solh3-merge-pr.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "failed" "status": "failed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 

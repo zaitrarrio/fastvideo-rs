@@ -60,10 +60,21 @@ dry "lists split without globbing" 0 "--cells sol-h3 \\* --extra-env FASTVIDEO_X
 dry "the reviewer's case" 1 "which has no FV_AVOID_MACHINES" FV_FAMILY=precision FV_POD_CAP_S=1800 \
   RUNPOD_VOLUME_ID=other RUNPOD_CLOUD_TYPE=COMMUNITY FV_AVOID_MACHINES=m1 FV_SKIP_TAE=1
 for kv in FV_POD_FILES=x FV_POD_SCRIPT=x FV_POD_FILE=x FV_PROMPTS=5 FV_PROMPT=x FV_SEED=1 FV_AVOID_MACHINES=m1 \
-  FV_CREATE_WAIT_S=60 FV_FETCH_SKIP=png FV_FETCH_MAX_MB=10 RUNPOD_ALLOWED_CUDA=13.0; do
+  FV_CREATE_WAIT_S=60 RUNPOD_ALLOWED_CUDA=13.0; do
   dry "refused: $kv" 1 "which has no ${kv%%=*}" FV_FAMILY=trace "$kv"
 done
-for kv in FV_KEEP_POD=1 FV_FETCH_TREE=1 RUNPOD_NO_VOLUME=1; do
+# FV_FETCH_TREE=1 is fv-lab's --fetch-tree (ADR-0019 §13); its settings act only with it.
+dry "FV_FETCH_TREE=1: --fetch-tree" 0 "--family trace --root $ROOT --fetch-tree --fetch-skip /frames/ --fetch-max-mb 10 --yes --wait" \
+  FV_FAMILY=trace FV_FETCH_TREE=1 FV_FETCH_SKIP=/frames/ FV_FETCH_MAX_MB=10
+expect "plan: FV_FETCH_TREE=1 fetches nothing" 0 "--family trace --root $ROOT --tag abc1234-1025120000-abcd" -- \
+  FV_DRY_RUN=1 FV_FAMILY=trace FV_FETCH_TREE=1 bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
+for kv in FV_FETCH_SKIP=png FV_FETCH_MAX_MB=10; do
+  dry "refused without the tree: $kv" 1 "reads ${kv%%=*} only with FV_FETCH_TREE=1" FV_FAMILY=trace "$kv"
+done
+for mb in 010 0x10 1e3 -1; do
+  dry "refused: FV_FETCH_MAX_MB=$mb (not decimal)" 1 "as a decimal number of MiB" FV_FAMILY=trace FV_FETCH_TREE=1 FV_FETCH_MAX_MB="$mb"
+done
+for kv in FV_KEEP_POD=1 RUNPOD_NO_VOLUME=1; do
   dry "refused: $kv" 1 "which has no $kv" FV_FAMILY=trace "$kv"
 done
 for kv in FV_GEN_TIMEOUT_S=900 FV_CONTAINER_DISK_GB=200 RUNPOD_CLOUD_TYPE=COMMUNITY RUNPOD_GPU_TYPE=H100 \

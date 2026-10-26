@@ -72,7 +72,7 @@ sm_120a with the SageAttention3 FP4 kernels against CUTLASS `e67e63c`), and this
 with the runtime's CUDA 13.4 libraries. Both sides ran on the same pod:
 `scripts/gpu/experiments/fasth3-nvfp4-validate.sh up <image> <bin>` and `scripts/gpu/experiments/fasth3-nvfp4-pod.sh`. Weights came from R2
 (185 GB at ~180 MB/s from EU-NL-1 to the WNAM bucket, 17 min). Results are in `artifacts/ports/fasth3-nvfp4/run-2026-10-14/`
-(`summary.md` from `scripts/gpu/experiments/fasth3-nvfp4-summary.py`). Every step passed (`status.tsv`).
+(`summary.md` from `scripts/gpu/experiments/fasth3-nvfp4-summary.py`, now `fv-lab report summary --kind fasth3-nvfp4 DIR --json OUT`). Every step passed (`status.tsv`).
 
 **Upstream, exactly as its page runs it:**
 - `convert_minimax_h3_text_encoder_nvfp4.py` (50 layers, probe 0.134, 170 s) and

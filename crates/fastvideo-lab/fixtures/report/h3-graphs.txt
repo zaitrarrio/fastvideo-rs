@@ -1,0 +1,109 @@
+== cells/4s-graphs
+  h3-demo-480p-a               total    8.19 denoise   5.661 median step 1.354 peak 27454 MiB
+  h3-demo-480p-b               total    7.89 denoise   5.314 median step 1.328 peak 27454 MiB
+  h3-demo-480p-c               total    8.00 denoise   5.315 median step 1.328 peak 27454 MiB
+  spark-mountain-lake-480p-a   total    7.80 denoise   5.144 median step 1.270 peak 31262 MiB
+  spark-mountain-lake-480p-b   total    7.61 denoise   5.100 median step 1.278 peak 27468 MiB
+  spark-mountain-lake-480p-c   total    7.56 denoise   5.009 median step 1.252 peak 27532 MiB
+  h3-demo-768p-a               total   19.36 denoise  13.851 median step 3.471 peak 38796 MiB
+  h3-demo-768p-b               total   19.23 denoise  13.753 median step 3.445 peak 34700 MiB
+  h3-demo-768p-c               total   19.08 denoise  13.588 median step 3.397 peak 34828 MiB
+  spark-mountain-lake-768p-a   total   18.68 denoise  13.254 median step 3.297 peak 43980 MiB
+  spark-mountain-lake-768p-b   total   18.66 denoise  13.308 median step 3.327 peak 34874 MiB
+  spark-mountain-lake-768p-c   total   18.49 denoise  13.149 median step 3.287 peak 34874 MiB
+  capture step 0: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427050600872 } pool 4.72 GiB
+  capture step 1: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427050600872 } pool 4.72 GiB
+  max graph pool high 11.09 GiB over 16 captures
+== cells/4s-lazy
+  h3-demo-480p-a               total    8.00 denoise   5.390 median step 1.337 peak 25988 MiB
+  h3-demo-480p-b               total    7.90 denoise   5.391 median step 1.335 peak 25766 MiB
+  h3-demo-480p-c               total    8.06 denoise   5.390 median step 1.335 peak 25766 MiB
+  spark-mountain-lake-480p-a   total    7.71 denoise   5.108 median step 1.259 peak 25606 MiB
+  spark-mountain-lake-480p-b   total    7.67 denoise   5.117 median step 1.271 peak 25606 MiB
+  spark-mountain-lake-480p-c   total    7.66 denoise   5.131 median step 1.269 peak 25606 MiB
+  h3-demo-768p-a               total   19.10 denoise  13.736 median step 3.433 peak 33606 MiB
+  h3-demo-768p-b               total   19.19 denoise  13.681 median step 3.404 peak 32326 MiB
+  h3-demo-768p-c               total   19.16 denoise  13.663 median step 3.403 peak 32326 MiB
+  spark-mountain-lake-768p-a   total   18.55 denoise  13.228 median step 3.295 peak 32166 MiB
+  spark-mountain-lake-768p-b   total   18.65 denoise  13.230 median step 3.296 peak 32166 MiB
+  spark-mountain-lake-768p-c   total   18.68 denoise  13.358 median step 3.296 peak 33190 MiB
+== cells/4s-sync
+  h3-demo-480p-a               total    8.14 denoise   5.579 median step 1.394 peak 25988 MiB
+  h3-demo-480p-b               total    8.14 denoise   5.580 median step 1.392 peak 25798 MiB
+  h3-demo-480p-c               total    8.13 denoise   5.567 median step 1.392 peak 25766 MiB
+  spark-mountain-lake-480p-a   total    7.86 denoise   5.294 median step 1.325 peak 25638 MiB
+  spark-mountain-lake-480p-b   total    7.74 denoise   5.271 median step 1.317 peak 25638 MiB
+  spark-mountain-lake-480p-c   total    7.82 denoise   5.272 median step 1.317 peak 25638 MiB
+  h3-demo-768p-a               total   19.33 denoise  13.843 median step 3.461 peak 32358 MiB
+  h3-demo-768p-b               total   19.30 denoise  13.872 median step 3.465 peak 32390 MiB
+  h3-demo-768p-c               total   19.24 denoise  13.869 median step 3.467 peak 32358 MiB
+  spark-mountain-lake-768p-a   total   18.82 denoise  13.436 median step 3.359 peak 32230 MiB
+  spark-mountain-lake-768p-b   total   18.79 denoise  13.410 median step 3.352 peak 32230 MiB
+  spark-mountain-lake-768p-c   total   18.91 denoise  13.461 median step 3.360 peak 32230 MiB
+== cells/v2-graphs
+  h3-demo-480p-a               total   18.31 denoise  15.811 median step 1.409 peak 27692 MiB
+  h3-demo-480p-b               total   13.61 denoise  11.034 median step 1.379 peak 27692 MiB
+  h3-demo-480p-c               total   13.60 denoise  11.044 median step 1.380 peak 27692 MiB
+  spark-mountain-lake-480p-a   total   13.14 denoise  10.596 median step 1.320 peak 30956 MiB
+  spark-mountain-lake-480p-b   total   13.12 denoise  10.665 median step 1.325 peak 27784 MiB
+  spark-mountain-lake-480p-c   total   12.92 denoise  10.420 median step 1.302 peak 27784 MiB
+  h3-demo-768p-a               total   34.95 denoise  29.587 median step 3.685 peak 37800 MiB
+  h3-demo-768p-b               total   35.07 denoise  29.669 median step 3.716 peak 35127 MiB
+  h3-demo-768p-c               total   34.73 denoise  29.409 median step 3.676 peak 35084 MiB
+  spark-mountain-lake-768p-a   total   34.06 denoise  28.643 median step 3.572 peak 45390 MiB
+  spark-mountain-lake-768p-b   total   33.95 denoise  28.610 median step 3.565 peak 44422 MiB
+  spark-mountain-lake-768p-c   total   33.97 denoise  28.626 median step 3.573 peak 44328 MiB
+  capture step 0: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 } pool 4.72 GiB
+  capture step 1: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 } pool 4.72 GiB
+  max graph pool high 11.09 GiB over 26 captures
+== cells/v2-lazy
+  h3-demo-480p-a               total   13.67 denoise  11.133 median step 1.386 peak 25988 MiB
+  h3-demo-480p-b               total   13.66 denoise  11.143 median step 1.386 peak 25734 MiB
+  h3-demo-480p-c               total   13.64 denoise  11.157 median step 1.389 peak 25734 MiB
+  spark-mountain-lake-480p-a   total   13.09 denoise  10.597 median step 1.319 peak 25638 MiB
+  spark-mountain-lake-480p-b   total   13.12 denoise  10.604 median step 1.320 peak 25638 MiB
+  spark-mountain-lake-480p-c   total   13.13 denoise  10.615 median step 1.320 peak 25638 MiB
+  h3-demo-768p-a               total   35.01 denoise  29.548 median step 3.681 peak 32326 MiB
+  h3-demo-768p-b               total   34.89 denoise  29.498 median step 3.681 peak 33446 MiB
+  h3-demo-768p-c               total   34.85 denoise  29.498 median step 3.681 peak 33446 MiB
+  spark-mountain-lake-768p-a   total   34.21 denoise  28.815 median step 3.595 peak 33254 MiB
+  spark-mountain-lake-768p-b   total   34.18 denoise  28.825 median step 3.597 peak 33318 MiB
+  spark-mountain-lake-768p-c   total   34.22 denoise  28.831 median step 3.598 peak 33318 MiB
+== cells/v2-sync
+  h3-demo-480p-a               total   14.27 denoise  11.678 median step 1.459 peak 26182 MiB
+  h3-demo-480p-b               total   14.16 denoise  11.589 median step 1.448 peak 25830 MiB
+  h3-demo-480p-c               total   14.20 denoise  11.665 median step 1.455 peak 25830 MiB
+  spark-mountain-lake-480p-a   total   13.57 denoise  10.997 median step 1.374 peak 25702 MiB
+  spark-mountain-lake-480p-b   total   13.62 denoise  11.075 median step 1.384 peak 26054 MiB
+  spark-mountain-lake-480p-c   total   13.56 denoise  11.025 median step 1.379 peak 26086 MiB
+  h3-demo-768p-a               total   35.46 denoise  29.961 median step 3.743 peak 32422 MiB
+  h3-demo-768p-b               total   35.45 denoise  29.976 median step 3.741 peak 33606 MiB
+  h3-demo-768p-c               total   35.36 denoise  29.951 median step 3.745 peak 33606 MiB
+  spark-mountain-lake-768p-a   total   34.56 denoise  29.201 median step 3.650 peak 33446 MiB
+  spark-mountain-lake-768p-b   total   34.58 denoise  29.257 median step 3.657 peak 33446 MiB
+  spark-mountain-lake-768p-c   total   34.60 denoise  29.213 median step 3.650 peak 33446 MiB
+== trace/v2-480p
+  spark-mountain-lake-480p-w   total   17.17 denoise  11.118 median step 1.379 peak 25980 MiB trace: busy 1.316 idle 65.5ms kernels 2790 host_launches 2684 memcpy {"DtoD": {"bytes": 42864640400, "count": 150}, "HtoD": {"bytes": 38707200, "count": 1}}
+  h3-demo-480p-a               total   17.65 denoise  11.634 median step 1.452 peak 25982 MiB trace: busy 1.393 idle 68.0ms kernels 2790 host_launches 2684 memcpy {"DtoD": {"bytes": 44100403600, "count": 150}, "HtoD": {"bytes": 38707200, "count": 1}}
+  h3-demo-480p-b               total   14.86 denoise  12.269 median step 1.480 peak 27610 MiB trace: busy 1.393 idle 2.3ms kernels 2792 host_launches 2686 memcpy {"DtoD": {"bytes": 44100403600, "count": 150}}
+  h3-demo-480p-c               total   13.61 denoise  11.073 median step 1.380 peak 27610 MiB trace: busy 1.393 idle 2.3ms kernels 2792 host_launches 0 memcpy {"DtoD": {"bytes": 44100403600, "count": 150}}
+  capture step 0: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 } pool 4.72 GiB
+  capture step 1: GraphStats { nodes: 9866, kernels: 2792, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 427143426472 } pool 4.72 GiB
+  max graph pool high 4.72 GiB over 8 captures
+== trace/v2-768p
+  spark-mountain-lake-768p-w   total   35.03 denoise  29.328 median step 3.643 peak 33210 MiB trace: busy 3.608 idle 57.4ms kernels 2789 host_launches 2684 memcpy {"DtoD": {"bytes": 108426035600, "count": 150}, "HtoD": {"bytes": 38707200, "count": 1}}
+  h3-demo-768p-a               total   35.39 denoise  29.968 median step 3.741 peak 32668 MiB trace: busy 3.705 idle 65.1ms kernels 2789 host_launches 2684 memcpy {"DtoD": {"bytes": 109661798800, "count": 150}, "HtoD": {"bytes": 38707200, "count": 1}}
+  h3-demo-768p-b               total   36.03 denoise  30.715 median step 3.781 peak 34910 MiB trace: busy 3.710 idle 2.5ms kernels 2791 host_launches 2686 memcpy {"DtoD": {"bytes": 109661798800, "count": 150}}
+  h3-demo-768p-c               total   34.82 denoise  29.487 median step 3.678 peak 34910 MiB trace: busy 3.712 idle 2.4ms kernels 2791 host_launches 0 memcpy {"DtoD": {"bytes": 109661798800, "count": 150}}
+  capture step 0: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1048343013800 } pool 11.09 GiB
+  capture step 1: GraphStats { nodes: 9865, kernels: 2791, allocs: 3187, frees: 3187, escaped: 0, alloc_bytes: 1048343013800 } pool 11.09 GiB
+  max graph pool high 11.09 GiB over 8 captures
+== byte identity (all arms and requests of a checkpoint / prompt / canvas)
+  ('4s', 'h3-demo-480p'): 9 clips, 1 distinct, files ['125']
+  ('4s', 'h3-demo-768p'): 9 clips, 1 distinct, files ['125']
+  ('4s', 'spark-mountain-lake-480p'): 9 clips, 1 distinct, files ['125']
+  ('4s', 'spark-mountain-lake-768p'): 9 clips, 1 distinct, files ['125']
+  ('v2', 'h3-demo-480p'): 9 clips, 1 distinct, files ['125']
+  ('v2', 'h3-demo-768p'): 9 clips, 1 distinct, files ['125']
+  ('v2', 'spark-mountain-lake-480p'): 9 clips, 1 distinct, files ['125']
+  ('v2', 'spark-mountain-lake-768p'): 9 clips, 1 distinct, files ['125']

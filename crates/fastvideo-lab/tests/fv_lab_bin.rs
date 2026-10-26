@@ -688,3 +688,149 @@ fn fv_b4a_cells_is_refused_not_ignored() {
     assert_ne!(code, Some(0));
     assert!(err.contains("not FV_B4A_CELLS"), "{err}");
 }
+
+#[test]
+fn report_summary_and_table_print_the_scripts_output() {
+    let fx = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/report");
+    let read =
+        |p: PathBuf| std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    // The tier from the run directory's parent; the retired branch's lines.
+    let out = stdout(fv_lab().args([
+        "report",
+        "summary",
+        "artifacts/runpod/trace/b0d0bb8-10251650",
+    ]));
+    assert_eq!(out, read(fx.join("summary/trace--b0d0bb8-10251650.txt")));
+    let out = stdout(fv_lab().args([
+        "report",
+        "summary",
+        "--kind",
+        "h3-graphs",
+        "artifacts/perf/h3-denoise-graphs/run-2026-10-14",
+    ]));
+    assert_eq!(out, read(fx.join("h3-graphs.txt")));
+    // --json writes the record as the script's json.dump does.
+    let dir = std::env::temp_dir().join(format!("fv-lab-bin-report-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let json = dir.join("out.json");
+    let out = stdout(
+        fv_lab()
+            .args(["report", "summary", "--kind", "h3-tier-options", "--json"])
+            .arg(&json)
+            .arg("artifacts/perf/h3-nvfp4-tier-options"),
+    );
+    assert_eq!(out, read(fx.join("h3-tier-options.md")));
+    assert_eq!(read(json.clone()), read(fx.join("h3-tier-options.json")));
+    // timings: printed and written (here to --out).
+    let md = dir.join("timings.md");
+    let out = stdout(
+        fv_lab()
+            .args(["report", "table", "--kind", "timings", "--out"])
+            .arg(&md)
+            .arg(fx.join("timings-run")),
+    );
+    assert_eq!(out, read(fx.join("timings.md")));
+    assert_eq!(read(md), out);
+    // sol-bench: the table, and results.json where --json says.
+    let res = dir.join("results.json");
+    let out = stdout(
+        fv_lab()
+            .args(["report", "table", "--kind", "sol-bench", "--json"])
+            .arg(&res)
+            .args([
+                "artifacts/runpod/sol-bench/2026-10-06/a1-h3-ltx",
+                "artifacts/runpod/sol-bench/2026-10-06/a2-wan",
+                "artifacts/runpod/sol-bench/2026-10-06/a3-h3-bf16",
+            ]),
+    );
+    assert_eq!(out, read(fx.join("sol-bench--2026-10-06.md")));
+    assert_eq!(
+        read(res),
+        read(fx.join("sol-bench--2026-10-06.results.json"))
+    );
+    // Options of another kind are refused, not ignored; an unknown tier too.
+    for args in [
+        vec![
+            "report",
+            "summary",
+            "--json",
+            "x.json",
+            "artifacts/runpod/trace/b0d0bb8-10251650",
+        ],
+        vec![
+            "report",
+            "summary",
+            "--kind",
+            "hd",
+            "--family",
+            "hd",
+            "artifacts/runpod/hd/2cd1ba0-09290122",
+        ],
+        vec![
+            "report",
+            "summary",
+            "--family",
+            "nosuchtier",
+            "artifacts/runpod/trace/b0d0bb8-10251650",
+        ],
+        vec![
+            "report",
+            "table",
+            "--kind",
+            "timings",
+            "--json",
+            "x.json",
+            "artifacts/runpod/hd/2cd1ba0-09290122",
+        ],
+    ] {
+        let (code, _, err) = out_err(fv_lab().args(&args));
+        assert_eq!(code, Some(1), "{args:?}: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_tree_fetch_is_checked_before_any_pod_exists() {
+    // A skip pattern fv-lab cannot read, and a tree fetch without --wait
+    // (nothing would fetch it), fail before any request.
+    for extra in [
+        vec!["--wait", "--fetch-tree", "--fetch-skip", "fr[a]mes"],
+        vec!["--fetch-tree"],
+    ] {
+        let (code, _, err) = out_err(
+            fv_lab()
+                .args(["pod", "up", "--sha", "1234567", "--family", "rtx6000"])
+                .args(&extra),
+        );
+        assert_eq!(code, Some(1), "{extra:?}: {err}");
+        assert!(err.contains("fetch"), "{err}");
+    }
+    // --fetch-skip needs --fetch-tree (clap).
+    let (code, _, _) = out_err(fv_lab().args([
+        "pod",
+        "up",
+        "--sha",
+        "1234567",
+        "--family",
+        "rtx6000",
+        "--fetch-skip",
+        "/frames/",
+    ]));
+    assert_eq!(code, Some(2));
+    // A readable pattern passes to the plan (no --yes: no request).
+    stdout(fv_lab().args([
+        "pod",
+        "up",
+        "--sha",
+        "1234567",
+        "--family",
+        "rtx6000",
+        "--wait",
+        "--fetch-tree",
+        "--fetch-skip",
+        "/frames/|\\.mp4$",
+        "--fetch-max-mb",
+        "100",
+    ]));
+}

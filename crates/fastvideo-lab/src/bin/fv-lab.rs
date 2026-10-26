@@ -17,7 +17,9 @@
 //!                 one pod of the tier on fv-deploy's guards: price cap, $8 floor, EU
 //!                 volume, backstop at the tier's wall cap, ready within 600 s (3 cycles);
 //!                 without --yes it prints the plan; --wait also waits, fetches and deletes
-//! fv-lab pod status <id> | fetch <id> [--wait] [--down] | down <id> | reap [--yes] [--account]
+//! fv-lab pod status <id> | fetch <id> [--wait] [--down] [--fetch-tree [--fetch-skip ERE] [--fetch-max-mb N]]
+//!                 | down <id> | reap [--yes] [--account]
+//!                 --fetch-tree: the whole run directory (runpod-http.sh FV_FETCH_TREE=1)
 //!                 reap: the pods recorded here past their cap; --account: every
 //!                 fv-lab-<tier>-<sha7>-<MMDDHHMMSS>-<hex4> pod past its tier's cap
 //! fv-lab gold check [--max-age-days N] [--today YYYY-MM-DD]
@@ -27,6 +29,12 @@
 //!                 the `gold` tier's cells, generated from lab/gold/ and families/
 //! fv-lab report tiers [--runs artifacts/runpod/<tier>/<tag>] [--check] [--out F]
 //!                 docs/perf/tiers.md from the gold files and one run set
+//! fv-lab report summary <run dir> [--kind tier|hd|h3-graphs|h3-tier-options|h3-trim-nvfp4|fasth3-nvfp4]
+//!                 [--family T] [--json OUT]
+//!                 what a run's summary scripts printed, from its files (the retired
+//!                 families' live.log lines, hd_report.py, the experiments' *-summary.py)
+//! fv-lab report table --kind sol-bench|timings <run dir>... [--json F] [--out F] [--stdout]
+//!                 sol_bench_table.py (and its results.json), timings.sh (timings.md)
 //! fv-lab backstop --kind K --id ID --deadline T --armed-file F   (started by `pod up`)
 //! ```
 //!
@@ -56,13 +64,13 @@ use fastvideo_deploy::provider::{
 
 use fastvideo_lab::plan::{Lab, Paths, Tier};
 use fastvideo_lab::pod::{
-    baseline_for_pod, check_cells, check_sha7_named, fetch_run, judge_run, launch, name_taken,
-    random_suffix, reap_account, reap_recorded, run_dir, run_tag, undeleted_in_ledger, wait_done,
-    Done, LabPod, PodRecord, StartOptions,
+    baseline_for_pod, check_cells, check_sha7_named, fetch_run, fetch_tree, judge_run, launch,
+    name_taken, random_suffix, reap_account, reap_recorded, run_dir, run_tag, undeleted_in_ledger,
+    wait_done, Done, FetchSkip, LabPod, PodRecord, StartOptions, TreeFetch,
 };
 use fastvideo_lab::run::{dry_run_lines, gate_selection, Decision, RunConfig, RunError, Runner};
 use fastvideo_lab::schema;
-use fastvideo_lab::{goldcell, goldcheck, report};
+use fastvideo_lab::{experiments, goldcell, goldcheck, report, summary, table};
 
 /// `-V` / `--version`: the tools release this binary was built as
 /// (`FV_RELEASE_VERSION` at build time, docs/dev/tools-releases.md; the
@@ -146,6 +154,30 @@ enum GoldCmd {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum SummaryKind {
+    /// The lines the retired families' script branches copied into live.log.
+    Tier,
+    /// scripts/gpu/hd_report.py (without the keyframe sharpness).
+    Hd,
+    /// scripts/gpu/experiments/h3-graphs-summary.py.
+    H3Graphs,
+    /// scripts/gpu/experiments/h3-tier-options-summary.py.
+    H3TierOptions,
+    /// scripts/gpu/experiments/h3-trim-nvfp4-summary.py.
+    H3TrimNvfp4,
+    /// scripts/gpu/experiments/fasth3-nvfp4-summary.py.
+    Fasth3Nvfp4,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum TableKind {
+    /// scripts/gpu/sol_bench_table.py: our sol-bench cells and sol-engine's numbers.
+    SolBench,
+    /// scripts/gpu/timings.sh: a validate.sh run's stage reports (<run>/remote/*.json).
+    Timings,
+}
+
 #[derive(Subcommand)]
 enum ReportCmd {
     /// docs/perf/tiers.md: the gold variants as one run set measured them.
@@ -168,6 +200,42 @@ enum ReportCmd {
         gold: Option<PathBuf>,
         #[arg(long)]
         root: Option<PathBuf>,
+    },
+    /// One run directory's summary, read from its files: what the replaced
+    /// summary scripts printed (docs/adr/0019-fv-lab.md §13).
+    Summary {
+        /// The run directory (artifacts/runpod/<tier>/<tag>, or an experiment's fetch).
+        run_dir: PathBuf,
+        #[arg(long, value_enum, default_value = "tier")]
+        kind: SummaryKind,
+        /// The tier (`--kind tier`; default the run directory's parent's name).
+        #[arg(long)]
+        family: Option<String>,
+        /// Also write the summary's record (`--json OUT` of the h3-tier-options,
+        /// h3-trim-nvfp4 and fasth3-nvfp4 scripts).
+        #[arg(long)]
+        json: Option<PathBuf>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// A table over run directories (sol-bench) or a validate.sh run's timings.
+    Table {
+        #[arg(long, value_enum)]
+        kind: TableKind,
+        /// Run directories (sol-bench: each holding <cell>/benchmark.json;
+        /// timings: one validate.sh run directory).
+        #[arg(required = true)]
+        runs: Vec<PathBuf>,
+        /// sol-bench: where results.json goes (default: the first run
+        /// directory's parent, as sol_bench_table.py writes it).
+        #[arg(long)]
+        json: Option<PathBuf>,
+        /// timings: where timings.md goes (default <run>/timings.md).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Print only; write no results.json / timings.md.
+        #[arg(long)]
+        stdout: bool,
     },
 }
 
@@ -266,6 +334,8 @@ enum PodCmd {
         /// Delete the pod after the fetch.
         #[arg(long)]
         down: bool,
+        #[command(flatten)]
+        tree: TreeArgs,
     },
     /// Delete a pod (recorded here or not), or with --from-ledger every pod the
     /// ledger shows created and not deleted.
@@ -285,6 +355,40 @@ enum PodCmd {
         #[arg(long)]
         state_dir: Option<PathBuf>,
     },
+}
+
+/// `runpod-http.sh`'s `FV_FETCH_TREE=1`, `FV_FETCH_SKIP`, `FV_FETCH_MAX_MB`.
+#[derive(Args, Clone)]
+struct TreeArgs {
+    /// Mirror the whole run directory instead of the summaries (frames, mp4s,
+    /// wavs, every file; FV_FETCH_TREE=1).
+    #[arg(long)]
+    fetch_tree: bool,
+    /// Relative paths (`<tier>/<tag>/…`) not to fetch: an extended regular
+    /// expression of alternatives of literal text, `.`, `^` and `$`
+    /// (FV_FETCH_SKIP; e.g. `/frames/`).
+    #[arg(long, requires = "fetch_tree")]
+    fetch_skip: Option<String>,
+    /// Files above this many MiB are not fetched (FV_FETCH_MAX_MB, default 400; 0: no limit).
+    #[arg(long, requires = "fetch_tree")]
+    fetch_max_mb: Option<u64>,
+}
+
+impl TreeArgs {
+    /// The tree fetch asked for, checked (the skip pattern parses).
+    fn tree(&self) -> Result<Option<TreeFetch>, String> {
+        if !self.fetch_tree {
+            return Ok(None);
+        }
+        Ok(Some(TreeFetch {
+            skip: self
+                .fetch_skip
+                .as_deref()
+                .map(FetchSkip::parse)
+                .transpose()?,
+            max_mb: self.fetch_max_mb.unwrap_or(400),
+        }))
+    }
 }
 
 #[derive(Args)]
@@ -322,6 +426,9 @@ struct UpArgs {
     /// and never above the tier's.
     #[arg(long)]
     wall_cap_s: Option<u64>,
+    /// With --wait: how the run is fetched.
+    #[command(flatten)]
+    tree: TreeArgs,
     #[arg(long)]
     root: Option<PathBuf>,
     /// Ledger, pod records, backstop logs (default <root>/artifacts/fv-lab).
@@ -733,6 +840,13 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
             &capped
         }
     };
+    // A skip pattern fv-lab cannot read fails here, before any pod exists.
+    let tree = u.tree.tree()?;
+    if tree.is_some() && !u.wait {
+        return Err(
+            "--fetch-tree: the fetch of `pod up --wait` (or `pod fetch --fetch-tree`)".into(),
+        );
+    }
     let clock = RealClock;
     let tag = match &u.tag {
         Some(t) => t.clone(),
@@ -885,6 +999,7 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         &rec,
         &root,
         true,
+        tree.as_ref(),
         &clock,
         &log,
         &interrupted,
@@ -917,6 +1032,7 @@ fn finish(
     rec: &PodRecord,
     root: &Path,
     wait: bool,
+    tree: Option<&TreeFetch>,
     clock: &dyn Clock,
     log: &dyn LogSink,
     interrupted: &dyn Fn() -> bool,
@@ -946,8 +1062,17 @@ fn finish(
         }
     }
     let dest = run_dir(root, &rec.family, &rec.tag);
-    fetch_run(http, &rec.url, &rec.family, &rec.tag, &dest, clock, log)
-        .map_err(|e| e.to_string())?;
+    match tree {
+        // FV_FETCH_TREE=1: the whole run directory, as runpod-http.sh mirrors it.
+        Some(t) => {
+            fetch_tree(http, &rec.url, &rec.family, &rec.tag, &dest, t, clock, log)
+                .map_err(|e| e.to_string())?;
+        }
+        None => {
+            fetch_run(http, &rec.url, &rec.family, &rec.tag, &dest, clock, log)
+                .map_err(|e| e.to_string())?;
+        }
+    }
     // A success needs the fetched DONE and `matrix_exit=0` (pod::judge_run).
     for problem in judge_run(&dest, &rec.tag) {
         log.line(&format!("[fv-lab] {problem}"));
@@ -1082,7 +1207,13 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
             );
             Ok(true)
         }),
-        PodCmd::Fetch { id, wait, down } => with_pod(id, |p, http, rec, root, state| {
+        PodCmd::Fetch {
+            id,
+            wait,
+            down,
+            tree,
+        } => with_pod(id, |p, http, rec, root, state| {
+            let tree = tree.tree()?;
             let flag = interrupt_flag();
             let interrupted = || flag.load(Ordering::SeqCst);
             let result = finish(
@@ -1091,6 +1222,7 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
                 &rec,
                 root,
                 *wait,
+                tree.as_ref(),
                 &RealClock,
                 &StderrLog,
                 &interrupted,
@@ -1452,7 +1584,134 @@ fn cmd_report(c: &ReportCmd) -> Result<ExitCode, String> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        ReportCmd::Summary {
+            run_dir,
+            kind,
+            family,
+            json,
+            root,
+        } => cmd_summary(
+            run_dir,
+            *kind,
+            family.as_deref(),
+            json.as_deref(),
+            root.as_ref(),
+        ),
+        ReportCmd::Table {
+            kind,
+            runs,
+            json,
+            out,
+            stdout,
+        } => cmd_table(*kind, runs, json.as_deref(), out.as_deref(), *stdout),
     }
+}
+
+fn write_text(path: &Path, text: &str) -> Result<(), String> {
+    std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// `fv-lab report summary`.
+fn cmd_summary(
+    run_dir: &Path,
+    kind: SummaryKind,
+    family: Option<&str>,
+    json: Option<&Path>,
+    root: Option<&PathBuf>,
+) -> Result<ExitCode, String> {
+    use std::io::Write as _;
+    if !run_dir.is_dir() {
+        return Err(format!("{}: not a directory", run_dir.display()));
+    }
+    let takes_json = matches!(
+        kind,
+        SummaryKind::H3TierOptions | SummaryKind::H3TrimNvfp4 | SummaryKind::Fasth3Nvfp4
+    );
+    if json.is_some() && !takes_json {
+        return Err("--json: only the h3-tier-options, h3-trim-nvfp4 and fasth3-nvfp4 summaries write a record".into());
+    }
+    if family.is_some() && kind != SummaryKind::Tier {
+        return Err("--family: only the tier summary".into());
+    }
+    let s = match kind {
+        SummaryKind::Tier => {
+            let tname = match family {
+                Some(f) => f.to_owned(),
+                None => run_dir
+                    .canonicalize()
+                    .ok()
+                    .and_then(|p| {
+                        p.parent()
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().into_owned())
+                    })
+                    .ok_or("the tier: --family (the run directory has no parent)")?,
+            };
+            let root = find_root(root)?;
+            let lab = Lab::load(&root).map_err(|e| e.to_string())?;
+            tier(&lab, &tname)?;
+            let bytes = summary::tier_summary(run_dir, &tname);
+            if !summary::SUMMARY_TIERS.contains(&tname.as_str()) {
+                eprintln!("[fv-lab] {tname}: its runpod-matrix.sh branch printed no summary lines");
+            }
+            std::io::stdout()
+                .write_all(&bytes)
+                .map_err(|e| e.to_string())?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        SummaryKind::Hd => experiments::Summary {
+            text: summary::hd_summary(run_dir, std::ffi::OsStr::new("ffprobe"))?,
+            json: None,
+        },
+        SummaryKind::H3Graphs => experiments::h3_graphs(run_dir)?,
+        SummaryKind::H3TierOptions => experiments::h3_tier_options(run_dir)?,
+        SummaryKind::H3TrimNvfp4 => experiments::h3_trim_nvfp4(run_dir)?,
+        SummaryKind::Fasth3Nvfp4 => experiments::fasth3_nvfp4(run_dir)?,
+    };
+    print!("{}", s.text);
+    if let (Some(path), Some(j)) = (json, s.json_text()) {
+        write_text(path, &j)?;
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `fv-lab report table`.
+fn cmd_table(
+    kind: TableKind,
+    runs: &[PathBuf],
+    json: Option<&Path>,
+    out: Option<&Path>,
+    stdout: bool,
+) -> Result<ExitCode, String> {
+    match kind {
+        TableKind::SolBench => {
+            if out.is_some() {
+                return Err(
+                    "--out: only the timings table (sol-bench writes results.json: --json)".into(),
+                );
+            }
+            let t = table::sol_bench(runs)?;
+            print!("{}", t.table);
+            if !stdout {
+                write_text(json.unwrap_or(&t.results_path), &t.results_json)?;
+            }
+        }
+        TableKind::Timings => {
+            if json.is_some() {
+                return Err("--json: only the sol-bench table".into());
+            }
+            let [run] = runs else {
+                return Err("timings: one run directory".into());
+            };
+            let text = table::timings(run)?;
+            if !stdout {
+                let path = out.map_or_else(|| run.join("timings.md"), Path::to_path_buf);
+                write_text(&path, &text)?;
+            }
+            print!("{text}");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn main() -> ExitCode {

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# A stand-in for ffprobe in the hd report goldens (fv-lab-report-goldens.sh,
+# tests/report.rs): `ffprobe -v error -show_entries stream=… -of json <mp4>`,
+# answered from the file's name. A name holding `silent` has no audio stream,
+# `noprobe` gets no output at all (ffprobe failing on a file).
+f="${*: -1}"
+case "$f" in
+  *noprobe*) exit 1 ;;
+  *silent*)
+    printf '{\n    "programs": [\n\n    ],\n    "streams": [\n        {\n            "codec_type": "video",\n            "width": 1920,\n            "height": 1088,\n            "nb_frames": "121",\n            "duration": "5.041667"\n        }\n    ]\n}\n' ;;
+  *)
+    printf '{\n    "programs": [\n\n    ],\n    "streams": [\n        {\n            "codec_type": "video",\n            "width": 1088,\n            "height": 1920,\n            "nb_frames": "241",\n            "duration": "10.041667"\n        },\n        {\n            "codec_type": "audio",\n            "nb_frames": "471",\n            "duration": "10.048000"\n        }\n    ]\n}\n' ;;
+esac

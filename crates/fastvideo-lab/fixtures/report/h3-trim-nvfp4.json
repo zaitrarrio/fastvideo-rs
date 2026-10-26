@@ -1,0 +1,132 @@
+{
+ "cells": {
+  "bf16-480": {
+   "denoise_s": 16.861998869,
+   "forward_s": 2.110072291,
+   "total_s": 194.39936411300002,
+   "decode_s": 2.050682579,
+   "peak_mib": 44996,
+   "peak_mib_max": 45190,
+   "dit_gib": null
+  },
+  "mxfp8-480": {
+   "denoise_s": 13.006527664,
+   "forward_s": 1.626512355,
+   "total_s": 15.381594547,
+   "decode_s": 2.060275903,
+   "peak_mib": 31972,
+   "peak_mib_max": 32324,
+   "dit_gib": null
+  },
+  "nvfp4-480": {
+   "denoise_s": 10.901322577,
+   "forward_s": 1.362444786,
+   "total_s": 13.259705862999999,
+   "decode_s": 2.0576353739999997,
+   "peak_mib": 20644,
+   "peak_mib_max": 20740,
+   "dit_gib": null
+  },
+  "bf16-768": {
+   "denoise_s": 48.313565833,
+   "forward_s": 6.039010457,
+   "total_s": 53.410067403,
+   "decode_s": 4.747291617999999,
+   "peak_mib": 52452,
+   "peak_mib_max": 52516,
+   "dit_gib": null
+  },
+  "mxfp8-768": {
+   "denoise_s": 38.152492244,
+   "forward_s": 4.768488299,
+   "total_s": 43.262780683,
+   "decode_s": 4.759469632,
+   "peak_mib": 39396,
+   "peak_mib_max": 40420,
+   "dit_gib": null
+  },
+  "nvfp4-768": {
+   "denoise_s": 32.422993307,
+   "forward_s": 4.052818749,
+   "total_s": 37.543824576,
+   "decode_s": 4.756703972,
+   "peak_mib": 28100,
+   "peak_mib_max": 28196,
+   "dit_gib": null
+  }
+ },
+ "pairs": {},
+ "gates": {
+  "bf16-480 -> mxfp8-480": {
+   "verdict": "pass",
+   "speedup": 1.2964258643505084,
+   "fails": []
+  },
+  "bf16-480 -> nvfp4-480": {
+   "verdict": "fail",
+   "speedup": 1.546784690563698,
+   "fails": [
+    "sharpness_ratio (nvfp4-480-spark-mountain-lake)"
+   ]
+  },
+  "bf16-768 -> mxfp8-768": {
+   "verdict": "pass",
+   "speedup": 1.2663279117918689,
+   "fails": []
+  },
+  "bf16-768 -> nvfp4-768": {
+   "verdict": "fail",
+   "speedup": 1.4901019586790984,
+   "fails": [
+    "sharpness_ratio (nvfp4-768-ltx-newsbroadcast)",
+    "temporal_jitter_ratio (nvfp4-768-ltx-newsbroadcast)",
+    "sharpness_ratio (nvfp4-768-spark-mountain-lake)",
+    "temporal_jitter_ratio (nvfp4-768-talking-head)"
+   ]
+  },
+  "mxfp8-480 -> nvfp4-480": {
+   "verdict": "fail",
+   "speedup": 1.1931146493583848,
+   "fails": [
+    "temporal_jitter_ratio (nvfp4-480-ltx-newsbroadcast)",
+    "sharpness_ratio (nvfp4-480-spark-mountain-lake)"
+   ]
+  },
+  "mxfp8-768 -> nvfp4-768": {
+   "verdict": "fail",
+   "speedup": 1.1767109804683895,
+   "fails": [
+    "sharpness_ratio (nvfp4-768-ltx-newsbroadcast)",
+    "temporal_jitter_ratio (nvfp4-768-ltx-newsbroadcast)",
+    "sharpness_ratio (nvfp4-768-spark-mountain-lake)",
+    "temporal_jitter_ratio (nvfp4-768-talking-head)"
+   ]
+  }
+ },
+ "parity": {
+  "mxfp8": {
+   "video_step01": 0.001125,
+   "video_step02": 0.004804,
+   "video_step04": 0.02687,
+   "video_step08": 0.4756,
+   "video_vel_step01": 0.05866,
+   "audio_step01": 0.002078,
+   "audio_step08": 0.4162,
+   "step00_block_0": 0.0,
+   "step00_block_20": 0.04693,
+   "step00_block_41": 0.08286
+  },
+  "nvfp4": {
+   "video_step01": 0.003369,
+   "video_step02": 0.01073,
+   "video_step04": 0.04601,
+   "video_step08": 0.7013,
+   "video_vel_step01": 0.1756,
+   "audio_step01": 0.006799,
+   "audio_step08": 0.668,
+   "step00_block_0": 0.02648,
+   "step00_block_20": 0.1486,
+   "step00_block_41": 0.1959
+  }
+ }
+}

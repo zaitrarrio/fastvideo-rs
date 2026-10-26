@@ -561,10 +561,20 @@ fv_lab_route() {
     || die "$FAMILY: no complete [[tier]] in lab/tiers.toml"
   # No equivalent at all.
   for v in FV_POD_FILES FV_POD_SCRIPT FV_POD_FILE FV_PROMPTS FV_PROMPT FV_SEED FV_AVOID_MACHINES \
-    FV_CREATE_WAIT_S FV_FETCH_SKIP FV_FETCH_MAX_MB RUNPOD_ALLOWED_CUDA; do
+    FV_CREATE_WAIT_S RUNPOD_ALLOWED_CUDA; do
     [[ -z "${!v:-}" ]] || refuse "has no $v"
   done
-  for v in FV_KEEP_POD FV_FETCH_TREE RUNPOD_NO_VOLUME; do
+  # The tree fetch's settings act only with it (fetch_tree), as here.
+  if [[ "${FV_FETCH_TREE:-0}" != 1 ]]; then
+    for v in FV_FETCH_SKIP FV_FETCH_MAX_MB; do
+      [[ -z "${!v:-}" ]] || refuse "reads $v only with FV_FETCH_TREE=1 (fv-lab pod up --fetch-tree)"
+    done
+  fi
+  # $(( FV_FETCH_MAX_MB << 20 )) reads 010 as octal and 0x10 as hex; fv-lab a decimal.
+  if [[ -n "${FV_FETCH_MAX_MB:-}" && ! "$FV_FETCH_MAX_MB" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    refuse "reads FV_FETCH_MAX_MB as a decimal number of MiB, not $FV_FETCH_MAX_MB"
+  fi
+  for v in FV_KEEP_POD RUNPOD_NO_VOLUME; do
     [[ "${!v:-0}" != 1 ]] || refuse "has no $v=1"
   done
   # The retired families' pair selectors (ADR-0019 §9.4, §11.5): ignored, the
@@ -638,6 +648,12 @@ fv_lab_route() {
   fi
   (( ${#extra[@]} )) && args+=(--extra-env "${extra[@]}")
   [[ "${FV_LPIPS:-0}" == 1 ]] && args+=(--lpips)
+  # FV_FETCH_TREE=1: the whole run directory (ADR-0019 §13), when `run` fetches.
+  if [[ "${FV_FETCH_TREE:-0}" == 1 && "$what" == run ]]; then
+    args+=(--fetch-tree)
+    [[ -n "${FV_FETCH_SKIP:-}" ]] && args+=(--fetch-skip "$FV_FETCH_SKIP")
+    [[ -n "${FV_FETCH_MAX_MB:-}" ]] && args+=(--fetch-max-mb "$FV_FETCH_MAX_MB")
+  fi
   [[ "$what" == run ]] && args+=(--yes --wait)
   if [[ "${FV_DRY_RUN:-0}" == 1 ]]; then
     lab="$(fv_lab_bin)" || lab=fv-lab

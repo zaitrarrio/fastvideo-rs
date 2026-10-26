@@ -1,0 +1,7 @@
+[fasth3-8step-768p-sol] teacache reused steps (all passes): 0
+[fasth3-8step-768p-tea] teacache reused steps (all passes): 0
+[fasth3-8step-768p-soltea] teacache reused steps (all passes): 0
+[fasth3-8step-480p-sol] teacache reused steps (all passes): 0
+[fasth3-8step-480p-tea] teacache reused steps (all passes): 0
+[fasth3-8step-480p-soltea] teacache reused steps (all passes): 0
+gate-fasth3-4step-vsa-480p--fasth3-4step-vsa-480p-taeh3.json: "verdict": "fail"

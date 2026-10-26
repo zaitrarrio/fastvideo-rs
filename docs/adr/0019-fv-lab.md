@@ -7,11 +7,12 @@
   (§11: a typed verdict step in the cell schema, `b4a` as a tier, `fv-lab gate`) is accepted: its GPU gate passed on
   `e82b6b7` and `b4a` is retired from the script like the ten (§11.6). Two dropped modes are tiers again, frozen
   from the script at `5987e6a4` (§12, accepted; GPU check passed on `8b18d89`).
-  D1c (`report`), the rest of D1d (`oracle`) and the retirement of the rest of `runpod-matrix.sh`, `runpod-http.sh`
-  and the port one-offs follow (§8)
+  D1c (§13: `fv-lab report summary` and `report table`, the `FV_FETCH_TREE` mirror; CPU only, no GPU gate) is
+  accepted. The rest of D1d (`oracle`) and the retirement of the rest of `runpod-matrix.sh`, `runpod-http.sh` and the
+  port one-offs follow (§8)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
-- Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
+- Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
   `scripts/gpu/fv-lab-compare-runs.sh` (the GPU gate's comparison); fv-lab in the tools release's `gpucheck` set;
   schemas `crates/fastvideo-lab/schemas/{tiers,cell}.v1.json`; data `lab/tiers.toml`, `lab/cells/*.toml` (D1a
   `rtx6000-*`, D1b `techniques-*`, `b6-*`, `rtx5090-*`, `fastvideo-*`, `h3arms-*`, `trace-*`, `ltxfps-*`, `ltxvae-*`,
@@ -233,7 +234,7 @@ usd_per_hr }`), because `reap` selects by id or name pattern and age, `up` check
 | run tag | `<sha>-<MMDDHHMM>` | `<sha>-<MMDDHHMMSS>-<4 hex>`, name checked free | unique pod names (§6) |
 | run verdict | `matrix_exit≠0` or an old driver fail | also no `DONE` or no `matrix_exit=0` fail | a run that did not finish is not a success |
 | `FV_POD_FILES`, `FV_POD_SCRIPT`, `kernels` / `all` modes | yes | no | not used by `rtx6000`; later slices if needed |
-| `FV_FETCH_TREE` mirror | yes | no | D1c with `report` |
+| `FV_FETCH_TREE` mirror | yes | `pod up --wait` / `pod fetch` `--fetch-tree [--fetch-skip] [--fetch-max-mb]` (D1c, §13.3) | |
 
 ### 8. The GPU gate, and what retires when
 
@@ -265,7 +266,9 @@ Pass: exit 0, every arm `same`, `fasth3-8step` skipped (`weights incomplete`) in
   `fv-lab pod up --wait` for it (done for `rtx6000` and the nine, §10, with `runpod.sh cmd_rtx6000`); when the last
   family moves, the script is deleted.
 - **D1c**: `fv-lab report {summary,table,tiers}` replacing the `*-summary.py`, `hd_report.py`, `sol_bench_table.py`,
-  `timings.sh`; the `FV_FETCH_TREE` mirror.
+  `timings.sh`; the `FV_FETCH_TREE` mirror. Done (§13): `report summary` and `report table`, goldens from the scripts
+  on committed run directories; `sol_bench_table.py` and the four `*-summary.py` deleted; `hd_report.py` and
+  `timings.sh` stay until their callers move (§13.5).
 - **D1d**: `gate` / `oracle` moved into or aliased by `fv-lab` (`oracle.sh`, the `oracle` family). First slice (§11):
   the verdict step, `b4a` as a tier, `fv-lab gate` (the promotion gate aliased: `fv-gpucheck gate` driven offline);
   `b4a`'s branch deleted after its GPU gate (§11.6).
@@ -414,7 +417,7 @@ is `h3-8step`, and that a cell belongs to exactly one tier.
 
 | | script | fv-lab | why |
 |---|---|---|---|
-| summaries copied into `live.log` after arms (b6 stage lines, techniques / b6 compare fields, h3arms reuse counts and gate verdicts, trace `/gpu_trace`, ltxfps PASS/FAIL, ltxvae decode lines) | yes | no | log only: each is a `grep` of a file both runners write and both fetches take (`stderr.log`, `compare/*.json`, `gate/*.json`). Nothing reads them from `live.log`. D1c's `report` reads the files |
+| summaries copied into `live.log` after arms (b6 stage lines, techniques / b6 compare fields, h3arms reuse counts and gate verdicts, trace `/gpu_trace`, ltxfps PASS/FAIL, ltxvae decode lines) | yes | no | log only: each is a `grep` of a file both runners write and both fetches take (`stderr.log`, `compare/*.json`, `gate/*.json`). Nothing reads them from `live.log`. D1c's `report` reads the files: `fv-lab report summary <run dir>` prints them (§13.1) |
 | `FV_TECH_CELLS`, `FV_B6_CELLS` (narrow by pair) | yes | `--cells` / `FV_CELLS` by arm (`<pair>-base,<pair>-pr`), or `fv-lab run <cell> --family <tier>` | arms are the unit of a run directory |
 | `techniques` H3 caches | shared by the three arms until this PR | per arm, both sides | see below |
 | `FV_GEN_TIMEOUT_S` default 900 (`b6`) | when run by hand | the tier's 3600 | `runpod-http.sh` passes 3600 to every family, so 900 never applied on a pod |
@@ -1050,7 +1053,164 @@ evidence and diffs byte-identical; `fv-lab gate` reproduces them), `tests/fv_lab
 `gate_evaluates_a_finished_runs_verdicts_offline`), `tests/dry_run.rs` and `tests/payload_golden.rs` with the `b4a`
 fixtures, `fv-lab-goldens.sh --check` (with compare-runs' verdict-file cases); GPU: §11.6.
 
+§13 (D1c), CPU: `tests/report.rs` (every fixture of `fixtures/report/`, byte for byte), `tests/fetch_tree.rs` (the
+script's `fetch_tree` on a fake pod), `tests/fv_lab_bin.rs::report_summary_and_table_print_the_scripts_output`,
+`::the_tree_fetch_is_checked_before_any_pod_exists`, `bash scripts/gpu/tests/fv-lab-report-goldens.sh --check`,
+`fv-lab-route.test.sh`; no GPU.
+
 §10, CPU: `bash scripts/gpu/tests/fv-lab-goldens.sh --check` (frozen fixtures present, branches gone),
 `tests/dry_run.rs::retired_families_are_frozen_tiers_without_a_branch`, `tests/fv_lab_bin.rs::runs_dir_replaces_the_run_directory`,
 `FV_DRY_RUN=1 runpod-http.sh run` for a retired and a script family, and every remaining family's
 `FV_DRY_RUN=1 runpod-matrix.sh` output equal before and after the deletion (`headline` aside, which now prints fv-lab's).
+
+### 13. D1c: `fv-lab report summary` and `report table`, and the tree fetch
+
+Status: accepted 2026-10-26. CPU only: every report reads files a run directory already holds, so there is no GPU gate;
+the goldens are the scripts' own output on committed run directories. Decision-id FVID-2026-10-26-fv-lab-report.
+
+#### 13.1 What replaces what
+
+| replaced | by | reads |
+|---|---|---|
+| the summary lines the retired families' `runpod-matrix.sh` branches copied into `live.log` (§9.4, §10 item 4) | `fv-lab report summary <run dir>` (`--kind tier`, the default; the tier is `--family` or the directory's parent) | `techniques`: the `compare/compare-clips-*.json` fields and each `*-base` / `*-env` / `*-prof` arm's last `denoise_s` / `total_s`; `b6`: each arm's load-stage lines of `stderr.log`, then the `compare-clips-b6-*` fields; `b4a`: the `compare-clips-b4a-*` fields; `h3arms`: the six technique arms' TeaCache reuse counts, then each `gate/gate-*.json` verdict; `trace`: the last `/gpu_trace` line of five arms (400 bytes); `ltxfps`: the sink / mp4 / frames PASS and FAIL lines (300 bytes); `ltxvae`, `ltxvae-gen`: the last three decode lines per arm (400 bytes). Every other tier's branch printed none: nothing, and a note on stderr. Not ported: b4a's per-arm `[<arm>] teacache reused forwards: <n>` and per-cell `b4a <cell>: pass\|fail (…)` lines and the family verdict line, because they are the verdict step's (§11.1): `fv-lab run` writes them into `live.log` itself, and `fv-lab gate` re-derives them offline |
+| `scripts/gpu/hd_report.py` | `report summary --kind hd` | the cells' `benchmark.json`, the compare reports, `ffprobe` (a process, as in the script) on the kept mp4s; not the keyframe sharpness, and no `--jpg-out` (§13.4) |
+| `experiments/h3-graphs-summary.py` | `report summary --kind h3-graphs` | `cells/`, `trace/` (`stderr.log` or `events.log`), `hashes.tsv` |
+| `experiments/h3-tier-options-summary.py` | `report summary --kind h3-tier-options [--json OUT]` | `cells/`, `compare/clips`, `compare/gate`, `check/` |
+| `experiments/h3-trim-nvfp4-summary.py` | `report summary --kind h3-trim-nvfp4 [--json OUT]` | `runs/`, the parity dumps |
+| `experiments/fasth3-nvfp4-summary.py` | `report summary --kind fasth3-nvfp4 [--json OUT]` | `up-*`, `ours-*`, the parity dumps, the phase profile |
+| `scripts/gpu/sol_bench_table.py` | `report table --kind sol-bench <run dir>… [--json F]` | `<cell>/benchmark.json` (or `frames/`), the `sol` stage report's `timings` (LingBot, Cosmos3), `summary.json`; writes `results.json` where the script did (the first run directory's parent) unless `--json` / `--stdout` |
+| `scripts/gpu/timings.sh` | `report table --kind timings <run dir> [--out F]` | a `validate.sh` run's `remote/*.json`, `summary.json`, `cached-refs`; writes `timings.md` and prints it |
+
+`report tiers` is ADR-0023's. The ports are line for line, including each script's quirks (a `.get` default that
+applies only to a missing key, `x or y`, dict insertion order, `statistics.median` keeping an int, Python's float
+`repr` and `.2e` spelling, jq's `//` taking the right side on `null`, `false` or an error); the regular expressions are
+matched by hand with the scripts' backtracking order (no regex engine is a dependency of the crate). Python's
+`json.dumps` output is reproduced by `pyfmt.rs` (an order-keeping JSON reader and writer), since `serde_json` sorts
+keys in this workspace and spells floats differently (`1e-5`).
+
+#### 13.2 Equality: the scripts' output on committed runs
+
+`scripts/gpu/tests/fv-lab-report-goldens.sh [--check]` writes `crates/fastvideo-lab/fixtures/report/` from the scripts,
+under `env -i` with `LC_ALL=C`, Python as `python3 -I` (stdlib only; no network, no download), and
+`tests/report.rs` holds fv-lab to every fixture byte for byte (53 files):
+
+- **Tier summaries**: all 31 committed run directories of the eight tiers. The deleted branches' lines are frozen in
+  `fixtures/report/summary-script.sh`, verbatim between markers (`runpod-matrix.sh` at `5987e6a4`, `b4a`'s from
+  `fixtures/b4a-script/`), in a frame that only drops the `log` stamp and supplies the loops that stood around the
+  per-arm lines; `--check` compares each block with its source whenever the history holds `5987e6a4`. The 31 runs:
+  - 18 script-side runs of the frozen version (`LIVE`): every fixture line is in that run's own `live.log`, and,
+    for 16 of them, the lines of `live.log` shaped as that family's summary lines are exactly the fixture's, in order
+    (the reverse check). The other two (`techniques/1de80f1-10240618`, `93696e5-10240625`) were committed with only
+    `live.log` and `compare/`, so their arm-timing lines cannot be rebuilt and only the forward check holds;
+  - 3 script-side runs of earlier versions of the summaries (`techniques/51898b8-10240107`, `90dd3f8-10240259`,
+    `b6/a2ca568-10241101`): fixtures only, their `live.log` is another version's;
+  - 2 runs whose files hold no summary line: `b6/a2ca568-10241022` (no arm directory was committed) and
+    `ltxfps/3df276d-09272000` (no `stderr.log` was committed): empty fixtures;
+  - 8 fv-lab-side runs (tags `-<MMDDHHMMSS>-<hex>`), whose `live.log` has none of these lines: the gap this closes.
+- **hd**: the five `artifacts/runpod/hd/*` runs, `hd_report.py` run with `numpy` and `PIL` stood in by empty modules:
+  none of the committed runs keeps keyframes, so neither is called and the output is exact. None keeps an mp4
+  either, so `fixtures/report/hd-run/` (synthetic: mp4s under `frames/`, a hidden directory, a failing probe, non-ASCII
+  and `-0.0` in a `benchmark.json`) covers `## streams`, with `fixtures/report/bin/ffprobe` (a stand-in that answers from
+  the file name) first on `PATH` for the script and passed to fv-lab.
+- **Experiments**: `h3-graphs` and `h3-tier-options` on their committed run directories (both equal the summaries
+  committed beside them); `h3-trim-nvfp4` and `fasth3-nvfp4` on their archives laid out as the summaries read them
+  (`fv-lab-report-goldens.sh layout trim|fasth3`, the one mapping the test also uses; the compare-clips reports, the
+  `stderr.log` and the profile were not archived, so those parts are covered by unit tests of the matchers).
+- **sol-bench**: the three committed run sets, and `fixtures/report/sol-bench-cells/` (synthetic, every `PUBLISHED`
+  row, the LingBot and Cosmos3 paths, `-s15`, `-rs3`, a skipped cell, a later run of a cell, a missing and a
+  trailing-slash argument), table and `results.json`.
+- **timings**: `fixtures/report/timings-run/` (three committed stage reports and synthetic model / parity / clip / probe
+  reports, a timeout report, a broken file, a cached CPU reference). Its numbers are spelled alike by jq 1.6 and 1.7.
+
+`tests/fv_lab_bin.rs` runs the commands (summary from the parent's tier, `--json`, `--out`, refusals of another kind's
+options and of an unknown tier).
+
+#### 13.3 The tree fetch: `FV_FETCH_TREE=1`
+
+`runpod-http.sh fetch_results` with `FV_FETCH_TREE=1` mirrors the whole run directory instead of the summaries:
+`fetch_tree` walks the pod's listing (`<family>/<tag>/`) recursively, passes over `../`, absolute and query hrefs,
+leaves out each path (`<family>/<tag>/…` as the listing spells it) that `grep -qE "$FV_FETCH_SKIP"` matches, keeps a
+subdirectory's spelling and decodes a file's name (`printf '%b'` of `%HH`), and drops a file over `FV_FETCH_MAX_MB`
+MiB (default 400; `curl --max-filesize`, 0 no limit) or whose download fails. fv-lab: `pod up --wait` and `pod fetch`
+take `--fetch-tree [--fetch-skip ERE] [--fetch-max-mb N]` (`pod::fetch_tree`); the summaries' fetch is unchanged
+without it. `runpod-http.sh run` maps `FV_FETCH_TREE=1`, `FV_FETCH_SKIP`, `FV_FETCH_MAX_MB` across (it refused them
+before); `FV_FETCH_SKIP` / `FV_FETCH_MAX_MB` without `FV_FETCH_TREE=1` stay refused (the script ignores them); `plan`
+fetches nothing and passes none.
+
+`--fetch-skip` is an ERE subset fv-lab reads without a regex engine: alternatives of literal characters, `.`,
+backslash-escaped punctuation, `^` at an alternative's start and `$` at its end. Anything else (brackets, groups,
+repetition, `\d`-style escapes, GNU's anchors `\<`, `\>`, `` \` ``, `\'`, an empty alternative) is refused before a
+pod exists. A pattern starting with `-` is refused by the command line (clap reads it as an option); the script handed
+it to grep, which read it as one too.
+
+What fv-lab's tree fetch adds to the script's (review of #198), because a pod's listing is not trusted and `up --wait`
+deletes the pod after the fetch:
+
+- **Names.** An entry is refused (logged, not fetched) unless its spelling and its decoded name are each a single
+  component: not empty, `.` or `..`, and holding no `/`, `\` or NUL; a `%` not followed by two hex digits, and a name
+  that is not UTF-8 once decoded, are refused too. Otherwise `href="%2Fhome%2Fuser%2F.bashrc"` decodes to an absolute
+  path that `Path::join` would put in place of the run directory, `..%2F..%2Fx` and `../../x/` climb out of it, and
+  `./` recurses forever. Every joined path is checked to be a child of the directory it is written into, and the walk
+  stops at `TREE_DEPTH` (16) levels.
+- **Size.** Files are fetched with `Http::download_capped` (fastvideo-deploy, additive: a provided method on the
+  trait, overridden by the reqwest client): refused on a larger `Content-Length` before any byte is written, stopped
+  mid-stream as soon as the bytes pass `--fetch-max-mb`, written under a temporary name (`.<name>.fv-lab-part`) and
+  renamed; a failure removes both, as the script's `|| rm -f`.
+- **No lost run.** The top-level listing is retried 5 times, 10 s apart (as `fetch_run`'s); the files `judge_run`
+  reads (`RUN_FILES`, `DONE`) are fetched whatever `--fetch-skip` matches; a listing that stays empty is an error after
+  those are fetched.
+- `runpod-http.sh` refuses an `FV_FETCH_MAX_MB` that is not a decimal number (bash's `$(( … << 20 ))` reads `010` as
+  octal and `0x10` as hex). Every skip pattern the
+repository uses is in it (`/frames/`, `\.cache$`, `png`, `oracle-dump\.tar|/dump/|\.mp4$`, sol-bench's
+`\.png$|/cold/|\.cache$|text-cache|\.wav$`). `tests/fetch_tree.rs` cuts `proxy` and `fetch_tree` out of
+`runpod-http.sh`, runs them against a fake `curl` serving a fake pod, runs fv-lab's against the same files, and finds
+the two trees byte-identical in four cases (no skip; `/frames/`; an alternation with a 1 MiB limit; anchors with no
+limit); `fv-lab-route.test.sh` covers the mapping and the refusals.
+
+#### 13.4 Differences from the scripts, and why
+
+| | script | fv-lab | why |
+|---|---|---|---|
+| tier summary lines that went through the frame's `log` | `[HH:MM:SS] [family] ` in front | the line alone | the stamp is the frame's, not the summary's; the per-arm lines that went through `tee` had none either |
+| a `stderr.log` holding a NUL byte | GNU grep (C locale) prints `binary file matches` and none of its lines | its lines | fv-lab reads bytes; a NUL in a stage log is not a reason to hide its lines |
+| hd keyframe sharpness (Laplacian variance, high-frequency share of each kept PNG) | computed with numpy and Pillow | one row per keyframe set: `not computed: fv-lab reads no PNG (scripts/gpu/hd_report.py)` | no image decoder or FFT among the crate's dependencies; `hd_report.py` stays for it (§13.5) |
+| a run directory the script would raise on (a missing key, a value of the wrong type, an unparsable number) | a traceback after the lines printed so far | an error naming the file and the key, exit 1, nothing printed | a partial report reads as a complete one |
+| `timings` numbers | jq 1.7 echoes a number read from its input as spelled (`1.500`, `0.00001`); jq 1.6 its shortest form | the shortest form (jq 1.6, and 1.7 after arithmetic) | one spelling whatever jq the caller has; the fixture holds only numbers both spell alike |
+| `timings` report file holding several JSON values | each processed | the file read as one value (else no rows, as a parse error) | `fv-gpucheck` writes one |
+| file order | `validate.sh`'s glob in the caller's locale | byte order (C) | the goldens run under `LC_ALL=C` |
+| `--fetch-skip` | any ERE | the subset of §13.3, else refused before the pod | no regex engine; a pattern either means what grep matches or fails early |
+| `--fetch-tree` on `pod up` | n/a | only with `--wait` | otherwise nothing would fetch; `pod fetch --fetch-tree` later |
+| a listing entry that is not a single name (absolute, `..`, `.`, a `/`, `\` or NUL once decoded) | followed | refused and logged | it would write outside the run directory or loop (§13.3) |
+| a malformed `%` escape in an entry (`%2` at the end, `%Ag`), a name not UTF-8 once decoded | `printf '%b'` rules (`%2` kept, `\xA` then `g`), bytes as they are | refused and logged | no server's listing holds one (`urllib.parse.quote`); a name fv-lab cannot spell is not guessed |
+| a file over `--fetch-max-mb` | curl stops on `Content-Length` or mid-stream | the same, then a temporary file removed | |
+| the top-level listing | one read | 5 tries; empty after them: an error once `RUN_FILES` and `DONE` are fetched | `up --wait` deletes the pod next |
+| `RUN_FILES` and `DONE` matched by `--fetch-skip` | skipped | fetched | `judge_run` reads them |
+| `FV_FETCH_MAX_MB=010`, `0x10` | 8, 16 MiB (bash arithmetic) | refused by the route | fv-lab reads a decimal |
+| a skip pattern starting with `-` | an option to grep | refused (clap) | |
+| `hd_report.py --jpg-out DIR` | makes DIR, prints `## crops -> DIR`, writes no crop | no such option | it wrote nothing; an empty header is not a report |
+| JSON the reports read with a leading zero, `1.`, a raw control character in a string, a lone surrogate | `json.loads` refuses all but the last, which it keeps in a `str` | refused (an error) | a Rust `String` cannot hold a lone surrogate; the rest is Python's own rule |
+| `FV_FETCH_SKIP` / `FV_FETCH_MAX_MB` without `FV_FETCH_TREE=1` | ignored | refused (`runpod-http.sh` route) | refused rather than dropped (§10) |
+
+#### 13.5 Retired, and what stays
+
+- **Deleted**: `scripts/gpu/sol_bench_table.py` and `scripts/gpu/experiments/{fasth3-nvfp4,h3-graphs,
+  h3-tier-options,h3-trim-nvfp4}-summary.py`: nothing called them (docs named them; the docs now name the fv-lab
+  commands). Their fixtures are frozen: `fv-lab-report-goldens.sh` runs each from `f9e57ea2` (the last commit with them)
+  when the history holds it, and otherwise keeps the fixtures and says so (CI's shallow clone). The sol-bench
+  `PUBLISHED` map is now `crates/fastvideo-lab/src/table.rs`.
+- **Stays** `scripts/gpu/hd_report.py` until the `hd` family moves (§9.1: a cell type for derived clips, or `hd`
+  retired) or the keyframe sharpness lands in `fv-gpucheck` (it reads PNGs); `report summary --kind hd` already covers
+  the rest.
+- **Stays** `scripts/gpu/timings.sh` while `validate.sh` (the Vast driver, outside fv-lab) calls it; it goes when
+  `validate.sh` is retired (C3 / D1e) or calls `fv-lab report table --kind timings`, which needs fv-lab on the
+  driver's machine.
+- The frozen summary lines (`fixtures/report/summary-script.sh`) are a test reference only; nothing runs them on a pod.
+
+#### 13.6 For D1d: reports that are verdicts
+
+Some reports decide pass / fail rather than describe, and belong in the typed `[verdict]` step (§11.1) rather than in
+`report`: the `determinism` / `det-short` families' frame-hash equality across runs (`determinism.txt`), h3-graphs'
+byte identity of every checkpoint / prompt / canvas group (`hashes.tsv`, `MISMATCH`), fasth3-nvfp4's lossy-gate hard
+quality windows applied to the parity clip (`gate_hard_quality`), and h3arms' reuse count (already a `[[verdict.count]]`
+in b4a). `report` prints them as the scripts did; D1d gives them a type (a frames-hash equality list and a compare-
+report window rule under `[verdict]`), so `fv-lab gate` can re-evaluate them offline.

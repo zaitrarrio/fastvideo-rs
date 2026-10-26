@@ -1,0 +1,13 @@
+[b6-ltx25-ref2v-base] [fastvideo] ltx2 ic-lora: /workspace/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors (480 pairs, reference downscale 1, stage 1 only)
+[b6-ltx25-ref2v-base] [fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+[b6-ltx25-ref2v-base] [fastvideo] ltx2 ic-lora: attached 480 linears (base kept for the stage-2 unfuse) from /workspace/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors
+[b6-ltx25-ref2v-base] [fastvideo] load/io ltx2 load {"wall_s":348.37,"viewed_gb":40.42,"prefetch_read_gb":39.11,"prefetch_skipped_gb":0.00,"prefetch_busy_s":5087.6,"viewed_gbps":0.12,"window_wait_s":0.0,"fill_s":0.8,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":260.8,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[b6-ltx25-ref2v-base] [fastvideo] ltx2 ic-lora: fused at strength 1 (0.26s)
+[b6-ltx25-ref2v-base] [fastvideo] ltx2 ic-lora: fused at strength 0 (0.12s)
+[b6-ltx25-ref2v-pr] [fastvideo] ltx2 ic-lora: /workspace/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors (480 pairs, reference downscale 1, stage 1 only)
+[b6-ltx25-ref2v-pr] [fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+[b6-ltx25-ref2v-pr] [fastvideo] ltx2 ic-lora: attached 480 linears (base kept for the stage-2 unfuse) from /workspace/weights/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors
+[b6-ltx25-ref2v-pr] [fastvideo] load/io ltx2 load {"wall_s":303.42,"viewed_gb":40.42,"prefetch_read_gb":39.11,"prefetch_skipped_gb":0.00,"prefetch_busy_s":4407.7,"viewed_gbps":0.13,"window_wait_s":0.0,"fill_s":0.6,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":225.9,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[b6-ltx25-ref2v-pr] [fastvideo] ltx2 ic-lora: fused at strength 1 (0.27s)
+[b6-ltx25-ref2v-pr] [fastvideo] ltx2 ic-lora: fused at strength 0 (0.12s)
+compare-clips-b6-ltx25-ref2v-base--b6-ltx25-ref2v-pr.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 

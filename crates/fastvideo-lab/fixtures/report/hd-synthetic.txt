@@ -1,0 +1,22 @@
+## cells
+turbo-768p missing
+turbo-1080p missing
+turbo-768p-v missing
+turbo-1080p-v missing
+max-768p {"total_s": 61.25, "denoise_s": 40.5, "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition", "prompts": {"h3-demo": {"total_s": 61.25, "step_seconds": [1.5, 1.25]}}, "label": "caf\u00e9"}
+
+max-1080p {"total_s": 120.0, "warm_steady_state": true, "x": null, "n": [1, 2.5, -0.0, 1e-05, 12345678901234567890]}
+
+turbo-1080p-10s missing
+max-1080p-10s missing
+## compare reports
+compare-clips-max-768p-lanczos--max-1080p-h3-demo.json {"stage": "compare-clips-max-768p-lanczos--max-1080p-h3-demo", "status": "pass", "context": {"psnr_mean": 31.5}}
+
+compare-clips-zz-skipped.json {"stage": "compare-clips-zz", "status": "skipped", "reason": "frames missing"}
+
+## keyframe sharpness (grayscale, at 1920x1088 / 1088x1920)
+## streams
+max-1080p/frames/h3-demo/clip.mp4 [('video', '10.041667', '241'), ('audio', '10.048000', '471')]
+max-1080p/frames/talking-head/clip-silent.mp4 [('video', '5.041667', '121')]
+turbo-768p-v/frames/spark/clip.mp4 [('video', '10.041667', '241'), ('audio', '10.048000', '471')]
+turbo-768p-v/frames/spark/noprobe.mp4 []

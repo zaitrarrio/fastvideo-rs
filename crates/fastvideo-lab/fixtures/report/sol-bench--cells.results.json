@@ -1,0 +1,620 @@
+{
+ "a14b-sol-base": {
+  "cell": "a14b-sol-base",
+  "run": "a",
+  "summary": {
+   "cell": "a14b-sol-base",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 223.25,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 97,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": true,
+  "text_cache": "miss",
+  "peak_mib": 50017,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "17"
+  }
+ },
+ "a14b-sol-fullopt": {
+  "cell": "a14b-sol-fullopt",
+  "run": "a",
+  "summary": {
+   "cell": "a14b-sol-fullopt",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 230.5,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 98,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": false,
+  "text_cache": "miss",
+  "peak_mib": 50018,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "18"
+  }
+ },
+ "cosmos3-baseline": {
+  "cell": "cosmos3-baseline",
+  "run": "a",
+  "summary": {
+   "cell": "cosmos3-baseline",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 144.5,
+  "text_s": 2.5,
+  "denoise_s": 100.25,
+  "decode_s": 9.75,
+  "load_s": 300,
+  "peak_mib": 75000.5,
+  "gpu": "RTX PRO 6000",
+  "warm": true,
+  "detail": {
+   "steps": 35,
+   "steps_computed": 20,
+   "steps_reused": 15,
+   "fp8": false
+  }
+ },
+ "cosmos3-baseline-fp8": {
+  "cell": "cosmos3-baseline-fp8",
+  "run": "a",
+  "summary": {
+   "cell": "cosmos3-baseline-fp8",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 147.5,
+  "text_s": 2.5,
+  "denoise_s": 100.25,
+  "decode_s": 9.75,
+  "load_s": 300,
+  "peak_mib": 75000.5,
+  "gpu": "RTX PRO 6000",
+  "warm": true,
+  "detail": {
+   "steps": 35,
+   "steps_computed": 20,
+   "steps_reused": 15,
+   "fp8": true
+  }
+ },
+ "cosmos3-teacache": {
+  "cell": "cosmos3-teacache",
+  "run": "a",
+  "summary": {
+   "cell": "cosmos3-teacache",
+   "exit": 124,
+   "skipped": "timeout after 3300 s"
+  }
+ },
+ "cosmos3-teacache-fp8": {
+  "cell": "cosmos3-teacache-fp8",
+  "run": "a",
+  "summary": {
+   "cell": "cosmos3-teacache-fp8",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 146.5,
+  "text_s": 2.5,
+  "denoise_s": 100.25,
+  "decode_s": 9.75,
+  "load_s": 300,
+  "peak_mib": 75000.5,
+  "gpu": "RTX PRO 6000",
+  "warm": true,
+  "detail": {
+   "steps": 35,
+   "steps_computed": 20,
+   "steps_reused": 15,
+   "fp8": true
+  }
+ },
+ "h3-768p-dense": {
+  "cell": "h3-768p-dense",
+  "run": "b",
+  "total_s": 99.5,
+  "load_s": 1,
+  "text_s": 2,
+  "denoise_s": 3,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 4,
+  "warm": false,
+  "text_cache": null,
+  "peak_mib": null,
+  "gpu": null,
+  "env": null
+ },
+ "h3-768p-dense-bf16": {
+  "cell": "h3-768p-dense-bf16",
+  "run": "a",
+  "summary": {
+   "cell": "h3-768p-dense-bf16",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 107.25,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 81,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": true,
+  "text_cache": "miss",
+  "peak_mib": 50001,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "1"
+  }
+ },
+ "h3-768p-fullopt": {
+  "cell": "h3-768p-fullopt",
+  "run": "a",
+  "summary": {
+   "cell": "h3-768p-fullopt",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 114.5,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 82,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": true,
+  "text_cache": "miss",
+  "peak_mib": 50002,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "2"
+  }
+ },
+ "h3-768p-fullopt-bf16": {
+  "cell": "h3-768p-fullopt-bf16",
+  "run": "a",
+  "summary": {
+   "cell": "h3-768p-fullopt-bf16",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 121.75,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 83,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": false,
+  "text_cache": "miss",
+  "peak_mib": 50003,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "3"
+  }
+ },
+ "lingbot-baseline": {
+  "cell": "lingbot-baseline",
+  "run": "a",
+  "summary": {
+   "cell": "lingbot-baseline",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 171.25,
+  "text_s": 3.25,
+  "denoise_s": 131.25,
+  "decode_s": 10.5,
+  "load_s": 50.5,
+  "peak_mib": 90000,
+  "gpu": "RTX PRO 6000",
+  "warm": false,
+  "detail": {
+   "base_denoise_s": 100.5,
+   "refiner_denoise_s": 30.75,
+   "refiner_prepare_s": 1.5,
+   "base_steps_reused": 10,
+   "refiner_steps_computed": 3,
+   "refiner_sparse_steps": 2
+  }
+ },
+ "lingbot-baseline-rs3": {
+  "cell": "lingbot-baseline-rs3",
+  "run": "a",
+  "summary": {
+   "cell": "lingbot-baseline-rs3",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 223.5,
+  "text_s": 3.25,
+  "denoise_s": 182.5,
+  "decode_s": 10.5,
+  "load_s": 50.5,
+  "peak_mib": 90000,
+  "gpu": "RTX PRO 6000",
+  "warm": false,
+  "detail": {
+   "base_denoise_s": 100.5,
+   "refiner_denoise_s": 30.75,
+   "refiner_prepare_s": 1.5,
+   "base_steps_reused": 10,
+   "refiner_steps_computed": 3,
+   "refiner_sparse_steps": 2
+  },
+  "measured_total_s": 172.25,
+  "extrapolated": "refiner denoise x8/3"
+ },
+ "lingbot-fullopt": {
+  "cell": "lingbot-fullopt",
+  "run": "a",
+  "summary": {
+   "cell": "lingbot-fullopt",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 173.25,
+  "text_s": 3.25,
+  "denoise_s": 131.25,
+  "decode_s": 10.5,
+  "load_s": 50.5,
+  "peak_mib": 90000,
+  "gpu": "RTX PRO 6000",
+  "warm": false,
+  "detail": {
+   "base_denoise_s": 100.5,
+   "refiner_denoise_s": 30.75,
+   "refiner_prepare_s": 1.5,
+   "base_steps_reused": 10,
+   "refiner_steps_computed": 3,
+   "refiner_sparse_steps": 2
+  }
+ },
+ "ltx23-hq-base": {
+  "cell": "ltx23-hq-base",
+  "run": "a",
+  "summary": {
+   "cell": "ltx23-hq-base",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 237.75,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 99,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": true,
+  "text_cache": "miss",
+  "peak_mib": 50019,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "19"
+  }
+ },
+ "ltx23-hq-fullopt": {
+  "cell": "ltx23-hq-fullopt",
+  "run": "a",
+  "summary": {
+   "cell": "ltx23-hq-fullopt",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 245.0,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 100,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": true,
+  "text_cache": "hit",
+  "peak_mib": 50020,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "20"
+  }
+ },
+ "ltx25-1080p20s-sol-bf16": {
+  "cell": "ltx25-1080p20s-sol-bf16",
+  "run": "a",
+  "summary": {
+   "cell": "ltx25-1080p20s-sol-bf16",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 136.25,
+  "load_s": 50.5,
+  "text_s": 2.5,
+  "denoise_s": 90.75,
+  "stage_1_s": 35.25,
+  "stage_2_s": 55.5,
+  "decode_s": 12.75,
+  "warm": true,
+  "text_cache": "miss",
+  "peak_mib": 50005,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "5"
+  }
+ },
+ "ltx25-1080p20s-sol-nvfp4": {
+  "cell": "ltx25-1080p20s-sol-nvfp4",
+  "run": "a",
+  "summary": {
+   "cell": "ltx25-1080p20s-sol-nvfp4",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 150.75,
+  "load_s": 50.5,
+  "text_s": 2.5,
+  "denoise_s": 94.75,
+  "stage_1_s": 37.25,
+  "stage_2_s": 57.5,
+  "decode_s": 12.75,
+  "warm": true,
+  "text_cache": "miss",
+  "peak_mib": 50007,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "7"
+  }
+ },
+ "ltx25-4k5s-sol-bf16": {
+  "cell": "ltx25-4k5s-sol-bf16",
+  "run": "a",
+  "summary": {
+   "cell": "ltx25-4k5s-sol-bf16",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 129.0,
+  "load_s": 50.5,
+  "text_s": 2.5,
+  "denoise_s": 88.75,
+  "stage_1_s": 34.25,
+  "stage_2_s": 54.5,
+  "decode_s": 12.75,
+  "warm": true,
+  "text_cache": "hit",
+  "peak_mib": 50004,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "4"
+  }
+ },
+ "ltx25-4k5s-sol-nvfp4": {
+  "cell": "ltx25-4k5s-sol-nvfp4",
+  "run": "a",
+  "summary": {
+   "cell": "ltx25-4k5s-sol-nvfp4",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 143.5,
+  "load_s": 50.5,
+  "text_s": 2.5,
+  "denoise_s": 92.75,
+  "stage_1_s": 36.25,
+  "stage_2_s": 56.5,
+  "decode_s": 12.75,
+  "warm": false,
+  "text_cache": "miss",
+  "peak_mib": 50006,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "6"
+  }
+ },
+ "sana-baseline": {
+  "cell": "sana-baseline",
+  "run": "a",
+  "summary": {
+   "cell": "sana-baseline",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 194.25,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 93,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": true,
+  "text_cache": "miss",
+  "peak_mib": 50013,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "13"
+  }
+ },
+ "sana-full": {
+  "cell": "sana-full",
+  "run": "a",
+  "summary": {
+   "cell": "sana-full",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 201.5,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 94,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": true,
+  "text_cache": "miss",
+  "peak_mib": 50014,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "14"
+  }
+ },
+ "wan13-sol-base": {
+  "cell": "wan13-sol-base",
+  "run": "a",
+  "summary": {
+   "cell": "wan13-sol-base",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 92.5,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 95,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": false,
+  "text_cache": "miss",
+  "peak_mib": 1234,
+  "gpu": "RTX PRO 6000",
+  "env": {
+   "FASTVIDEO_X": "15"
+  }
+ },
+ "wan13-sol-fullstack": {
+  "cell": "wan13-sol-fullstack",
+  "run": "a",
+  "summary": {
+   "cell": "wan13-sol-fullstack",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 216.0,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 96,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": true,
+  "text_cache": "hit",
+  "peak_mib": 50016,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "16"
+  }
+ },
+ "wan14-720p-base-s15": {
+  "cell": "wan14-720p-base-s15",
+  "run": "a",
+  "summary": {
+   "cell": "wan14-720p-base-s15",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 1766.6666666666667,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 1666.6666666666667,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": true,
+  "text_cache": "miss",
+  "peak_mib": 50011,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "11"
+  },
+  "measured_total_s": 600,
+  "extrapolated": "denoise x50/15"
+ },
+ "wan14-720p-fullstack": {
+  "cell": "wan14-720p-fullstack",
+  "run": "a",
+  "summary": {
+   "cell": "wan14-720p-fullstack",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 187.0,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 92,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": false,
+  "text_cache": "hit",
+  "peak_mib": 50012,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "12"
+  }
+ },
+ "wan5b-base": {
+  "cell": "wan5b-base",
+  "run": "a",
+  "summary": {
+   "cell": "wan5b-base",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 158.0,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 88,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": true,
+  "text_cache": "hit",
+  "peak_mib": 50008,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "8"
+  }
+ },
+ "wan5b-easycache": {
+  "cell": "wan5b-easycache",
+  "run": "a",
+  "summary": {
+   "cell": "wan5b-easycache",
+   "exit": 0,
+   "ended": "2026-10-06T12:00:00Z"
+  },
+  "total_s": 165.25,
+  "load_s": 50.5,
+  "text_s": 1.25,
+  "denoise_s": 89,
+  "stage_1_s": null,
+  "stage_2_s": null,
+  "decode_s": 6.5,
+  "warm": false,
+  "text_cache": "miss",
+  "peak_mib": 50009,
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "env": {
+   "FASTVIDEO_X": "9"
+  }
+ },
+ "wan5b-opt": {
+  "cell": "wan5b-opt",
+  "run": "a",
+  "summary": {
+   "cell": "wan5b-opt",
+   "exit": 124
+  }
+ }
+}

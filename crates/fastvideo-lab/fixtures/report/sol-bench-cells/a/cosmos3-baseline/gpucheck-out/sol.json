@@ -1,0 +1,21 @@
+{
+  "stage": "sol",
+  "status": "pass",
+  "checks": [
+    {
+      "name": "timings",
+      "values": {
+        "request_s": 144.5,
+        "text_tower_s": 2.5,
+        "denoise_s": 100.25,
+        "decode_s": 9.75,
+        "load_s": 300,
+        "peak_mib": 75000.5,
+        "steps": 35,
+        "steps_computed": 20,
+        "steps_reused": 15,
+        "fp8": false
+      }
+    }
+  ]
+}

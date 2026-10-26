@@ -1,0 +1,8 @@
+{
+  "total_s": 99.5,
+  "load_s": 1,
+  "text_s": 2,
+  "denoise_s": 3,
+  "decode_s": 4,
+  "warm_steady_state": false
+}

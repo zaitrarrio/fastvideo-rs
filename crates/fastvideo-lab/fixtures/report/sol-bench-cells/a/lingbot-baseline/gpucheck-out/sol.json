@@ -1,0 +1,36 @@
+{
+  "stage": "sol",
+  "status": "pass",
+  "checks": [
+    {
+      "name": "load",
+      "values": {
+        "seconds": 1
+      }
+    },
+    {
+      "name": "timings",
+      "values": {
+        "request_s_median": 171.25,
+        "peak_mib": 90000,
+        "runs": [
+          {
+            "text_encode_s": 3.25,
+            "base_denoise_s": 100.5,
+            "refiner_denoise_s": 30.75,
+            "refiner_prepare_s": 1.5,
+            "base_steps_reused": 10,
+            "refiner_steps_computed": 3,
+            "refiner_sparse_steps": 2,
+            "base_decode_s": 4.5,
+            "refiner_decode_s": 6,
+            "load_text_s": 20,
+            "load_base_s": 30.5,
+            "load_refiner_s": null,
+            "refiner_steps": 8
+          }
+        ]
+      }
+    }
+  ]
+}

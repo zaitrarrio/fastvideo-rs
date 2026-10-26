@@ -1,0 +1,21 @@
+compare-clips-fasth3-4step-vsa-768p-base--fasth3-4step-vsa-768p-env.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+compare-clips-fasth3-4step-vsa-768p-base--fasth3-4step-vsa-768p-prof.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+compare-clips-fasth3-8step-768p-base--fasth3-8step-768p-env.json: "status":"skipped" 
+compare-clips-fasth3-8step-768p-base--fasth3-8step-768p-prof.json: "status":"skipped" 
+compare-clips-h3-480p-fullopt-base--h3-480p-fullopt-env.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+compare-clips-h3-480p-fullopt-base--h3-480p-fullopt-prof.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+compare-clips-ltx25-512p-sol-base--ltx25-512p-sol-env.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+compare-clips-ltx25-512p-sol-base--ltx25-512p-sol-prof.json: "status": "ok" "max_abs_diff_uint8": 0 "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "hard gate: max_abs_diff_uint8 == 0" "status": "pass" 
+compare-clips-ltx25-512p-sol-env--ltx25-512p-sol-cache.json: "status": "ok" "max_abs_diff_uint8": 0 "status": "ok" "status": "completed" "status": "completed" "status": "deferred" "off_identity": { "max_abs_diff_uint8": 0 "status": "ok" "status": "ok" "off_identity": "not requested" "status": "pass" 
+fasth3-4step-vsa-768p-base "denoise_s":17.311782791 "total_s":22.835104929 
+fasth3-8step-768p-base 
+h3-480p-fullopt-base "denoise_s":23.374643273 "total_s":26.096172901 
+ltx25-512p-sol-base 
+fasth3-4step-vsa-768p-env "denoise_s":17.332968287 "total_s":22.928147973 
+fasth3-8step-768p-env 
+h3-480p-fullopt-env "denoise_s":23.708417319 "total_s":26.428500756 
+ltx25-512p-sol-env 
+fasth3-4step-vsa-768p-prof "denoise_s":17.361330349 "total_s":22.900180041 
+fasth3-8step-768p-prof 
+h3-480p-fullopt-prof "denoise_s":23.62273706 "total_s":26.312284533 
+ltx25-512p-sol-prof 
