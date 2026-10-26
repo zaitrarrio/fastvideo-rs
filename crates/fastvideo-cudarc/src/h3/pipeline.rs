@@ -3548,14 +3548,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// SHARED_FILES is scripts/gpu/verify-weights.sh's `shared_file` table:
-    /// the same files, copies, lengths and SHA-256s (the script is the one
-    /// the lab runs before an arm; gen-configs.mjs reads it too).
-    #[test]
-    fn shared_files_mirror_verify_weights_shared_file() {
-        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../scripts/gpu/verify-weights.sh");
-        let text = std::fs::read_to_string(&script).unwrap();
+    /// One row of verify-weights.sh's `shared_file` table: (file, copy,
+    /// bytes, SHA-256).
+    type SharedRow = (String, String, u64, String);
+
+    /// verify-weights.sh's `shared_file` table, read strictly: the script's
+    /// plain `NAME=value` assignments expanded, and in the function body
+    /// only `case "$1" in`, quoted arms (`"<a>" | "<b>")`), each followed by
+    /// one `echo "<copy> <bytes> <sha256>" ;;`, `*) return 1 ;;` and `esac`.
+    /// Any other line, an echo with no arm before it, an arm with no echo, an
+    /// unknown variable or a malformed field is an error, so no arm written
+    /// in another form is dropped silently.
+    fn parse_shared_file_table(text: &str) -> std::result::Result<Vec<SharedRow>, String> {
         let mut vars = std::collections::HashMap::new();
         for line in text.lines() {
             if let Some((k, v)) = line.split_once('=') {
@@ -3569,7 +3573,7 @@ mod tests {
                 }
             }
         }
-        let expand = |s: &str| {
+        let expand = |s: &str| -> std::result::Result<String, String> {
             let mut out = s.to_owned();
             for (k, v) in &vars {
                 out = out.replace(&format!("${{{k}}}"), v);
@@ -3579,40 +3583,161 @@ mod tests {
             for k in keys {
                 out = out.replace(&format!("${k}"), &vars[k]);
             }
-            out
+            if out.contains('$') {
+                return Err(format!("{s}: an unknown variable"));
+            }
+            Ok(out)
         };
-        let body: Vec<&str> = text
-            .lines()
-            .skip_while(|l| *l != "shared_file() {")
-            .skip(1)
-            .take_while(|l| *l != "}")
-            .collect();
+        let lines: Vec<&str> = text.lines().collect();
+        let open = lines
+            .iter()
+            .position(|l| *l == "shared_file() {")
+            .ok_or("no shared_file() function")?;
         let mut got = Vec::new();
-        let mut patterns: Vec<String> = Vec::new();
-        for line in body {
+        let mut patterns: Option<Vec<String>> = None;
+        let mut closed = false;
+        for line in &lines[open + 1..] {
+            if *line == "}" {
+                closed = true;
+                break;
+            }
             let t = line.trim();
-            if let Some(echo) = t.strip_prefix("echo \"") {
-                let fields: Vec<String> = expand(echo.split('"').next().unwrap())
+            if t.is_empty() || t == "case \"$1\" in" || t == "esac" {
+                continue;
+            }
+            if t == "*) return 1 ;;" {
+                if patterns.is_some() {
+                    return Err(format!("an arm with no echo before: {line}"));
+                }
+                continue;
+            }
+            if let Some(echo) = t
+                .strip_prefix("echo \"")
+                .and_then(|e| e.strip_suffix("\" ;;"))
+            {
+                let pats = patterns
+                    .take()
+                    .ok_or_else(|| format!("an echo with no arm: {line}"))?;
+                let f: Vec<String> = expand(echo)?
                     .split_whitespace()
                     .map(str::to_owned)
                     .collect();
-                assert_eq!(fields.len(), 3, "{line}");
-                for p in patterns.drain(..) {
-                    got.push((
-                        p,
-                        fields[0].clone(),
-                        fields[1].parse::<u64>().unwrap(),
-                        fields[2].clone(),
-                    ));
+                let ok = f.len() == 3
+                    && f[1].parse::<u64>().is_ok()
+                    && f[2].len() == 64
+                    && f[2]
+                        .chars()
+                        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase());
+                if !ok {
+                    return Err(format!("not \"<copy> <bytes> <sha256>\": {line}"));
                 }
-            } else if t.ends_with(')') && t.starts_with('"') {
-                patterns = t
-                    .trim_end_matches(')')
-                    .split('|')
-                    .map(|p| expand(p.trim().trim_matches('"')))
-                    .collect();
+                let bytes = f[1].parse::<u64>().map_err(|e| e.to_string())?;
+                for p in pats {
+                    got.push((p, f[0].clone(), bytes, f[2].clone()));
+                }
+                continue;
+            }
+            let arm = t.strip_suffix(')').map(|a| {
+                a.split('|')
+                    .map(|p| {
+                        let p = p.trim();
+                        match p.strip_prefix('"').and_then(|p| p.strip_suffix('"')) {
+                            Some(q) if !q.is_empty() && !q.contains('"') => expand(q),
+                            _ => Err(format!("not a quoted pattern: {p}")),
+                        }
+                    })
+                    .collect::<std::result::Result<Vec<String>, String>>()
+            });
+            match arm {
+                Some(Ok(pats)) if patterns.is_none() => patterns = Some(pats),
+                Some(Ok(_)) => return Err(format!("an arm with no echo before: {line}")),
+                _ => return Err(format!("an unexpected line: {line}")),
             }
         }
+        if !closed {
+            return Err("shared_file() is not closed".into());
+        }
+        if patterns.is_some() {
+            return Err("an arm with no echo at the end".into());
+        }
+        if got.is_empty() {
+            return Err("shared_file lists no file".into());
+        }
+        Ok(got)
+    }
+
+    /// The parser refuses what it cannot read instead of dropping it: an
+    /// unquoted pattern, a one-line arm, an echo with no arm, an unknown
+    /// variable, a malformed field.
+    #[test]
+    fn the_shared_file_parser_refuses_unexpected_forms() {
+        let sha = "c05d6ac4b1a33de372799d708531da6320f6a3ce6d1ce6d895e770988e004a39";
+        let script = |extra: &str| {
+            format!(
+                "F=f.safetensors\nshared_file() {{\n  case \"$1\" in\n    \"a/vae/$F\" | \"b/vae/$F\")\n      echo \"base/vae/$F 12 {sha}\" ;;\n{extra}    *) return 1 ;;\n  esac\n}}\n"
+            )
+        };
+        let good = parse_shared_file_table(&script("")).unwrap();
+        assert_eq!(
+            good,
+            [
+                (
+                    "a/vae/f.safetensors".into(),
+                    "base/vae/f.safetensors".into(),
+                    12,
+                    sha.into()
+                ),
+                (
+                    "b/vae/f.safetensors".into(),
+                    "base/vae/f.safetensors".into(),
+                    12,
+                    sha.into()
+                ),
+            ]
+        );
+        for (what, extra) in [
+            (
+                "an unquoted pattern",
+                "    z/vae/$F)\n      echo \"base/vae/$F 12 SHA\" ;;\n",
+            ),
+            (
+                "a one-line arm",
+                "    \"z/vae/f\") echo \"other/vae/f 1 SHA\" ;;\n",
+            ),
+            (
+                "an echo with no arm",
+                "      echo \"base/vae/$F 12 SHA\" ;;\n",
+            ),
+            ("an arm with no echo", "    \"z/vae/f\")\n"),
+            (
+                "an unknown variable",
+                "    \"z/vae/$G\")\n      echo \"base/vae/$F 12 SHA\" ;;\n",
+            ),
+            (
+                "a short echo",
+                "    \"z/vae/f\")\n      echo \"base/vae/f 12\" ;;\n",
+            ),
+            ("another statement", "    \"z/vae/f\")\n      printf x ;;\n"),
+        ] {
+            let text = script(&extra.replace("SHA", sha));
+            assert!(
+                parse_shared_file_table(&text).is_err(),
+                "{what} accepted:\n{text}"
+            );
+        }
+        assert!(parse_shared_file_table("#!/bin/bash\n").is_err());
+    }
+
+    /// SHARED_FILES is scripts/gpu/verify-weights.sh's `shared_file` table:
+    /// the same files, copies, lengths and SHA-256s (the script is the one
+    /// the lab runs before an arm; gen-configs.mjs reads it too).
+    #[test]
+    fn shared_files_mirror_verify_weights_shared_file() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/gpu/verify-weights.sh");
+        let text = std::fs::read_to_string(&script).unwrap();
+        let mut got =
+            parse_shared_file_table(&text).unwrap_or_else(|e| panic!("{}: {e}", script.display()));
         got.sort();
         let mut want: Vec<(String, String, u64, String)> = SHARED_FILES
             .iter()

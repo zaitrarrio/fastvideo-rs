@@ -113,7 +113,7 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
     // The request is negotiated against the caps the engine will serve
     // before the model loads (`EngineService::start_negotiated`): a task the
     // model does not serve (t2v on a reference- or audio-to-video variant)
-    // is refused without the load (35-200 s in the gold run at 7e580e5).
+    // is refused without the load (5-199 s in the gold run at 7e580e5).
     let mut req = GenerationRequest::text(ProtocolId::Native, model.id.as_str(), a.prompt);
     req.seed = Some(a.seed);
     if let (Some(w), Some(h)) = (a.width, a.height) {

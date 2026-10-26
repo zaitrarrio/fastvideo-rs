@@ -142,6 +142,26 @@ describe("the hand-written copies agree with the manifests (gen-configs.mjs cros
     expect(() => sharedFiles("#!/bin/bash\n")).toThrow(/no shared_file/);
     expect(() => sharedFiles('shared_file() {\n  case "$1" in\n    "a/b")\n      echo "c/d 12" ;;\n  esac\n}')).toThrow(/shared_file/);
   });
+  it("sharedFiles is strict: an arm in another form is an error, never dropped", () => {
+    const sha = "c05d6ac4b1a33de372799d708531da6320f6a3ce6d1ce6d895e770988e004a39";
+    const script = (extra: string) =>
+      `F=f.safetensors\nshared_file() {\n  case "$1" in\n    "a/vae/$F" | "b/vae/\${F}")\n      echo "base/vae/$F 12 ${sha}" ;;\n${extra}    *) return 1 ;;\n  esac\n}\n`;
+    expect(sharedFiles(script(""))).toEqual([
+      { file: "a/vae/f.safetensors", copy: "base/vae/f.safetensors", bytes: 12, sha256: sha },
+      { file: "b/vae/f.safetensors", copy: "base/vae/f.safetensors", bytes: 12, sha256: sha },
+    ]);
+    const bad: [string, string, RegExp][] = [
+      ["an unquoted pattern", `    z/vae/$F)\n      echo "base/vae/$F 12 ${sha}" ;;\n`, /unexpected line: z\/vae/],
+      ["a one-line arm", `    "z/vae/f") echo "other/vae/f 1 ${sha}" ;;\n`, /unexpected line: "z\/vae\/f"\) echo/],
+      ["an echo with no arm", `      echo "base/vae/$F 12 ${sha}" ;;\n`, /an echo with no arm/],
+      ["an arm with no echo", `    "z/vae/f")\n`, /an arm with no echo/],
+      ["an unknown variable", `    "z/vae/$G")\n      echo "base/vae/$F 12 ${sha}" ;;\n`, /z\/vae\/\$G: an unknown variable/],
+      ["an unknown variable in the echo", `    "z/vae/f")\n      echo "base/vae/$H 12 ${sha}" ;;\n`, /unknown variable/],
+      ["a short echo", `    "z/vae/f")\n      echo "base/vae/f 12" ;;\n`, /<copy> <bytes> <sha256>/],
+      ["another statement", `    "z/vae/f")\n      printf x ;;\n`, /unexpected line: printf/],
+    ];
+    for (const [what, extra, err] of bad) expect(() => sharedFiles(script(extra)), what).toThrow(err);
+  });
   it("scripts/gpu/verify-weights.sh: a variant:<id> cell per manifest variant, listing its trees", () => {
     const list = execFileSync("bash", [join(repo, "scripts/gpu/verify-weights.sh"), "--list"]).toString();
     for (const [id, v] of Object.entries(MANIFEST_VARIANTS)) expect(list, id).toMatch(new RegExp(`^variant:${id.replace(/\./g, "\\.")}\\s+${v.trees.join(" ").replace(/[.]/g, "\\.")}$`, "m"));

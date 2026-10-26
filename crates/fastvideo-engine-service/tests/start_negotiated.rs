@@ -139,6 +139,24 @@ fn a_task_the_model_does_not_serve_is_refused_before_any_load() {
     }
 }
 
+/// No backend: the error `start` gives, before negotiating.
+#[test]
+fn no_backend_is_the_starts_error() {
+    let r = EngineService::start_negotiated(
+        EngineConfig::default(),
+        Vec::new(),
+        &ModelId::from("fasth3-4step-vsa"),
+        &t2v("fasth3-4step-vsa"),
+        &StagedInputs::default(),
+    );
+    match r {
+        Err(StartNegotiatedError::Start(e)) => {
+            assert!(e.message.contains("at least one backend"), "{e:?}")
+        }
+        other => panic!("{:?}", other.err()),
+    }
+}
+
 /// An unknown model is refused before any load too.
 #[test]
 fn an_unknown_model_is_refused_before_any_load() {
@@ -186,9 +204,9 @@ async fn an_accepted_request_starts_the_engine_with_the_same_caps_and_job() {
     drop(engine);
 }
 
-/// `caps_table` is the table `start` serves: every model's caps (tiers
-/// rebound across models included) and the public aliases, for the whole
-/// catalog on one backend.
+/// `caps_table` is the table `start` serves, equal as a whole (every model's
+/// caps with tiers rebound across models, recipes, executors, tier bindings,
+/// public names), for the whole catalog on one backend.
 #[tokio::test]
 async fn caps_table_is_the_started_engines_table() {
     let (backends, _) = catalog_backend(None);
@@ -196,10 +214,10 @@ async fn caps_table_is_the_started_engines_table() {
     let before = EngineService::caps_table(&cfg, &backends).expect("table");
     let engine = EngineService::start(cfg, backends).expect("start");
     let after = engine.caps();
-    let all =
-        |t: &fastvideo_engine_service::CapabilityTable| t.models().cloned().collect::<Vec<_>>();
-    assert!(!all(&before).is_empty());
-    assert_eq!(all(&before), all(after));
+    assert!(before.models().next().is_some());
+    // The whole table: models' caps, recipes, executors, tier bindings and
+    // public names.
+    assert_eq!(&before, after);
     assert_eq!(before.public_aliases(), after.public_aliases());
     drop(engine);
 }

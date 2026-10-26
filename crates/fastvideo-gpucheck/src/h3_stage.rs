@@ -238,7 +238,10 @@ pub enum Stage {
         #[arg(long)]
         no_text_cache: bool,
         /// Root holding `tokenizer/` + `text_encoder/` when not `--weights`
-        /// itself, e.g. the output of `h3 slim-text`.
+        /// itself, e.g. the output of `h3 slim-text`. For an R2 NVFP4 tree
+        /// (`fasth3-v2-nvfp4`, `fasth3-4step-vsa-nvfp4`) this is h3-base, whose
+        /// `vae/` gives the shard the tree leaves out: both directories must
+        /// keep their R2 names (the shared file is keyed on them).
         #[arg(long)]
         text_weights: Option<PathBuf>,
         /// `auto` (resident-fp8 when the load's memory plan fits it beside the

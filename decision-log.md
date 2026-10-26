@@ -2031,3 +2031,10 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/ops/r2-weights.md §15
 - Verification: `control/test/unit/families-gen.test.ts` (the table's two rows; the four NVFP4 variants pass; another `text_weights`, none, or h3-base missing from `trees` refused naming the variant and the copy; a script without the table or with a bad arm throws), `node gen-configs.mjs --check`, vitest unit, tsc
+
+### FVID · 2026-10-26 · FVID-2026-10-26-gold-followups-review
+- Trigger: the independent review of #213 (nothing blocking): both `shared_file` table parsers (the Rust mirror test, gen-configs.mjs `sharedFiles`) dropped an arm written in another form while another arm parsed; an unknown variable stayed in an expanded field; `caps_table_is_the_started_engines_table` compared models and aliases, not the whole table; an empty backend list gave `UnknownModel`
+- Decision: (coordinator, executed by the agent) both parsers strict: only `case "$1" in`, quoted arms each followed by one `echo "<copy> <bytes> <sha256>" ;;`, `*) return 1 ;;` and `esac`; an echo with no arm, an arm with no echo, any other line, or a field still holding `$` is an error (tests: an unquoted pattern, a one-line arm and five more forms in both); the table compared whole (`CapabilityTable: PartialEq`); `start_negotiated` refuses no backend with `start`'s error; the plan's D1 follow-ups 4-6 and D3 (a)/(b) marked done, the two loader cuts left open as future PRs; `--text-weights` help and r2-weights.md §15 say the NVFP4 and h3-base tree directories keep their R2 names
+- Reversibility: high (tests and docs)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- Verification: `h3::pipeline::tests::the_shared_file_parser_refuses_unexpected_forms`, `families-gen.test.ts` "sharedFiles is strict", `start_negotiated.rs` (`caps_table_is_the_started_engines_table`, `no_backend_is_the_starts_error`)

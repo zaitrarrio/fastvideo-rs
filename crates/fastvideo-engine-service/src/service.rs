@@ -749,6 +749,9 @@ impl Declared {
     }
 }
 
+/// [`EngineService::start`]'s refusal of an empty backend list.
+const NO_BACKEND: &str = "the engine needs at least one backend";
+
 /// Why [`EngineService::start_negotiated`] did not start the engine.
 #[derive(Debug, thiserror::Error)]
 pub enum StartNegotiatedError {
@@ -777,7 +780,7 @@ impl EngineService {
         backends: Vec<Box<dyn EngineBackend>>,
     ) -> Result<Self, ApiError> {
         if backends.is_empty() {
-            return Err(ApiError::internal("the engine needs at least one backend"));
+            return Err(ApiError::internal(NO_BACKEND));
         }
         let declared = declare(&backends);
         let mut execs = Vec::new();
@@ -857,6 +860,9 @@ impl EngineService {
         req: &GenerationRequest,
         staged: &StagedInputs,
     ) -> Result<(Self, ModelCaps, ResolvedJob), StartNegotiatedError> {
+        if backends.is_empty() {
+            return Err(StartNegotiatedError::Start(ApiError::internal(NO_BACKEND)));
+        }
         let table = Self::caps_table(&cfg, &backends).map_err(StartNegotiatedError::Start)?;
         let caps = table
             .get(model)

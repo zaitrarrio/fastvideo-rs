@@ -818,26 +818,42 @@ export function crossChecks(set = loadFamilies()) {
  * held to the same table by a Rust test): [{ file, copy, bytes, sha256 }], `<tree>/<path>` paths. Reads the script's
  * plain `NAME=value` assignments and the function's `"<pattern>" | …)` / `echo "<copy> <bytes> <sha256>" ;;` arms. */
 export function sharedFiles(text = readRel("../scripts/gpu/verify-weights.sh")) {
+  const where = "scripts/gpu/verify-weights.sh shared_file";
   const vars = {};
   for (const m of text.matchAll(/^([A-Z0-9_]+)=([^\s"$(]+)$/gm)) vars[m[1]] = m[2];
-  const expand = (str) => str.replace(/\$\{?([A-Z0-9_]+)\}?/g, (all, k) => (k in vars ? vars[k] : all));
+  // `$NAME` / `${NAME}` of the plain assignments; anything still holding a `$` (an unknown or quoted variable) is refused.
+  const expand = (str) => {
+    const out = str.replace(/\$\{([A-Z0-9_]+)\}|\$([A-Z0-9_]+)/g, (all, a, b) => vars[a ?? b] ?? all);
+    if (out.includes("$")) throw new Error(`${where}: ${str}: an unknown variable`);
+    return out;
+  };
   const body = /^shared_file\(\) \{\n([\s\S]*?)\n\}$/m.exec(text);
   if (!body) throw new Error("scripts/gpu/verify-weights.sh: no shared_file() function");
+  // Strict: only `case "$1" in`, quoted arms each followed by one `echo "<copy> <bytes> <sha256>" ;;`, `*) return 1 ;;`
+  // and `esac`; any other line, an echo with no arm, an arm with no echo is an error (never an arm dropped silently).
   const out = [];
-  let patterns = [];
+  let patterns = null;
   for (const line of body[1].split("\n").map((l) => l.trim())) {
+    if (line === "" || line === 'case "$1" in' || line === "esac") continue;
+    if (line === "*) return 1 ;;") {
+      if (patterns) throw new Error(`${where}: an arm with no echo before: ${line}`);
+      continue;
+    }
     const arm = /^("[^"]+"(?:\s*\|\s*"[^"]+")*)\)$/.exec(line);
     if (arm) {
+      if (patterns) throw new Error(`${where}: an arm with no echo before: ${line}`);
       patterns = [...arm[1].matchAll(/"([^"]+)"/g)].map((p) => expand(p[1]));
       continue;
     }
     const echo = /^echo "([^"]+)" ;;$/.exec(line);
-    if (!echo) continue;
+    if (!echo) throw new Error(`${where}: an unexpected line: ${line}`);
+    if (!patterns) throw new Error(`${where}: an echo with no arm: ${line}`);
     const f = expand(echo[1]).split(/\s+/);
-    if (f.length !== 3 || !/^[0-9]+$/.test(f[1]) || !/^[0-9a-f]{64}$/.test(f[2])) throw new Error(`scripts/gpu/verify-weights.sh shared_file: ${line}`);
+    if (f.length !== 3 || !/^[0-9]+$/.test(f[1]) || !/^[0-9a-f]{64}$/.test(f[2])) throw new Error(`${where}: not "<copy> <bytes> <sha256>": ${line}`);
     for (const p of patterns) out.push({ file: p, copy: f[0], bytes: Number(f[1]), sha256: f[2] });
-    patterns = [];
+    patterns = null;
   }
+  if (patterns) throw new Error(`${where}: an arm with no echo at the end`);
   if (!out.length) throw new Error("scripts/gpu/verify-weights.sh: shared_file lists no file");
   return out;
 }
