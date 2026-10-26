@@ -46,6 +46,11 @@ pub fn create_body(l: &Launch) -> Value {
     if !l.gpu.allowed_cuda.is_empty() {
         m.insert("allowedCudaVersions".into(), json!(l.gpu.allowed_cuda));
     }
+    // Only when set: without it the body is the script's
+    // (`runpod-http.sh` sends it only with FV_MIN_RAM_GB).
+    if let Some(gb) = l.gpu.min_ram_gb {
+        m.insert("minRAMPerGPU".into(), json!(gb));
+    }
     Value::Object(m)
 }
 
@@ -186,6 +191,10 @@ impl Provider for Pod<'_> {
             // and fails the billed-price check.
             usd_per_hr: parse_usd(v.get("costPerHr")),
             created_at: Some(self.api.clock().now()),
+            // What the host gave the pod (`runpod-http.sh` logs the same):
+            // the RAM floor's evidence; absent or 0 is unknown.
+            memory_gb: parse_usd(v.get("memoryInGb")).filter(|x| *x > 0.0),
+            vcpus: parse_usd(v.get("vcpuCount")).filter(|x| *x > 0.0),
         })
     }
 

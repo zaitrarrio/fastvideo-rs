@@ -107,7 +107,8 @@ for FAMILY in $FAMILIES; do
   # as the script's FV_CONTAINER_DISK_GB, and so is its idle watchdog (an R2
   # fetch keeps the GPU at 0 %: weights::r2_idle_min, a 600 s apt-get plus one
   # fetch at the cell cap, in minutes, plus 15, at least 30; before and after
-  # the GPU's first use); its env (the R2 key as Runpod secret references) is
+  # the GPU's first use), and so is its host-RAM floor (min_ram_gb, passed as
+  # FV_MIN_RAM_GB); its env (the R2 key as Runpod secret references) is
   # the one difference tests/payload_golden.rs allows.
   if [[ "$FAMILY" == gold ]] || fv_lab_experiment "$FAMILY"; then
     extra=()
@@ -118,6 +119,13 @@ for FAMILY in $FAMILIES; do
       (( cell > 0 )) || cell=3600
       idle=$(( (600 + cell + 59) / 60 + 15 )); (( idle >= 30 )) || idle=30
       extra=(FV_CONTAINER_DISK_GB="$disk" FV_IDLE_GPU_MIN="$idle" FV_IDLE_GPU_GRACE_MIN="$idle")
+      # Its host-RAM floor (min_ram_gb, ADR-0019 §16.10) is the script's
+      # FV_MIN_RAM_GB: minRAMPerGPU in both bodies.
+      ram="$(tv min_ram_gb)"
+      if [[ -n "$ram" ]]; then
+        [[ "$ram" =~ ^[1-9][0-9]*$ ]] || { echo "fv-lab-goldens: the gold tier's min_ram_gb '$ram' is not a positive whole number" >&2; exit 2; }
+        extra+=(FV_MIN_RAM_GB="$ram")
+      fi
     fi
     clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" ${extra[@]+"${extra[@]}"} \
       bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"

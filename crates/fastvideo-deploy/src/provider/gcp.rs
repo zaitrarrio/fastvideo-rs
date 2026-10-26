@@ -1017,6 +1017,8 @@ impl Provider for GcpVm<'_> {
             data_center: Some(zone.to_owned()),
             usd_per_hr: price,
             created_at: Some(self.api.clock.now()),
+            memory_gb: None,
+            vcpus: None,
         })
     }
 

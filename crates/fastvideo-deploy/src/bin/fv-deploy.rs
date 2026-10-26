@@ -946,6 +946,8 @@ fn with_provider<T>(
         data_center: None,
         usd_per_hr: None,
         created_at: None,
+        memory_gb: None,
+        vcpus: None,
     });
     // GCP: the zone `up` recorded, else --zone; never a default.
     let zone = match kind {

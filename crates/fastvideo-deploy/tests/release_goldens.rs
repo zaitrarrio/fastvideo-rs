@@ -932,6 +932,8 @@ fn up_instance(kind: ProviderKind, image: &str, name: &str, id: &str) -> (Launch
         data_center: Some("EU-RO-1".into()),
         usd_per_hr: (kind == ProviderKind::RunpodPod).then_some(1.84),
         created_at: None,
+        memory_gb: None,
+        vcpus: None,
     };
     (l, inst)
 }

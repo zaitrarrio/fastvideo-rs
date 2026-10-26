@@ -419,3 +419,140 @@ fn a_baseline_that_is_this_build_is_fatal() {
     let runs = f.dir.join("scratch/runs/fam/t1");
     assert!(!runs.join("x-base").exists());
 }
+
+/// The pod's memory (ADR-0019 §16.10) on a fake cgroup v2: `box.txt` gets the
+/// RAM limit and the OOM kills at start (after the start command's lines),
+/// each arm's `summary.json` its memory fields before `ended`, and an arm
+/// the kernel OOM-killed says so in `live.log`.
+#[test]
+fn the_pods_ram_limit_and_an_arms_oom_kill_are_recorded() {
+    let f = fake("mem");
+    let cg = f.dir.join("cgroup");
+    let events = cg.join("pod/memory.events");
+    std::fs::create_dir_all(cg.join("pod")).unwrap();
+    for (file, text) in [
+        ("memory.current", "1\n"),
+        ("memory.max", "206158430208\n"),
+        ("memory.peak", "104857600\n"),
+        ("memory.stat", "anon 52428800\nfile 1\nshmem 1048576\n"),
+        ("memory.events", "oom 0\noom_kill 0\n"),
+    ] {
+        std::fs::write(cg.join("pod").join(file), text).unwrap();
+    }
+    std::fs::write(f.dir.join("proc-cgroup"), "0::/pod\n").unwrap();
+    std::fs::write(f.dir.join("meminfo"), "MemTotal:       2113290240 kB\n").unwrap();
+    // `oom` is killed as the kernel kills a loader over the limit: SIGKILL,
+    // nothing printed, the cgroup's oom_kill counted.
+    let cell = CellFile::parse(
+        &format!(
+            r#"
+schema = 1
+name = "t"
+description = "fake"
+
+[workload]
+model = "h3"
+seed = 1
+
+[[arm]]
+name = "ok"
+gate = "ok"
+trees = ["w"]
+argv = ["gen", "--seed", "{{seed}}"]
+
+[[arm]]
+name = "oom"
+gate = "ok"
+trees = ["w"]
+env = ["OOM_EVENTS={}"]
+argv = ["gen"]
+"#,
+            events.display()
+        ),
+        "t.toml",
+    )
+    .unwrap();
+    let gpucheck = f.dir.join("bin/fv-gpucheck");
+    let body = read(&gpucheck);
+    std::fs::write(
+        &gpucheck,
+        body.replacen(
+            "#!/bin/sh\n",
+            "#!/bin/sh\nif [ -n \"$OOM_EVENTS\" ]; then printf 'oom 1\\noom_kill 1\\n' > \"$OOM_EVENTS\"; kill -9 $$; fi\n",
+            1,
+        ),
+    )
+    .unwrap();
+    let mut cfg = config(&f);
+    cfg.proc_cgroup = f.dir.join("proc-cgroup");
+    cfg.cgroup_root = cg.clone();
+    cfg.meminfo = f.dir.join("meminfo");
+    cfg.mem_poll = Duration::from_millis(5);
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    std::fs::create_dir_all(&runs).unwrap();
+    std::fs::write(runs.join("box.txt"), "image_build_id=x\nFake, 1 MiB\n").unwrap();
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    Runner::new(cfg).run(&steps).unwrap();
+
+    assert_eq!(
+        read(&runs.join("box.txt")),
+        format!(
+            "image_build_id=x\nFake, 1 MiB\ncpus={} mem=2015G\ncgroup=v2 {} pod_ram_limit_mib=196608 oom_kills=0\n",
+            std::thread::available_parallelism().map_or(0, |n| n.get()),
+            cg.join("pod").display()
+        )
+    );
+    let ok = read(&runs.join("ok/summary.json"));
+    assert!(
+        ok.starts_with("{\"cell\":\"ok\",\"family\":\"fam\",\"exit\":0,\"seconds\":")
+            && ok.contains(",\"peak_ram_mib\":51,\"ram_limit_mib\":196608,\"pod_peak_mib_cumulative\":100,\"oom_kills\":0,\"ended\":\"")
+            && ok.ends_with("Z\"}\n"),
+        "{ok}"
+    );
+    let v: serde_json::Value = serde_json::from_str(&ok).unwrap();
+    assert_eq!(v["exit"], 0);
+    let oom: serde_json::Value =
+        serde_json::from_str(&read(&runs.join("oom/summary.json"))).unwrap();
+    assert_eq!(
+        (oom["exit"].clone(), oom["oom_kills"].clone()),
+        (137.into(), 1.into())
+    );
+    let log = read(&runs.join("live.log"));
+    for want in [
+        format!("[fam] pod memory: cgroup v2 {}, limit 196608 MiB, oom_kills 0", cg.join("pod").display()),
+        "[fam] ram ok: ram 51 MiB of 196608 MiB, oom_kills 0".to_owned(),
+        "[fam] FAIL oom  ".to_owned(),
+        "exit=137".to_owned(),
+        "[fam] ram oom: ram 51 MiB of 196608 MiB, oom_kills 1".to_owned(),
+        "[fam] OOM oom: the kernel OOM-killed 1 process(es) in this pod during the arm (host RAM, not GPU".to_owned(),
+    ] {
+        assert!(log.contains(&want), "live.log lacks {want:?}:\n{log}");
+    }
+    assert!(!log.contains("OOM ok:"), "{log}");
+}
+
+/// Without a memory cgroup an arm's summary is as before (no memory fields)
+/// and `box.txt` says so.
+#[test]
+fn without_a_memory_cgroup_the_summary_is_unchanged() {
+    let f = fake("nomem");
+    let cell = CellFile::parse(CELL, "t.toml").unwrap();
+    let mut cfg = config(&f);
+    cfg.proc_cgroup = f.dir.join("none");
+    cfg.cgroup_root = f.dir.join("none");
+    cfg.only = Some(vec!["a".into()]);
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    Runner::new(cfg).run(&steps).unwrap();
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    let a = read(&runs.join("a/summary.json"));
+    assert!(!a.contains("ram"), "{a}");
+    assert!(
+        a.starts_with("{\"cell\":\"a\",\"family\":\"fam\",\"exit\":0,\"seconds\":")
+            && a.contains(",\"ended\":\""),
+        "{a}"
+    );
+    assert!(
+        read(&runs.join("box.txt")).contains("cgroup=none  pod_ram_limit_mib=null oom_kills=\n")
+    );
+    assert!(read(&runs.join("live.log")).contains("[fam] pod memory: no memory cgroup found"));
+}

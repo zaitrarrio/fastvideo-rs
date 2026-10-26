@@ -951,9 +951,11 @@ function schemaNode(n, at) {
       if (n.format !== "double") bad(`number format ${n.format}`);
       return { ts: "number", zod: "z.number()" };
     case "integer":
-      if (n.format === "uint32" && n.minimum === 0) return { ts: "number", zod: "z.number().int().min(0).max(4294967295)" };
-      if (n.format === "uint64" && n.minimum === 0) return { ts: "number", zod: "z.number().int().min(0)" };
-      return bad(`integer format ${n.format}`);
+      // schemars' unsigned minimum: 0, or a `range(min = …)` on the field (e.g. `min_ram_gb`, at least 1).
+      if (n.format !== "uint32" && n.format !== "uint64") return bad(`integer format ${n.format}`);
+      if (!Number.isInteger(n.minimum) || n.minimum < 0) return bad(`integer minimum ${n.minimum}`);
+      if (n.format === "uint32") return { ts: "number", zod: `z.number().int().min(${n.minimum}).max(4294967295)` };
+      return { ts: "number", zod: `z.number().int().min(${n.minimum})` };
     case "array": {
       const t = schemaNode(n.items, `${at}[]`);
       return { ts: /[ |]/.test(t.ts) ? `(${t.ts})[]` : `${t.ts}[]`, zod: `z.array(${t.zod})` };

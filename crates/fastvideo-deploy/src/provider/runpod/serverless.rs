@@ -187,6 +187,8 @@ impl Provider for Serverless<'_> {
             data_center: launch.placement.data_centers.first().cloned(),
             usd_per_hr: None,
             created_at: Some(self.api.clock().now()),
+            memory_gb: None,
+            vcpus: None,
         })
     }
 

@@ -27,6 +27,14 @@
     "id": {
       "$ref": "#/$defs/InstanceId"
     },
+    "memory_gb": {
+      "description": "The host RAM the provider gave the instance (GB; a Runpod pod's\n`memoryInGb`), when its create answer says.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
     "name": {
       "type": "string"
     },
@@ -45,6 +53,14 @@
     },
     "usd_per_hr": {
       "description": "Billed $/hr when the provider says.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
+    "vcpus": {
+      "description": "Its vCPUs (a Runpod pod's `vcpuCount`), when the create answer says.",
       "type": [
         "number",
         "null"

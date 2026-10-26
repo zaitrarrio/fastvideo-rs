@@ -60,7 +60,8 @@
 # FV_MIN_RAM_GB (PodCreateInput minRAMPerGPU, whole GB: the pod's host RAM floor;
 # unset = Runpod's default floor of 8 GB per GPU, above which the host's share
 # decides; too small a share is the suspected cause of the 2026-10-26 upstream
-# H3 LoRA failure, docs/oracle.md "Upstream cells: host RAM"),
+# H3 LoRA failure, docs/oracle.md "Upstream cells: host RAM"; an fv-lab tier's
+# floor is its min_ram_gb in lab/tiers.toml, ADR-0019 §16.10),
 # FV_AVOID_MACHINES (space-separated Runpod machine ids: a pod placed on one
 # is deleted at once and created again),
 # FV_POD_SCRIPT (the basename of one of FV_POD_FILES, run instead of the
@@ -578,9 +579,18 @@ fv_lab_route() {
     || die "$FAMILY: no complete [[tier]] in lab/tiers.toml"
   # No equivalent at all.
   for v in FV_POD_FILES FV_POD_SCRIPT FV_POD_FILE FV_PROMPTS FV_PROMPT FV_SEED FV_AVOID_MACHINES \
-    FV_CREATE_WAIT_S RUNPOD_ALLOWED_CUDA FV_MIN_RAM_GB; do
+    FV_CREATE_WAIT_S RUNPOD_ALLOWED_CUDA; do
     [[ -z "${!v:-}" ]] || refuse "has no $v"
   done
+  # The host-RAM floor is the tier's (min_ram_gb, ADR-0019 §16.10): the same
+  # value passes, any other (or one for a tier without a floor) is refused.
+  local ram
+  ram="$(tier_value "$FAMILY" min_ram_gb)"
+  if [[ -n "$ram" ]]; then
+    same FV_MIN_RAM_GB "$ram"
+  elif [[ -n "${FV_MIN_RAM_GB:-}" ]]; then
+    refuse "has no FV_MIN_RAM_GB for this tier: a pod's host-RAM floor is its tier's min_ram_gb in lab/tiers.toml"
+  fi
   # The tree fetch's settings act only with it (fetch_tree), as here.
   if [[ "${FV_FETCH_TREE:-0}" != 1 ]]; then
     for v in FV_FETCH_SKIP FV_FETCH_MAX_MB; do

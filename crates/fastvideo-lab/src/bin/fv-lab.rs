@@ -1011,8 +1011,13 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     let tag_image = l.image.clone();
     l.image = ghcr_resolve(&http, &tag_image).map_err(|e| e.to_string())?;
     log.line(&format!(
-        "[fv-lab] {} on {}: image {} ({tag_image})",
-        l.name, t.gpu, l.image
+        "[fv-lab] {} on {}: image {} ({tag_image}){}",
+        l.name,
+        t.gpu,
+        l.image,
+        t.min_ram_gb
+            .map(|g| format!(", host RAM floor {g} GB per GPU (minRAMPerGPU)"))
+            .unwrap_or_default()
     ));
     let api_key = env.get(API_KEY_VAR).unwrap_or("").to_owned();
     let leaks = |s: &str| !api_key.is_empty() && s.contains(api_key.as_str());
@@ -1072,6 +1077,9 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         usd_per_hr: inst.usd_per_hr,
         created_at: inst.created_at,
         cap_s: t.wall_cap_s,
+        min_ram_gb: t.min_ram_gb,
+        memory_gb: inst.memory_gb,
+        vcpus: inst.vcpus,
     };
     write_record(&state.join("pods").join(format!("{}.json", rec.id)), &rec)?;
     let out = run_dir(&root, &t.name, &tag);
@@ -1272,6 +1280,8 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
                 data_center: None,
                 usd_per_hr: rec.usd_per_hr,
                 created_at: rec.created_at,
+                memory_gb: rec.memory_gb,
+                vcpus: rec.vcpus,
             };
             let ping = p
                 .reach(&inst, &ReachOptions::default())
@@ -1353,7 +1363,7 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
                     .collect();
                 reap_account(&pods, now, &caps)
             } else {
-                let records = read_records(&state)?;
+                let records = read_records(&state);
                 reap_recorded(&pods, now, &records)
             };
             let mut ok = true;
@@ -1390,20 +1400,15 @@ fn cmd_pod(c: &PodCmd) -> Result<bool, String> {
 }
 
 /// Every pod record of this machine (`<state>/pods/*.json`).
-fn read_records(state: &Path) -> Result<Vec<PodRecord>, String> {
-    let dir = state.join("pods");
-    let Ok(rd) = std::fs::read_dir(&dir) else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::new();
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.extension().is_some_and(|x| x == "json") {
-            let t = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
-            out.push(serde_json::from_str(&t).map_err(|e| format!("{}: {e}", p.display()))?);
-        }
+/// This machine's pod records (`<state>/pods/*.json`); one it cannot read
+/// (another version's, a torn write) is skipped with a warning naming it, so
+/// the others are still reaped.
+fn read_records(state: &Path) -> Vec<PodRecord> {
+    let (records, skipped) = fastvideo_lab::pod::read_records(&state.join("pods"));
+    for w in skipped {
+        eprintln!("[fv-lab] WARN: skipping pod record {w}");
     }
-    Ok(out)
+    records
 }
 
 fn cmd_backstop(

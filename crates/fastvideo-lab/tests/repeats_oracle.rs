@@ -326,7 +326,10 @@ fn assert_same_outputs(a: &Path, b: &Path) {
             || name == "summary.json"
             || name == "done.json"
             || name.ends_with(".arms.json")
-            || name.ends_with(".weights.log"))
+            || name.ends_with(".weights.log")
+            // The pod's box (the start command writes it; fv-lab adds the
+            // pod's memory cgroup, ADR-0019 §16.10): no output of the cells.
+            || name == "box.txt")
     };
     let (fa, fb): (Vec<String>, Vec<String>) = (
         files(a).into_iter().filter(keep).collect(),

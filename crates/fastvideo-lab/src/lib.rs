@@ -23,6 +23,9 @@
 //!   and which from the R2 weights store, fetched per arm (ADR-0019 §16).
 //! - [`pod`]: `fv-lab pod`, a tier's Runpod pod on fv-deploy's `Provider`
 //!   trait, guards and lifecycle.
+//! - [`podmem`]: the pod's memory cgroup (its RAM limit, OOM kills and an
+//!   arm's peak process memory), for the runner's `box.txt`, `summary.json`
+//!   and `live.log` (ADR-0019 §16.10).
 //! - [`goldcheck`]: `fv-lab gold check`, the CI bridge (plan D4): every
 //!   gold file parses and resolves against the family files, a validated
 //!   commit exists, and the per-variant validation age.
@@ -53,6 +56,7 @@ pub mod goldcheck;
 pub mod knobs;
 pub mod plan;
 pub mod pod;
+pub mod podmem;
 pub mod profiles;
 pub mod pyfmt;
 pub mod quote;

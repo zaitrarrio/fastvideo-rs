@@ -409,6 +409,7 @@ fn runpod_launch(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Launch
                     count: 1,
                     allowed_cuda: Vec::new(),
                     min_cuda: None,
+                    min_ram_gb: None,
                 },
                 placement,
                 disk: Disk {
@@ -440,6 +441,7 @@ fn runpod_launch(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Launch
                     count: 1,
                     allowed_cuda: Vec::new(),
                     min_cuda: Some(MIN_CUDA.into()),
+                    min_ram_gb: None,
                 },
                 placement,
                 disk: Disk {
@@ -548,6 +550,7 @@ pub fn vast_launch(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Laun
             count: 1,
             allowed_cuda: Vec::new(),
             min_cuda: None,
+            min_ram_gb: None,
         },
         placement: Placement {
             region: None,
@@ -605,6 +608,7 @@ pub fn script_vast(p: &ScriptVast<'_>) -> Launch {
             count: 1,
             allowed_cuda: Vec::new(),
             min_cuda: None,
+            min_ram_gb: None,
         },
         placement: Placement {
             region: None,
@@ -711,6 +715,7 @@ pub fn gcp_launch(repo: &Repo, req: &PresetRequest, stamp: &str) -> Result<Launc
             count: 1,
             allowed_cuda: Vec::new(),
             min_cuda: None,
+            min_ram_gb: None,
         },
         placement: gcp_placement(&zone, !fake, Some(req.region.clone())),
         disk: Disk {
@@ -826,6 +831,7 @@ pub fn script_gcp(p: &ScriptGcp<'_>) -> Launch {
             count: 1,
             allowed_cuda: Vec::new(),
             min_cuda: None,
+            min_ram_gb: None,
         },
         placement: gcp_placement(p.zone, !p.fake, None),
         disk: Disk {
@@ -917,6 +923,7 @@ pub fn script_pod(p: &ScriptPod<'_>) -> Launch {
             count: 1,
             allowed_cuda: Vec::new(),
             min_cuda: None,
+            min_ram_gb: None,
         },
         placement: Placement {
             region: None,
@@ -983,6 +990,7 @@ pub fn script_endpoint(p: &ScriptEndpoint<'_>) -> Launch {
             count: 1,
             allowed_cuda: Vec::new(),
             min_cuda: Some(MIN_CUDA.into()),
+            min_ram_gb: None,
         },
         placement: Placement {
             region: None,

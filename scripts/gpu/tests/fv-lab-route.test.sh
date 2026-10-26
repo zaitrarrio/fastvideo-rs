@@ -64,6 +64,10 @@ for kv in FV_POD_FILES=x FV_POD_SCRIPT=x FV_POD_FILE=x FV_PROMPTS=5 FV_PROMPT=x 
   FV_CREATE_WAIT_S=60 RUNPOD_ALLOWED_CUDA=13.0 FV_MIN_RAM_GB=192; do
   dry "refused: $kv" 1 "which has no ${kv%%=*}" FV_FAMILY=trace "$kv"
 done
+# A tier without a floor: FV_MIN_RAM_GB refused, naming the tier's min_ram_gb
+# (ADR-0019 §16.10).
+dry "refused: FV_MIN_RAM_GB names the tier's min_ram_gb" 1 "a pod's host-RAM floor is its tier's min_ram_gb in lab/tiers.toml" \
+  FV_FAMILY=trace FV_MIN_RAM_GB=192
 # FV_MIN_RAM_GB on the script path: minRAMPerGPU in the body; anything but a
 # whole positive number of GB stops before jq or the API.
 plan_env=(RUNPOD_API_KEY=t FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_FAMILY=oracle)

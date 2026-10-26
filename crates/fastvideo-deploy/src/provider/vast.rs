@@ -512,6 +512,8 @@ impl Provider for Vast<'_> {
                 .map(str::to_owned),
             usd_per_hr: billed,
             created_at: Some(self.api.clock().now()),
+            memory_gb: None,
+            vcpus: None,
         })
     }
 

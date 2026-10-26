@@ -396,6 +396,8 @@ pub fn launch(tier: &Tier, sha7: &str, start: &StartOptions) -> Result<Launch, P
             count: tier.gpu_count,
             allowed_cuda: Vec::new(),
             min_cuda: None,
+            // The tier's host-RAM floor (`minRAMPerGPU`), when it sets one.
+            min_ram_gb: tier.min_ram_gb,
         },
         placement: Placement {
             region: Some(tier.region.clone()),
@@ -546,6 +548,42 @@ pub struct PodRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<f64>,
     pub cap_s: u64,
+    /// The tier's host-RAM floor asked for (GB per GPU, `minRAMPerGPU`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_ram_gb: Option<u32>,
+    /// What the host gave the pod (the create answer's `memoryInGb`,
+    /// `vcpuCount`), when Runpod said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_gb: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vcpus: Option<f64>,
+}
+
+/// The pod records in `dir` (`<state>/pods/*.json`), and one line per file
+/// that could not be read or parsed (`<path>: <why>`): skipped, not fatal, so
+/// a record of another fv-lab version ([`PodRecord`] refuses unknown fields)
+/// or a torn write never stops `pod reap` from reading the rest.
+pub fn read_records(dir: &Path) -> (Vec<PodRecord>, Vec<String>) {
+    let (mut out, mut skipped) = (Vec::new(), Vec::new());
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return (out, skipped);
+    };
+    let mut paths: Vec<PathBuf> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    paths.sort();
+    for p in paths {
+        match std::fs::read_to_string(&p)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str::<PodRecord>(&t).map_err(|e| e.to_string()))
+        {
+            Ok(r) => out.push(r),
+            Err(e) => skipped.push(format!("{}: {e}", p.display())),
+        }
+    }
+    (out, skipped)
 }
 
 /// `artifacts/runpod/<family>/<tag>` under `root`: where `runpod-http.sh`
@@ -1345,6 +1383,35 @@ cells = ["c"]
         assert!(launch(&t, "ABCDEF1", &o).is_err());
         assert!(launch(&t, "abcdef", &o).is_err());
         assert!(l.env.is_empty(), "a volume tier's pod carries no env");
+        assert_eq!(l.gpu.min_ram_gb, None, "no floor unless the tier sets one");
+    }
+
+    /// A tier's `min_ram_gb` is the pod body's `minRAMPerGPU`, and nothing
+    /// else of the body changes; without it the body has no such field.
+    #[test]
+    fn a_tiers_host_ram_floor_is_the_pods_min_ram_per_gpu() {
+        use fastvideo_deploy::provider::runpod::pod_create_body;
+        let t = tier();
+        let o = StartOptions::for_tier(&t, "abcdef1-10241200");
+        let plain = pod_create_body(&launch(&t, "abcdef1", &o).unwrap());
+        assert!(plain.get("minRAMPerGPU").is_none());
+        let t = Tiers::parse(
+            &TIERS.replace(
+                "container_disk_gb = 120",
+                "container_disk_gb = 120\nmin_ram_gb = 192",
+            ),
+            "t",
+        )
+        .unwrap()
+        .tiers
+        .remove(0);
+        assert_eq!(t.min_ram_gb, Some(192));
+        let l = launch(&t, "abcdef1", &o).unwrap();
+        assert_eq!(guard::check_min_ram(&l), Ok(()));
+        let mut body = pod_create_body(&l);
+        assert_eq!(body["minRAMPerGPU"], serde_json::json!(192));
+        body.as_object_mut().map(|m| m.remove("minRAMPerGPU"));
+        assert_eq!(body, plain);
     }
 
     #[test]
@@ -1569,7 +1636,33 @@ cells = ["c"]
             usd_per_hr: None,
             created_at: created,
             cap_s,
+            min_ram_gb: None,
+            memory_gb: None,
+            vcpus: None,
         }
+    }
+
+    /// An unreadable record (another version's field, a torn write) is
+    /// skipped and named; the others are read.
+    #[test]
+    fn read_records_skips_what_it_cannot_read() {
+        let dir = std::env::temp_dir().join(format!("fv-lab-records-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = record("p1", 3600, Some(1.0));
+        std::fs::write(dir.join("p1.json"), serde_json::to_string(&good).unwrap()).unwrap();
+        let mut newer = serde_json::to_value(record("p2", 3600, None)).unwrap();
+        newer["field_of_a_later_version"] = serde_json::json!(1);
+        std::fs::write(dir.join("p2.json"), newer.to_string()).unwrap();
+        std::fs::write(dir.join("p3.json"), "{\"id\":").unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a record").unwrap();
+        let (records, skipped) = read_records(&dir);
+        assert_eq!(records, [good]);
+        assert_eq!(skipped.len(), 2, "{skipped:?}");
+        assert!(skipped[0].contains("p2.json") && skipped[0].contains("field_of_a_later_version"));
+        assert!(skipped[1].contains("p3.json"));
+        assert_eq!(read_records(&dir.join("none")), (Vec::new(), Vec::new()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

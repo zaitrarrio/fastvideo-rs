@@ -67,6 +67,8 @@ export function runpodPodBody(l: Launch) {
     ...(v ? { networkVolumeId: v.id, volumeMountPath: v.mount_path } : {}),
     ...(nonEmpty(l.placement.data_centers) ? { dataCenterIds: l.placement.data_centers } : {}),
     ...(nonEmpty(l.gpu.allowed_cuda) ? { allowedCudaVersions: l.gpu.allowed_cuda } : {}),
+    // The host-RAM floor, only when set (pod.rs create_body; ADR-0019 §16.10).
+    ...(l.gpu.min_ram_gb != null ? { minRAMPerGPU: l.gpu.min_ram_gb } : {}),
   };
 }
 

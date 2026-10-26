@@ -145,6 +145,8 @@ impl Provider for FakeProvider<'_> {
             data_center: None,
             usd_per_hr: self.billed.get().unwrap_or(self.price.get()),
             created_at: Some(now),
+            memory_gb: None,
+            vcpus: None,
         })
     }
     fn status(&self, id: &InstanceId) -> Result<InstanceState, ProviderError> {
