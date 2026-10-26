@@ -565,7 +565,7 @@
           "minimum": 0
         },
         "model": {
-          "description": "The fv-gpucheck pipeline (`h3`, `ltx2`, `wan`, …).",
+          "description": "The fv-gpucheck pipeline (`h3`, `ltx2`, `wan`, …), descriptive: a cell\nwhose arms run two pipelines names both, space-separated (`h3 ltx2`:\na family whose compares follow arms of both, ADR-0019 §17), and a cell\nwithout a generation names what it runs (`kernels`).",
           "type": "string"
         },
         "note": {

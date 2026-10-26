@@ -1,0 +1,42 @@
+# runpod-matrix.sh `ltx`: the LTX-2 generations side by side: LTX-2.5 distilled
+# two-stage (warm), LTX-2.3 distilled two-stage and LTX-2.0 19B distilled
+# (8 steps, single stage), streamed Gemma where two-stage, one prompt and seed.
+# Each arm gates on its tree (the script's branch gates them since D1f,
+# docs/adr/0019-fv-lab.md §17: it ran them ungated before, and the two arms
+# whose trees are not on the EU volume failed on the missing files). ltx23 and
+# ltx2 are not on bz0ofkfx45 (volumes.sh FV_EU_VOLUME_TREES), so those two arms
+# are recorded as skipped there ("weights incomplete") by both runners. The
+# ltx25-two-stage arm is the rtx6000 tier's command word for word.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "ltx-versions"
+description = "LTX-2.5 two-stage (warm), LTX-2.3 two-stage and LTX-2.0 19B distilled 8-step at their default workloads, one prompt, seed 1024"
+
+[workload]
+model = "ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; each version's default canvas, frames and steps"
+
+[[arm]]
+name = "ltx25-two-stage"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit", "{weights}/ltx25",
+  "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx23-two-stage"
+gate = "ltx23"
+trees = ["ltx23"]
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.3", "--weights", "{weights}/ltx23", "--dit", "{weights}/ltx23",
+  "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text", "streamed", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ltx20-distilled-8step"
+gate = "ltx2"
+trees = ["ltx2"]
+steps = 8
+argv = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.0", "--weights", "{weights}/ltx2",
+  "--dit", "{weights}/ltx2/ltx-2-19b-distilled.safetensors", "--prompt", "{prompt}", "--seed", "{seed}",
+  "--clip", "{runs}/{arm}/frames"]

@@ -615,7 +615,10 @@ impl Verdict {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Workload {
-    /// The fv-gpucheck pipeline (`h3`, `ltx2`, `wan`, …).
+    /// The fv-gpucheck pipeline (`h3`, `ltx2`, `wan`, …), descriptive: a cell
+    /// whose arms run two pipelines names both, space-separated (`h3 ltx2`:
+    /// a family whose compares follow arms of both, ADR-0019 §17), and a cell
+    /// without a generation names what it runs (`kernels`).
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,

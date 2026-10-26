@@ -1,0 +1,90 @@
+# The fuse family's switch arms (runpod-matrix.sh `fuse`, step 3): untraced warm
+# generations with the block fusions off (FASTVIDEO_H3_FUSE=0 FASTVIDEO_LTX_FUSE=0
+# FASTVIDEO_SPLIT_ROWS=0: the ops the previous build runs) and on. The fusions keep
+# every rounding point, so each off / on pair must compare byte-identical
+# (--off-identity) and its gate is an `exact` switch whose OFF-identity report is
+# that compare itself. One cell, H3 and LTX-2.5 arms together: the script runs
+# all six arms, then the three compare / gate pairs (docs/adr/0019-fv-lab.md §17).
+# The fasth3-8step pair is skipped on the EU volume (h3-8step is R2-only), as
+# the script skips it. Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "fuse-switch"
+description = "Block fusions off against on for FastH3 8-step, FastH3 4-step VSA and LTX-2.5 at 4k5s: byte identity and an exact gate per pair"
+
+[workload]
+model = "h3 ltx2"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED; the H3 recipes' default canvas (the 768p of the arm names), LTX-2.5's 4k5s workload (--workload)"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+ltx_common = ["--mode", "fast", "ltx2", "gen", "--model-version", "2.5", "--weights", "{weights}/ltx25", "--dit",
+  "{weights}/ltx25", "--workload", "4k5s", "--prompt", "{prompt}", "--seed", "{seed}", "--two-stage", "--text",
+  "streamed", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "fasth3-8step-768p-off"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+env = ["FASTVIDEO_H3_FUSE=0", "FASTVIDEO_LTX_FUSE=0", "FASTVIDEO_SPLIT_ROWS=0"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-8step-768p-on"
+gate = "fasth3-8step"
+trees = ["h3-8step", "h3-base"]
+env = ["FASTVIDEO_H3_FUSE=1"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-8step", "--h3-recipe", "8step",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-vsa-768p-off"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_H3_FUSE=0", "FASTVIDEO_LTX_FUSE=0", "FASTVIDEO_SPLIT_ROWS=0"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "fasth3-4step-vsa-768p-on"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+env = ["FASTVIDEO_H3_FUSE=1"]
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa",
+  "--adaln-cache", "{runs}/{arm}-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}"]
+
+[[arm]]
+name = "ltx25-4k5s-sol-off"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = ["FASTVIDEO_H3_FUSE=0", "FASTVIDEO_LTX_FUSE=0", "FASTVIDEO_SPLIT_ROWS=0"]
+argv = ["{@ltx_common}"]
+
+[[arm]]
+name = "ltx25-4k5s-sol-on"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = ["FASTVIDEO_LTX_FUSE=1"]
+argv = ["{@ltx_common}"]
+
+[[compare]]
+baseline = "fasth3-8step-768p-off"
+candidate = "fasth3-8step-768p-on"
+args = ["--off-identity"]
+gate = { kind = "exact", off = "fasth3-8step-768p-on" }
+
+[[compare]]
+baseline = "fasth3-4step-vsa-768p-off"
+candidate = "fasth3-4step-vsa-768p-on"
+args = ["--off-identity"]
+gate = { kind = "exact", off = "fasth3-4step-vsa-768p-on" }
+
+[[compare]]
+baseline = "ltx25-4k5s-sol-off"
+candidate = "ltx25-4k5s-sol-on"
+args = ["--off-identity"]
+gate = { kind = "exact", off = "ltx25-4k5s-sol-on" }

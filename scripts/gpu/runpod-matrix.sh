@@ -894,7 +894,11 @@ Audio: male speech, clear voice, quiet room"
     fi
     ;;
   ltx)
-    run_cell ltx25-two-stage \
+    # Each arm gates on its weight tree (verify-weights.sh), as every fv-lab
+    # arm does (docs/adr/0019-fv-lab.md §4, §17): ltx23 and ltx2 are not on
+    # the EU volume, so on bz0ofkfx45 those two arms are recorded as skipped
+    # ("weights incomplete") instead of failing on the missing files.
+    gated_cell ltx25-two-stage ltx25-two-stage \
       "$BIN" --mode fast ltx2 gen \
         --model-version 2.5 \
         --weights "$W/ltx25" \
@@ -905,7 +909,7 @@ Audio: male speech, clear voice, quiet room"
         --text streamed \
         --warm \
         --clip "$RUNS/ltx25-two-stage/frames"
-    run_cell ltx23-two-stage \
+    gated_cell ltx23-two-stage ltx23 \
       "$BIN" --mode fast ltx2 gen \
         --model-version 2.3 \
         --weights "$W/ltx23" \
@@ -915,7 +919,7 @@ Audio: male speech, clear voice, quiet room"
         --two-stage \
         --text streamed \
         --clip "$RUNS/ltx23-two-stage/frames"
-    run_cell ltx20-distilled-8step \
+    gated_cell ltx20-distilled-8step ltx2 \
       "$BIN" --mode fast ltx2 gen \
         --model-version 2.0 \
         --weights "$W/ltx2" \

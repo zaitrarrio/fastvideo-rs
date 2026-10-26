@@ -472,3 +472,71 @@ weights = "volume"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["oracle-fasth3-8step", "oracle-fasth3-8step-vsa0", "oracle-fasth3-4step-vsa", "oracle-fasth3-4step-dense", "oracle-h3-ref2va-4step", "oracle-ltx25-512p", "oracle-ltx25-512p-dense", "oracle-ltx25-4k", "oracle-ltx25-4k-dense"]
+
+# ---- D1f (docs/adr/0019-fv-lab.md §17): three more runpod-matrix.sh families as
+# tiers, each held equal to the script's dry run by a golden (fv-lab-goldens.sh);
+# their branches stay until each one's GPU check through both runners (§17.5).
+# Every tier is the rtx6000 tier's pod, as runpod-http.sh gives every FV_FAMILY.
+
+# runpod-matrix.sh `fuse` (Phase 3c DiT block fusions): the ungated kernel check,
+# the traced steps, then the off / on switch arms with a compare and an exact
+# gate per pair (one cell: the three pairs follow all six arms, H3 and LTX-2.5).
+[[tier]]
+name = "fuse"
+description = "DiT block fusions: kernels bit for bit against their op chains, a traced step per workload, and fusions off against on (byte identity, exact gate) for FastH3 and LTX-2.5"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["fuse-kernels", "fuse-trace", "fuse-switch"]
+
+# runpod-matrix.sh `attn3` at its defaults (FV_ATTN3_ARMS "v2 cudnn", FV_ATTN3_VSA
+# "0 1"; both refused by fv-lab: select by arm): one cell, H3 and LTX-2.5 arms,
+# the three compares after them as in the script.
+[[tier]]
+name = "attn3"
+description = "sm_120 dense attention A/B (flash v2 against cuDNN SDPA) on FastH3 4-step dense and LTX-2.5 1080p20s dense, and VSA bf16 in place against f32"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["attn3-h3-ltx25"]
+
+# runpod-matrix.sh `ltx`: LTX-2.5, LTX-2.3 and LTX-2.0 side by side, each arm
+# gated on its tree (the script's branch gates them since D1f, §17); the ltx23
+# and ltx2 trees are not on the EU volume, so those two arms are skipped there.
+[[tier]]
+name = "ltx"
+description = "LTX-2.5 two-stage, LTX-2.3 two-stage and LTX-2.0 19B distilled at their defaults (the two older trees are not on the EU volume: skipped)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["ltx-versions"]

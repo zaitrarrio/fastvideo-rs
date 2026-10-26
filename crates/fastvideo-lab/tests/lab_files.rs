@@ -98,12 +98,14 @@ fn only_fasth3_8step_needs_a_tree_the_eu_volume_lacks() {
 }
 
 #[test]
-fn the_trees_tiers_lack_on_the_eu_volume_are_h3_8step_and_fastwan22() {
+fn the_trees_tiers_lack_on_the_eu_volume_are_h3_8step_fastwan22_and_the_older_ltx2s() {
     // Every other tree an arm reads is on bz0ofkfx45 (volumes.sh
     // FV_EU_VOLUME_TREES): the GPU runs exercise every arm but these, which
     // both runners record as skipped there: h3-8step (R2-only since
     // 2026-10-13; rtx6000, the D1b families, the oracle's fasth3-8step
-    // cells) and fastwan22-ti2v-5b (det-short's wan group, ADR-0019 §15).
+    // cells, fuse's 8-step arms), fastwan22-ti2v-5b (det-short's wan group,
+    // ADR-0019 §15), and ltx23 and ltx2 (the ltx tier's LTX-2.3 and LTX-2.0
+    // arms, D1f §17, gated in the script since then).
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let eu: BTreeSet<String> = parse_eu_trees(&read("scripts/gpu/volumes.sh"))
         .into_iter()
@@ -115,7 +117,17 @@ fn the_trees_tiers_lack_on_the_eu_volume_are_h3_8step_and_fastwan22() {
         .filter(|t| !eu.contains(t.as_str()))
         .map(String::as_str)
         .collect();
-    assert_eq!(lacking, BTreeSet::from(["h3-8step", "fastwan22-ti2v-5b"]));
+    assert_eq!(
+        lacking,
+        BTreeSet::from(["h3-8step", "fastwan22-ti2v-5b", "ltx23", "ltx2"])
+    );
+    let older_ltx: Vec<&str> = script_cells(&lab)
+        .into_iter()
+        .flat_map(|c| &c.arms)
+        .filter(|a| a.trees.iter().any(|t| t == "ltx23" || t == "ltx2"))
+        .map(|a| a.name.as_str())
+        .collect();
+    assert_eq!(older_ltx, ["ltx23-two-stage", "ltx20-distilled-8step"]);
     let wan: Vec<&str> = script_cells(&lab)
         .into_iter()
         .flat_map(|c| &c.arms)

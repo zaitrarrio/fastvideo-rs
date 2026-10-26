@@ -62,6 +62,9 @@ dry run show what will run.
 | `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | byte identity across fresh processes at short configs, three runs per group and the timed-pick control; `determinism.txt` | D1d (§15); retired after its GPU check (§15.10); `wan` skips on the EU volume |
 | `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | byte identity of 1080p runs within one process and across two; prompt sets as files, hashes per run, stage digests | D1d (§15); retired after its GPU check (§15.10) |
 | `oracle` | `oracle-<target>` (9) | 32 | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; GPU check passed (`f93a961`), but **not retired**: the script branch stays whole for the clip-metric targets, `sfwan13` and `oracle.sh` (§15.10) |
+| `fuse` | `fuse-{kernels,trace,switch}` | 10 | DiT block fusions: the kernels bit for bit (ungated), a traced step per workload, fusions off against on (`--off-identity`, `exact` gate) | D1f ([§17](../adr/0019-fv-lab.md)); script branch kept until its GPU check; 3 arms skip on the EU volume (`h3-8step`) |
+| `attn3` | `attn3-h3-ltx25` | 6 | flash v2 against cuDNN SDPA on FastH3 4-step dense and LTX-2.5 1080p20s dense, VSA bf16 in place against f32 | D1f (§17); script branch kept until its GPU check; `FV_ATTN3_ARMS` / `FV_ATTN3_VSA` refused (select by arm) |
+| `ltx` | `ltx-versions` | 3 | LTX-2.5 two-stage, LTX-2.3 two-stage, LTX-2.0 19B distilled | D1f (§17); script branch kept until its GPU check (it gates its arms since D1f); `ltx23` / `ltx2` skip on the EU volume |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)); weights `volume+r2` ([below](#weights-from-the-volume-and-r2-volumer2)) |
 | `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`, deleted after the GPU check, §14.4), [below](#port-one-offs-the-experiment-tiers) |
 
@@ -312,6 +315,31 @@ whole and `oracle.sh` keeps driving it (`FV_ORACLE_TARGETS`, `FV_POD_FILE`, `FV_
 lacks); it retires once the driver and the clip-metric cells exist (ADR-0019 §15.10). det-short's opt-in `ltx-sol`
 group and other `FV_DET_REPEATS` went with its branch (a tier when wanted). The two retired families' script side is
 frozen for `tests/repeats_oracle.rs` at `0f63c56b` (`crates/fastvideo-lab/fixtures/det-script/`).
+
+## `fuse`, `attn3`, `ltx` (D1f)
+
+[ADR-0019 §17](../adr/0019-fv-lab.md). Three more families as tiers, their `runpod-matrix.sh` branches kept until each
+one's GPU check through both runners (§17.5); their goldens come from the live branches (`fv-lab-goldens.sh`). No new
+cell field: `fuse`'s kernel check is an ungated arm (§15), and a cell whose compares follow arms of two pipelines
+names both in its descriptive `model` (`model = "h3 ltx2"`). The script's `ltx` branch gates its three arms since
+this slice (it ran them ungated, so the LTX-2.3 and LTX-2.0 arms failed on the volume, where their trees are not;
+now both runners record them as skipped).
+
+```sh
+./fv-lab run fuse --dry-run                     # the script's dry run, kernels-fuse first
+./fv-lab run fuse --cells kernels-fuse,fasth3-4step-vsa-768p-off,fasth3-4step-vsa-768p-on   # the kernel check and one switch pair
+./fv-lab run attn3 --cells fasth3-4step-dense-768p-v2,fasth3-4step-dense-768p-cudnn          # the H3 dense A/B only
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family ltx --yes --wait
+```
+
+`FV_ATTN3_ARMS` / `FV_ATTN3_VSA` are refused by `fv-lab run` and `pod up --extra-env` (the script branch still reads
+them); `--cells` names the arms. The script's `[PASS]` / `[FAIL]` and `/gpu_trace` lines in `live.log` are not
+copied (log only: both are in the arms' `stderr.log`).
+
+Not moved (§17.3): `b4b`, `b4c`, `b4c2`. Each cell's verdict reads what no `[verdict]` list types today
+(`benchmark.json` fields, cache-directory listings under `$SCRATCH`, CUPTI kernel tables); a typed check list or
+their retirement is the coordinator's call. `h3` is proposed for retirement with no tier (§17.4: `rtx6000` covers it
+but for the refiner-less Spark fallback, which nothing serves).
 
 ## On a GPU box: `fv-lab run`
 

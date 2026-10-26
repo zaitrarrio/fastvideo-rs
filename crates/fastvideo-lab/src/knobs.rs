@@ -66,18 +66,24 @@ pub const MODE_KNOBS: [&str; 16] = [
     "FV_DET_I2V_PROMPT",
 ];
 
-/// The knobs of the `oracle` family, a tier (ADR-0019 §15) whose
-/// `runpod-matrix.sh` branch stays whole (§15.10: its clip-metric targets,
-/// `sfwan13` and `scripts/gpu/oracle.sh`'s runtime side still run there): the
-/// script reads them, no tier does. fv-lab refuses them; `runpod-http.sh`'s
+/// The knobs of the tiers whose `runpod-matrix.sh` branch is still there:
+/// the script reads them, no tier does. fv-lab refuses them; `runpod-http.sh`'s
 /// `FV_LAB_NOT_READ` gains them in the PR that retires the branch (as the
 /// `FV_DET_*` knobs did with `det-short` and `determinism`).
-pub const SCRIPT_KNOBS: [&str; 5] = [
+///
+/// - `oracle` (ADR-0019 §15), whose branch stays whole (§15.10: its
+///   clip-metric targets, `sfwan13` and `scripts/gpu/oracle.sh`'s runtime side
+///   still run there): `FV_ORACLE_*`, `FV_REF2VA_PROMPT`.
+/// - `attn3` (D1f, §17): `FV_ATTN3_ARMS` and `FV_ATTN3_VSA` picked its arms;
+///   the tier is their defaults (`v2 cudnn`, `0 1`), selected by arm.
+pub const SCRIPT_KNOBS: [&str; 7] = [
     "FV_ORACLE_TARGETS",
     "FV_ORACLE_F32",
     "FV_ORACLE_OWN_TEXT",
     "FV_ORACLE_PREFETCH",
     "FV_REF2VA_PROMPT",
+    "FV_ATTN3_ARMS",
+    "FV_ATTN3_VSA",
 ];
 
 /// The blocks the oracle cells dump (`FASTVIDEO_DUMP_OPS` in every arm's
@@ -149,6 +155,11 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
             "FV_ORACLE_URL: determinism no longer runs the oracle first; run the oracle on its own (scripts/gpu/oracle.sh; ADR-0019 §15.5, §15.10)"
                 .to_owned(),
         );
+    }
+    if key == "FV_ATTN3_ARMS" || key == "FV_ATTN3_VSA" {
+        return Some(format!(
+            "{key}: the attn3 tier runs the script's default arms (FV_ATTN3_ARMS \"v2 cudnn\", FV_ATTN3_VSA \"0 1\"); narrow it by arm with --cells (FV_CELLS) (ADR-0019 §17)"
+        ));
     }
     if key == "FV_ORACLE_PREFETCH" {
         return Some(
@@ -371,7 +382,13 @@ mod tests {
         let env = |k: &str| (k == "FV_ORACLE_PREFETCH").then(|| "0".to_owned());
         let e = check_run_env("oracle", env).unwrap_err();
         assert!(e.contains("always fetches"), "{e}");
-        // The script's oracle branch still reads them (ADR-0019 §15.10):
+        // attn3's arm pickers (ADR-0019 §17): refused by fv-lab, by arm.
+        let e = check_extra_env("attn3", &["FV_ATTN3_ARMS=v2".into()]).unwrap_err();
+        assert!(e.contains("narrow it by arm"), "{e}");
+        let env = |k: &str| (k == "FV_ATTN3_VSA").then(|| "1".to_owned());
+        let e = check_run_env("attn3", env).unwrap_err();
+        assert!(e.contains("FV_ATTN3_VSA: the attn3 tier runs"), "{e}");
+        // The script's oracle and attn3 branches still read them (ADR-0019 §15.10, §17):
         // runpod-http.sh's list gains them when it goes (tests/knobs.rs
         // holds that list to not_read()).
         assert!(SCRIPT_KNOBS.iter().all(|k| !not_read().any(|n| n == *k)));
