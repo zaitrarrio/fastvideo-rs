@@ -51,9 +51,8 @@ on:
       - "scripts/gpu/fv-lab-retired.sh"
       - "scripts/gpu/tests/fv-lab-route.test.sh"
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
-      # D1e (ADR-0019 §14): the experiment tiers' goldens, cut from the experiments' pod scripts
+      # D1e (ADR-0019 §14): the experiment tiers' goldens, cut from the experiments' pod scripts (read from the history since §14.4)
       - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
-      - "scripts/gpu/experiments/**"
       - "scripts/gpu/prompts-hd5.json"
       - "scripts/gpu/prompts-h3-graphs-*.json"
       - "scripts/gpu/hd_report.py"
@@ -122,9 +121,8 @@ on:
       - "scripts/gpu/fv-lab-retired.sh"
       - "scripts/gpu/tests/fv-lab-route.test.sh"
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
-      # D1e (ADR-0019 §14): the experiment tiers' goldens, cut from the experiments' pod scripts
+      # D1e (ADR-0019 §14): the experiment tiers' goldens, cut from the experiments' pod scripts (read from the history since §14.4)
       - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
-      - "scripts/gpu/experiments/**"
       - "scripts/gpu/prompts-hd5.json"
       - "scripts/gpu/prompts-h3-graphs-*.json"
       - "scripts/gpu/hd_report.py"

@@ -218,13 +218,15 @@ pub fn check_extra_env(tier: &str, entries: &[String]) -> Result<(), String> {
 }
 
 /// `fv-lab run`: the [`MODE_KNOBS`] and [`SCRIPT_KNOBS`] set (non-empty) in
-/// its environment, and the oracle's `FASTVIDEO_DUMP_OPS`. `get` reads one
-/// variable (the process environment in the binary).
+/// its environment, the oracle's `FASTVIDEO_DUMP_OPS`, and `FV_ORACLE_URL`
+/// for `determinism` (which the script's branch read to run the oracle
+/// first; the tier does not, ADR-0019 §15.10). `get` reads one variable (the
+/// process environment in the binary).
 pub fn check_run_env(tier: &str, get: impl Fn(&str) -> Option<String>) -> Result<(), String> {
     let found = MODE_KNOBS
         .iter()
         .chain(&SCRIPT_KNOBS)
-        .chain(&["FASTVIDEO_DUMP_OPS"])
+        .chain(&["FASTVIDEO_DUMP_OPS", "FV_ORACLE_URL"])
         .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (*k, v)))
         .filter_map(|(k, v)| {
             why(Some(tier), k, &v, false).map(|w| (restored_mode(k, &v).is_some(), w))
@@ -337,6 +339,13 @@ mod tests {
         .unwrap_err();
         assert!(e.contains("no longer runs the oracle first"), "{e}");
         assert!(check_extra_env("oracle", &["FV_ORACLE_URL=https://x/upstream/t".into()]).is_ok());
+        // `fv-lab run` with FV_ORACLE_URL in its environment: refused for
+        // determinism (it would be dropped), read by oracle.
+        let url = |k: &str| (k == "FV_ORACLE_URL").then(|| "https://x/upstream/t".to_owned());
+        let e = check_run_env("determinism", url).unwrap_err();
+        assert!(e.contains("no longer runs the oracle first"), "{e}");
+        assert!(check_run_env("oracle", url).is_ok());
+        assert!(check_run_env("det-short", url).is_ok());
         // Retired with their branches (ADR-0019 §15.10): runpod-http.sh's
         // FV_LAB_NOT_READ refuses them too (tests/knobs.rs holds them equal).
         for k in [

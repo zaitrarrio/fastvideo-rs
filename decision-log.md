@@ -1924,7 +1924,7 @@ Project code: FVID
 ### FVID · 2026-10-26 · FVID-2026-10-26-retire-h3-graphs-experiment
 - Trigger: the `h3-graphs` tier's GPU check (ADR-0019 §14.4) passed on `f93a961` (pod `8zx5w6h0766g35`): the check prints `PASS`, the twelve `--off-identity` compares byte-identical (sync = lazy = graphs), the graphs arm replayed 4 of 4 steps on three requests
 - Options: keep `h3-graphs-{validate,pod}.sh` as a second runner; delete them as §14.4 says, the goldens script reading the pod script from the history
-- Decision: (coordinator, executed by the agent) delete them and `scripts/gpu/experiments/` (its README with them); in the same commit `self-delete.test.sh` drops `h3-graphs-validate.sh` from `LOCAL` and lowers its launcher floor from 3 to 2; `docs/perf/h3-denoise-graphs.md` §5 records the h3-turbo 768p denoise (sync 17.98 s, lazy 17.88 s −0.57 %, graphs 17.93 s −0.30 %; replays 0.19-0.21 % under lazy; graph pool high water 10.34 GiB) against its expectation (lazy ~1.4 %, a replay 0.6-0.7 % more), the verdicts unchanged (lazy default, graphs opt-in)
+- Decision: (coordinator, executed by the agent) delete them and `scripts/gpu/experiments/` (its README with them); in the same commit `self-delete.test.sh` drops `h3-graphs-validate.sh` from `LOCAL` and lowers its launcher floor from 3 to 2; `docs/perf/h3-denoise-graphs.md` §5 records the h3-turbo 768p denoise (sync 17.98 s, lazy 17.88 s −0.56 %, graphs 17.93 s −0.30 %; replays 0.19-0.21 % under lazy; graph pool high water 10.34 GiB) against its expectation (lazy ~1.4 %, a replay 0.6-0.7 % more), the verdicts unchanged (lazy default, graphs opt-in)
 - Reason: §14.4's pass rule; the tier is the experiment's h3-turbo part word for word (§14.3), and the NVFP4 part stays readable in git until `hydrate`
 - Reversibility: high (the scripts are in git at the parent of the deleting commit)
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
@@ -1951,3 +1951,12 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §15.7 "Results", §15.8, §15.10
 - Verification: `tests/repeats_oracle.rs` (the live branch against fv-lab), `fv-lab-goldens.sh --check` (oracle's fixtures from the live branch), `fv-lab-route.test.sh` (`oracle` still on the script path)
+
+### FVID · 2026-10-26 · FVID-2026-10-26-d1-retire-review
+- Trigger: the independent review of #207 (nothing blocking): `fv-lab run determinism` with `FV_ORACLE_URL` in its environment dropped it silently, though the docs said it is refused; `runpod-http.sh` read `FV_EXTRA_ENV`'s first line only, so a newline dropped later entries (the `FV_DET_CELLS` / `FV_ORACLE_URL` refusals and `--extra-env` included); with full history the experiment goldens paired the deleted pod script with the live `prompts-hd5.json`, while CI's shallow clone only checks presence; nits
+- Decision: (coordinator, executed by the agent) `knobs::check_run_env` also checks `FV_ORACLE_URL` (`why()` scopes the refusal to `determinism`; `oracle` reads it); `fv_lab_route` refuses an `FV_EXTRA_ENV` holding a newline; `fv-lab-experiment-goldens.sh` reads `prompts-hd5.json` from the same commit as the pod script (the deleting commit's parent); `control.yml` drops the dead `scripts/gpu/experiments/**` filters; lazy vs sync written −0.56 % (17.8792 / 17.9808); `docs/perf/determinism.md` names the tiers; the frozen dry-run test also compares `FV_DRY_RUN_GATES` with the first four columns of `<family>-gates.tsv`
+- Reason: refused, not dropped (ADR-0019 §10, §15.10); local and CI regeneration must agree
+- Reversibility: high
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §14.4 "Result", §15.10
+- Verification: `knobs::tests::the_retired_determinism_families_knobs_are_not_read` (`check_run_env` refuses `FV_ORACLE_URL` for `determinism`, not for `oracle` / `det-short`), `fv-lab-route.test.sh` (a newline in `FV_EXTRA_ENV` refused), `fv-lab-experiment-goldens.sh --check` (passes with the live `prompts-hd5.json` edited: the history's copy is read), `tests/repeats_oracle.rs::the_frozen_script_dry_runs_as_the_frozen_goldens`

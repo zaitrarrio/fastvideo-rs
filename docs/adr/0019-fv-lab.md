@@ -1393,7 +1393,7 @@ Cost: one RTX PRO 6000 Blackwell Server Edition in EU-RO-1 on `bz0ofkfx45` at ab
 0, the twelve compare reports exist and are byte-identical (sync = lazy = graphs on every request), and the graphs
 arm replayed 4 of 4 steps on three requests (h3-demo `b` and `c`, spark `c`; h3-demo `a` and spark `b` captured,
 spark `a` and the cold request ran eager, a new key's first sight). The h3-turbo 768p denoise (each arm's
-`benchmark.json` `denoise_s`, the median of its six timed requests): sync 17.98 s, lazy 17.88 s (−0.57 %), graphs
+`benchmark.json` `denoise_s`, the median of its six timed requests): sync 17.98 s, lazy 17.88 s (−0.56 %), graphs
 17.93 s (−0.30 % vs sync); per replayed request graphs is 0.19-0.21 % under lazy (0.69-0.79 % under sync); the
 graph pool's high water 10.34 GiB (`stderr.log`: `graph pool high 10.34 GiB` at every capture). Against
 `docs/perf/h3-denoise-graphs.md` §5's expectation (lazy about 1.4 % under sync, a replay 0.6-0.7 % more), both
@@ -1402,8 +1402,10 @@ verdicts stand (lazy default, graphs opt-in).
 
 Done in that PR, as above: `scripts/gpu/experiments/{h3-graphs-validate.sh,h3-graphs-pod.sh,README.md}` deleted (the
 directory with them); `self-delete.test.sh` drops the launcher from `LOCAL` and its launcher floor is 2
-(`family-pool-validate.sh`, `ltx-pod.sh`); `fv-lab-experiment-goldens.sh` reads `h3-graphs-pod.sh` from the parent
-of the deleting commit (`source_of`), and in CI's shallow clone keeps the fixtures as they are. The experiment's own
+(`family-pool-validate.sh`, `ltx-pod.sh`); `fv-lab-experiment-goldens.sh` reads `h3-graphs-pod.sh` and its input `prompts-hd5.json`
+from the parent of the deleting commit (`source_of`), so a later edit of the live prompts file cannot pair with the
+old script, and in CI's shallow clone keeps the fixtures as they are (so both agree); `control.yml` drops its
+`scripts/gpu/experiments/**` path filters. The experiment's own
 NVFP4 cells stay readable in git (`git show <deleting commit>^:scripts/gpu/experiments/h3-graphs-{validate,pod}.sh`,
 `docs/perf/h3-denoise-graphs.md` §6).
 
@@ -1783,7 +1785,7 @@ Done in the PR after the checks (2026-10-26), as `b4a` was retired (§11.6):
   `runpod-http.sh`'s `FV_LAB_NOT_READ` (`tests/knobs.rs` holds them equal). `runpod-http.sh run` / `plan` route the two
   families to `fv-lab pod up`, refuse `FV_DET_CELLS` (in `FV_EXTRA_ENV` and in the host environment) with a pointer
   to `FV_CELLS`, and refuse `FV_ORACLE_URL` for `determinism` (the script ran the oracle first with it; the tier
-  does not, §15.5, so it is refused, not dropped; `fv-lab pod up --extra-env` refuses it for that tier too). Every
+  does not, §15.5, so it is refused, not dropped; `fv-lab pod up --extra-env` and `fv-lab run` refuse it for that tier too), and refuse an `FV_EXTRA_ENV` holding a newline (`read` takes its first line only, so later entries, refusals included, were dropped). Every
   other tier passes `FV_ORACLE_URL` on.
 - `tests/repeats_oracle.rs` ran the live branches. For `det-short` and `determinism` it runs a frozen copy,
   `crates/fastvideo-lab/fixtures/det-script/`: `runpod-matrix.sh` at main `0f63c56b` cut to its frame, the two

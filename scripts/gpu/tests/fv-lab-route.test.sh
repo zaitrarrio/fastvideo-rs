@@ -228,6 +228,9 @@ dry "determinism: FV_ORACLE_URL refused" 1 \
 dry "another tier: FV_ORACLE_URL passes to --extra-env" 0 \
   "--family det-short --root $ROOT --extra-env FV_ORACLE_URL=https://x-8000.proxy.runpod.net/upstream/t --yes --wait" \
   FV_FAMILY=det-short FV_EXTRA_ENV="FV_ORACLE_URL=https://x-8000.proxy.runpod.net/upstream/t"
+dry "FV_EXTRA_ENV with a newline refused (later lines would be dropped)" 1 \
+  "reads FV_EXTRA_ENV as one line of space-separated K=V entries, and it holds a newline" \
+  FV_FAMILY=det-short FV_EXTRA_ENV="FASTVIDEO_X=1"$'\n'"FV_DET_CELLS=h3"
 mx "matrix: det-short is retired" "FATAL: det-short is retired to fv-lab (fv-lab-retired.sh): fv-lab run det-short " det-short
 mx "matrix: determinism is retired" "FATAL: determinism is retired to fv-lab (fv-lab-retired.sh): fv-lab run determinism " \
   determinism

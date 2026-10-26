@@ -141,7 +141,7 @@ lever makes a kernel faster. They remove idle time.
   | arm | denoise (median of 6 requests) | vs sync |
   |---|---|---|
   | sync (`FASTVIDEO_H3_STEP_SYNC=1`) | 17.98 s | |
-  | lazy (the default) | 17.88 s | −0.57 % |
+  | lazy (the default) | 17.88 s | −0.56 % |
   | graphs (`FASTVIDEO_H3_GRAPHS=1`) | 17.93 s | −0.30 % |
 
   - (a) holds on every request (−0.50 to −0.61 %), about 40 % of the expected 1.4 %. Why the gain is smaller on

@@ -28,7 +28,10 @@
 //! `cuda-13.pins` and `fv-lab-retired.sh` whole. So a change to fv-lab's
 //! `[repeats]` step is still held to the script's bytes, and a change to
 //! `scripts/gpu/` no longer moves the reference. `oracle`'s branch is live
-//! (it stays whole, §15.10) and is copied from this checkout.
+//! (it stays whole, §15.10) and is copied from this checkout. The frozen
+//! `determinism` branch's oracle prelude (`FV_ORACLE_URL` set: `bash
+//! runpod-matrix.sh oracle`) would hit "unknown family" in the cut copy,
+//! which has no `oracle` branch; no test sets `FV_ORACLE_URL` for it.
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -423,7 +426,9 @@ fn host_build_id() -> Option<String> {
 /// The frozen script is the one the frozen goldens came from: its dry run of
 /// `det-short` and `determinism`, under `fv-lab-goldens.sh`'s inputs, is
 /// `fixtures/<family>-dry-run.txt` line for line (which `tests/dry_run.rs`
-/// holds fv-lab's dry run to).
+/// holds fv-lab's dry run to), and its `FV_DRY_RUN_GATES` records are the
+/// first four columns of `fixtures/<family>-gates.tsv` (the fifth, a cell's
+/// needs, is `verify-weights.sh --list`'s, added by the goldens script).
 #[test]
 fn the_frozen_script_dry_runs_as_the_frozen_goldens() {
     for family in ["det-short", "determinism"] {
@@ -436,6 +441,7 @@ fn the_frozen_script_dry_runs_as_the_frozen_goldens() {
         for l in ["libcudnn.so", "libcupti.so"] {
             std::fs::write(libs.join(l), "").unwrap();
         }
+        let gates = f.dir.join("dry-gates.tsv");
         let o = Command::new("bash")
             .arg(f.root().join("scripts/gpu/runpod-matrix.sh"))
             .arg(family)
@@ -444,6 +450,7 @@ fn the_frozen_script_dry_runs_as_the_frozen_goldens() {
             .env("HOME", &f.dir)
             .env("LC_ALL", "C")
             .env("FV_DRY_RUN", "1")
+            .env("FV_DRY_RUN_GATES", &gates)
             .env("FV_WORK", &work)
             .env("FV_SCRATCH", &scratch)
             .env("FV_RUN_TAG", "1234567-10241200")
@@ -485,6 +492,21 @@ fn the_frozen_script_dry_runs_as_the_frozen_goldens() {
         )
         .expect("frozen golden");
         assert_eq!(ours, golden.lines().collect::<Vec<_>>(), "{family}");
+        let first4 = |t: &str| -> Vec<String> {
+            t.lines()
+                .map(|l| l.split('\t').take(4).collect::<Vec<_>>().join("\t"))
+                .collect()
+        };
+        let ours = std::fs::read_to_string(&gates)
+            .expect("FV_DRY_RUN_GATES written")
+            .replace(&s, "/fvscratch")
+            .replace(&w, "/workspace");
+        let golden = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/{family}-gates.tsv")),
+        )
+        .expect("frozen gates");
+        assert!(!golden.is_empty(), "{family}: gates");
+        assert_eq!(first4(&ours), first4(&golden), "{family}: gates");
     }
 }
 

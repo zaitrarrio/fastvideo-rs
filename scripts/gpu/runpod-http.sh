@@ -551,6 +551,11 @@ fv_lab_route() {
   # would land in another run directory than FV_FAMILY's, under another pod
   # name). Checked before any other refusal, so the hint is the first answer.
   local r r_tier r_fam r_mode extra_in=()
+  # FV_EXTRA_ENV is one line of K=V entries: `read` below takes its first line
+  # only, so a newline would drop every later entry unchecked and unpassed
+  # (the refusals below included). Refused, not dropped.
+  [[ "${FV_EXTRA_ENV:-}" != *$'\n'* ]] \
+    || refuse "reads FV_EXTRA_ENV as one line of space-separated K=V entries, and it holds a newline"
   read -r -a extra_in <<<"${FV_EXTRA_ENV:-}"
   for e in ${extra_in[@]+"${extra_in[@]}"}; do
     for r in $FV_LAB_RESTORED; do
