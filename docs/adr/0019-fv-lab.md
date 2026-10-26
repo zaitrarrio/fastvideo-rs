@@ -355,8 +355,9 @@ wrote. ADR-0019 open decision 3 covers compares and gates placed between arms.
 
 `kernels` is not a family. It is a `runpod-http.sh` mode (`kernels`, `all`) that runs `fv-gpucheck kernels` before or
 instead of the family (ADR-0019 §7: not in fv-lab). Its in-family uses (`kernels-wan`, `kernels-fuse`,
-`attn-fp8-kernels`) are ungated `run_cell`s. They move once an arm may have no weight gate. That step is small, but
-every family that uses one also needs something more (above).
+`attn-fp8-kernels`) are ungated `run_cell`s. An arm may have no weight gate since §15 (item 6), and `kernels-fuse`
+moved with `fuse` as the ungated arm of the cell `fuse-kernels` (D1f, §17); `kernels-wan` and `attn-fp8-kernels` stay
+with their families (`wan`, `h3attn`), which need more (above).
 
 #### 9.2 The schema additions (cell v1, additive, `deny_unknown_fields` kept)
 
@@ -2384,9 +2385,10 @@ compared. Expected summary lines:
 
 - `fuse`: "5 arm(s) the same (2 ran with byte-identical frames, 2 skipped in both, 0 failed in both; 0 with the same
   compare-dumps lines), 0 control arm(s) reported, 4 report(s) the same, 0 verdict file(s) the same, 0
-  difference(s)": `kernels-fuse` the same with `exit` 0 and no frames (it writes none; `fv-lab-compare-runs.sh` compares its
-  `summary.json` only, so read its `[PASS]` / `[FAIL]` lines in both `stderr.log`: whether a kernel `[FAIL]` also
-  sets a non-zero exit is UNVERIFIED here), the two VSA arms
+  difference(s)": `kernels-fuse` the same with `exit` 0 and no frames (it writes none; a kernel `[FAIL]` exits
+  non-zero: `kernels.rs` stops at the first failed `report.check(…)?` without `--keep-going`, and the report's finish
+  exits `EXIT_CHECK_FAILED` = 1, so a failing kernel reads `"exit":1` in both `summary.json`, counted as "1 failed in
+  both", and the compare still exits 0 because the VSA arms ran: read the line, not only the exit status), the two VSA arms
   ran (248 frames each, as `trace`'s `fasth3-4step-vsa-768p` at `b0d0bb8`), the two 8-step arms `skipped: weights incomplete`; the reports are the VSA compare (both
   `pass`, off-identity `ok` when the fusions keep every bit, as the family requires), the 8-step and the LTX compares
   `skipped` (frames missing) on both, and the VSA gate report present in both.
@@ -2396,7 +2398,9 @@ compared. Expected summary lines:
   two unselected compares `skipped` on both.
 - `ltx`: "3 arm(s) the same (1 ran with byte-identical frames, 2 skipped in both, 0 failed in both; …), … 0 report(s)
   the same, 0 verdict file(s) the same, 0 difference(s)": `ltx25-two-stage` about 242 frames (as the D1a gate's), the
-  other two `skipped: weights incomplete` on both (each with its `<arm>.weights.log`).
+  other two `skipped: weights incomplete` on both (each with its `<arm>.weights.log`). The LTX-2.5 arm cannot be
+  left out to save its ~9 min: without it no arm runs, and `fv-lab-compare-runs.sh` exits 1 ("no arm ran with
+  frames in both runs: nothing was compared").
 
 A compare verdict that fails on both sides (a fused path no longer bit-equal, cuDNN off by a bit) is a finding about
 the build, not a runner difference: report it and keep the branch until it is understood.

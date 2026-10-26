@@ -9,7 +9,8 @@ held to the script's last dry run by a frozen golden ([below](#keeping-it-equal-
 stay in the script and move in later slices. `b4a` (D1d) is the first whose cells carry a verdict step ([Verdicts
 and `fv-lab gate`](#verdicts-and-fv-lab-gate); its GPU gate passed on `e82b6b7`, ADR-0019 §11.6); `det-short` and
 `determinism` (D1d) the last, with their `[repeats]` frame hashes (GPU checks passed on `f93a961`, §15.10). `oracle`
-is a tier whose script branch stays whole ([below](#determinism-and-the-oracle-d1d-second-slice)). `gold` is fv-lab's
+is a tier whose script branch stays whole ([below](#determinism-and-the-oracle-d1d-second-slice)), and `fuse`,
+`attn3` and `ltx` (D1f) are tiers whose branches stay until their GPU checks ([below](#fuse-attn3-ltx-d1f)). `gold` is fv-lab's
 own: every gold variant's canonical cell (ADR-0023).
 `precision-nvfp4` and `ltxvae-gen` are two modes of retired families, restored as tiers ([ADR-0019 §12](../adr/0019-fv-lab.md)).
 

@@ -611,7 +611,10 @@ impl Verdict {
 /// What every arm of a cell generates. Each value is referenced from the
 /// arms' command lines as a placeholder (`{prompt}`, `{seed}`, …), so the
 /// declared workload is the one that runs; a value no arm uses is an error.
-/// An absent value is the pipeline's (or the recipe's) default.
+/// An absent value is the pipeline's (or the recipe's) default. In a cell
+/// whose arms run two pipelines (`model = "h3 ltx2"`), each value describes
+/// the arms that reference it: `attn3`'s `seconds = 5` is its H3 arms', while
+/// its LTX-2.5 arms run the 1080p20s workload their argv names.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Workload {
