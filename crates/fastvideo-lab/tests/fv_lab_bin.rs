@@ -217,8 +217,10 @@ fn wall_cap_can_only_be_lowered() {
     }
 }
 
-/// `--runs-dir` / `FV_RUNS_DIR` replace the run directory (`{runs}`): how
-/// runpod-matrix.sh `headline` runs a retired tier's cells into its own.
+/// `--runs-dir` / `FV_RUNS_DIR` replace the run directory (`{runs}`): one
+/// run's cells into another's directory, as runpod-matrix.sh reads
+/// `FV_RUNS_DIR` (`headline` ran tiers' cells this way until it retired,
+/// ADR-0019 §22).
 #[test]
 fn runs_dir_replaces_the_run_directory() {
     let args = [
@@ -240,16 +242,16 @@ fn runs_dir_replaces_the_run_directory() {
     let flag = stdout(
         fv_lab()
             .args(args)
-            .args(["--runs-dir", "/fvscratch/runs/headline/t"]),
+            .args(["--runs-dir", "/fvscratch/runs/other/t"]),
     );
     let env = stdout(
         fv_lab()
             .args(args)
-            .env("FV_RUNS_DIR", "/fvscratch/runs/headline/t"),
+            .env("FV_RUNS_DIR", "/fvscratch/runs/other/t"),
     );
     for out in [&flag, &env] {
         assert!(
-            out.contains("--clip-dir /fvscratch/runs/headline/t/sol-h3/frames"),
+            out.contains("--clip-dir /fvscratch/runs/other/t/sol-h3/frames"),
             "{out}"
         );
         assert!(!out.contains("/runs/rtx6000/"), "{out}");

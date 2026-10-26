@@ -225,7 +225,7 @@ The ports landed on main in #29, #30 and #31, and their weights reached EU in #3
 
 **Pods:** six pods in three pairs, (b1, b2), then (b3, b4), then (b5, b6), so at most 2 are up at once. Each pod has 55 min of cell budget from container start, a 64-min self-delete and a 65-min local backstop. Every launch sets `FV_AVOID_MACHINES=s3p8exc9lcvi`.
 
-**Arguments:** they mirror main's `solbench`, `sana-video`, `sol-lingbot` and `sol-cosmos3` families (`scripts/gpu/sol-bench-pod.sh` sets `b1`–`b6`).
+**Arguments:** they mirror main's `solbench`, `sana-video`, `sol-lingbot` and `sol-cosmos3` families (`scripts/gpu/sol-bench-pod.sh` sets `b1`–`b6`). Those families are retired with no tier since (`sana-video` in ADR-0019 §18, the other three in §22): `sol-bench-pod.sh` is what runs these arms.
 
 **Precision is pinned to sol-engine's:**
 - Wan arms run with `FASTVIDEO_WAN_QUANT=off`, the full Wan VAE and Diffusers UniPC sigmas.

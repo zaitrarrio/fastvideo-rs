@@ -4,8 +4,9 @@ Status 2026-10-06. Everything here is checked on the CPU against the
 published checkpoints' tensor headers and configs. **No GPU frame has been
 produced yet for any of the three.** The weights are on the EU volume
 (fetched and verified 2026-10-06; see [Weight trees](#weight-trees)), but no
-pod has run the cells. The benchmark arms are written and ready
-(`runpod-matrix.sh solbench`, [below](#benchmark-arms)).
+pod has run the cells. The benchmark arms were written as
+`runpod-matrix.sh solbench`, retired with no tier since (ADR-0019 §22); the
+benchmark runs `scripts/gpu/sol-bench-pod.sh` ([below](#benchmark-arms)).
 
 Sources:
 
@@ -258,7 +259,16 @@ Both arms share the drift, so the ratio compares like with like.
 
 ## Benchmark arms
 
-`runpod-matrix.sh solbench` (default `FV_CELLS` in bold):
+**Retired** ([ADR-0019 §22](../adr/0019-fv-lab.md), S1): the `solbench` family
+is retired with no tier, and `runpod-matrix.sh`, `runpod-http.sh` and
+`runpod.sh` refuse it (exit 2). The sol-engine benchmark runs
+`scripts/gpu/sol-bench-pod.sh` (`docs/perf/sol-bench.md`), whose sets cover the
+default arms below, without compares or gates and without
+`wan13-sol-easycache`, `wan13-sol-attn` and `a14b-sol-mxfp8`. None of those was
+ever recorded. The family's commands are in
+`git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
+
+The retired `runpod-matrix.sh solbench` arms (default `FV_CELLS` in bold):
 
 | Cell | What | Reproduces |
 |---|---|---|
@@ -279,18 +289,13 @@ All Wan cells run with:
   mxfp8);
 - the full Wan VAE.
 
-`compare_cells` and `gate_cells` compare each arm with its base.
+`compare_cells` and `gate_cells` compared each arm with its base.
 
-```bash
-# RTX PRO 6000 (EUR-IS-1, the EU weight volume), every default cell:
-FV_FAMILY=solbench FV_POD_CAP_S=10800 bash scripts/gpu/runpod-http.sh run <sha>
-# B200 (both A14B experts resident; needs B200 stock in the volume's DC):
-RUNPOD_GPU_TYPE="NVIDIA B200" FV_FAMILY=solbench \
-  FV_CELLS="a14b-sol-base a14b-sol-fullopt" FV_EXTRA_ENV="FV_SOL_A14B_MOE=both" \
-  FV_POD_CAP_S=5400 bash scripts/gpu/runpod-http.sh run <sha>
-```
+The family's runs (`FV_FAMILY=solbench bash scripts/gpu/runpod-http.sh run
+<sha>`, with `FV_SOL_A14B_MOE=both` on a B200) are refused now; the
+`sol-bench-pod.sh` launch is in `docs/perf/sol-bench.md`.
 
-Per-cell wall caps:
+Its per-cell wall caps were:
 
 | Variable | Default |
 |---|---|
@@ -298,7 +303,7 @@ Per-cell wall caps:
 | `FV_SOL_A14B_CAP_S` | 5400 |
 | `FV_SOL_LTX_CAP_S` | 2400 |
 
-`FV_SOL_PROMPTS=5` makes the A14B cells run sol-engine's five prompts after a
+`FV_SOL_PROMPTS=5` made the A14B cells run sol-engine's five prompts after a
 warm generation, as the published median does. That is about 6x the A14B
 time.
 
@@ -327,7 +332,7 @@ The estimates are scaled from measured cells:
 All three were fetched to the EU volume (`jg48s6o1w0`) on 2026-10-06,
 owner-approved, and verified. They are recorded as live rows in
 `weights-manifest.tsv`, `weights-revisions.tsv` and `weights-sha256.tsv`
-(PR #35; see `docs/ops/runpod-volumes.md`). The `solbench` cells gate on
+(PR #35; see `docs/ops/runpod-volumes.md`). The `solbench` cells gated on
 `verify-weights.sh` cells `wan21-t2v-1.3b`, `wan22-t2v-a14b` and `ltx23-hq`.
 The Wan trees were fetched whole: their UMT5 and VAE are copies of the same
 LFS objects as `wan21-t2v-14b`'s.

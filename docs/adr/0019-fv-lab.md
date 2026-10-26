@@ -3871,9 +3871,9 @@ existing cell file (the schema additions are optional fields and new kinds); `ru
 
 Status: **accepted** 2026-10-26 (coordinator, after an independent review of #221 that checked every claim).
 Decision-id FVID-2026-10-26-d1-remaining. It was proposed in #221 (draft PR from `claude/d1-remaining-proposal`, docs
-only). The review's corrections are folded in below, and the coordinator's decisions are in §22.6. Nothing is done
-yet: each family moves or retires in its own slice (§22.6), and a tier's branch leaves the script only after that
-tier's own check through both runners (§8).
+only). The review's corrections are folded in below, and the coordinator's decisions are in §22.6. Each
+family moves or retires in its own slice (§22.6; S1 is done, §22.8), and a tier's branch leaves the script only
+after that tier's own check through both runners (§8).
 
 Fifteen `runpod-matrix.sh` families are left besides `oracle` (§18.3). `oracle` retires on its own once §20.7's re-run
 passes (§21.9), so this section leaves it out. For each family it gives:
@@ -4335,7 +4335,9 @@ change, like §17.2's `ltx` gating.
 - *Lost*:
   - the compares and lossy gates of each arm against its base;
   - the three arms `sol-bench-pod.sh` lacks;
-  - LingBot on three prompts.
+  - LingBot on three prompts;
+  - `sol-lingbot`'s B200 path with the base and refiner both resident (`FV_LINGBOT_RESIDENCY=both`):
+    `sol-bench-pod.sh` hard-codes `--residency swap` (`sol-bench-pod.sh:220`).
 
   None of these was ever recorded.
 - *Stale run commands*: these docs name the branches, and S1 updates them:
@@ -4417,7 +4419,8 @@ pods at a time keeps the Runpod balance guard ($8, CLAUDE.md) in reach, and the 
 
 S1 uses §18.2's mechanism:
 - `FV_SCRIPT_RETIRED`, with a pointer for each family;
-- 567 branch lines deleted (the `*)` branch stays), with `eval`'s defaults (rpm:101-103);
+- 567 branch lines deleted (495; see §22.8: the 72-line gap is `mmaudio`'s range, 468-539) (the `*)` branch
+  stays), with `eval`'s defaults (rpm:101-103);
 - `headline`'s route tests removed;
 - the sample family of `fv-lab-route.test.sh:314` and `docs/dev/fv-lab.md:182` switched;
 - the stale sol and `headline` docs updated;
@@ -4437,4 +4440,52 @@ After S7 and S8, `runpod-matrix.sh` has no branch left and goes, and with it `ru
 
 #### 22.7 What this section does not change
 
-Nothing yet: no script, cell, tier, golden, schema or test. Each slice above makes its own changes.
+Nothing by itself: no script, cell, tier, golden, schema or test. Each slice above makes its own changes (S1's: §22.8).
+
+#### 22.8 S1 done: the nine retired with no tier
+
+Executed 2026-10-26 on `claude/d1-s1-retire-nine` (draft PR #222, from `4f8822a0`), §18.2's mechanism; CPU only, $0.
+
+- **The list.** `FV_SCRIPT_RETIRED` (`scripts/gpu/fv-lab-retired.sh`) gains `sfquality`, `headline`, `speechtest`,
+  `cold`, `eval`, `ltxoffload`, `solbench`, `sol-lingbot` and `sol-cosmos3` (twenty families). Each pointer
+  (`fv_script_retired_why`) says, as §22.3 does, what replaces the family, what is lost, and where its commands are:
+  `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`. `headline`'s lists its nine arms by tier.
+- **Refused, exit 2, before any key read or pod**, by the existing checks, which read the list: `runpod-matrix.sh`
+  (the `*)` branch), `runpod-http.sh run` / `all` / `plan` (dry run or not) and `runpod.sh gpu` / `matrix` / `plan`
+  (`rp_family_cmd`). No driver code changed.
+- **The branches.** The nine `case` branches are deleted: 495 lines (`speechtest` 82, `sfquality` 40, `headline` 40,
+  `cold` 64, `eval` 55, `ltxoffload` 64, `solbench` 113, `sol-lingbot` 18, `sol-cosmos3` 19), plus `eval`'s three
+  default lines (rpm:101-103). §22.6's "567 lines" overcounted: the ranges of §22.1 add up to 495. With the header
+  and usage text, `runpod-matrix.sh` loses 505 lines and gains 10 (1,898 to 1,403). No shared helper went: each
+  function at the top (`run_cell`, `gated_cell`, `compare_cells`, `gate_cells`, `frames_digest`, the oracle helpers,
+  `metric_dry`) and each variable (`PROMPT_ARGS`, `LPIPS_ARGS`, `LPIPS_DIR`, `TAE`) still has a use in the seven
+  remaining families; the nine branches' own functions (`sub`, `drop_page_cache`, `ltx_off_gen`, `frames_hash`,
+  `sfq`, `t2a`, `add`) were local to them. `scripts/gpu/speech_transcribe.py`, which only `speechtest` called, stays
+  as a by-hand tool (the pointer names it); `scripts/gpu/sol/` and `prompts-sol-wan-t2v5.json` stay for
+  `sol-bench-pod.sh`, which is untouched.
+- **Dry runs compared** (§10 item 1): `FV_DRY_RUN=1` output (time stamps, the temporary directory and the
+  repository path replaced by placeholders), `FV_DRY_RUN_GATES` records and exit status, before (`4f8822a0`) and after,
+  the volume's `auxiliary/tae` marked complete, `FV_BASELINE_SHA` set, no `FV_LAB_BIN`. All **12 byte-identical**:
+  `wan` (102 lines, 65 records), `sfwan` (96, 24), `sfstream` (4, 2), `hd` (18, 8), `serve-engine` (8, 6), `mmaudio`
+  (5, 2; exit 1 at the same `find` as before, §22.1), `oracle` with its defaults (26, 8) and with
+  `FV_ORACLE_TARGETS=sfwan13` (18, 4), the oracle tier's nine tensor-diff targets (43, 14) and ten clip-metric targets
+  (145, 23) at `FV_GEN_TIMEOUT_S=5400`, and `wan` (102, 65) and `sfwan` (114, 28) with `FV_ORACLE_URL` set. The nine
+  retired families now stop at the refusal (exit 2, no record).
+- **Knobs.** None moved, as in §18.2: no tier ran these families, so their knobs (`FV_SFQ_*`, `FV_HEADLINE_*`,
+  `FV_WHISPER_MODEL`, `FV_LPIPS_SELFTEST`, `FV_OFFLOAD_*`, `FV_SOL_*`, `FV_LINGBOT_*`, `FV_COSMOS3_ARMS`) were never in
+  `knobs.rs` or `FV_LAB_NOT_READ`; a run that would set them is refused by its family.
+- **Tests.** `fv-lab-route.test.sh` and `runpod-plan.test.sh` name the twenty families themselves rather than reading
+  the list, so a family dropped from it fails its refusals, and `runpod-plan.test.sh` drives `runpod.sh plan gpu` /
+  `plan matrix` as well as `gpu` / `matrix` (the refusal prefixes of `runpod-http.sh` and `runpod.sh` say "§18, §22"); `fv-lab-route.test.sh` lost `headline`'s fake-box runs and
+  checks that `runpod-matrix.sh headline` is refused before `FV_LAB_BIN` is called; its sample script family is `wan`
+  (was `eval`). `tests/dry_run.rs` (`families_retired_with_no_tier_have_no_branch_and_no_tier`) holds the twenty and
+  that no `"$FAMILY" == <family>` code is left (eval's defaults). Mutations, each caught: one of the nine dropped from
+  the list (each of the nine in turn; the Rust test too), `runpod-http.sh`'s refusal removed, `rp_family_cmd`'s
+  removed, `runpod-matrix.sh`'s removed, a `headline)` branch restored (also `fv-lab-goldens.sh`), a pointer removed,
+  `eval`'s defaults restored (the Rust test).
+- **Docs.** The stale run commands of §22.3 now point at the retirement: `docs/ports/wan.md` and
+  `docs/serve/e2e/wan.md` (`sfquality`), `docs/dev/fv-lab.md` and the `--runs-dir` help (`headline`; the flag stays),
+  `docs/ports/sol-wan-ltx23.md`, `docs/ports/lingbot.md`, `docs/ports/cosmos3.md`, `docs/perf/sol-lingbot-cosmos3-plan.md`
+  and `docs/perf/sol-bench.md` (the sol families), and, found by grep, `docs/ports/mmaudio.md` (`speechtest`),
+  `docs/ports/ltx25.md` and `docs/serve/research-8gb-av.md` (`ltxoffload`), `scripts/gpu/README.md` (`eval`).
+- **Left in the script**: `mmaudio`, `sfwan`, `sfstream`, `wan`, `oracle`, `hd`, `serve-engine` (S2-S8).

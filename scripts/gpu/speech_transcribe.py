@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Whisper intelligibility check for generated audio (runpod-matrix.sh speechtest).
+"""Whisper intelligibility check for generated audio.
+
+Written for runpod-matrix.sh speechtest, retired with no tier
+(docs/adr/0019-fv-lab.md §22; its commands in
+git show 4f8822a0:scripts/gpu/runpod-matrix.sh); run by hand now.
 
 Reads a TSV manifest (id, wav, intended line, note) and transcribes every wav
 with openai-whisper (English forced, temperature 0). Per clip it writes the

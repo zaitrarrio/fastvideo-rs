@@ -122,7 +122,8 @@ study of the rollout (TAEHV carried state on the top rows is one suspect)
 before `max_seconds` defaults above ~30 s are sensible.
 
 **Follow-up (R12 study, `docs/ports/wan.md` "Long-run quality: the R12
-study").** Reproduced without the server (`runpod-matrix.sh sfquality`).
+study").** Reproduced without the server (`runpod-matrix.sh sfquality`, retired
+with no tier since, ADR-0019 §22; `fv-gpucheck wan stream --run <spec>` by hand).
 The bands are in the DiT latents, not the decoder: a fresh-state TAEHV
 decode matches the carried state to a few levels, and the latents' top
 rows turn into stripes. Graph and eager runs are bitwise equal over 90 s,

@@ -2143,3 +2143,4 @@ Project code: FVID
   - whether the `mmaudio` knob stays offered (catalog `FASTVIDEO_WAN_AUDIO`, the CLI's `--audio mmaudio`, GCP staging);
   - whether `sol-bench-pod.sh` moves to fv-lab;
   - the total spend, within the standing "provision as needed" permission.
+- Result (2026-10-26, S1, draft PR #222): the nine (c) families retired with no tier: in `FV_SCRIPT_RETIRED` with pointers naming what is lost, refused (exit 2) by `runpod-matrix.sh`, `runpod-http.sh run` / `all` / `plan` and `runpod.sh gpu` / `matrix` / `plan`, their branches deleted (495 lines, not §22.6's 567; plus `eval`'s defaults), 12 dry runs of the remaining families byte-identical before and after, no knob moved, stale docs updated; tests and mutations in ADR-0019 §22.8; CPU only
