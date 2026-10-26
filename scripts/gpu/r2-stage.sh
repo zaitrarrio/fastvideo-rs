@@ -23,13 +23,22 @@
 #
 # The R2 key comes in FV_WEIGHTS_R2_ACCESS_KEY_ID / FV_WEIGHTS_R2_SECRET_ACCESS_KEY
 # (the pod's Runpod secret references, filled by Runpod; runpod-http.sh's start
-# command removed them from its own environment at once and hands them to this
-# script alone). They are read into this shell's variables and unset at once,
-# and only `r2-weights.py plan` gets them, in its environment (never an argv);
-# r2-fetch.py reads the plan's presigned URLs. Nothing of the key is printed:
-# the log says `r2_key=env|none|...` only. Never on the volume: the root, the
-# state directory and every fetched tree's parent must resolve off
-# /workspace and off <volume weights>; a link is never written through.
+# command copied them into its own shell variables, unset them from its
+# environment on its first line, and passes them to this script alone). They
+# are read into this shell's variables and unset at once, so no child of this
+# script has them in its environment but `r2-weights.py plan` (in its
+# environment, never an argv; under `timeout`, FV_R2_PLAN_TIMEOUT_S, 300 s);
+# r2-fetch.py reads the plan's presigned URLs. Nothing of the key or the plan
+# is printed: the log says `r2_key=env|none|...` only. What `unset` does not
+# do: the values stay in the container's initial environment (PID 1's
+# /proc/<pid>/environ) and in the environ of this script's process, readable by
+# root on the pod; the key is the store's read-only key (ADR-0019 §21.8).
+# Never on the volume: the root, the state directory, the parent of every
+# link and of every fetched tree must resolve under the root (the state
+# directory: off it) and off /workspace and <volume weights>; a path already
+# there is never replaced. The state directory must also lie outside the
+# served run directory (<status dir>/../.., the start command's
+# $SCRATCH/runs), and the status directory off the volume.
 # python3: the runtime image has none (its CI job keeps it Python-free), so it
 # is installed with apt under a 600 s cap, as fv-lab's runner does (§16.4).
 #
@@ -37,9 +46,8 @@
 # matrix's arms then record `weights incomplete`). scripts/gpu/tests/runpod-r2.test.sh
 # runs it with a fake python.
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# The key first, before anything else runs.
+# The key first, before anything else runs (no command substitution, no child).
 # (A blank value is no key: the start command passes both names, empty when
 # the pod had none.)
 _id="${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}" _sec="${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}"
@@ -56,6 +64,7 @@ else
   key_src=none
 fi
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 log() { printf '[%s] r2-stage: %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 die() { log "FAILED: $*"; exit 1; }
 
@@ -82,7 +91,19 @@ off_volume() { # <path>
 }
 off_volume "$ROOT" || die "the root $ROOT is on the volume ($VOL, /workspace)"
 off_volume "$STATE" || die "the state directory $STATE is on the volume"
+off_volume "$STATUS" || die "the status directory $STATUS is on the volume"
+# The plan (bearer URLs) never where the pod serves files from.
+SERVED="$(readlink -m "$STATUS/../..")/"
+[[ "$(readlink -m "$STATE")/" != "$SERVED"* ]] || die "the state directory $STATE is in the served directory $SERVED"
 mkdir -p "$ROOT" "$STATE" && chmod 700 "$STATE" || die "cannot make $ROOT / $STATE"
+ROOT_R="$(readlink -m "$ROOT")/"
+# under_root <path>: <path> resolves under the root and off the volume (a
+# symlink on the way, a volume link included, is followed).
+under_root() {
+  local r
+  r="$(readlink -m "$1")"
+  [[ "$r/" == "$ROOT_R"* ]] && off_volume "$r"
+}
 PLAN="$STATE/plan.json"
 rm -f "$PLAN"   # an interrupted run's
 trap 'rm -f "$PLAN"' EXIT
@@ -91,6 +112,9 @@ trap 'rm -f "$PLAN"' EXIT
 n=0
 for t in $LINKS; do
   if [[ ! -e "$ROOT/$t" && ! -L "$ROOT/$t" ]]; then
+    # Its parent, made here, must be the root's own (overlapping roots such as
+    # `auxiliary auxiliary/new` would otherwise write through the first link).
+    under_root "$ROOT/$t/.." || die "the link $t would land at $(readlink -m "$ROOT/$t/.."), outside $ROOT"
     mkdir -p "$(dirname "$ROOT/$t")" && ln -s "$VOL/$t" "$ROOT/$t" || die "cannot link $ROOT/$t"
   fi
   n=$((n + 1))
@@ -101,9 +125,7 @@ todo=()
 for spec in "$@"; do
   dest="${spec%@*}" rev="${spec##*@}"
   # Its parent must be the root's own directory, never a link into the volume.
-  parent="$(readlink -m "$ROOT/$dest/..")"
-  [[ "$parent/" == "$(readlink -m "$ROOT")/"* ]] && off_volume "$parent" \
-    || die "$dest would land at $parent, outside $ROOT"
+  under_root "$ROOT/$dest/.." || die "$dest would land at $(readlink -m "$ROOT/$dest/.."), outside $ROOT"
   if [[ -f "$ROOT/$dest/.complete" && "$(cat "$ROOT/$dest/.fv-revision" 2>/dev/null)" == "$rev" ]]; then
     log "$spec already in $ROOT"
   else
@@ -123,9 +145,12 @@ if (( ${#todo[@]} )); then
     "$PY" -c "$check" >/dev/null 2>&1 || die "python3 unavailable after apt-get"
   fi
   log "fetch ${todo[*]} into $ROOT (cap ${CAP}s)"
+  PT="${FV_R2_PLAN_TIMEOUT_S:-300}"
+  [[ "$PT" =~ ^[1-9][0-9]*$ ]] || die "FV_R2_PLAN_TIMEOUT_S '$PT' is not a positive number of seconds"
   FV_WEIGHTS_R2_ACCESS_KEY_ID="$_id" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$_sec" \
+    timeout --signal=TERM --kill-after=15 "$PT" \
     "$PY" "$HERE/r2-weights.py" plan "${todo[@]}" --pin "$HERE/weights-r2.tsv" --ttl "$((CAP + 600))" --out "$PLAN" \
-    || die "r2-weights.py plan failed"
+    || { rc=$?; rm -f "$PLAN"; die "r2-weights.py plan failed (exit $rc)"; }
   ( cd "$STATE" && env -u FV_R2_SKIP_TREES timeout --signal=TERM --kill-after=15 "$CAP" \
     "$PY" "$HERE/r2-fetch.py" --root "$ROOT" --plan "$PLAN" --skip-trees '' --status "$STATUS/r2-fetch.json" ) \
     || { rc=$?; rm -f "$PLAN"; die "r2-fetch.py exit $rc"; }

@@ -1309,6 +1309,12 @@ impl CellFile {
                 for d in [&c.baseline, &c.candidate] {
                     self.check_path(file, &at, d, &["runs", "scratch", "ref", "ref_dir"])?;
                 }
+                self.check_anchor(
+                    file,
+                    &format!("{at}.after"),
+                    c.after.as_deref(),
+                    [c.baseline.as_str(), c.candidate.as_str()],
+                )?;
                 continue;
             }
             let off = c.gate.as_ref().and_then(|g| g.off.as_ref());
@@ -1354,6 +1360,39 @@ impl CellFile {
         }
         self.validate_d1d(file)?;
         self.validate_metrics(file)?;
+        Ok(())
+    }
+
+    /// `after = "<a>"` on a step that reads `paths`: every arm a path
+    /// `{runs}/<arm>/…` names runs at or before `<a>` (its output is there
+    /// when the step runs), as an arm compare's two arms are checked. An
+    /// anchor that is not an arm is reported by the caller.
+    fn check_anchor<'p>(
+        &self,
+        file: &str,
+        at: &str,
+        after: Option<&str>,
+        paths: impl IntoIterator<Item = &'p str>,
+    ) -> Result<(), LabError> {
+        let pos = |n: &str| self.arms.iter().position(|x| x.name == n);
+        let Some(pa) = after.and_then(pos) else {
+            return Ok(());
+        };
+        for p in paths {
+            let Some(n) = p.strip_prefix("{runs}/").and_then(|r| r.split('/').next()) else {
+                continue;
+            };
+            if pos(n).is_some_and(|pn| pn > pa) {
+                return Err(field(
+                    file,
+                    at,
+                    format!(
+                        "`{}` runs before `{n}`, whose `{p}` the step reads",
+                        after.unwrap_or_default()
+                    ),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -1461,6 +1500,17 @@ impl CellFile {
             for r in &m.requires {
                 check("requires", r)?;
             }
+            // Anchored: after every arm whose output it reads.
+            self.check_anchor(
+                file,
+                &at("after"),
+                m.after.as_deref(),
+                m.clips
+                    .iter()
+                    .map(|c| c.path.as_str())
+                    .chain(m.requires.iter().map(String::as_str))
+                    .chain(m.measures.iter().flat_map(|me| me.inputs())),
+            )?;
             for me in &m.measures {
                 for p in me.inputs() {
                     check("measure", p)?;
@@ -3844,6 +3894,30 @@ args = ["--off-identity"]
         assert!(e.contains("runs before `a2`"), "{e}");
         let good = format!("{CELL}after = \"a2\"\n");
         assert!(CellFile::parse(&good, "c1.toml").is_ok());
+        // A metric or a directory compare anchored before the arm whose
+        // output it reads (N5 of the D1j review): refused as an arm compare is.
+        let frames = format!("{ORACLE}{FRAMES}");
+        for (from, to) in [
+            (
+                "clips = [{ label = \"ours\", path = \"{runs}/o1-main/frames/output.mp4\" }]",
+                "clips = [{ label = \"ours\", path = \"{runs}/o1-diff/frames/output.mp4\" }]",
+            ),
+            (
+                "candidate = \"{runs}/o1-main/frames\"\nafter",
+                "candidate = \"{runs}/o1-diff/frames\"\nafter",
+            ),
+        ] {
+            assert!(frames.contains(from), "{from}");
+            let e = CellFile::parse(&frames.replacen(from, to, 1), "o1.toml")
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("`o1-main` runs before `o1-diff`"), "{to}: {e}");
+            // Anchored at that arm (or unanchored), it parses.
+            let at_diff = frames
+                .replacen(from, to, 1)
+                .replace("after = \"o1-main\"", "after = \"o1-diff\"");
+            assert!(CellFile::parse(&at_diff, "o1.toml").is_ok(), "{to}");
+        }
         // `{ref_dir}` only in a cell with a reference.
         let e = CellFile::parse(
             &format!(

@@ -79,7 +79,7 @@
 # floor is its min_ram_gb in lab/tiers.toml, ADR-0019 §16.10),
 # FV_AVOID_MACHINES (space-separated Runpod machine ids: a pod placed on one
 # is deleted at once and created again),
-# FV_R2_TREES (`run` / `plan` only; space-separated weights-r2.tsv trees the EU
+# FV_R2_TREES (`run` / `all` / `plan` only; space-separated weights-r2.tsv trees the EU
 # volume lacks, e.g. sfwan21-1.3b: the pod gets the R2 key as the Runpod
 # secret references fv-lab's volume+r2 pods carry, and before the matrix
 # scripts/gpu/r2-stage.sh makes fv-lab's merged weight root /fvscratch/weights
@@ -142,14 +142,24 @@ fi
 # Each tree a weights-r2.tsv dest that the EU volume neither holds nor sits
 # inside; the container disk at least the trees and fv-lab's 120 GB reserve
 # (refused, not raised: the body says what the caller asked for); `run` /
-# `plan` of a script family only. Sets R2_SPECS (dest@rev …) and R2_LINKS
+# `all` / `plan` of a script family only, on the EU volume (the link roots are
+# FV_EU_VOLUME_TREES, so another volume is refused). Sets R2_SPECS (dest@rev …) and R2_LINKS
 # (fv-lab's TreeSources::link_roots of FV_EU_VOLUME_TREES), and the idle
 # limits' defaults (an R2 fetch keeps the GPU at 0 %).
 R2_SPECS="" R2_LINKS=""
 if [[ -n "${FV_R2_TREES:-}" && -n "${FV_R2_TREES//[[:space:]]/}" ]]; then
   r2die() { echo "runpod-http: FV_R2_TREES: $*" >&2; exit 2; }
-  [[ "${1:-}" == run || "${1:-}" == plan ]] || r2die "for \`run\` and \`plan\` only (the matrix's weights), not \`${1:-}\`"
+  [[ "${1:-}" == run || "${1:-}" == all || "${1:-}" == plan ]] \
+    || r2die "for \`run\`, \`all\` and \`plan\` only (the matrix's weights), not \`${1:-}\`"
   [[ "${RUNPOD_NO_VOLUME:-0}" != 1 ]] || r2die "the merged root links the EU volume's trees: not with RUNPOD_NO_VOLUME=1"
+  # The links are the EU volume's trees (FV_EU_VOLUME_TREES): another volume
+  # would get links to trees it may not hold.
+  [[ -z "${RUNPOD_VOLUME_ID:-}" || "$RUNPOD_VOLUME_ID" == "$FV_EU_VOLUME_ID" ]] \
+    || r2die "the merged root links the EU volume's trees ($FV_EU_VOLUME_ID): not with RUNPOD_VOLUME_ID=$RUNPOD_VOLUME_ID"
+  [[ "$VOL_NAME" == "$FV_EU_VOLUME_NAME" ]] \
+    || r2die "the merged root links the EU volume's trees ($FV_EU_VOLUME_NAME): not with the volumes '$VOL_NAME'"
+  [[ -z "${FV_PLAN_VOLUME:-}" || "${FV_PLAN_VOLUME%% *}" == "$FV_EU_VOLUME_ID" ]] \
+    || r2die "the merged root links the EU volume's trees ($FV_EU_VOLUME_ID): not with FV_PLAN_VOLUME=$FV_PLAN_VOLUME"
   r2_table="$ROOT/scripts/gpu/weights-r2.tsv"
   r2_bytes=0
   for t in $FV_R2_TREES; do
@@ -172,7 +182,7 @@ if [[ -n "${FV_R2_TREES:-}" && -n "${FV_R2_TREES//[[:space:]]/}" ]]; then
   done
   R2_LINKS="$(tr ' ' '\n' <<<"$R2_LINKS" | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/^ *//; s/ *$//')"
   r2_need=$(( (r2_bytes + 999999999) / 1000000000 + 120 ))
-  [[ "${FV_CONTAINER_DISK_GB:-120}" =~ ^[0-9]+$ ]] && (( ${FV_CONTAINER_DISK_GB:-120} >= r2_need )) \
+  [[ "${FV_CONTAINER_DISK_GB:-120}" =~ ^[0-9]+$ ]] && (( 10#${FV_CONTAINER_DISK_GB:-120} >= r2_need )) \
     || r2die "the container disk (FV_CONTAINER_DISK_GB=${FV_CONTAINER_DISK_GB:-120}) must hold the trees ($(awk -v b="$r2_bytes" 'BEGIN { printf "%.2f", b / 1e9 }') GB) and 120 GB: FV_CONTAINER_DISK_GB=$r2_need or more"
   r2_cell="${FV_GEN_TIMEOUT_S:-3600}"
   [[ "$r2_cell" =~ ^[0-9]+$ ]] || r2die "FV_GEN_TIMEOUT_S '$r2_cell' is not a number of seconds"
@@ -277,9 +287,12 @@ start_cmd() {
   fi
   local cells="fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage"
   # FV_R2_TREES (ADR-0019 §21.8): the R2 key leaves the start command's
-  # environment before anything starts (the watchdogs, the file server, the
-  # matrix inherit none of it); r2-stage.sh alone gets it back, and hands it
-  # to its plan step alone. The matrix's $W is the merged root then.
+  # environment on its first line, before anything starts, so no child (the
+  # watchdogs, the file server, the matrix) has it in its environment;
+  # r2-stage.sh alone gets it back, and hands it to its plan step alone. It
+  # stays in the container's initial environment (PID 1's /proc/<pid>/environ),
+  # readable by root on the pod, as HF_TOKEN and RUNPOD_API_KEY are; it is the
+  # store's read-only key (§21.2). The matrix's $W is the merged root then.
   local work=/workspace r2_block=""
   if [[ -n "$R2_SPECS" ]]; then
     printf '%s\n' '_fvr2_id="${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}" _fvr2_secret="${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}"; unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY'
@@ -389,6 +402,15 @@ upstream_start_cmd() {
   # UP_LOCAL=1: nothing is written to the volume (it is read for weights only);
   # venvs, derived weights and results live on the container disk.
   [[ "${UP_LOCAL:-1}" == 1 ]] && runs=/root/runs
+  # An r2:<tree> step (upstream_r2_key): the R2 key leaves the start command's
+  # environment on its first line, before the watchdogs, the file server and
+  # the clone start, and goes back to pod.sh alone (ADR-0019 §21.2; fv-lab
+  # oracle::R2_KEY_CAPTURE / R2_KEY_HANDOFF render the same lines).
+  local r2_env=""
+  if upstream_r2_key; then
+    printf '%s\n' '_fvr2_id="${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}" _fvr2_secret="${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}"; unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY'
+    r2_env='FV_WEIGHTS_R2_ACCESS_KEY_ID="$_fvr2_id" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$_fvr2_secret" '
+  fi
   idle_watchdog net
   cat <<EOF
 set -u
@@ -410,7 +432,7 @@ RUNNER=/opt/fvrs
     && git -C /opt/fvrs-live fetch -q --depth 1 origin $UP_SHA && git -C /opt/fvrs-live checkout -q FETCH_HEAD \
     && echo live
 } >"\$OUT/clone.log" 2>&1 && RUNNER=/opt/fvrs-live
-env ${FV_EXTRA_ENV:-} UP_STEPS="${UP_STEPS:-info:box}" UP_STEPS_BG="${UP_STEPS_BG:-}" UP_CELLS="${UP_CELLS:-}" \
+${r2_env}env ${FV_EXTRA_ENV:-} UP_STEPS="${UP_STEPS:-info:box}" UP_STEPS_BG="${UP_STEPS_BG:-}" UP_CELLS="${UP_CELLS:-}" \
   UP_CELL_TIMEOUT_S=${UP_CELL_TIMEOUT_S:-5400} UP_LOCAL=${UP_LOCAL:-1} \
   bash \$RUNNER/scripts/gpu/upstream/pod.sh "\$OUT" >"\$OUT/pod.out" 2>&1
 echo "done $tag" >"\$OUT/DONE"
@@ -453,7 +475,7 @@ pod_payload() {
   local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" files="" f hub=false r2=false
   [[ "$mode" == upstream ]] && upstream_hub_token && hub=true
   [[ "$mode" == upstream ]] && upstream_r2_key && r2=true
-  [[ "$mode" == run && -n "$R2_SPECS" ]] && r2=true
+  [[ ( "$mode" == run || "$mode" == all ) && -n "$R2_SPECS" ]] && r2=true
   if [[ -n "${FV_POD_FILES:-}" ]]; then
     local ft
     ft="$(mktemp -d)"

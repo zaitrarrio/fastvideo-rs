@@ -177,6 +177,20 @@ pub fn r2_step(tree: &str) -> String {
     format!("r2:{tree}")
 }
 
+/// The first line of the start command of a pod that has the R2 key
+/// (`weights::r2_env_refs`): the two values copied into the shell's own
+/// variables and removed from its environment before anything starts, so
+/// the watchdogs, the file server and the clone inherit none of it
+/// (`runpod-http.sh`'s, ADR-0019 §21.2). What it cannot do: the values stay
+/// in the container's initial environment (PID 1's `/proc/<pid>/environ`),
+/// readable by root on the pod.
+pub const R2_KEY_CAPTURE: &str = "_fvr2_id=\"${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}\" _fvr2_secret=\"${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}\"; unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY";
+
+/// The env prefix that hands the captured key to the one command that needs
+/// it (`pod.sh`, which hands it to its plan step alone).
+pub const R2_KEY_HANDOFF: &str =
+    "FV_WEIGHTS_R2_ACCESS_KEY_ID=\"$_fvr2_id\" FV_WEIGHTS_R2_SECRET_ACCESS_KEY=\"$_fvr2_secret\" ";
+
 fn sfield(file: &str, f: String, msg: impl Into<String>) -> LabError {
     LabError::Field {
         file: file.to_owned(),
@@ -496,6 +510,14 @@ pub fn check_image_tag(tag: &str) -> Result<(), String> {
 }
 
 impl UpstreamStart {
+    /// Whether `UP_STEPS` has an `r2:<tree>` step: the pod then has the R2
+    /// key, which its start command takes out of its environment on its
+    /// first line and hands to `pod.sh` alone (`runpod-http.sh`'s
+    /// `upstream_r2_key`).
+    pub fn has_r2_step(&self) -> bool {
+        self.up_steps.split(' ').any(|s| s.starts_with("r2:"))
+    }
+
     /// `runpod-http.sh`'s defaults for a stack and its steps.
     pub fn for_stack(stack: &Stack, tag: &str, up_sha: &str, up_steps: &str) -> Self {
         UpstreamStart {
@@ -548,7 +570,14 @@ impl UpstreamStart {
 pub fn upstream_start_command(o: &UpstreamStart) -> Result<String, String> {
     o.check()?;
     let mut s = UPSTREAM_START_TEMPLATE.trim_end_matches('\n').to_owned();
+    let (r2_head, r2_env) = if o.has_r2_step() {
+        (format!("{R2_KEY_CAPTURE}\n"), R2_KEY_HANDOFF.to_owned())
+    } else {
+        (String::new(), String::new())
+    };
     for (k, v) in [
+        ("@R2_HEAD@", r2_head),
+        ("@R2_ENV@", r2_env),
         ("@TAG@", o.tag.clone()),
         ("@UP_SHA@", o.up_sha.clone()),
         ("@UP_STEPS@", o.up_steps.clone()),
@@ -611,7 +640,15 @@ pub fn upstream_launch(
     if stack.hub_token {
         env.insert(HUB_TOKEN_ENV.0.to_owned(), hub_token_ref());
     }
-    if selected.iter().any(|t| !t.r2.is_empty()) {
+    let r2 = selected.iter().any(|t| !t.r2.is_empty());
+    if r2 != start.has_r2_step() {
+        return Err(format!(
+            "the targets' R2 trees ({}) and UP_STEPS `{}` disagree: the key is passed for r2:<tree> steps only",
+            if r2 { "some" } else { "none" },
+            start.up_steps
+        ));
+    }
+    if r2 {
         env.extend(crate::weights::r2_env_refs());
     }
     let disk = selected

@@ -5,7 +5,7 @@
 #   - the refusals, before the key and before anything is made: a bad name, a
 #     tree weights-r2.tsv lacks, a tree on the EU volume, under one or holding
 #     one, a tree twice, a container disk too small for the trees and 120 GB,
-#     another mode than run / plan, RUNPOD_NO_VOLUME=1, a family fv-lab runs;
+#     another mode than run / all / plan, another volume, RUNPOD_NO_VOLUME=1, a family fv-lab runs;
 #   - unset is a no-op: the plan body byte-identical with FV_R2_TREES unset,
 #     empty or blank, and none of the R2 lines in it;
 #   - the body: the R2 key as the two Runpod secret references fv-lab's
@@ -62,9 +62,17 @@ refused "holding a volume tree" "holds the EU volume's tree auxiliary/tae" FV_R2
 refused "a tree twice" "sfwan21-1.3b twice" "FV_R2_TREES=sfwan21-1.3b sfwan21-1.3b" FV_CONTAINER_DISK_GB=500 -- plan 1234567 t
 refused "a disk too small" "FV_CONTAINER_DISK_GB=149 or more" FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=148 -- plan 1234567 t
 refused "the default disk" "FV_CONTAINER_DISK_GB=149 or more" FV_R2_TREES=sfwan21-1.3b -- plan 1234567 t
-for mode in all kernels weights upstream plan-upstream; do
-  refused "mode $mode" "for \`run\` and \`plan\` only" FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 -- "$mode" 1234567
+for mode in kernels weights upstream plan-upstream; do
+  refused "mode $mode" "for \`run\`, \`all\` and \`plan\` only" FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 -- "$mode" 1234567
 done
+# `all` (oracle.sh FV_ORACLE_RUN_MODE=all): accepted, on to the key check.
+http FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 -- all 1234567
+[[ "$RC" != 0 ]] && grep -q 'RUNPOD_API_KEY missing' "$TMP/err" && ! grep -q FV_R2_TREES "$TMP/err" \
+  && ok "mode all: accepted (the key check next)" || bad "mode all: exit $RC, $(cat "$TMP/err")"
+# The link roots are the EU volume's trees: another volume refused.
+refused "another volume id" "not with RUNPOD_VOLUME_ID=vol9" FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 RUNPOD_VOLUME_ID=vol9 -- plan 1234567 t
+refused "another volume name" "not with the volumes 'other-vol'" FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 RUNPOD_VOLUME_NAME=other-vol -- plan 1234567 t
+refused "another plan volume" "not with FV_PLAN_VOLUME=vol9 EU-RO-1" FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 "FV_PLAN_VOLUME=vol9 EU-RO-1" -- plan 1234567 t
 refused "no volume" "not with RUNPOD_NO_VOLUME=1" FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 RUNPOD_NO_VOLUME=1 -- plan 1234567 t
 # A family fv-lab runs takes its trees from its tier (weights = "volume+r2").
 http FV_DRY_RUN=1 FV_FAMILY=rtx6000 FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 -- run 1234567
@@ -90,6 +98,10 @@ B="$TMP/r2.json"; cp "$TMP/out" "$B"
 [[ "$(jq -c .env "$B")" == '{"FV_WEIGHTS_R2_ACCESS_KEY_ID":"{{ RUNPOD_SECRET_fv_r2_access_key_id }}","FV_WEIGHTS_R2_SECRET_ACCESS_KEY":"{{ RUNPOD_SECRET_fv_r2_secret_access_key }}"}' ]] \
   && ok "body: the two Runpod secret references, nothing else" || bad "body env: $(jq -c .env "$B")"
 [[ "$(jq .containerDiskInGb "$B")" == 150 ]] && ok "body: the disk asked for" || bad "body disk"
+# A leading zero is base 10 (not octal: 0150 would be 104).
+http "${PLAN[@]}" RUNPOD_API_KEY=x FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=0150 -- plan 1234567 1234567-10241200
+[[ "$RC" == 0 && "$(jq .containerDiskInGb "$TMP/out")" == 150 ]] && ok "body: FV_CONTAINER_DISK_GB=0150 read as 150" \
+  || bad "disk 0150: exit $RC, $(cat "$TMP/err")"
 [[ "$(jq -S . "$B")" == "$(cat "$FX/runpod-http-oracle-sfwan13-r2.json")" ]] && ok "body: its golden" || bad "body differs from its golden"
 CMD="$(jq -r '.dockerStartCmd[2]' "$B")"
 [[ "$(head -1 <<<"$CMD")" == '_fvr2_id="${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}" _fvr2_secret="${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}"; unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY' ]] \
@@ -111,6 +123,10 @@ out="$(env -i PATH="$PATH" FV_WEIGHTS_R2_ACCESS_KEY_ID=AKIDtest0123 FV_WEIGHTS_R
 REPO="$TMP/repo"
 mkdir -p "$REPO/scripts/gpu" "$TMP/bin"
 cp "$STAGE" "$ROOT/scripts/gpu/weights-r2.tsv" "$REPO/scripts/gpu/"
+# The pod's layout: the start command serves $SCRATCH/runs and the status
+# directory is $OUT = $SCRATCH/runs/<family>/<tag>; the plan's marker stands
+# for its presigned URLs.
+SERVED="$TMP/served" O="$TMP/served/oracle/tag" MARK="X-Amz-Signature=FAKEsig0123456789"
 cat >"$TMP/bin/python3" <<EOF
 #!/usr/bin/env bash
 if [[ "\$1" == -c ]]; then [[ -e "$TMP/have-python" ]]; exit; fi
@@ -120,7 +136,8 @@ echo "env: id=\${FV_WEIGHTS_R2_ACCESS_KEY_ID:+set} secret=\${FV_WEIGHTS_R2_SECRE
 case "\$(basename "\$1")" in
   r2-weights.py)
     out=""; prev=""; for a in "\$@"; do [[ "\$prev" == --out ]] && out="\$a"; prev="\$a"; done
-    echo '{"plan":"bearer-urls"}' >"\$out"
+    echo '{"url":"https://r2.example/x?$MARK"}' >"\$out"
+    if [[ -e "$TMP/slow-plan" ]]; then sleep 30; fi
     if [[ -e "$TMP/fail-plan" ]]; then exit 1; fi ;;
   r2-fetch.py)
     root=""; status=""; plan=""; prev=""
@@ -150,17 +167,20 @@ stage() {
   shift 3
   while [[ "$1" != -- ]]; do kv+=("$1"); shift; done
   shift
-  rm -rf "$TMP/out" "$TMP/calls.log" "$TMP/plan-seen.json"
-  mkdir -p "$TMP/out"
+  rm -rf "$O" "$TMP/calls.log" "$TMP/plan-seen.json"
+  mkdir -p "$O"
   set +e
   OUTPUT="$(env -i PATH="$TMP/bin:$PATH" HOME="$TMP" ${kv[@]+"${kv[@]}"} \
-    bash "$REPO/scripts/gpu/r2-stage.sh" "$root" "$state" "$TMP/out" 60 "$VOL" "$LINKS" "$@" 2>&1)"
+    bash "$REPO/scripts/gpu/r2-stage.sh" "$root" "$state" "${STATUS_DIR:-$O}" 60 "$VOL" "$LINKS" "$@" 2>&1)"
   RC=$?
   set -e
   local leak
-  leak="$(grep -rlF -e "$ID" -e "$SECRET" "$TMP/out" "$TMP/calls.log" "$root" "$state" 2>/dev/null || true)"
-  [[ "$OUTPUT" != *"$ID"* && "$OUTPUT" != *"$SECRET"* && -z "$leak" ]] && ok "$name: the key's values in no output, argv or file" \
-    || bad "$name: the key leaked ($leak)"
+  # The key's values and the plan's bearer URLs (the fake plan's marker), in
+  # no output, argv or file the run leaves: the served run directory, the
+  # calls, the root, the state directory, the volume.
+  leak="$(grep -rlF -e "$ID" -e "$SECRET" -e "$MARK" "$SERVED" "$TMP/calls.log" "$root" "$state" "$VOL" 2>/dev/null || true)"
+  [[ "$OUTPUT" != *"$ID"* && "$OUTPUT" != *"$SECRET"* && "$OUTPUT" != *"$MARK"* && -z "$leak" ]] \
+    && ok "$name: the key's values and the plan's URLs in no output, argv or file" || bad "$name: the key or the plan leaked ($leak)"
 }
 R="$TMP/scratch/weights" S="$TMP/scratch/r2"
 stage "fetch" "$R" "$S" "${KEY[@]}" -- "sfwan21-1.3b@$REV"
@@ -168,7 +188,7 @@ stage "fetch" "$R" "$S" "${KEY[@]}" -- "sfwan21-1.3b@$REV"
 grep -qx "argv: $REPO/scripts/gpu/r2-weights.py plan sfwan21-1.3b@$REV --pin $REPO/scripts/gpu/weights-r2.tsv --ttl 660 --out $S/plan.json" "$TMP/calls.log" \
   && ok "fetch: the plan pins weights-r2.tsv's revision" || bad "fetch: plan argv: $(cat "$TMP/calls.log")"
 [[ "$(sed -n 2p "$TMP/calls.log")" == "env: id=set secret=set skip=unset" ]] && ok "fetch: the plan step has the key" || bad "plan env"
-grep -qx "argv: $REPO/scripts/gpu/r2-fetch.py --root $R --plan $S/plan.json --skip-trees  --status $TMP/out/r2-fetch.json" "$TMP/calls.log" \
+grep -qx "argv: $REPO/scripts/gpu/r2-fetch.py --root $R --plan $S/plan.json --skip-trees  --status $O/r2-fetch.json" "$TMP/calls.log" \
   && ok "fetch: r2-fetch.py into the merged root, every tree, a status" || bad "fetch argv: $(cat "$TMP/calls.log")"
 [[ "$(sed -n 4p "$TMP/calls.log")" == "env: id= secret= skip=unset" ]] && ok "fetch: the fetch step has no key" || bad "fetch env"
 [[ -f "$TMP/plan-seen.json" && ! -e "$S/plan.json" ]] && ok "fetch: the plan there for the fetch, removed after" || bad "plan lifecycle"
@@ -216,6 +236,30 @@ rm -rf "$TMP/scratch"
 stage "a tree inside a link" "$R" "$S" "${KEY[@]}" -- "auxiliary/tae/x@r1"
 [[ "$RC" != 0 && ! -s "$TMP/calls.log" ]] && grep -q 'outside' <<<"$OUTPUT" && [[ -z "$(ls -A "$VOL/auxiliary/tae")" ]] \
   && ok "a tree inside a link into the volume: refused, nothing written there" || bad "tree in link: $OUTPUT"
+# Overlapping link roots (a root and a tree under it, the volume lacking the
+# latter): the second link's parent resolves through the first into the
+# volume; refused, no symlink made there.
+rm -rf "$TMP/scratch"
+LINKS="auxiliary auxiliary/new" stage "overlapping link roots" "$R" "$S" "${KEY[@]}" -- "sfwan21-1.3b@$REV"
+[[ "$RC" != 0 && ! -s "$TMP/calls.log" && ! -e "$VOL/auxiliary/new" && ! -L "$VOL/auxiliary/new" ]] \
+  && grep -q 'the link auxiliary/new would land at' <<<"$OUTPUT" \
+  && ok "overlapping link roots: refused, nothing written into the volume" || bad "overlapping roots: exit $RC, $OUTPUT"
+# The plan step under a time limit: a hung plan is killed, its file removed.
+rm -rf "$TMP/scratch"; : >"$TMP/slow-plan"
+t0=$SECONDS
+stage "hung plan" "$R" "$S" "${KEY[@]}" FV_R2_PLAN_TIMEOUT_S=1 -- "sfwan21-1.3b@$REV"
+rm -f "$TMP/slow-plan"
+[[ "$RC" != 0 && ! -e "$S/plan.json" && $((SECONDS - t0)) -lt 20 ]] && grep -q 'r2-weights.py plan failed (exit 124)' <<<"$OUTPUT" \
+  && ! grep -q r2-fetch.py "$TMP/calls.log" && ok "hung plan: killed by the timeout, the plan removed, nothing fetched" \
+  || bad "hung plan: exit $RC after $((SECONDS - t0)) s, $OUTPUT"
+# The state directory never where the pod serves files; the status off the volume.
+rm -rf "$TMP/scratch"
+stage "state in the served directory" "$R" "$SERVED/r2" "${KEY[@]}" -- "sfwan21-1.3b@$REV"
+[[ "$RC" != 0 && ! -s "$TMP/calls.log" && ! -e "$SERVED/r2" ]] && grep -q 'is in the served directory' <<<"$OUTPUT" \
+  && ok "state in the served directory: refused, nothing made" || bad "state in served: exit $RC, $OUTPUT"
+STATUS_DIR="$VOL/runs/x/y" stage "status on the volume" "$R" "$S" "${KEY[@]}" -- "sfwan21-1.3b@$REV"
+[[ "$RC" != 0 && ! -s "$TMP/calls.log" && ! -e "$VOL/runs" ]] && grep -q 'status directory .* is on the volume' <<<"$OUTPUT" \
+  && ok "status on the volume: refused" || bad "status on volume: exit $RC, $OUTPUT"
 for spec in "../x@r1" "a b@r1" "sfwan21-1.3b" "x@r/1"; do
   stage "spec '$spec'" "$R" "$S" "${KEY[@]}" -- "$spec"
   [[ "$RC" != 0 && ! -s "$TMP/calls.log" ]] && ok "spec '$spec': refused" || bad "spec '$spec': $OUTPUT"

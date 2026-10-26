@@ -33,7 +33,7 @@ use fastvideo_lab::oracle::{
     check_balance, check_image_tag, drive, hub_step, hub_token_ref, plan_oracle, runtime_args,
     secret_like, up_steps, upstream_launch, upstream_start_command, OracleOps, OraclePlan,
     OracleRequest, RefState, RuntimePod, Stacks, UpPod, UpState, UpstreamPlan, UpstreamStart,
-    FINAL_ASKS, FINAL_ASK_GAP_S, STOCK_WAIT_S,
+    FINAL_ASKS, FINAL_ASK_GAP_S, R2_KEY_CAPTURE, R2_KEY_HANDOFF, STOCK_WAIT_S,
 };
 use fastvideo_lab::plan::Lab;
 use fastvideo_lab::weights::r2_env_refs;
@@ -239,6 +239,31 @@ fn the_upstream_start_command_is_the_scripts_with_its_values() {
     ] {
         assert!(!cmd.contains(m), "{m}");
     }
+    // No r2:<tree> step: no R2 line (the key is not in the pod's env).
+    assert!(!cmd.contains("_fvr2_") && !cmd.contains("FV_WEIGHTS_R2_"));
+    // An r2:<tree> step: the key out of the start command's environment on
+    // its first line, before the watchdogs, the file server and the clone,
+    // and back to pod.sh alone (S1 of the D1j review; runpod-http.sh's
+    // upstream_start_cmd renders the same lines).
+    let steps = up_steps(s, &["sfwan13".to_owned()]);
+    let r2 = UpstreamStart::for_stack(s, TAG, UP_SHA, &steps);
+    assert!(r2.has_r2_step() && !o.has_r2_step());
+    let rcmd = upstream_start_command(&r2).expect("command");
+    assert_eq!(rcmd.lines().next(), Some(R2_KEY_CAPTURE));
+    let handoff: Vec<&str> = rcmd.lines().filter(|l| l.contains("$_fvr2_")).collect();
+    assert_eq!(handoff.len(), 1, "{handoff:?}");
+    assert!(handoff[0].starts_with(&format!("{R2_KEY_HANDOFF}env ")));
+    assert!(handoff[0]
+        .ends_with("bash $RUNNER/scripts/gpu/upstream/pod.sh \"$OUT\" >\"$OUT/pod.out\" 2>&1"));
+    // The key in the env and the r2 step go together.
+    let sf = vec!["sfwan13".to_owned()];
+    assert!(upstream_launch(s, &sf, "latest", &r2).is_ok());
+    let e = upstream_launch(s, &sf, "latest", &o).unwrap_err();
+    assert!(e.contains("disagree"), "{e}");
+    let vsa = vec!["fasth3-4step-vsa".to_owned()];
+    assert!(upstream_launch(s, &vsa, "latest", &r2)
+        .unwrap_err()
+        .contains("disagree"));
     // Shell text is refused.
     o.up_steps = "info:box $(id)".into();
     assert!(upstream_start_command(&o).is_err());

@@ -179,7 +179,8 @@ rt_family="${FV_ORACLE_FAMILY:-oracle}"
 stock_wait="${FV_RUNTIME_STOCK_WAIT_S:-900}"
 # sfwan13's tree is R2-only: the runtime pod fetches it into its merged weight
 # root as fv-lab's oracle-r2 tier does (runpod-http.sh FV_R2_TREES, on a
-# 150 GB disk; docs/adr/0019-fv-lab.md §21.8). Other targets: nothing changes.
+# 150 GB disk; docs/adr/0019-fv-lab.md §21.8; FV_ORACLE_RUN_MODE=all too, the
+# kernels first). Other targets: nothing changes.
 rt_r2="" rt_disk="${FV_CONTAINER_DISK_GB:-}"
 if [[ " $targets " == *" sfwan13 "* ]]; then
   rt_r2=sfwan21-1.3b

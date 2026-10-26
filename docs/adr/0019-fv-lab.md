@@ -3476,15 +3476,32 @@ tree). For a run's selected targets:
   has an `r2` tree (beside the Hub token's for a `hub_token` stack), and its disk is the largest of the stack's and
   the selected targets'. Without `sfwan13` the body is the one §19.7 measured: 150 GB, no env
   (`runpod-http-upstream-fastvideo.json` unchanged).
-- `pod.sh`: `r2_key_init` (at the start, beside `hub_token_init`) reads `FV_WEIGHTS_R2_ACCESS_KEY_ID` /
-  `FV_WEIGHTS_R2_SECRET_ACCESS_KEY` into the shell's own variables and **unsets them**, so no step, cell or reference
-  sees the key; a blank part or an unfilled `{{ … }}` reference is no key; `box.txt` gets `r2_key=env|none|none (env:
+- *The start command* (`oracle::upstream_start_command`, `runpod-http.sh`'s `upstream_start_cmd`): with an `r2:`
+  step its **first line** copies the key into two shell variables and unsets it (`oracle::R2_KEY_CAPTURE`), before
+  the idle and cap watchdogs, the keepalive, the file server and the clone start, and the line that runs `pod.sh`
+  hands it back to `pod.sh` alone as an env prefix (`R2_KEY_HANDOFF`); `upstream_launch` refuses targets with `r2`
+  trees whose `UP_STEPS` has no `r2:` step and the reverse. Without an `r2:` step the command is unchanged
+  (`runpod-http-upstream-fastvideo.json` and `-sol-ltx25.json` byte-identical).
+- `pod.sh`: `r2_key_init`, **its first command** (before `HERE=$(…)` or any child), reads
+  `FV_WEIGHTS_R2_ACCESS_KEY_ID` / `FV_WEIGHTS_R2_SECRET_ACCESS_KEY` into the shell's own variables and **unsets
+  them**, so no step, cell or reference has the key in its environment, and they are cleared once the steps are
+  done; a blank part or an unfilled `{{ … }}` reference is no key; `box.txt` gets `r2_key=env|none|none (env:
   unfilled secret reference)|none (env: incomplete)`, never a value. `weights_r2 <tree>` (the step `r2:<tree>`)
-  refuses a bad name, a tree the table lacks and a `$UW` on `/workspace` (the volume) before anything; keeps a tree
-  already complete at its revision; else runs `r2-weights.py plan <tree>@<rev> --pin weights-r2.tsv --ttl <cap+600>
-  --out <private dir>/plan.json` with the key in **its environment only** (never an argv), then `timeout <cap>
-  r2-fetch.py --root $UW --plan … --skip-trees '' --status $OUT/r2-<tree>.json` without it, and removes the plan
-  whatever happened. The plan's directory (`/root/.r2-state`, mode 700) is outside the served `/root/runs`. Python:
+  refuses a bad name, a `$UW` on `/workspace` (the volume), a tree whose parent resolves (through a link inside
+  `$UW`) outside `$UW` or onto `/workspace`, a tree the table lacks, and a plan directory in the served runs
+  directory (`$OUT/../..`) or on `/workspace`, before anything; keeps a tree already complete at its revision; else
+  runs `r2-weights.py plan <tree>@<rev> --pin weights-r2.tsv --ttl <cap+600> --out <private dir>/plan-<tree>.json`
+  with the key in **its environment only** (never an argv) under `timeout ${UP_R2_PLAN_TIMEOUT_S:-300}`, then
+  `timeout <cap> r2-fetch.py --root $UW --plan … --skip-trees '' --status $OUT/r2-<tree>.json` without it, and
+  removes the plan whatever happened. The plan's directory (`/root/.r2-state`, mode 700) is outside the served
+  `/root/runs`.
+- *What `unset` achieves, exactly*: the key is in no child's environment (no step, cell, watchdog or server). It is
+  **not** gone from the pod: Runpod starts the container with it, so it stays in the container's initial
+  environment (PID 1's `/proc/<pid>/environ`, and the start shell's and `pod.sh`'s own initial environ), readable by
+  root on the pod, and anything running as root there could read it. `HF_TOKEN` (the Hub token) has the same
+  exposure, and fv-lab's own `volume+r2` runtime pods hold the key in their start command's and runner's environment
+  (the runner removes it from every arm's, §16.4). The R2
+  key is the store's **read-only** key (`docs/ops/runpod-secrets.md`), so what it exposes is the published weights. Python:
   the image's (`$UP/tools/bin/python`, else `python3`; standard library only), so no apt step. The cap is
   `UP_CELL_TIMEOUT_S`; the pod's `net` idle watchdog counts the fetch's own traffic, and a 28.93 GB fetch takes about
   a minute (§21.7).
@@ -3631,7 +3648,8 @@ grep -E '^(r2_key|hf_token)=' $U/box.txt; grep '^r2:' $U/steps.tsv; jq '{exit, o
 grep -E '\] (weights /fvscratch/weights: |r2 oracle-sfwan13: |oracle: sfwan13 reference )' $L/live.log
 cat $S/r2-stage.log                                                # the script side's merged root: r2_key=env, 1 fetched, exit=0
 grep -E 'runpod-pod-(created|deleted)' artifacts/fv-lab/ledger.tsv | tail -4    # both fv-lab pods created and deleted
-grep -rhoE 'FV_WEIGHTS_R2_[A-Z_]+[=":]+ *[^ "{]+' $L $U || echo "no key value in any fetched file"
+grep -rlE 'X-Amz-Signature|X-Amz-Credential|FV_WEIGHTS_R2_[A-Z_]+[=":]+ *[^ "{$]+|R2_KEY_(ID|SECRET)=[^"$ ]' $L $S $U \
+  || echo "no key value or presigned URL in any fetched file"     # fv-lab's, the script side's and the upstream run
 ```
 
 **Pass:**
@@ -3653,7 +3671,8 @@ grep -rhoE 'FV_WEIGHTS_R2_[A-Z_]+[=":]+ *[^ "{]+' $L $U || echo "no key value in
   frames-vs-ref,legacy-frames-vs-ref}.json` (each report's `status`; the codec floor's numbers read our mp4's encode,
   which may differ between pods, §20.6, but not its status); each generation arm the preset's 81 frames.
 - The ledger shows the upstream and the fv-lab runtime pod created and deleted; `fv-lab pod reap --account` lists
-  nothing; no fetched file holds a key.
+  nothing; no fetched file of the three runs (`$L`, `$S`, `$U`) holds a key value or a presigned URL (`X-Amz-Signature`
+  / `X-Amz-Credential`).
 
 **Cost** ($2.49/hr; UNVERIFIED where marked). *R2 fetch time*: 28.93 GB at the 0.52-0.96 GB/s §16.7's gold run
 measured for trees over 10 GB on PRO 6000 pods in EU-RO-1: **30-56 s on each pod that fetches**, the upstream pod
@@ -3696,29 +3715,34 @@ showed what that reads like). §21.1 did not settle it; the options were these, 
 - **C.** fv-lab's side alone against the reference (`compare-dumps` and the frame compares), no runner comparison:
   the oracle's purpose is met, §8's equality is not.
 
-**What A is.** `FV_R2_TREES="<tree>…"` on `runpod-http.sh run` / `plan` (refused for every other mode, with
-`RUNPOD_NO_VOLUME=1`, and for a family fv-lab runs, whose tier says where its trees come from):
+**What A is.** `FV_R2_TREES="<tree>…"` on `runpod-http.sh run` / `all` / `plan` (`all`: `oracle.sh`'s
+`FV_ORACLE_RUN_MODE=all`; refused for every other mode, with `RUNPOD_NO_VOLUME=1`, with a volume other than the EU
+one (`RUNPOD_VOLUME_ID`, `RUNPOD_VOLUME_NAME`, `FV_PLAN_VOLUME`: the link roots are `FV_EU_VOLUME_TREES`, which another
+volume may not hold), and for a family fv-lab runs, whose tier says where its trees come from):
 
 - *Checked before the key, a lookup or a pod* (exit 2): each tree a safe name, once, a dest of `weights-r2.tsv` (its
   revision pinned from there), neither on nor inside an EU-volume tree nor holding one (`FV_EU_VOLUME_TREES`, fv-lab's
   `TreeSources` rules); the container disk **refused, not raised**, when `FV_CONTAINER_DISK_GB` (default 120) is below
-  the trees and fv-lab's 120 GB reserve (`FV_CONTAINER_DISK_GB=149 or more` for `sfwan21-1.3b`): the body is what the
-  caller asked for, as `same FV_CONTAINER_DISK_GB` does for a tier. The idle limits default to fv-lab's
+  the trees and fv-lab's 120 GB reserve (`FV_CONTAINER_DISK_GB=149 or more` for `sfwan21-1.3b`; read in base 10, so
+  `0150` is 150): the body is what the caller asked for, as `same FV_CONTAINER_DISK_GB` does for a tier. The idle limits default to fv-lab's
   `weights::r2_idle_min` of the cell cap (115 min at 5400 s), as an `oracle-r2` pod's.
 - *The body*: `env` the two Runpod secret references of `weights::r2_env_refs`, never values.
 - *The start command*: its first line copies the key into two shell variables and unsets it, so no watchdog, file
-  server, matrix or child of theirs has it in its environment; before the matrix, `scripts/gpu/r2-stage.sh` gets it
+  server, matrix or child of theirs has it in its environment (it stays in PID 1's initial environment, readable by
+  root on the pod, as §21.2 says); before the matrix, `scripts/gpu/r2-stage.sh` gets it
   back (in its own environment only) with the merged root `$SCRATCH/weights`, the state directory `$SCRATCH/r2`
   (outside the served `$SCRATCH/runs`), the cell cap, the volume's `/workspace/weights`, fv-lab's link roots
   (`TreeSources::link_roots`, rendered on the host from `FV_EU_VOLUME_TREES`) and the `dest@rev` list, into
   `$OUT/r2-stage.log`; then the shell's copies are cleared and the matrix runs with `FV_WORK=$SCRATCH`, so its `$W`
   is `/fvscratch/weights` and its command lines are fv-lab's word for word.
-- `r2-stage.sh`: unsets the key at once (`r2_key=env|none|…` is all it prints); refuses a root or state directory on
-  `/workspace` or the volume's weights, and a tree whose parent resolves outside the root (a tree inside a link would
-  be written through it into the volume); links each link root (never over a path already there); keeps a tree
+- `r2-stage.sh`: unsets the key at once, before any command substitution or child (`r2_key=env|none|…` is all it
+  prints); refuses a root, state or status directory on `/workspace` or the volume's weights, a state directory in
+  the served directory (`<status>/../..`), and a link or tree whose parent resolves outside the root or onto the
+  volume (a tree inside a link, or overlapping link roots such as `auxiliary auxiliary/new`, would be written
+  through the first link into the volume); links each link root (never over a path already there); keeps a tree
   complete at its revision; installs python3 with apt under 600 s when the image has none (§16.4); runs
   `r2-weights.py plan --pin weights-r2.tsv --ttl <cap+600> --out <state>/plan.json` with the key in its environment
-  only, then `r2-fetch.py --root … --skip-trees '' --status $OUT/r2-fetch.json` under `timeout <cap>` without it; the
+  only, under `timeout ${FV_R2_PLAN_TIMEOUT_S:-300}`, then `r2-fetch.py --root … --skip-trees '' --status $OUT/r2-fetch.json` under `timeout <cap>` without it; the
   plan (mode 600 in a 700 directory) removed whatever happened (an exit trap too).
 - *Unset, nothing changes*: every pod body and golden byte-identical (`fv-lab-goldens.sh --check`); the golden of the
   new body is `runpod-http-oracle-sfwan13-r2.json` (`FV_FAMILY=oracle FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150
@@ -3729,9 +3753,20 @@ showed what that reads like). §21.1 did not settle it; the options were these, 
   environment holds none of it); `r2-stage.sh` with a fake python and apt-get: the key in the plan step's environment
   only and in no output, argv or file, the plan pinned, 700, removed after a failed fetch and a failed plan, fv-lab's
   links, the volume refused three ways, no key / half a key / unfilled references fetch nothing, apt when python3 is
-  missing, bad specs. Mutations caught: the start command's `unset` dropped, `r2-stage.sh`'s `unset` dropped, the key
+  missing, bad specs; overlapping link roots refused with nothing written into the volume; a hung plan killed by its
+  timeout (exit 124, plan removed, nothing fetched); a state directory in the served directory and a status directory
+  on the volume refused; the fake plan carries an `X-Amz-Signature=FAKE…` marker that no output or file the run
+  leaves (served directory, root, state, volume) may hold; `all` accepted, another volume refused, a disk of `0150`
+  read as 150. Mutations caught: the start command's `unset` dropped, `r2-stage.sh`'s `unset` dropped, the key
   passed to the fetch, the exit trap dropped, a line added to every body, the disk check dropped, the root's volume
-  check dropped.
+  check dropped; after the review (2026-10-26): the link-parent check dropped, the plan's `timeout` dropped, the
+  served-directory check dropped, the status directory's volume check dropped, the plan printed into the log, the
+  plan copied into the status directory, the plan left on a timeout.
+  `scripts/gpu/tests/upstream-r2.test.sh` (CI) holds §21.2's side; mutations caught there: `r2_key_init` moved after
+  `ensure_base` or below `HERE=$(…)`, the key not cleared after the steps, the tree-parent check dropped, the plan's
+  `timeout` dropped, the served-directory check dropped, the default plan directory moved into `$OUT` or under
+  `/root/runs`, the plan copied into `$OUT` or printed, the upstream start command's first-line capture or its
+  hand-off to `pod.sh` dropped.
 
 #### 21.9 Then: the retirement of `oracle`
 
