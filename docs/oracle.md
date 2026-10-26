@@ -101,18 +101,32 @@ host copy of its base weight (`BaseLayerWithLoRA.cpu_weight =
 weight.to("cpu")`, about 70 GB for the 35B DiT). That copy comes on top of the
 pinned, CPU-offloaded text encoder (about 66 GB). The leading suspect is the pod's
 cgroup OOM killer. The 2026-09 runs' host (EUR-IS-1) had 1511 GB, and this one had
-755 GB with the same GPU and driver (595.91.07). Runpod gives a pod a share of
-the host's RAM unless `minRAMPerGPU` is set.
+755 GB with the same GPU and driver (595.91.07). Our pod body never set
+`minRAMPerGPU`, so it got Runpod's default floor (8 GB per GPU). The RAM a pod
+actually gets is then whatever share Runpod gives it on that host.
 
-What records it now: `box.txt` has `pod_ram_limit_mib` (the cgroup limit, not
-`free`'s host total). Each cell's `cell.json` has `peak_ram_mib`,
-`ram_limit_mib` and `oom_kills` (from the cgroup's `memory.events`), and its
-`mem.log` samples the pod's RAM each second. On a start failure,
-`bench_fastvideo.py` writes each worker's exit code to `result.json`
-`worker_exits` and to stderr (-9 = SIGKILL). `FV_MIN_RAM_GB=<n>` makes
-`runpod-http.sh` ask for `minRAMPerGPU: n`, and the driver log prints the RAM
-the pod was given (`memoryInGb`). None of this changes the reference's
-arguments or numerics.
+What records it now. All memory figures come from the pod's own memory
+cgroup, resolved from `/proc/self/cgroup`. `box.txt` records the version and
+path used (`cgroup=v2 /sys/fs/cgroup ...`), so a null field can be traced, and
+`pod_ram_limit_mib`, the cgroup limit rather than `free`'s host total. Each
+cell's `cell.json` has:
+
+- `peak_ram_mib`: the cell's peak process memory, sampled each second into
+  `mem.log`. It is anon + shmem on v2 and total_rss + total_shmem on v1, so
+  pinned memory is included. Page cache is left out: a cell that reads 140 GB
+  of weights fills the cache up to the limit with no risk of an OOM kill.
+- `ram_limit_mib`.
+- `pod_peak_mib_cumulative`: the cgroup's exact peak (v2 `memory.peak`, v1
+  `memory.max_usage_in_bytes`). It covers the whole pod life so far, not this
+  cell, and includes page cache.
+- `oom_kills`: the processes the kernel OOM-killed during the cell, from
+  `memory.events`.
+
+On a start failure, `bench_fastvideo.py` writes each worker's exit code to
+`result.json` `worker_exits` and to stderr (-9 = SIGKILL).
+`FV_MIN_RAM_GB=<n>` (a whole number) makes `runpod-http.sh` ask for
+`minRAMPerGPU: n`, and the driver log prints the RAM the pod was given
+(`memoryInGb`). None of this changes the reference's arguments or numerics.
 
 ## Results: H3 turbo on H100 with the datacenter VSA kernel (2026-09-29)
 

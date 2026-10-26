@@ -35,29 +35,36 @@ def _record_worker_exits(res: dict) -> None:
     initialization failed ... See stack trace for root cause." with no stack
     trace anywhere. The exit codes say which: -9 is SIGKILL. This wraps
     wait_for_ready's failure path only; READY workers and the generation are
-    untouched.
+    untouched, and the original exception is always the one that propagates.
     """
     try:
         from fastvideo.worker.multiproc_executor import WorkerMultiprocProc
     except Exception:  # noqa: BLE001  (another executor, or a renamed module)
         return
-    original = WorkerMultiprocProc.wait_for_ready
+    original = getattr(WorkerMultiprocProc, "wait_for_ready", None)
+    if original is None:
+        return
 
     def wait_for_ready(handles):
         try:
             return original(handles)
-        except BaseException:
-            exits = []
-            for h in handles:
-                h.proc.join(timeout=30)
-                code = h.proc.exitcode
-                exits.append({"rank": h.rank, "pid": h.proc.pid, "exitcode": code})
-                why = ("SIGKILL: most likely the kernel OOM killer (host RAM; see the cell's "
-                       "cell.json oom_kills and peak_ram_mib)") if code == -9 else (
-                           "still running after 30 s" if code is None else "see the worker's log above")
-                print(f"[bench_fastvideo] worker rank {h.rank} pid {h.proc.pid} exit code {code}: {why}",
-                      file=sys.stderr, flush=True)
-            res["worker_exits"] = exits
+        except Exception:
+            try:
+                deadline = time.monotonic() + 30.0  # shared by all workers
+                exits = []
+                for h in handles:
+                    h.proc.join(timeout=max(0.0, deadline - time.monotonic()))
+                    code = h.proc.exitcode
+                    exits.append({"rank": h.rank, "pid": h.proc.pid, "exitcode": code})
+                    why = ("SIGKILL: most likely the kernel OOM killer (host RAM; see the cell's cell.json "
+                           "oom_kills, peak_ram_mib and ram_limit_mib, and mem.log)") if code == -9 else (
+                               "still running when the 30 s wait ended" if code is None
+                               else "see the worker's log above")
+                    print(f"[bench_fastvideo] worker rank {h.rank} pid {h.proc.pid} exit code {code}: {why}",
+                          file=sys.stderr, flush=True)
+                res["worker_exits"] = exits
+            except Exception:  # noqa: BLE001  (diagnostics only: never mask the original error)
+                pass
             raise
 
     WorkerMultiprocProc.wait_for_ready = staticmethod(wait_for_ready)
