@@ -370,14 +370,13 @@ pub fn launch(tier: &Tier, sha7: &str, start: &StartOptions) -> Result<Launch, P
             volume_gb: 0,
         },
         weights: tier.weights,
-        guards: Guards {
-            max_usd_per_hr: tier.max_usd_per_hr,
-            min_balance_usd: guard::MIN_BALANCE_USD,
-            cap_s: tier.wall_cap_s,
-            ready_timeout_s: guard::READY_TIMEOUT_S,
-            ready_cycles: guard::READY_CYCLES,
-            force: false,
-        },
+        guards: Guards::all(
+            tier.max_usd_per_hr,
+            guard::MIN_BALANCE_USD,
+            tier.wall_cap_s,
+            guard::READY_TIMEOUT_S,
+            guard::READY_CYCLES,
+        ),
         serverless: None,
     })
 }
@@ -1291,7 +1290,7 @@ cells = ["c"]
             l.image,
             "ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-abcdef1"
         );
-        assert_eq!(guard::check_guards(&l.guards), Ok(()));
+        assert!(guard::check_guards(&l.guards).is_ok());
         assert_eq!(guard::check_region(&l), Ok(()));
         assert!(l.args[2]
             .contains("/opt/fastvideo-rs/target/release/fv-lab run rtx6000 >\"$OUT/matrix.out\""));

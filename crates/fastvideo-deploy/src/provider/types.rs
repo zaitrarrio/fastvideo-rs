@@ -192,29 +192,189 @@ pub struct Disk {
 }
 
 /// The money and readiness guards of one launch (docs/adr/0018-fv-deploy.md §5).
+///
+/// `null` (Rust `None`) in `max_usd_per_hr`, `cap_s`, `ready_timeout_s` or
+/// `ready_cycles` means **not checked by the launcher that wrote this
+/// launch** (§10.4): fv-control's serverless endpoints check no serverless
+/// price and no worker readiness, a Runpod template launches nothing. It is
+/// never a cap or a timeout: fv-deploy's own `up` refuses a launch with any
+/// of them `null` ([`Guards::checked`]), and a ledger shows them as "not
+/// checked". The balance floor is always checked (CLAUDE.md: $8). Every
+/// field stays required in the schema: a launcher states each guard, a
+/// number or `null`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Guards {
-    /// Price cap: an offer quoted above it is never created; a created
-    /// instance billed above it is deleted at once.
-    pub max_usd_per_hr: f64,
+    /// Price cap ($/hr): an offer quoted above it is never created; a created
+    /// instance billed above it is deleted at once. `null`: not checked by
+    /// this launcher.
+    #[schemars(required, schema_with = "nullable_double")]
+    #[serde(deserialize_with = "present")]
+    pub max_usd_per_hr: Option<f64>,
     /// Balance floor: nothing is created while the account balance is below
     /// it (CLAUDE.md: $8).
     pub min_balance_usd: f64,
-    /// Wall-clock cap: the detached backstop deletes the instance this many
-    /// seconds after its creation, whatever happens to the CLI.
-    pub cap_s: u64,
-    /// An instance not ready (`/ping` 200) this long after its creation is
-    /// deleted and replaced (the owner's rule: 600 s).
-    pub ready_timeout_s: u64,
+    /// Wall-clock cap (s): the detached backstop deletes the instance this
+    /// many seconds after its creation, whatever happens to the CLI. `null`:
+    /// not checked by this launcher.
+    #[schemars(required, schema_with = "nullable_uint64")]
+    #[serde(deserialize_with = "present")]
+    pub cap_s: Option<u64>,
+    /// An instance not ready (`/ping` 200) this long (s) after its creation
+    /// is deleted and replaced (the owner's rule: 600 s). `null`: not checked
+    /// by this launcher.
+    #[schemars(required, schema_with = "nullable_uint64")]
+    #[serde(deserialize_with = "present")]
+    pub ready_timeout_s: Option<u64>,
     /// At most this many instances are created for one `up` (the owner's
     /// rule: 3), then it gives up. Every create counts, a GPU-type fallback
-    /// after a billed-over-cap delete included.
-    pub ready_cycles: u32,
+    /// after a billed-over-cap delete included. `null`: not checked by this
+    /// launcher.
+    #[schemars(required, schema_with = "nullable_uint32")]
+    #[serde(deserialize_with = "present")]
+    pub ready_cycles: Option<u32>,
     /// Lifts the upper bounds (cap ≤ 4 h, ≤ 3 cycles, ≤ 600 s readiness;
     /// `--force-guards`). The $8 floor is never lifted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force: bool,
+}
+
+/// A guard: the key must be there, its value a number or `null` (serde would
+/// read a missing `Option` field as `None`, which here means "not checked":
+/// a launcher that forgets a guard must not pass as one that states it).
+fn present<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d)
+}
+
+// A guard's schema: required, a number or `null` (schemars would make an
+// `Option` field optional, and `required` alone drops the `null`).
+fn nullable_double(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": ["number", "null"], "format": "double"})
+}
+
+fn nullable_uint64(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": ["integer", "null"], "format": "uint64", "minimum": 0})
+}
+
+fn nullable_uint32(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": ["integer", "null"], "format": "uint32", "minimum": 0})
+}
+
+/// The guards with every number present: what fv-deploy's `up` runs on
+/// ([`Guards::checked`]). Not serialized.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CheckedGuards {
+    pub max_usd_per_hr: f64,
+    pub min_balance_usd: f64,
+    pub cap_s: u64,
+    pub ready_timeout_s: u64,
+    pub ready_cycles: u32,
+    pub force: bool,
+}
+
+/// What a ledger writes for a guard `null` in the launch.
+pub const NOT_CHECKED: &str = "not checked";
+
+impl Guards {
+    /// Every guard set (what fv-deploy writes).
+    pub fn all(
+        max_usd_per_hr: f64,
+        min_balance_usd: f64,
+        cap_s: u64,
+        ready_timeout_s: u64,
+        ready_cycles: u32,
+    ) -> Self {
+        Self {
+            max_usd_per_hr: Some(max_usd_per_hr),
+            min_balance_usd,
+            cap_s: Some(cap_s),
+            ready_timeout_s: Some(ready_timeout_s),
+            ready_cycles: Some(ready_cycles),
+            force: false,
+        }
+    }
+
+    /// The names of the guards this launch leaves unchecked (`null`), in
+    /// schema order.
+    pub fn not_checked(&self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if self.max_usd_per_hr.is_none() {
+            v.push("max_usd_per_hr");
+        }
+        if self.cap_s.is_none() {
+            v.push("cap_s");
+        }
+        if self.ready_timeout_s.is_none() {
+            v.push("ready_timeout_s");
+        }
+        if self.ready_cycles.is_none() {
+            v.push("ready_cycles");
+        }
+        v
+    }
+
+    /// Every number, or the names of the ones that are `null` (fv-deploy's
+    /// `up` checks every guard: a launch another launcher wrote with "not
+    /// checked" guards is refused, never run with a made-up value).
+    pub fn checked(&self) -> Result<CheckedGuards, Vec<&'static str>> {
+        match (
+            self.max_usd_per_hr,
+            self.cap_s,
+            self.ready_timeout_s,
+            self.ready_cycles,
+        ) {
+            (Some(max_usd_per_hr), Some(cap_s), Some(ready_timeout_s), Some(ready_cycles)) => {
+                Ok(CheckedGuards {
+                    max_usd_per_hr,
+                    min_balance_usd: self.min_balance_usd,
+                    cap_s,
+                    ready_timeout_s,
+                    ready_cycles,
+                    force: self.force,
+                })
+            }
+            _ => Err(self.not_checked()),
+        }
+    }
+
+    /// The guards as a ledger shows them: each number, or "not checked"
+    /// (`null` in the launch), in schema order.
+    pub fn ledger_view(&self) -> serde_json::Value {
+        fn num<T: Into<serde_json::Value>>(v: Option<T>) -> serde_json::Value {
+            v.map_or_else(|| serde_json::Value::from(NOT_CHECKED), Into::into)
+        }
+        let mut m = serde_json::Map::new();
+        m.insert("max_usd_per_hr".into(), num(self.max_usd_per_hr));
+        m.insert("min_balance_usd".into(), self.min_balance_usd.into());
+        m.insert("cap_s".into(), num(self.cap_s));
+        m.insert("ready_timeout_s".into(), num(self.ready_timeout_s));
+        m.insert("ready_cycles".into(), num(self.ready_cycles));
+        if self.force {
+            m.insert("force".into(), true.into());
+        }
+        serde_json::Value::Object(m)
+    }
+
+    /// One line for the local ledger: `max_usd_per_hr=2.5 min_balance_usd=8
+    /// cap_s=1800 ready_timeout_s=600 ready_cycles=3`, "not-checked" for a
+    /// `null`.
+    pub fn ledger_line(&self) -> String {
+        fn word<T: std::fmt::Display>(v: Option<T>) -> String {
+            v.map_or_else(|| "not-checked".to_owned(), |x| x.to_string())
+        }
+        format!(
+            "max_usd_per_hr={} min_balance_usd={} cap_s={} ready_timeout_s={} ready_cycles={}",
+            word(self.max_usd_per_hr),
+            self.min_balance_usd,
+            word(self.cap_s),
+            word(self.ready_timeout_s),
+            word(self.ready_cycles)
+        )
+    }
 }
 
 /// A Runpod serverless queue endpoint's scaling fields.

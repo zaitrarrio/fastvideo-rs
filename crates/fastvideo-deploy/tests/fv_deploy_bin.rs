@@ -526,3 +526,64 @@ fn gcp_cli_refuses_nan_budgets_empty_ranges_and_long_static_tokens() {
     assert!(seen.lock().map(|g| g.is_empty()).unwrap_or(false));
     let _ = std::fs::remove_dir_all(&state);
 }
+
+/// C3d (ADR-0018 §10): `templates plan` prints the create bodies with no
+/// request (no key needed); `reconcile` and `release rollback --local`
+/// without a D1 token refuse before any request; `release promote` outside
+/// GitHub Actions without a GitHub token refuses to dispatch; a bad channel
+/// is refused.
+#[test]
+fn templates_plan_and_release_refusals_make_no_request() {
+    let (base, seen) = fake_runpod(100.0);
+    let image = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    let run = |args: &[&str], env: &[(&str, &str)]| {
+        let mut c = Command::new(BIN);
+        c.args(args)
+            .arg("--root")
+            .arg(repo_root())
+            .env_remove("RUNPOD_API_KEY")
+            .env_remove("FV_CF_API_TOKEN")
+            .env_remove("CLOUDFLARE_API_TOKEN")
+            .env_remove("CLOUDFLARE_API_KEY")
+            .env_remove("GH_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GITHUB_ACTIONS")
+            .env("RUNPOD_API_BASE", format!("{base}/v1"))
+            .env("FV_REGISTRY_API", &base)
+            .env("FV_GITHUB_API", &base)
+            .env("FV_D1_API_BASE", format!("{base}/client/v4"));
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        c.output().unwrap_or_else(|e| panic!("{e}"))
+    };
+    let o = run(
+        &["templates", "plan", "cuda", image, "--channel", "stable"],
+        &[],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = String::from_utf8_lossy(&o.stdout);
+    let bodies: Vec<serde_json::Value> = serde_json::Deserializer::from_str(&out)
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .unwrap_or_else(|e| panic!("{e}: {out}"));
+    let names: Vec<&str> = bodies.iter().filter_map(|b| b["name"].as_str()).collect();
+    assert_eq!(names, ["fv-serve-cuda-sls", "fv-serve-cuda-pod"]);
+    assert_eq!(bodies[0]["env"]["FV_RELEASE_CHANNEL"], "stable");
+    let o = run(&["templates", "plan", "gpu", image], &[]);
+    assert!(!o.status.success());
+
+    let o = run(&["reconcile", "--dry-run"], &[("RUNPOD_API_KEY", KEY)]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("D1 is the release history"));
+    let o = run(&["release", "rollback", "stable", "--local"], &[]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("D1 is the release history"));
+    let o = run(&["release", "promote", "abcdef0", "stable"], &[]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("needs GH_TOKEN"));
+    let o = run(&["release", "promote", "abcdef0", "Stable", "--local"], &[]);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("lower-case letters"));
+    let all = format!("{:?}", seen.lock().map(|g| g.clone()).unwrap_or_default());
+    assert_eq!(all, "[]", "no request");
+}

@@ -30,6 +30,14 @@ on:
       - "scripts/serve/runpod-pod.sh"
       - "scripts/serve/runpod-endpoint.sh"
       - "scripts/serve/tests/fv-deploy-goldens.sh"
+      # C3d (ADR-0018 §10): the release goldens run these against the mock.
+      - "scripts/serve/tests/fv-deploy-release-goldens.sh"
+      - "scripts/serve/tests/mock_api.py"
+      - "scripts/serve/runpod-templates.sh"
+      - "scripts/serve/release.sh"
+      - "scripts/serve/lib/d1.sh"
+      - "scripts/serve/lib/ghcr.sh"
+      - "deploy/d1/registry.sql"
       - "scripts/serve/vast.sh"
       - "scripts/gcp/vm.sh"
       - "scripts/gcp/lib.sh"
@@ -86,6 +94,14 @@ on:
       - "scripts/serve/runpod-pod.sh"
       - "scripts/serve/runpod-endpoint.sh"
       - "scripts/serve/tests/fv-deploy-goldens.sh"
+      # C3d (ADR-0018 §10): the release goldens run these against the mock.
+      - "scripts/serve/tests/fv-deploy-release-goldens.sh"
+      - "scripts/serve/tests/mock_api.py"
+      - "scripts/serve/runpod-templates.sh"
+      - "scripts/serve/release.sh"
+      - "scripts/serve/lib/d1.sh"
+      - "scripts/serve/lib/ghcr.sh"
+      - "deploy/d1/registry.sql"
       - "scripts/serve/vast.sh"
       - "scripts/gcp/vm.sh"
       - "scripts/gcp/lib.sh"
@@ -155,7 +171,7 @@ jobs:
       - name: Shell lint (verify-weights.sh carries a generated region)
         working-directory: .
         run: bash scripts/gpu/lint.sh
-      - name: fv-deploy payload goldens are what runpod-pod.sh / runpod-endpoint.sh / vast.sh / gcp/vm.sh send (ADR-0018 §4, §8)
+      - name: fv-deploy goldens are what runpod-pod.sh / runpod-endpoint.sh / vast.sh / gcp/vm.sh / runpod-templates.sh / release.sh send (ADR-0018 §4, §8, §10)
         working-directory: .
         run: bash scripts/serve/tests/fv-deploy-goldens.sh --check
       - name: gcp/vm.sh creates, deletes and reaps against a local mock of Compute Engine (ADR-0018 §8.3)
