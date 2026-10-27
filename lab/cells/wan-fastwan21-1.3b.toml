@@ -1,0 +1,329 @@
+# runpod-matrix.sh `wan`, its first block (docs/ports/wan.md; docs/adr/0019-fv-lab.md §22, S6): FastWan2.1 1.3B DMD
+# (3 steps 1000/757/522, 480x832x81, VSA sparsity 0.8, guidance 1; warm: one untimed generation first) and every
+# arm the script runs between its baseline `wan13-dmd` and the last arm compared with it:
+#   - wan13-dmd (VSA, the default decoder: TAEHV taew2_1 for the distilled preset) and wan13-dmd-dense, compared;
+#   - kernels-wan: `fv-gpucheck kernels --groups wan_fusion,wan_causal_attn`, ungated (it reads no weight tree, the
+#     script's bare `run_cell`); its `[PASS]` / `[FAIL]` lines echoed into the log (the script copies them without the
+#     arm's prefix, cut to 200 characters: log only, §9.4);
+#   - the kernel arms on wan13-dmd's recipe: f32act (FASTVIDEO_BF16_ACT=0, the numerics before bf16 activations),
+#     bf16act (residual + norm as two kernels), fuse (the same math fused), mxfp8 / w8a8 (FASTVIDEO_WAN_QUANT on top
+#     of fuse); each compared and lossy-gated against f32act, the fused / unfused pair compared --off-identity with
+#     an `exact` gate whose OFF arm is wan13-fuse, and the two quantized arms against fuse;
+#   - SF-Wan 1.3B at 81 frames (sf_wan_t2v_1_3b, 4 steps, shift 5): the flash block attention, its composed
+#     reference (FASTVIDEO_WAN_CAUSAL_FLASH=0) and the whole-clip masked path (FASTVIDEO_WAN_CAUSAL_AR=0);
+#   - the base Wan2.2 TI2V-5B (704x1280x121) and Wan2.1 T2V-14B (480x832x81) kernel A/B at 12 UniPC steps, guidance
+#     5: f32act, bf16act, mxfp8, each against f32act;
+#   - the full Wan VAE (and its one-frame-per-pass decode) against TAEHV, the exact-cache identity
+#     (FASTVIDEO_WAN_COND_CACHE=0 --no-text-cache: --off-identity and an `exact` gate), Sol-Attn and TeaCache.
+# One cell, not one per loop iteration: the full-VAE, no-cache, Sol and TeaCache arms are compared and gated against
+# wan13-dmd, the cell's first arm, and a compare or gate reads arms of its own cell (§9.2); every compare runs where
+# the script runs it (`after`). The script's FV_PROMPTS prompt set is not a tier setting (fv-lab ignores it, §9.4).
+# TAEHV is found through FASTVIDEO_TAE_DIR={tae}, the script's `$TAE` (the volume's auxiliary/tae when complete, else
+# the container disk's copy): each gated arm's env entry (ADR-0019 §22.4, Addition 16), so the arms read `{tae}`
+# without a `tae` file and gate on their trees only (no `tae weights missing` skip); the tier has `tae = true`, so its
+# pod's fetch-tae.sh fetches taew2_1 and taew2_2. In the `auto` decoder mode a missing taew2_1 is no failure but a
+# fall back to the Wan VAE: benchmark.json's `decoder` (`taehv` / `wan-vae`) records which decoded (§22.18). The trees
+# are R2-only since 2026-10-13 (`weights = "volume+r2"`): fastwan21-1.3b, then sfwan21-1.3b, wan22-ti2v-5b and
+# wan21-t2v-14b in turn (each dropped before the next is fetched), and fastwan21-1.3b again for the last five arms.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "wan-fastwan21-1.3b"
+description = "FastWan2.1 1.3B DMD: VSA against dense, the Wan kernel checks, the bf16 / fused / MXFP8 / W8A8 kernel arms with lossy and exact gates, SF-Wan 1.3B's flash, composed and whole-clip attention at 81 frames, the TI2V-5B and T2V-14B kernel A/B at 12 steps, the full VAE against TAEHV, the exact-cache identity, Sol-Attn and TeaCache"
+
+[workload]
+model = "wan kernels"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; each recipe's canvas and steps are in its argv (FastWan2.1 1.3B: the preset's 480x832x81, 3 DMD steps; SF-Wan 81 frames; the base 5B 704x1280x121 and 14B 480x832x81 at 12 UniPC steps)"
+
+[lists]
+wan_common = ["--weights", "{weights}/fastwan21-1.3b", "--prompt", "{prompt}", "--seed", "{seed}", "--warm"]
+sf_common = ["--weights", "{weights}/sfwan21-1.3b", "--preset", "sf_wan_t2v_1_3b", "--steps", "4", "--flow-shift", "5",
+  "--prompt", "{prompt}", "--seed", "{seed}", "--warm"]
+base_12 = ["--unipc", "--steps", "12", "--guidance", "5", "--flow-shift", "5"]
+base_5b = ["--weights", "{weights}/wan22-ti2v-5b", "--preset", "wan_2_2_ti2v_5b"]
+geo_5b = ["--height", "704", "--width", "1280", "--num-frames", "121", "--prompt", "{prompt}", "--seed", "{seed}", "--warm"]
+base_14b = ["--weights", "{weights}/wan21-t2v-14b", "--preset", "wan_t2v_14b"]
+geo_14b = ["--height", "480", "--width", "832", "--num-frames", "81", "--prompt", "{prompt}", "--seed", "{seed}", "--warm"]
+
+# Baseline: VSA (the checkpoint's to_gate_compress), the default decoder.
+[[arm]]
+name = "wan13-dmd"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "{@wan_common}", "--clip-dir", "{runs}/{arm}/frames"]
+
+# Dense attention, same checkpoint (the gates unused).
+[[arm]]
+name = "wan13-dmd-dense"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "wan", "gen", "{@wan_common}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "kernels-wan"
+argv = ["--out", "{runs}/{arm}/gpucheck-out", "kernels", "--groups", "wan_fusion,wan_causal_attn"]
+echo = ["[PASS]", "[FAIL]"]
+
+[[arm]]
+name = "wan13-f32act"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=0", "FASTVIDEO_WAN_QUANT=off"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "{@wan_common}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan13-bf16act"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=1", "FASTVIDEO_WAN_FUSE=0", "FASTVIDEO_WAN_QUANT=off"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "{@wan_common}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan13-fuse"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=1", "FASTVIDEO_WAN_FUSE=1", "FASTVIDEO_WAN_QUANT=off"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "{@wan_common}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan13-mxfp8"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=1", "FASTVIDEO_WAN_FUSE=1", "FASTVIDEO_WAN_QUANT=mxfp8"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "{@wan_common}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan13-w8a8"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=1", "FASTVIDEO_WAN_FUSE=1", "FASTVIDEO_WAN_QUANT=w8a8"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "{@wan_common}", "--clip-dir", "{runs}/{arm}/frames"]
+
+# SF-Wan 1.3B as FastVideo generates it: 3-frame blocks through the KV cache, 4 DMD steps (Self-Forcing scheduler,
+# shift 5), guidance 1, 480x832, 81 frames; the flash block attention against its composed reference (f32 scores and
+# softmax) and the whole-clip masked path.
+[[arm]]
+name = "sfwan13-81f-flash"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_CAUSAL_FLASH=1"]
+argv = ["--mode", "fast", "wan", "gen", "{@sf_common}", "--num-frames", "81", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "sfwan13-81f-composed"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_CAUSAL_FLASH=0"]
+argv = ["--mode", "fast", "wan", "gen", "{@sf_common}", "--num-frames", "81", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "sfwan13-81f-wholeclip"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_CAUSAL_AR=0"]
+argv = ["--mode", "fast", "wan", "gen", "{@sf_common}", "--num-frames", "81", "--clip-dir", "{runs}/{arm}/frames"]
+
+# Base Wan2.2 TI2V-5B and Wan2.1 T2V-14B, UniPC with guidance 5 over 12 steps (not the 50-step official recipe: an
+# A/B of the kernel arms, the same schedule on every arm); f32act the pre-bf16 numerics, bf16act the default, mxfp8
+# FASTVIDEO_WAN_QUANT.
+[[arm]]
+name = "wan5b-f32act"
+gate = "wan22-ti2v-5b"
+trees = ["wan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=0", "FASTVIDEO_WAN_QUANT=off"]
+argv = ["--mode", "fast", "wan", "gen", "{@base_5b}", "{@base_12}", "{@geo_5b}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan5b-bf16act"
+gate = "wan22-ti2v-5b"
+trees = ["wan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=1", "FASTVIDEO_WAN_QUANT=off"]
+argv = ["--mode", "fast", "wan", "gen", "{@base_5b}", "{@base_12}", "{@geo_5b}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan5b-mxfp8"
+gate = "wan22-ti2v-5b"
+trees = ["wan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=1", "FASTVIDEO_WAN_QUANT=mxfp8"]
+argv = ["--mode", "fast", "wan", "gen", "{@base_5b}", "{@base_12}", "{@geo_5b}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan14b-f32act"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=0", "FASTVIDEO_WAN_QUANT=off"]
+argv = ["--mode", "fast", "wan", "gen", "{@base_14b}", "{@base_12}", "{@geo_14b}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan14b-bf16act"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=1", "FASTVIDEO_WAN_QUANT=off"]
+argv = ["--mode", "fast", "wan", "gen", "{@base_14b}", "{@base_12}", "{@geo_14b}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan14b-mxfp8"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_BF16_ACT=1", "FASTVIDEO_WAN_QUANT=mxfp8"]
+argv = ["--mode", "fast", "wan", "gen", "{@base_14b}", "{@base_12}", "{@geo_14b}", "--clip-dir", "{runs}/{arm}/frames"]
+
+# The opt-out to the full Wan VAE (2 latent frames per pass by default), and the old one-frame-per-pass decode.
+[[arm]]
+name = "wan13-dmd-fullvae"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "{@wan_common}", "--full-vae", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan13-dmd-fullvae-chunk1"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "--vsa", "--vae-chunk", "1", "wan", "gen", "{@wan_common}", "--full-vae", "--clip-dir",
+  "{runs}/{arm}/frames"]
+
+# Exact switches off: text K/V, text and time embeddings recomputed every forward, every prompt encoded. Must be
+# byte-identical to the baseline (compare --off-identity; benchmark.json frames_sha256).
+[[arm]]
+name = "wan13-dmd-nocache"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_COND_CACHE=0"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "{@wan_common}", "--no-text-cache", "--clip-dir", "{runs}/{arm}/frames"]
+
+# Lossy arms, never default; LPIPS against the baseline. Sol-Attn on 1.3B (tau 1.0, layer 0 dense, Morton3D;
+# replaces VSA), and TeaCache4Wan2.1 1.3B (poly-rescaled rel-L1 on the latents, thresh 0.08).
+[[arm]]
+name = "wan13-dmd-sol"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_SOL_ATTN=1"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "{@wan_common}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan13-dmd-teacache"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_TEACACHE=1"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "{@wan_common}", "--clip-dir", "{runs}/{arm}/frames"]
+
+# VSA against dense.
+[[compare]]
+baseline = "wan13-dmd"
+candidate = "wan13-dmd-dense"
+after = "wan13-dmd-dense"
+
+# Every kernel arm against f32act, then the fusion's identity, then the quantized arms against fuse.
+[[compare]]
+baseline = "wan13-f32act"
+candidate = "wan13-bf16act"
+after = "wan13-w8a8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan13-f32act"
+candidate = "wan13-fuse"
+after = "wan13-w8a8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan13-f32act"
+candidate = "wan13-mxfp8"
+after = "wan13-w8a8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan13-f32act"
+candidate = "wan13-w8a8"
+after = "wan13-w8a8"
+gate = { kind = "lossy" }
+
+# The fusion is exact: its OFF identity is the fused / unfused pair itself.
+[[compare]]
+baseline = "wan13-bf16act"
+candidate = "wan13-fuse"
+args = ["--off-identity"]
+after = "wan13-w8a8"
+gate = { kind = "exact", off = "wan13-fuse" }
+
+[[compare]]
+baseline = "wan13-fuse"
+candidate = "wan13-mxfp8"
+after = "wan13-w8a8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan13-fuse"
+candidate = "wan13-w8a8"
+after = "wan13-w8a8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "sfwan13-81f-composed"
+candidate = "sfwan13-81f-flash"
+after = "sfwan13-81f-wholeclip"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "sfwan13-81f-flash"
+candidate = "sfwan13-81f-wholeclip"
+after = "sfwan13-81f-wholeclip"
+
+[[compare]]
+baseline = "wan5b-f32act"
+candidate = "wan5b-bf16act"
+after = "wan5b-mxfp8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan5b-f32act"
+candidate = "wan5b-mxfp8"
+after = "wan5b-mxfp8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan14b-f32act"
+candidate = "wan14b-bf16act"
+after = "wan14b-mxfp8"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan14b-f32act"
+candidate = "wan14b-mxfp8"
+after = "wan14b-mxfp8"
+gate = { kind = "lossy" }
+
+# TAEHV (the default) against the full VAE: LPIPS / PSNR / sharpness; the one-frame-per-pass decode against the
+# default full-VAE decode.
+[[compare]]
+baseline = "wan13-dmd-fullvae"
+candidate = "wan13-dmd"
+after = "wan13-dmd-fullvae-chunk1"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan13-dmd-fullvae-chunk1"
+candidate = "wan13-dmd-fullvae"
+after = "wan13-dmd-fullvae-chunk1"
+
+[[compare]]
+baseline = "wan13-dmd"
+candidate = "wan13-dmd-nocache"
+args = ["--off-identity"]
+after = "wan13-dmd-nocache"
+gate = { kind = "exact" }
+
+[[compare]]
+baseline = "wan13-dmd"
+candidate = "wan13-dmd-sol"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan13-dmd"
+candidate = "wan13-dmd-teacache"
+gate = { kind = "lossy" }

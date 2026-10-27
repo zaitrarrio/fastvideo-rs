@@ -245,6 +245,131 @@ fn the_mmaudio_tier_reads_its_three_trees_from_r2_within_its_disk() {
     assert_eq!(tier.container_disk_gb, 180);
 }
 
+/// `wan` (ADR-0019 §22, S6): every arm gated on a verify-weights.sh cell
+/// whose trees are all R2-only (none on the EU volume), but four ungated
+/// ones (kernels-wan and the three compare-dumps); in the script's arm order
+/// fv-lab's R2 plan (drop what the arm does not read, then fetch, §16.4)
+/// makes eleven fetches, 428.10 GB, with at most wan21-t2v-14b's 80.41 GB on
+/// the container disk at once, which the tier's 210 GB holds with the 120 GB
+/// reserve. Derived from weights-r2.tsv's bytes, not typed in: each switch
+/// of tree is one fetch of the new tree.
+#[test]
+fn the_wan_tier_fetches_its_trees_in_turn_within_its_disk() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier("wan").expect("wan");
+    assert_eq!(tier.weights, TierWeights::VolumeR2);
+    assert_eq!(
+        tier.min_ram_gb,
+        Some(256),
+        "the 14B arms' host load, as gold's"
+    );
+    let verify = read("scripts/gpu/verify-weights.sh");
+    let cells_line = verify
+        .split("CELLS=(")
+        .nth(1)
+        .and_then(|r| r.split(')').next())
+        .expect("verify-weights.sh CELLS=(…)");
+    let gates: BTreeSet<&str> = cells_line.split_whitespace().collect();
+    let sources = TreeSources::load(&repo_root()).expect("volumes.sh, weights-r2.tsv");
+    let mut arms = Vec::new();
+    let mut ungated = Vec::new();
+    for c in tier.all_cells().filter_map(|c| lab.cells.get(c)) {
+        for a in &c.arms {
+            let Some(gate) = &a.gate else {
+                assert!(a.trees.is_empty(), "{}: ungated with trees", a.name);
+                ungated.push(a.name.as_str());
+                continue;
+            };
+            assert!(gates.contains(gate.as_str()), "{}: gate {gate}", a.name);
+            assert_eq!(
+                a.trees,
+                std::slice::from_ref(gate),
+                "{}: its gate's one tree",
+                a.name
+            );
+            for t in &a.trees {
+                assert!(
+                    matches!(sources.source(t), Source::R2(_)),
+                    "{}: {t} in R2 only",
+                    a.name
+                );
+            }
+            arms.push((a.name.as_str(), a.trees.as_slice()));
+        }
+    }
+    assert_eq!(arms.len(), 45, "the script's 45 gated arms");
+    assert_eq!(
+        ungated,
+        [
+            "kernels-wan",
+            "wan5b-oracle-diff",
+            "wan5b-oracle-exact-diff",
+            "fw22-oracle-diff"
+        ]
+    );
+    // The expected sequence of fetches: a new tree whenever the arm's tree
+    // differs from the one before (each arm reads one tree).
+    let mut fetches: Vec<&str> = Vec::new();
+    for (_, trees) in &arms {
+        if fetches.last() != Some(&trees[0].as_str()) {
+            fetches.push(trees[0].as_str());
+        }
+    }
+    assert_eq!(
+        fetches,
+        [
+            "fastwan21-1.3b",
+            "sfwan21-1.3b",
+            "wan22-ti2v-5b",
+            "wan21-t2v-14b",
+            "fastwan21-1.3b",
+            "wan21-t2v-14b",
+            "wan22-ti2v-5b",
+            "fastwan22-ti2v-5b",
+            "wan22-ti2v-5b",
+            "fastwan22-ti2v-5b",
+            "sfwan21-1.3b"
+        ]
+    );
+    let bytes = |t: &str| sources.r2.get(t).map(|r| r.bytes).expect("an R2 tree");
+    let plan = WeightsPlan::new(&sources, &arms).expect("its R2 trees");
+    let fetched: Vec<&str> = plan
+        .arms
+        .iter()
+        .flat_map(|(_, w)| w.fetch.iter().map(|t| t.dest.as_str()))
+        .collect();
+    assert_eq!(fetched, fetches, "one fetch per switch, nothing else");
+    // Each fetch drops the tree before it, so one tree at a time.
+    for (_, w) in &plan.arms {
+        assert!(w.fetch.len() <= 1 && w.drop.len() <= 1, "{w:?}");
+    }
+    assert_eq!(
+        plan.fetch_bytes,
+        fetches.iter().map(|t| bytes(t)).sum::<u64>()
+    );
+    assert_eq!(plan.fetch_bytes, 428_103_503_172, "428.10 GB");
+    assert_eq!(plan.peak_bytes, bytes("wan21-t2v-14b"));
+    assert_eq!(plan.peak_bytes, 80_406_918_983, "80.41 GB");
+    let peak_gb = plan.peak_bytes.div_ceil(1_000_000_000);
+    assert!(u64::from(tier.container_disk_gb) >= peak_gb + DISK_RESERVE_GB);
+    assert_eq!(tier.container_disk_gb, 210);
+    // The GPU check's arms (§22.18): two trees, one after the other, 53.41 GB;
+    // the script side stages both at once (174 GB with the reserve).
+    let check: Vec<(&str, &[String])> = arms
+        .iter()
+        .copied()
+        .filter(|(n, _)| ["wan13-dmd", "wan13-dmd-dense", "cli-fw22", "engine-fw22"].contains(n))
+        .collect();
+    let p = WeightsPlan::new(&sources, &check).expect("the check's trees");
+    assert_eq!(
+        p.fetch_bytes,
+        bytes("fastwan21-1.3b") + bytes("fastwan22-ti2v-5b")
+    );
+    assert_eq!(p.fetch_bytes, 53_413_890_791);
+    assert_eq!(p.peak_bytes, bytes("fastwan21-1.3b"));
+    assert_eq!(p.fetch_bytes.div_ceil(1_000_000_000) + DISK_RESERVE_GB, 174);
+}
+
 #[test]
 fn every_tae_file_is_one_fetch_tae_sh_fetches() {
     // The pod's start command runs fetch-tae.sh (the tier's `tae = true`), and
@@ -286,8 +411,18 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
                 .map(move |a| (t.name.as_str(), a))
         })
         .collect();
+    let wan: Vec<(&str, &str)> = readers
+        .iter()
+        .copied()
+        .filter(|(t, _)| *t == "wan")
+        .collect();
+    let others: Vec<(&str, &str)> = readers
+        .iter()
+        .copied()
+        .filter(|(t, _)| *t != "wan")
+        .collect();
     assert_eq!(
-        readers,
+        others,
         [
             ("sfstream", "sfstream-main"),
             ("sfstream", "sfstream-10min"),
@@ -300,6 +435,27 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
     // sfstream's arms read the directory; `wan stream` reads taew2_1 in it,
     // and so does mmaudio's `wan gen` (the distilled presets' TAEHV).
     assert!(fetch.contains("\nfetch taew2_1.safetensors "));
+    // wan (ADR-0019 §22, S6): each of its 45 gated arms reads the directory
+    // (FASTVIDEO_TAE_DIR={tae}), the oracle arms taew2_2 in it too; the `auto`
+    // decoder of the distilled presets looks for taew2_1 there, the Wan 2.2
+    // latent space (wan5b-taehv, fw22-taehv, the oracle arms) for taew2_2,
+    // and fetch-tae.sh fetches both.
+    let wan_tier = lab.tier("wan").expect("wan");
+    assert!(wan_tier.tae);
+    let gated: Vec<&str> = wan_tier
+        .all_cells()
+        .filter_map(|c| lab.cells.get(c))
+        .flat_map(|c| &c.arms)
+        .filter(|a| a.gate.is_some())
+        .map(|a| a.name.as_str())
+        .collect();
+    assert_eq!(gated.len(), 45);
+    assert_eq!(
+        wan.iter().map(|(_, a)| *a).collect::<Vec<_>>(),
+        gated,
+        "every gated wan arm, none of the ungated four"
+    );
+    assert!(fetch.contains("\nfetch taew2_2.safetensors "));
 }
 
 #[test]
@@ -309,8 +465,8 @@ fn every_tae_file_a_tae_dir_arm_names_is_one_fetch_tae_sh_fetches() {
     // tier's `tae = true`) tries to provide what it reads. Every
     // `{tae}/<file>` such an arm names, in any tier (cells and extra cells),
     // in `env` or the spliced argv, must then be a file fetch-tae.sh fetches.
-    // (`wan`'s `--taehv {tae}/taew2_2.safetensors`, S6, needs taew2_2 added
-    // to fetch-tae.sh first.)
+    // (`wan`'s oracle arms read `--taehv {tae}/taew2_2.safetensors`, which
+    // fetch-tae.sh fetches since S6.)
     fn tae_files(s: &str) -> Vec<&str> {
         let mut out = Vec::new();
         let mut rest = s;
@@ -350,8 +506,8 @@ fn every_tae_file_a_tae_dir_arm_names_is_one_fetch_tae_sh_fetches() {
         }
     }
     assert!(
-        readers_seen >= 4,
-        "sfstream's two arms and mmaudio's two Wan arms at least"
+        readers_seen >= 4 + 45,
+        "sfstream's two arms, mmaudio's two Wan arms and wan's 45 at least"
     );
 }
 

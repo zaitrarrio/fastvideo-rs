@@ -16,7 +16,11 @@
 #     values) for an r2:<tree> step whatever whitespace separates the steps,
 #     none without one, beside the Hub token's;
 #   - scripts/gpu/oracle.sh gives sfwan13 its r2 step and 180 GB, as
-#     lab/upstream.toml's target.
+#     lab/upstream.toml's target;
+#   - upstream/oracle.sh's oracle_wan22 / oracle_fastwan22 read their tree
+#     from $UW when the r2 step completed it, else the volume's (ADR-0019 §22,
+#     S6, as oracle_sfwan's §21.2), and lab/upstream.toml gives their targets
+#     the r2 trees and the 210 GB disk.
 #
 #   bash scripts/gpu/tests/upstream-r2.test.sh
 set -euo pipefail
@@ -261,6 +265,34 @@ grep -qx '  rt_r2=sfwan21-1.3b' "$ROOT/scripts/gpu/oracle.sh" && grep -qx '  rt_
   && ok "oracle.sh: its runtime pod reads sfwan13's tree from R2 (FV_R2_TREES, 150 GB)" || bad "oracle.sh: the runtime side's FV_R2_TREES"
 grep -qF 'r2 = ["sfwan21-1.3b"]' "$ROOT/lab/upstream.toml" && grep -qx 'container_disk_gb = 180' "$ROOT/lab/upstream.toml" \
   && ok "lab/upstream.toml: the same tree and disk" || bad "lab/upstream.toml: sfwan13's r2 / disk"
+
+# upstream/oracle.sh's Wan 2.2 TI2V-5B references (ADR-0019 §22, S6): the
+# functions cut from the script, oracle_cell stubbed to print its argv.
+ORA="$ROOT/scripts/gpu/upstream/oracle.sh"
+: >"$TMP/ora.sh"
+for fn in oracle_wan22 oracle_fastwan22; do
+  sed -n "/^$fn() {\$/,/^}\$/p" "$ORA" >>"$TMP/ora.sh"
+  grep -q "^$fn() {\$" "$TMP/ora.sh" || { echo "upstream-r2: no $fn in upstream/oracle.sh" >&2; exit 2; }
+done
+wan_model() { # <fn> <uw>: the --model its oracle_cell gets
+  env -i PATH="$PATH" bash -c '. "$1"; oracle_cell() { local p=""; for a in "$@"; do [[ "$p" == --model ]] && echo "$a"; p="$a"; done; }
+    W=/workspace/weights UW="$2" UP=/up HERE=/h; "$3"' _ "$TMP/ora.sh" "$2" "$1"
+}
+for c in "oracle_wan22 wan22-ti2v-5b" "oracle_fastwan22 fastwan22-ti2v-5b"; do
+  read -r fn tree <<<"$c"
+  rm -rf "$TMP/uww"; mkdir -p "$TMP/uww/$tree"
+  [[ "$(wan_model "$fn" "$TMP/uww")" == "/workspace/weights/$tree" ]] \
+    && ok "$fn: the volume's $tree without a complete \$UW copy" || bad "$fn: without \$UW: $(wan_model "$fn" "$TMP/uww")"
+  : >"$TMP/uww/$tree/.complete"
+  [[ "$(wan_model "$fn" "$TMP/uww")" == "$TMP/uww/$tree" ]] \
+    && ok "$fn: \$UW/$tree once its r2 step completed it" || bad "$fn: with \$UW: $(wan_model "$fn" "$TMP/uww")"
+done
+for t in "wan22-ti2v wan22-ti2v-5b" "fastwan22-ti2v fastwan22-ti2v-5b"; do
+  read -r target tree <<<"$t"
+  blk="$(awk -v n="name = \"$target\"" '$0 == n { f = 1; next } f && /^\[/ { exit } f' "$ROOT/lab/upstream.toml")"
+  grep -qx "r2 = \[\"$tree\"\]" <<<"$blk" && grep -qx 'container_disk_gb = 210' <<<"$blk" && grep -qx 'steps = \[\]' <<<"$blk" \
+    && ok "lab/upstream.toml: $target fetches $tree on 210 GB" || bad "lab/upstream.toml: $target: $blk"
+done
 
 if (( fail )); then echo "upstream-r2: FAILED" >&2; exit 1; fi
 echo "upstream-r2: all ok"

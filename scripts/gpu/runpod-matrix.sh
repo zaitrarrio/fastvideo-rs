@@ -38,11 +38,9 @@
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
 # bash scripts/gpu/runpod-matrix.sh hd (or any family). A dry run fetches
-# no weights, references or baseline; but `wan` (and `sfwan` through it)
-# still runs fetch_taehv.sh when $TAE lacks taew2_1 (45 MB from GitHub into
-# $TAE; a `WARN` line when offline), until its slice (S6) skips it as
-# `sfstream`'s does since S4 and `mmaudio`'s since S5 (ADR-0019 §22.13,
-# §22.15). With
+# no weights, references or baseline, and no TAE file: `sfstream` (since
+# S4), `mmaudio` (S5) and `wan` (S6; `sfwan` through it) skip their
+# fetch_taehv.sh in a dry run (ADR-0019 §22.13, §22.15, §22.17). With
 # FV_DRY_RUN_GATES=<file> it appends one line per gated cell ("arm", its
 # verify-weights.sh cell, -) and per promotion gate ("gate", kind, OFF arm
 # or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh) when a
@@ -579,19 +577,42 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
       --warm
       "${PROMPT_ARGS[@]}"
     )
+    # The fv-lab tier `wan` is this branch (lab/cells/wan-*.toml, six cells;
+    # docs/adr/0019-fv-lab.md §22, S6), held to its dry run by
+    # fv-lab-goldens.sh; it refuses FV_SFWAN_CELLS (sfwan's pick of these
+    # arms, --cells there; knobs::SCRIPT_KNOBS). Since S6, in lockstep with
+    # the tier (§22.4, Addition 16: `{tae}` without a TAE gate):
+    #   - FASTVIDEO_TAE_DIR="$TAE" is each gated arm's own env entry, first,
+    #     not an `export` before the arms, so the dry run shows it (the same
+    #     value reaches the same 45 commands; every other command no longer
+    #     carries it: the four ungated ones (kernels-wan, the three
+    #     compare-dumps) and the 29 compare-clips and 20 gate runs, whose
+    #     reports' env then lacks it; none reads a TAE, and
+    #     fv-lab-compare-runs.sh reads their status, not their env);
+    #   - engine-fw22 passes no --tae-dir (as serve-engine's engine arms since
+    #     S3): the engine then takes <weights root>/auxiliary/tae, which is
+    #     $TAE whenever the volume's auxiliary/tae is complete, and its
+    #     wan-turbo recipe (fastwan22-ti2v-5b) decodes with the full Wan VAE,
+    #     which never searches a TAE directory;
+    #   - the taew2_1 / taew2_2 fetch below (fetch_taehv.sh) is skipped in a
+    #     dry run, which fetched them into $TAE before (a real run is
+    #     unchanged).
+    # fv-lab's tier has no such per-family fetch: its pod's start command runs
+    # fetch-tae.sh (`tae = true`, as runpod-http.sh's does for this branch;
+    # taeh3, taeltx2_3_wide, taew2_1 and taew2_2) into the container disk's
+    # tae/, which is $TAE only when the volume's copy is incomplete.
     # The distilled presets decode through TAEHV when taew2_1 is found
     # (FASTVIDEO_TAE_DIR): fetch it onto the container disk once.
     TAEW="$TAE/taew2_1.safetensors"
-    if [[ ! -f "$TAEW" || ! -f "$TAE/taew2_2.safetensors" ]]; then
+    if [[ "$DRY_RUN" != 1 && ( ! -f "$TAEW" || ! -f "$TAE/taew2_2.safetensors" ) ]]; then
       bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
         || log "WARN: taew2_1 fetch failed (tae-fetch.log); distilled cells decode with the Wan VAE"
     fi
-    export FASTVIDEO_TAE_DIR="$TAE"
     # Baseline: VSA (the checkpoint's to_gate_compress), the default decoder.
-    gated_cell wan13-dmd fastwan21-1.3b \
+    gated_cell wan13-dmd fastwan21-1.3b env FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --clip-dir "$RUNS/wan13-dmd/frames"
     # Dense attention, same checkpoint (the gates unused).
-    gated_cell wan13-dmd-dense fastwan21-1.3b \
+    gated_cell wan13-dmd-dense fastwan21-1.3b env FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast wan gen "${wan_common[@]}" --clip-dir "$RUNS/wan13-dmd-dense/frames"
     compare_cells wan13-dmd wan13-dmd-dense
     # Kernel arms, same recipe as wan13-dmd (VSA). wan13-f32act is the
@@ -608,7 +629,7 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     wan_arm() {
       local name="$1"
       shift
-      gated_cell "$name" fastwan21-1.3b env "$@" \
+      gated_cell "$name" fastwan21-1.3b env FASTVIDEO_TAE_DIR="$TAE" "$@" \
         "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --clip-dir "$RUNS/$name/frames"
     }
     wan_arm wan13-f32act FASTVIDEO_BF16_ACT=0 FASTVIDEO_WAN_QUANT=off
@@ -646,7 +667,7 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     sf_arm() {
       local name="$1" frames="$2"
       shift 2
-      gated_cell "$name" sfwan21-1.3b env "$@" \
+      gated_cell "$name" sfwan21-1.3b env FASTVIDEO_TAE_DIR="$TAE" "$@" \
         "$BIN" --mode fast wan gen "${sf_common[@]}" --num-frames "$frames" --clip-dir "$RUNS/$name/frames"
     }
     sf_arm sfwan13-81f-flash 81 FASTVIDEO_WAN_CAUSAL_FLASH=1
@@ -662,7 +683,7 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     base_arm() {
       local name="$1" wcell="$2" preset="$3" h="$4" w="$5" f="$6"
       shift 6
-      gated_cell "$name" "$wcell" env "$@" \
+      gated_cell "$name" "$wcell" env FASTVIDEO_TAE_DIR="$TAE" "$@" \
         "$BIN" --mode fast wan gen --weights "$W/$wcell" --preset "$preset" \
           --unipc --steps 12 --guidance 5 --flow-shift 5 \
           --height "$h" --width "$w" --num-frames "$f" \
@@ -681,10 +702,10 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     done
     # The opt-out to the full Wan VAE (2 latent frames per pass by default),
     # and the old one-frame-per-pass decode.
-    gated_cell wan13-dmd-fullvae fastwan21-1.3b \
+    gated_cell wan13-dmd-fullvae fastwan21-1.3b env FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --full-vae \
         --clip-dir "$RUNS/wan13-dmd-fullvae/frames"
-    gated_cell wan13-dmd-fullvae-chunk1 fastwan21-1.3b \
+    gated_cell wan13-dmd-fullvae-chunk1 fastwan21-1.3b env FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast --vsa --vae-chunk 1 wan gen "${wan_common[@]}" --full-vae \
         --clip-dir "$RUNS/wan13-dmd-fullvae-chunk1/frames"
     # TAEHV (the default) against the full VAE: LPIPS / PSNR / sharpness.
@@ -695,7 +716,7 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # forward, every prompt encoded. Must be byte-identical to the baseline
     # (compare --off-identity; benchmark.json frames_sha256).
     gated_cell wan13-dmd-nocache fastwan21-1.3b \
-      env FASTVIDEO_WAN_COND_CACHE=0 \
+      env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_COND_CACHE=0 \
       "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --no-text-cache \
         --clip-dir "$RUNS/wan13-dmd-nocache/frames"
     compare_cells wan13-dmd wan13-dmd-nocache --off-identity
@@ -703,12 +724,12 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # Lossy arms, never default; LPIPS against the baseline.
     # Sol-Attn on 1.3B (tau 1.0, layer 0 dense, Morton3D; replaces VSA).
     gated_cell wan13-dmd-sol fastwan21-1.3b \
-      env FASTVIDEO_WAN_SOL_ATTN=1 \
+      env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_SOL_ATTN=1 \
       "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" \
         --clip-dir "$RUNS/wan13-dmd-sol/frames"
     # TeaCache4Wan2.1 1.3B (poly-rescaled rel-L1 on the latents, thresh 0.08).
     gated_cell wan13-dmd-teacache fastwan21-1.3b \
-      env FASTVIDEO_TEACACHE=1 \
+      env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_TEACACHE=1 \
       "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" \
         --clip-dir "$RUNS/wan13-dmd-teacache/frames"
     for arm in sol teacache; do
@@ -725,13 +746,13 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     one=(--prompt "$PROMPT" --seed "$SEED")
     w14=(--weights "$W/wan21-t2v-14b" --preset wan_t2v_14b --unipc --guidance 5.0
       --flow-shift 3.0 "${one[@]}")
-    gated_cell wan14 wan21-t2v-14b \
+    gated_cell wan14 wan21-t2v-14b env FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast wan gen "${w14[@]}" --steps 50 --clip-dir "$RUNS/wan14/frames"
     # Identity of the exact caches on 14B (CFG batch, 40 blocks): 4 steps each way.
-    gated_cell wan14-4step wan21-t2v-14b \
+    gated_cell wan14-4step wan21-t2v-14b env FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast wan gen "${w14[@]}" --steps 4 --clip-dir "$RUNS/wan14-4step/frames"
     gated_cell wan14-4step-nocache wan21-t2v-14b \
-      env FASTVIDEO_WAN_COND_CACHE=0 \
+      env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_COND_CACHE=0 \
       "$BIN" --mode fast wan gen "${w14[@]}" --steps 4 --no-text-cache \
         --clip-dir "$RUNS/wan14-4step-nocache/frames"
     compare_cells wan14-4step wan14-4step-nocache --off-identity
@@ -740,16 +761,16 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # (tau 1.0, 10 dense forwards, layer 0 dense, Morton3D); and each alone,
     # plus the Sol TeaCache preset.
     gated_cell wan14-easycache wan21-t2v-14b \
-      env FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
+      env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
       "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-easycache/frames"
     gated_cell wan14-teacache wan21-t2v-14b \
-      env FASTVIDEO_WAN_SOL_CACHE=teacache \
+      env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_SOL_CACHE=teacache \
       "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-teacache/frames"
     gated_cell wan14-sol wan21-t2v-14b \
-      env FASTVIDEO_WAN_SOL_ATTN=1 \
+      env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_SOL_ATTN=1 \
       "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-sol/frames"
     gated_cell wan14-fullstack wan21-t2v-14b \
-      env FASTVIDEO_WAN_SOL_ATTN=1 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
+      env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_SOL_ATTN=1 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
       "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-fullstack/frames"
     for arm in easycache teacache sol fullstack; do
       compare_cells wan14 "wan14-$arm"
@@ -765,11 +786,11 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
       target=wan22-ti2v
       ref="$SCRATCH/oracle-ref/$target"
       if oracle_fetch "$target" "$ref"; then
-        gated_cell wan5b-oracle wan22-ti2v-5b \
+        gated_cell wan5b-oracle wan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" \
           "$BIN" --mode fast --keep-going wan oracle --weights "$W/wan22-ti2v-5b" --reference "$ref/dump" \
             --dump-out "$RUNS/wan5b-oracle-dump" --taehv "$TAE/taew2_2.safetensors"
         oracle_diff wan5b-oracle-diff "$ref/dump" "$RUNS/wan5b-oracle-dump"
-        gated_cell wan5b-oracle-exact wan22-ti2v-5b \
+        gated_cell wan5b-oracle-exact wan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" \
           "$BIN" --mode exact --keep-going wan oracle --weights "$W/wan22-ti2v-5b" --reference "$ref/dump" \
             --dump-out "$RUNS/wan5b-oracle-exact-dump" --skip-dit
         oracle_diff wan5b-oracle-exact-diff "$ref/dump" "$RUNS/wan5b-oracle-exact-dump"
@@ -788,12 +809,12 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     fixtures="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
     ti2v=(--weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc --steps 50 --guidance 5.0
       --flow-shift 5.0 --fps 24 --negative "$wan_neg_cn" --seed "$SEED" --warm)
-    gated_cell wan5b wan22-ti2v-5b \
+    gated_cell wan5b wan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
         --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b/frames"
     # TAEHV (taew2_2, opt-in for the base checkpoint) on the same recipe.
     gated_cell wan5b-taehv wan22-ti2v-5b \
-      env FASTVIDEO_WAN_VAE=taehv \
+      env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_VAE=taehv \
       "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
         --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b-taehv/frames"
     compare_cells wan5b wan5b-taehv
@@ -801,12 +822,12 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # tokens at timestep 0). 480x832 because FastVideo resizes a TI2V image to
     # the 480x832 area and generates at that size; one prompt.
     ti2v_prompt="Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam on the sand, the camera glides slowly forward along the shoreline, bright sunny day."
-    gated_cell wan5b-i2v wan22-ti2v-5b \
+    gated_cell wan5b-i2v wan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast wan gen "${ti2v[@]}" --height 480 --width 832 --num-frames 121 \
         --image "$fixtures/ti2v-beach-832x480.jpg" --prompt "$ti2v_prompt" \
         --clip-dir "$RUNS/wan5b-i2v/frames"
     gated_cell wan5b-easycache wan22-ti2v-5b \
-      env FASTVIDEO_WAN_SOL_CACHE=easycache \
+      env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_SOL_CACHE=easycache \
       "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
         --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
     compare_cells wan5b wan5b-easycache
@@ -821,7 +842,7 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
       target=fastwan22-ti2v
       ref="$SCRATCH/oracle-ref/$target"
       if oracle_fetch "$target" "$ref"; then
-        gated_cell fw22-oracle fastwan22-ti2v-5b \
+        gated_cell fw22-oracle fastwan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" \
           "$BIN" --mode fast --keep-going wan oracle --weights "$W/fastwan22-ti2v-5b" --reference "$ref/dump" \
             --dump-out "$RUNS/fw22-oracle-dump" --taehv "$TAE/taew2_2.safetensors"
         oracle_diff fw22-oracle-diff "$ref/dump" "$RUNS/fw22-oracle-dump"
@@ -833,42 +854,42 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     fi
     fw22=(--weights "$W/fastwan22-ti2v-5b" --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24
       --seed "$SEED" --warm)
-    gated_cell fw22 fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+    gated_cell fw22 fastwan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_VAE=full \
       "$BIN" --mode fast wan gen "${fw22[@]}" --height 704 --width 1280 --num-frames 121 \
         --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/fw22/frames"
-    gated_cell fw22-taehv fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=taehv \
+    gated_cell fw22-taehv fastwan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_VAE=taehv \
       "$BIN" --mode fast wan gen "${fw22[@]}" --height 704 --width 1280 --num-frames 121 \
         --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/fw22-taehv/frames"
     compare_cells fw22 fw22-taehv
     # The distilled model against the base checkpoint's 50-step recipe.
     compare_cells wan5b fw22
-    gated_cell fw22-i2v fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+    gated_cell fw22-i2v fastwan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_VAE=full \
       "$BIN" --mode fast wan gen "${fw22[@]}" --height 480 --width 832 --num-frames 121 \
         --image "$fixtures/ti2v-beach-832x480.jpg" --prompt "$ti2v_prompt" --clip-dir "$RUNS/fw22-i2v/frames"
     # fal's 580p (1024x576) and 161 frames on both 5B tiers; the 5B at fal's
     # defaults (40 UniPC steps, CFG 3.5, shift 5). One prompt each.
     fal5b=(--weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc --steps 40 --guidance 3.5
       --flow-shift 5.0 --fps 24 --negative "$wan_neg_cn" --seed "$SEED")
-    gated_cell fw22-580p-161f fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+    gated_cell fw22-580p-161f fastwan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_VAE=full \
       "$BIN" --mode fast wan gen "${fw22[@]}" --height 576 --width 1024 --num-frames 161 \
         --prompt "$PROMPT" --clip-dir "$RUNS/fw22-580p-161f/frames"
-    gated_cell fw22-720p-161f fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+    gated_cell fw22-720p-161f fastwan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_VAE=full \
       "$BIN" --mode fast wan gen "${fw22[@]}" --height 704 --width 1280 --num-frames 161 \
         --prompt "$PROMPT" --clip-dir "$RUNS/fw22-720p-161f/frames"
-    gated_cell wan5b-580p-161f wan22-ti2v-5b \
+    gated_cell wan5b-580p-161f wan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast wan gen "${fal5b[@]}" --height 576 --width 1024 --num-frames 161 \
         --prompt "$PROMPT" --clip-dir "$RUNS/wan5b-580p-161f/frames"
-    gated_cell wan5b-720p-161f wan22-ti2v-5b \
+    gated_cell wan5b-720p-161f wan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast wan gen "${fal5b[@]}" --height 704 --width 1280 --num-frames 161 \
         --prompt "$PROMPT" --clip-dir "$RUNS/wan5b-720p-161f/frames"
     # The catalog's wan-turbo through the engine service (`fv-gpucheck
     # engine`): the same frames as the CLI at the recipe's settings.
     fwgeo=(--height 704 --width 1280 --num-frames 121 --prompt "$PROMPT" --seed "$SEED")
-    gated_cell cli-fw22 fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+    gated_cell cli-fw22 fastwan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" FASTVIDEO_WAN_VAE=full \
       "$BIN" --mode fast wan gen --weights "$W/fastwan22-ti2v-5b" --preset fast_wan_2_2_ti2v_5b --steps 3 \
         --flow-shift 5.0 --fps 24 "${fwgeo[@]}" --no-text-cache --no-mp4 --clip-dir "$RUNS/cli-fw22/frames"
-    gated_cell engine-fw22 fastwan22-ti2v-5b \
-      "$BIN" --keep-going --mode fast engine --model wan-turbo --weights-root "$W" --tae-dir "$TAE" "${fwgeo[@]}" \
+    gated_cell engine-fw22 fastwan22-ti2v-5b env FASTVIDEO_TAE_DIR="$TAE" \
+      "$BIN" --keep-going --mode fast engine --model wan-turbo --weights-root "$W" "${fwgeo[@]}" \
         --reference "$RUNS/cli-fw22/frames" --cancel-after-step 1 --clip-out "$RUNS/engine-fw22/out"
     rm -rf "$RUNS"/cli-fw22/frames "$RUNS"/engine-fw22/out/*/frames
     # SF-Wan 81 frames: TAEHV is the distilled default (sfwan13-81f-flash);

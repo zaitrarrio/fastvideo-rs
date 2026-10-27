@@ -161,7 +161,11 @@ without_controls() {
   done <"$1" && echo .
 }
 
-arms() { (cd "$1" && for s in */summary.json; do [[ -f "$s" ]] && dirname "$s"; done) | LC_ALL=C sort; }
+# Each lister ends with `true`: a glob that matches nothing leaves its loop's
+# last test false, and under `set -e` that status ended the `{ <A>; <B>; }`
+# group after the fv-lab run's list, so a file only in the runpod-http run
+# went unlisted (found by ADR-0019 §22.18's simulation, S6).
+arms() { (cd "$1" && for s in */summary.json; do [[ -f "$s" ]] && dirname "$s"; done; true) | LC_ALL=C sort; }
 diffs=0 same=0 ran=0 skipped=0 failed=0 ndumps=0 nctl=0
 say() { echo "$*"; diffs=$((diffs + 1)); }
 # {exit, skipped} of a summary.json, or `unreadable` (a difference even when
@@ -230,7 +234,7 @@ while IFS= read -r arm; do
     ran=$((ran + 1))
   fi
 done < <({ arms "$A"; arms "$B"; } | LC_ALL=C sort -u)
-reports() { (cd "$1" && for r in compare/compare-clips-*.json gate/gate-*.json; do [[ -f "$r" ]] && echo "$r"; done) | LC_ALL=C sort; }
+reports() { (cd "$1" && for r in compare/compare-clips-*.json gate/gate-*.json; do [[ -f "$r" ]] && echo "$r"; done; true) | LC_ALL=C sort; }
 verdict() {
   case "$1" in
     */gate/*) jq -e . "$1" >/dev/null 2>&1 && echo present || echo unreadable ;;
@@ -247,7 +251,7 @@ while IFS= read -r r; do
   echo "same $r: $va"
   nrep=$((nrep + 1))
 done < <({ reports "$A"; reports "$B"; } | LC_ALL=C sort -u)
-vfiles() { (cd "$1" && for r in *.verdict.json *.diff */*-evidence.log determinism.txt hashes.txt */hashes.txt */hashes.json; do [[ -f "$r" ]] && echo "$r"; done) | LC_ALL=C sort; }
+vfiles() { (cd "$1" && for r in *.verdict.json *.diff */*-evidence.log determinism.txt hashes.txt */hashes.txt */hashes.json; do [[ -f "$r" ]] && echo "$r"; done; true) | LC_ALL=C sort; }
 nver=0
 while IFS= read -r r; do
   if [[ "$r" == */* ]] && is_control "${r%%/*}"; then
@@ -287,7 +291,7 @@ while IFS= read -r r; do
 done < <({ vfiles "$A"; vfiles "$B"; } | LC_ALL=C sort -u)
 # The derived-clip reports (ADR-0019 §20): metrics.txt, its run directory part
 # read alike, then line by line (see the header).
-mfiles() { (cd "$1" && for r in */metrics.txt; do [[ -f "$r" ]] && echo "$r"; done) | LC_ALL=C sort; }
+mfiles() { (cd "$1" && for r in */metrics.txt; do [[ -f "$r" ]] && echo "$r"; done; true) | LC_ALL=C sort; }
 # The report with `/runs/<family>/<tag>/` read as `/runs/<family>/<tag>/`, then `.`
 # (trailing lines kept); fails on an unreadable file.
 mnorm() { sed -E 's#/runs/([^/ ]+)/[^/ ]+/#/runs/\1/<tag>/#g' "$1" && echo .; }

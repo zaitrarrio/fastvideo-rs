@@ -15,12 +15,13 @@
 schema = 1
 
 # FastVideo (FastH3 8-step V2, the FastH3 4-step LoRAs, the H3 Ref2VA
-# pipeline, SF-Wan 1.3B): oracle.sh's `fastvideo` pod. min_ram_gb 192: the LoRA
+# pipeline, SF-Wan 1.3B, the Wan 2.2 TI2V-5B modules through Diffusers):
+# oracle.sh's `fastvideo` pod. min_ram_gb 192: the LoRA
 # conversion keeps a host copy of the 35B DiT beside the offloaded text
 # encoder (docs/oracle.md "Upstream cells: host RAM"; the 2026-10-26 rerun).
 [[stack]]
 name = "fastvideo"
-description = "FastVideo references: FastH3 8-step V2, the FastH3 4-step VSA / dense LoRAs, H3 Ref2VA, SF-Wan 1.3B"
+description = "FastVideo references: FastH3 8-step V2, the FastH3 4-step VSA / dense LoRAs, H3 Ref2VA, SF-Wan 1.3B, Wan2.2 TI2V-5B and FastWan2.2 TI2V-5B modules (Diffusers)"
 image = "fastvideo"
 gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
 gpu_count = 1
@@ -69,6 +70,31 @@ name = "sfwan13"
 steps = []
 r2 = ["sfwan21-1.3b"]
 container_disk_gb = 180
+
+# The Wan 2.2 TI2V-5B modules through Diffusers (upstream/oracle.sh oracle_wan22
+# and oracle_fastwan22, oracle_wan22.py; the `wan` tier's cells
+# wan-wan22-ti2v-oracle and wan-fastwan22-ti2v-oracle, ADR-0019 §22, S6): the
+# base checkpoint, and FastWan2.2 TI2V-5B FullAttn with the DiT at its DMD
+# timestep 757. Both trees are R2-only since 2026-10-13, so each target's step
+# r2:<tree> fetches it onto the container disk at $UW/<tree> (pod.sh
+# weights_r2), read from there when complete, else from the volume as before
+# (oracle.sh's fallback, as oracle_sfwan's, §21.2; it reaches nothing today: the
+# EU volume holds H3 and LTX only, so the r2 step is what makes the reference).
+# 210 GB each: the stack's 150
+# and both trees (34.20 + 24.20 GB), since the `wan` tier's two oracle cells run
+# together (§22.18) and the pod gets the largest selected target's disk, not
+# the sum.
+[[stack.target]]
+name = "wan22-ti2v"
+steps = []
+r2 = ["wan22-ti2v-5b"]
+container_disk_gb = 210
+
+[[stack.target]]
+name = "fastwan22-ti2v"
+steps = []
+r2 = ["fastwan22-ti2v-5b"]
+container_disk_gb = 210
 
 # sol-engine LTX-2.5 (the distilled two-stage): oracle.sh's `sol-ltx25` pod.
 # RECON_ACCEPT_MISMATCH=1: two of the single-file packs rebuilt from the

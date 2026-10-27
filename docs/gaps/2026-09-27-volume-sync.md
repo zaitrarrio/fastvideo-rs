@@ -67,7 +67,7 @@ Each directory carries a `.complete`.
 | `tae/taeh3.safetensors` | madebyollin/taehv @ `e589fdd` (fetch-tae.sh, fetch-taeh3.sh) | 22 709 752 | `4fd022bf…3d4c13` |
 | `tae/taeltx2_3_wide.safetensors` | madebyollin/taehv @ `32ac014` (fetch-tae.sh) | 60 359 856 | `0a692914…52e082` |
 | `tae/taew2_1.safetensors` | madebyollin/taehv @ `e589fdd` (fetch-tae.sh, fetch_taehv.sh) | 22 642 902 | `04766eac…b1a93f` |
-| `tae/taew2_2.safetensors` | madebyollin/taehv @ `e589fdd` (fetch_taehv.sh) | 22 848 048 | `b84609b2…1f5325` |
+| `tae/taew2_2.safetensors` | madebyollin/taehv @ `e589fdd` (fetch-tae.sh since S6, fetch_taehv.sh) | 22 848 048 | `b84609b2…1f5325` |
 | `lpips/alexnet-owt-7be5be79.pth` | download.pytorch.org (fetch-lpips.sh) | 244 408 911 | `7be5be79…cdee02` |
 | `lpips/lpips_v0.1_alex.pth` | richzhang/PerceptualSimilarity @ `082bb24` (fetch-lpips.sh) | 6 009 | `df73285e…0835c0` |
 

@@ -1,0 +1,143 @@
+# runpod-matrix.sh `wan`, from the fal parity block to the end (docs/serve/fal-parity.md §3, P0 3-4; docs/ports/wan.md;
+# docs/adr/0019-fv-lab.md §22, S6): FastWan2.2 TI2V-5B FullAttn, the wan-turbo tier (fal's
+# fal-ai/wan/v2.2-5b/text-to-video/fast-wan), at its model card recipe: 3 DMD steps (1000/757/522), shift 5,
+# 704x1280x121 at 24 fps, the full Wan 2.2 VAE (fw22) and TAEHV taew2_2 (fw22-taehv, the wan-draft tier), compared;
+# the distilled model against the base checkpoint's 50-step recipe (wan5b, another cell's arm: a directory compare,
+# `tag`, the script's compare_one with the same tag); image-to-video; fal's 580p (1024x576) and 161 frames on both 5B
+# tiers (the 5B at fal's defaults: 40 UniPC steps, CFG 3.5, shift 5); the catalog's wan-turbo through the engine
+# service (`fv-gpucheck engine`, the same frames as the CLI at the recipe's settings, a second job cancelled after
+# step 1); then SF-Wan 81 frames with the full Wan VAE opt-out against TAEHV's flash arm (wan-fastwan21-1.3b's
+# sfwan13-81f-flash: a directory compare too).
+# engine-fw22 passes no --tae-dir (dropped from the script's engine arm in the same commit as this tier, as
+# serve-engine's in S3, §22.11): the engine takes <weights root>/auxiliary/tae, `{tae}` whenever the volume's copy is
+# complete, and wan-turbo (families/wan.toml fastwan22-ti2v-5b, `decoder = "full"`) never searches a TAE directory.
+# FASTVIDEO_TAE_DIR={tae} is each gated arm's env entry, as the script's since S6 (ADR-0019 §22.4, Addition 16).
+# The two directory compares run when one of this cell's arms is selected (the script runs every compare whatever
+# FV_CELLS names, a `skipped` report when the frames are missing): so they sit in the cell of the engine pair, the
+# arms a narrow run selects (§22.18). The script's removal of the CLI and engine frames after the pair is disk only and
+# not copied. fastwan22-ti2v-5b (24.20 GB), wan22-ti2v-5b and sfwan21-1.3b are R2-only since 2026-10-13
+# (`weights = "volume+r2"`). Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "wan-fastwan22-ti2v-5b"
+description = "FastWan2.2 TI2V-5B (wan-turbo) at its model card recipe with the full VAE and TAEHV, against the base 50-step recipe, image-to-video, fal's 580p and 161-frame canvases on both 5B tiers, the CLI against the serve engine, and SF-Wan 81 frames with the full VAE against TAEHV"
+
+[workload]
+model = "wan engine"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; each arm's canvas is in its argv; fw22-i2v's prompt (the beach fixture's) and the negative prompt are literals, as the script's ti2v_prompt and wan_neg_cn; the engine arm reads the CLI arm's frames as its reference, so it runs after it"
+
+[lists]
+fw22 = ["--weights", "{weights}/fastwan22-ti2v-5b", "--preset", "fast_wan_2_2_ti2v_5b", "--steps", "3", "--flow-shift",
+  "5.0", "--fps", "24", "--seed", "{seed}", "--warm"]
+fal5b = ["--weights", "{weights}/wan22-ti2v-5b", "--preset", "wan_2_2_ti2v_5b", "--unipc", "--steps", "40", "--guidance",
+  "3.5", "--flow-shift", "5.0", "--fps", "24", "--negative",
+  "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+  "--seed", "{seed}"]
+fwgeo = ["--height", "704", "--width", "1280", "--num-frames", "121", "--prompt", "{prompt}", "--seed", "{seed}"]
+sf_common = ["--weights", "{weights}/sfwan21-1.3b", "--preset", "sf_wan_t2v_1_3b", "--steps", "4", "--flow-shift", "5",
+  "--prompt", "{prompt}", "--seed", "{seed}", "--warm"]
+
+[[arm]]
+name = "fw22"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_VAE=full"]
+argv = ["--mode", "fast", "wan", "gen", "{@fw22}", "--height", "704", "--width", "1280", "--num-frames", "121", "--prompt",
+  "{prompt}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "fw22-taehv"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_VAE=taehv"]
+argv = ["--mode", "fast", "wan", "gen", "{@fw22}", "--height", "704", "--width", "1280", "--num-frames", "121", "--prompt",
+  "{prompt}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "fw22-i2v"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_VAE=full"]
+argv = ["--mode", "fast", "wan", "gen", "{@fw22}", "--height", "480", "--width", "832", "--num-frames", "121", "--image",
+  "{root}/scripts/gpu/fixtures/ti2v-beach-832x480.jpg", "--prompt",
+  "Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam on the sand, the camera glides slowly forward along the shoreline, bright sunny day.",
+  "--clip-dir", "{runs}/{arm}/frames"]
+
+# fal's 580p (1024x576) and 161 frames on both 5B tiers; the 5B at fal's defaults. One prompt each.
+[[arm]]
+name = "fw22-580p-161f"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_VAE=full"]
+argv = ["--mode", "fast", "wan", "gen", "{@fw22}", "--height", "576", "--width", "1024", "--num-frames", "161", "--prompt",
+  "{prompt}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "fw22-720p-161f"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_VAE=full"]
+argv = ["--mode", "fast", "wan", "gen", "{@fw22}", "--height", "704", "--width", "1280", "--num-frames", "161", "--prompt",
+  "{prompt}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan5b-580p-161f"
+gate = "wan22-ti2v-5b"
+trees = ["wan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "wan", "gen", "{@fal5b}", "--height", "576", "--width", "1024", "--num-frames", "161", "--prompt",
+  "{prompt}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan5b-720p-161f"
+gate = "wan22-ti2v-5b"
+trees = ["wan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "wan", "gen", "{@fal5b}", "--height", "704", "--width", "1280", "--num-frames", "161", "--prompt",
+  "{prompt}", "--clip-dir", "{runs}/{arm}/frames"]
+
+# The catalog's wan-turbo through the engine service: the same frames as the CLI at the recipe's settings.
+[[arm]]
+name = "cli-fw22"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_VAE=full"]
+argv = ["--mode", "fast", "wan", "gen", "--weights", "{weights}/fastwan22-ti2v-5b", "--preset", "fast_wan_2_2_ti2v_5b",
+  "--steps", "3", "--flow-shift", "5.0", "--fps", "24", "{@fwgeo}", "--no-text-cache", "--no-mp4", "--clip-dir",
+  "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "engine-fw22"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--keep-going", "--mode", "fast", "engine", "--model", "wan-turbo", "--weights-root", "{weights}", "{@fwgeo}",
+  "--reference", "{runs}/cli-fw22/frames", "--cancel-after-step", "1", "--clip-out", "{runs}/{arm}/out"]
+
+# SF-Wan 81 frames: TAEHV is the distilled default (sfwan13-81f-flash); the full Wan VAE opt-out on the same
+# recipe, for the decoder A/B.
+[[arm]]
+name = "sfwan13-81f-fullvae"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_VAE=full"]
+argv = ["--mode", "fast", "wan", "gen", "{@sf_common}", "--num-frames", "81", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "fw22"
+candidate = "fw22-taehv"
+after = "fw22-taehv"
+
+# The distilled model against the base checkpoint's 50-step recipe (wan-wan22-ti2v-5b's wan5b).
+[[compare]]
+tag = "wan5b--fw22"
+baseline = "{runs}/wan5b/frames"
+candidate = "{runs}/fw22/frames"
+after = "fw22-taehv"
+
+# The full VAE against TAEHV's flash arm (wan-fastwan21-1.3b's sfwan13-81f-flash).
+[[compare]]
+tag = "sfwan13-81f-fullvae--sfwan13-81f-flash"
+baseline = "{runs}/sfwan13-81f-fullvae/frames"
+candidate = "{runs}/sfwan13-81f-flash/frames"

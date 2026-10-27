@@ -9,8 +9,10 @@
 #   - `gold`, the experiment tiers (h3-graphs, ADR-0019 §14) and the sibling
 #     tiers (oracle-r2, §21; hd5, §22) refused for run / all (their plan still
 #     the script's body);
-#   - serve-engine (§22, S3), sfstream (§22, S4) and mmaudio (§22, S5) on the
-#     script path, their GPU checks' FV_R2_TREES forms planned;
+#   - serve-engine (§22, S3), sfstream (§22, S4), mmaudio (§22, S5) and wan
+#     (§22, S6) on the script path, their GPU checks' FV_R2_TREES forms
+#     planned; wan's dry run with each gated arm's FASTVIDEO_TAE_DIR, no
+#     --tae-dir, no TAE fetch, and sfwan's (its SF-Wan arms) the same;
 #   - hd's dropped post-script hook (FV_HD_POST_URL, FV_HD_POST_TIMEOUT_S,
 #     ADR-0019 §22, S2) refused by runpod-http.sh (script path and fv-lab
 #     route) and runpod-matrix.sh;
@@ -299,6 +301,38 @@ if [[ "$mm_arms" == "wan13-audio sfwan13-audio ours-v2a " ]] && ! grep -qE 'up-e
   ok "mmaudio: the cut branch runs exactly the tier's three arms"
 else
   bad "mmaudio: the dry run's arms are '$mm_arms'"
+fi
+
+# wan (ADR-0019 §22, S6): the same, its GPU check's two trees from R2 (the
+# script side stages both at once: 53.41 GB and the 120 GB); its dry run shows
+# each gated arm's FASTVIDEO_TAE_DIR and fetches no TAE file; sfwan, which runs
+# the branch's SF-Wan arms, inherits both.
+expect "wan: run is the script path" 0 "a pod running runpod-matrix.sh wan" -- \
+  FV_DRY_RUN=1 FV_FAMILY=wan bash "$HTTP" run abc1234
+expect "wan: the GPU check's script side plans" 0 '"name": "fv-lab-wan-abc1234-t"' -- RUNPOD_API_KEY=x \
+  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=wan "FV_R2_TREES=fastwan21-1.3b fastwan22-ti2v-5b" \
+  FV_CONTAINER_DISK_GB=174 FV_MIN_RAM_GB=256 bash "$HTTP" plan abc1234 abc1234-t
+expect "wan: FV_R2_TREES needs a disk for both trees" 2 "(53.41 GB) and 120 GB: FV_CONTAINER_DISK_GB=174 or more" -- \
+  FV_DRY_RUN=1 FV_FAMILY=wan "FV_R2_TREES=fastwan21-1.3b fastwan22-ti2v-5b" FV_CONTAINER_DISK_GB=173 bash "$HTTP" run abc1234
+for fam in wan sfwan; do
+  rm -rf "$TMP/ww" "$TMP/ws"; mkdir -p "$TMP/ww/weights/auxiliary/tae" "$TMP/ws"
+  : >"$TMP/ww/weights/auxiliary/tae/.complete"
+  expect "$fam: each SF-Wan arm's own FASTVIDEO_TAE_DIR, no fetch in a dry run" 0 \
+    "dry-run sfwan13-81f-flash: env FASTVIDEO_TAE_DIR=$TMP/ww/weights/auxiliary/tae FASTVIDEO_WAN_CAUSAL_FLASH=1 " -- \
+    FV_DRY_RUN=1 FV_WORK="$TMP/ww" FV_SCRATCH="$TMP/ws" bash "$MATRIX" "$fam"
+  if [[ -n "$(ls -A "$TMP/ww/weights/auxiliary/tae" | grep -v '^\.complete$')" || -e "$TMP/ws/runs/$fam/tae-fetch.log" ]]; then
+    bad "$fam: a dry run fetched a TAE file"
+  else
+    ok "$fam: a dry run fetched nothing"
+  fi
+done
+out="$(cd "$TMP" && clean FV_DRY_RUN=1 FV_WORK="$TMP/ww" FV_SCRATCH="$TMP/ws" bash "$MATRIX" wan 2>&1)" || true
+if [[ "$out" != *"--tae-dir"* && "$out" == *"dry-run engine-fw22: env FASTVIDEO_TAE_DIR=$TMP/ww/weights/auxiliary/tae "* \
+  && "$(grep -c ": env FASTVIDEO_TAE_DIR=$TMP/ww/weights/auxiliary/tae " <<<"$out")" == 45 \
+  && "$out" == *"dry-run kernels-wan: "* && "$out" != *"dry-run kernels-wan: env "* ]]; then
+  ok "wan: 45 gated arms with their own FASTVIDEO_TAE_DIR (kernels-wan none), engine-fw22 without --tae-dir"
+else
+  bad "wan: the dry run's TAE lines: $out"
 fi
 
 # b4a (ADR-0019 §11.6): fv-lab only, its GPU gate's cell selected by arm;

@@ -200,18 +200,32 @@ LTX_EXTEND_PROMPT="${FV_LTX_EXTEND_PROMPT:-The camera keeps pushing in slowly ov
 # Wan 2.2 TI2V-5B modules (Diffusers, oracle_wan22.py): VAE encode/decode
 # of a fixed 704x1280 clip and one DiT forward per timestep layout (t2v, and
 # i2v's frame-0-at-timestep-0), inputs dumped for `fv-gpucheck wan oracle`.
-# Weights: were on fv-weights-h3-ltx-hy (old EU volume); since 2026-10-13 the Wan trees come from R2.
+# Weights: were on fv-weights-h3-ltx-hy (old EU volume); since 2026-10-13 the
+# tree is R2-only: the step r2:wan22-ti2v-5b puts it at $UW/wan22-ti2v-5b on
+# the container disk (pod.sh weights_r2; lab/upstream.toml's target,
+# docs/adr/0019-fv-lab.md §22, S6), read from there when it is complete, else
+# from the volume as before (as oracle_sfwan). That fallback reaches nothing
+# today: the EU volume (bz0ofkfx45) holds H3 and LTX only, so without the R2
+# step the reference fails on a missing tree; it is kept for a volume that
+# holds the tree again (the same holds for oracle_fastwan22 and oracle_sfwan).
 oracle_wan22() {
+  local m="$W/wan22-ti2v-5b"
+  [[ -f "$UW/wan22-ti2v-5b/.complete" ]] && m="$UW/wan22-ti2v-5b"
   oracle_cell wan22-ti2v env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_wan22.py" \
-    --model "$W/wan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg"
+    --model "$m" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg"
 }
 
 # FastWan2.2 TI2V-5B FullAttn (FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers):
 # the TI2V-5B network DMD-distilled, so the same Diffusers modules; the DiT
-# forwards at the middle DMD timestep (1000/757/522). Weights: both volumes.
+# forwards at the middle DMD timestep (1000/757/522). Weights: R2-only since
+# 2026-10-13: the step r2:fastwan22-ti2v-5b puts the tree at
+# $UW/fastwan22-ti2v-5b, read from there when it is complete, else from the
+# volume as before (as oracle_wan22; no volume holds it today).
 oracle_fastwan22() {
+  local m="$W/fastwan22-ti2v-5b"
+  [[ -f "$UW/fastwan22-ti2v-5b/.complete" ]] && m="$UW/fastwan22-ti2v-5b"
   oracle_cell fastwan22-ti2v env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_wan22.py" \
-    --model "$W/fastwan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg" --timestep 757
+    --model "$m" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg" --timestep 757
 }
 
 # FastVideo SF-Wan 1.3B (WanCausalDMDPipeline at its defaults), one request,
@@ -219,7 +233,8 @@ oracle_fastwan22() {
 # The tree is R2-only since 2026-10-13 (the EU volume holds H3 and LTX): the
 # step r2:sfwan21-1.3b puts it at $UW/sfwan21-1.3b on the container disk
 # (pod.sh weights_r2; docs/adr/0019-fv-lab.md §21), read from there when it
-# is complete, else from the volume as before.
+# is complete, else from the volume as before (which no longer holds it: the
+# fallback reaches nothing without the R2 step, as oracle_wan22's).
 oracle_sfwan() {
   local m="$W/sfwan21-1.3b"
   [[ -f "$UW/sfwan21-1.3b/.complete" ]] && m="$UW/sfwan21-1.3b"
