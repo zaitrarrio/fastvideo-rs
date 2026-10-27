@@ -10,8 +10,9 @@ stay in the script and move in later slices. `b4a` (D1d) is the first whose cell
 and `fv-lab gate`](#verdicts-and-fv-lab-gate); its GPU gate passed on `e82b6b7`, ADR-0019 §11.6); `det-short` and
 `determinism` (D1d) the last, with their `[repeats]` frame hashes (GPU checks passed on `f93a961`, §15.10). `oracle`
 is a tier whose script branch stays whole ([below](#determinism-and-the-oracle-d1d-second-slice)), and `fuse`,
-`attn3` and `ltx` (D1f) are retired too (GPU checks passed on `762ce4d`, §17.6; [below](#fuse-attn3-ltx-d1f)). `gold` is fv-lab's
-own: every gold variant's canonical cell (ADR-0023).
+`attn3` and `ltx` (D1f) are retired too (GPU checks passed on `762ce4d`, §17.6; [below](#fuse-attn3-ltx-d1f)). `hd` and
+its 1080P-gate sibling `hd5` (D1 S2) are tiers whose script branch stays until their GPU check
+([below](#hd-and-hd5-d1-s2)). `gold` is fv-lab's own: every gold variant's canonical cell (ADR-0023).
 `precision-nvfp4` and `ltxvae-gen` are two modes of retired families, restored as tiers ([ADR-0019 §12](../adr/0019-fv-lab.md)).
 Eleven more families left the script with no tier (`h3`, `hunyuan`, `sana-video`, `b200`, `writer`, `precision-debug`,
 `identity`, `b4b`, `b4c`, `b4c2`, `h3attn`; D1g, ADR-0019 §18), and nine after them (`sfquality`, `headline`,
@@ -71,6 +72,8 @@ dry run show what will run.
 | `fuse` | `fuse-{kernels,trace,switch}` | 10 | DiT block fusions: the kernels bit for bit (ungated), a traced step per workload, fusions off against on (`--off-identity`, `exact` gate) | D1f ([§17](../adr/0019-fv-lab.md)); retired after its GPU check (§17.6); 3 arms skip on the EU volume (`h3-8step`) |
 | `attn3` | `attn3-h3-ltx25` | 6 | flash v2 against cuDNN SDPA on FastH3 4-step dense and LTX-2.5 1080p20s dense, VSA bf16 in place against f32 | D1f (§17); retired after its GPU check (§17.6); `FV_ATTN3_ARMS` / `FV_ATTN3_VSA` refused (select by arm) |
 | `ltx` | `ltx-versions` | 3 | LTX-2.5 two-stage, LTX-2.3 two-stage, LTX-2.0 19B distilled | D1f (§17); retired after its GPU check (§17.6; the script gated its arms from D1f); `ltx23` / `ltx2` skip on the EU volume |
+| `hd` | `hd-canvases`, `hd-10s` | 8 | H3 at the served 1080P canvas: h3-turbo and h3-max at 768p and 1920x1088 / 1088x1920 (`--oversize-canvas`) over `prompts-hd.json`, both at 1920x1088 for 10 s; time and peak memory | D1 S2 ([§22](../adr/0019-fv-lab.md)); the script's derived step (Lanczos compares, post script, keyframe prune) dropped in lockstep; branch kept until its GPU check (§22.10) |
+| `hd5` | `hd5-canvases`, `hd-10s` | 8 | `hd` over the 1080P serve gate's five prompts (`prompts-hd5.json`); the gate is `--cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s` | D1 S2 (§22.9); a sibling of the `hd` family (`FV_LAB_SIBLINGS`: the script with `FV_PROMPTS=…/prompts-hd5.json`); shares `hd-10s` |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)); weights `volume+r2` ([below](#weights-from-the-volume-and-r2-volumer2)) |
 | `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`, deleted after the GPU check, §14.4), [below](#port-one-offs-the-experiment-tiers) |
 
@@ -160,7 +163,8 @@ that fv-lab would not honour is refused, not dropped, unless fv-lab does the sam
   `FV_IDLE_NET_BYTES` 262144, `FV_MIN_DRIVER` 580, `FV_BOOT_WAIT_S` 600, `RUNPOD_VOLUME_ID` / `RUNPOD_VOLUME_NAME` /
   `FV_PLAN_VOLUME` the EU volume, `RUNPOD_IMAGE` the commit's runtime image, `FV_POD_PREFIX` `fv-lab`;
 - `FV_EXTRA_ENV` entries no tier reads: the dropped modes' knobs (`FV_PRECISION_ARM`, `FV_NVFP4_WORKLOADS`,
-  `FV_VAE_*`, `FV_LTXFPS*`, `FV_TECH_CELLS`, `FV_B6_CELLS`, `FV_B4A_CELLS`), `FV_PROMPTS` / `FV_PROMPT` / `FV_SEED`, and what the
+  `FV_VAE_*`, `FV_LTXFPS*`, `FV_TECH_CELLS`, `FV_B6_CELLS`, `FV_B4A_CELLS`), `hd`'s dropped post-script hook
+  (`FV_HD_POST_URL`, `FV_HD_POST_TIMEOUT_S`, ADR-0019 §22; refused on the script path too), `FV_PROMPTS` / `FV_PROMPT` / `FV_SEED`, and what the
   start command sets after them (`FV_WORK`, `FV_SCRATCH`, `FV_RUN_TAG`, `FV_CELLS`, `FV_GEN_TIMEOUT_S`). The two
   restored modes' settings name their tier: `FV_PRECISION_ARM=ltx-nvfp4` says `use FV_FAMILY=precision-nvfp4`,
   `FV_VAE_GEN=1` says `use FV_FAMILY=ltxvae-gen` (refused, not routed: the run would land under another run
@@ -428,6 +432,34 @@ Not moved (§17.3): `b4b`, `b4c`, `b4c2`. Each cell's verdict reads what no `[ve
 (`benchmark.json` fields, cache-directory listings under `$SCRATCH`, CUPTI kernel tables). They and `h3` (§17.4:
 `rtx6000` covers it but for the refiner-less Spark fallback, which nothing serves) are retired with no tier
 ([below](#retired-with-no-tier-d1g)).
+
+## `hd` and `hd5` (D1, S2)
+
+[ADR-0019 §22](../adr/0019-fv-lab.md) (S2, §22.9). `runpod-matrix.sh hd` as a tier: its eight arms
+(`lab/cells/hd-canvases.toml`, `hd-10s.toml`), held to the branch's dry run by `fv-lab-goldens.sh`. The branch's
+derived step left the script in the same change, so the two runners run the same arms and nothing else: the 768p clips'
+ffmpeg Lanczos upscale and its compares with the native 1080p clips, the `FV_HD_POST_URL` post script and the keyframe
+prune are gone (their findings are in `docs/serve/h3-1080p-and-upscaler.md`; their commands: `git show
+4f8822a0:scripts/gpu/runpod-matrix.sh`). `FV_HD_POST_URL` and `FV_HD_POST_TIMEOUT_S` are refused by fv-lab
+(`run`'s environment, `pod up --extra-env`), `runpod-http.sh` (both paths) and `runpod-matrix.sh`.
+
+`hd5` is the 1080P serve gate: the script ran it as `FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json`, which
+fv-lab does not read (`fv-lab run` ignores it with a warning, `pod up --extra-env` refuses it: a cell's workload is its
+prompts, ADR-0019 §7), so the prompt set is a cell's `workload.prompt_set`
+(`hd5-canvases`). It is a tier of its own, not extra cells of `hd`: its arms keep the script's names, which
+`hd_report.py` and `fv-lab report summary --kind hd` read, and a tier's arm names are unique. Its 10 s arms are `hd`'s
+cell (`FV_PROMPTS` never reached them).
+
+```sh
+./fv-lab run hd --dry-run                       # the script's eight arms, nothing else
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family hd --yes --wait
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family hd5 \
+  --cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s --yes --wait   # the 1080P gate
+./fv-lab report summary --kind hd artifacts/runpod/hd/<tag>    # the gate's run: artifacts/runpod/hd5/<tag>
+```
+
+The script's per-arm timing line in `live.log` (`<arm> "denoise_s": …`) is log only and not copied: the numbers are each
+arm's `benchmark.json`, which `report summary --kind hd` prints.
 
 ## Retired with no tier (D1g)
 

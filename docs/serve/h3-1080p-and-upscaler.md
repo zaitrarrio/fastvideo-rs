@@ -811,22 +811,30 @@ GPU pod. The balance is shared: other agents' pods ran at the same time.
 
 ## Reproduce
 
-```bash
-# needs the image for a commit that contains the hd family
-FV_FAMILY=hd FV_LPIPS=1 FV_FETCH_TREE=1 FV_SKIP_TAE=1 FV_FETCH_SKIP='\.cache$' \
-  scripts/gpu/runpod-http.sh run <sha>
-python3 scripts/gpu/hd_report.py artifacts/runpod/hd/<sha>-<time>
+Since ADR-0019 §22 (S2) the `hd` family is an fv-lab tier, and the runs above are its arms without the derived step:
+the 768p clips' Lanczos upscale and its compares with the native 1080p clips, the upscaler post script
+(`FV_HD_POST_URL`, now refused) and the keyframe prune left `runpod-matrix.sh` in the same change. Their results
+stand above; their commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh` (the `hd)` branch) and
+`scripts/gpu/hd-upscaler.sh`. The 1080P serve gate's `FV_PROMPTS=…/prompts-hd5.json` is the `hd5` tier (its prompt
+set in a cell: `fv-lab run` ignores `FV_PROMPTS` with a warning and `pod up --extra-env` refuses it). The image must be one of a commit that has both tiers (`lab/`, fv-lab).
 
-# the upscaler benchmark (weights already on both volumes: verify-weights.sh upscalers);
-# the hook runs as the matrix cell `upscaler`, so FV_CELLS must list it
-FV_FAMILY=hd FV_CELLS="turbo-768p turbo-1080p upscaler" FV_LPIPS=1 FV_FETCH_TREE=1 FV_SKIP_TAE=1 \
-  FV_FETCH_SKIP='\.cache$' FV_POD_PREFIX=fv-upsc \
-  FV_POD_FILES="scripts/gpu/hd-upscaler.sh scripts/gpu/hd_upscaler_metrics.py scripts/gpu/hd_flashvsr.py" \
-  FV_EXTRA_ENV="FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh FV_HD_POST_TIMEOUT_S=5400 FV_HD_FLASHVSR=1" \
-  scripts/gpu/runpod-http.sh run d46ca17
-# FV_HD_UP_WARM=0 skips the warm repeat; FV_HD_UP_1440_CLIPS picks the 1440p clips;
-# FV_HD_UP_CLIPS the clips overall.
+```bash
+# the eight arms (prompts-hd.json; the 10 s arms one prompt)
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <sha> --family hd --fetch-tree --fetch-skip '\.png$|\.cache$' --yes --wait
+# the 1080P serve gate: five prompts, the landscape and 10 s arms
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <sha> --family hd5 \
+  --cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s \
+  --fetch-tree --fetch-skip '\.png$|\.cache$' --yes --wait
+./fv-lab report summary --kind hd artifacts/runpod/hd/<tag>   # the gate: artifacts/runpod/hd5/<tag>
+# or: python3 scripts/gpu/hd_report.py <run dir> (numpy, Pillow)
 ```
+
+Until the `hd` branch is deleted (ADR-0019 §22.6, S7) the script runs the same arms: `FV_FAMILY=hd
+scripts/gpu/runpod-http.sh run <sha>`, and for the gate `FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
+FV_CELLS="turbo-768p turbo-1080p max-768p max-1080p turbo-1080p-10s max-1080p-10s"` with it (and
+`FV_FETCH_TREE=1 FV_FETCH_SKIP='\.png$|\.cache$'`). With no prune on the pod any more, the commands skip the PNG
+frames (about 1-1.5 GB per 1080p arm) and keep the MP4s, `benchmark.json`, `frames.sha256.json` and the logs; drop
+`\.png$|` from the skip to fetch the frames as well.
 
 The run behind this page used `FV_FETCH_SKIP='frames/[^/]+/frame-[0-9]+\.png$|\.cache$'`.
 That pattern also matched `keyframes/`, so the PNG keyframes were not

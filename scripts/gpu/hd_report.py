@@ -8,6 +8,11 @@ ratios (native 1080p and the upscaler against Lanczos-upscaled 768p), a
 no-reference sharpness table from the kept keyframes, and audio/video stream
 durations. With --jpg-out, writes small side-by-side crops (Lanczos 768p,
 native 1080p, upscaler) as JPGs. Needs numpy + Pillow, ffprobe.
+
+Runs since the hd family became an fv-lab tier (docs/adr/0019-fv-lab.md §22,
+S2: the hd and hd5 tiers, the script's branch without its derived step) have
+no Lanczos compares and no keyframes: those sections are empty, and the
+`fv-lab report summary --kind hd` port prints the same.
 """
 import argparse
 import glob

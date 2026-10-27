@@ -181,6 +181,19 @@ impl Sibling {
             )
         )
     }
+
+    /// The script's log of the prompt set its `FV_PROMPTS` names
+    /// (`[<family>] prompt set: <file>`, before `matrix start`): a sibling
+    /// tier that is a prompt-set mode of its family (`hd5`, the `hd` family
+    /// with `FV_PROMPTS=scripts/gpu/prompts-hd5.json`, ADR-0019 §22, S2) has
+    /// no counterpart of it, since its prompt set is its cells'
+    /// `workload.prompt_set`, rendered in each arm's `--prompts`. The one
+    /// line of the fixture fv-lab does not print
+    /// (`tests/dry_run.rs::the_hd_tiers_are_the_hd_family_without_its_derived_step`
+    /// holds it to the cell's prompt set).
+    pub fn prompt_set_line(&self, line: &str) -> bool {
+        line.starts_with(&format!("[{}] prompt set: ", self.family))
+    }
 }
 
 /// A script's line as a `volume+r2` tier reads its weights: `{weights}` is

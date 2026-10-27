@@ -577,3 +577,58 @@ weights = "volume"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["ltx-versions"]
+
+# ---- D1, slice S2 (docs/adr/0019-fv-lab.md §22, S2): the `hd` family as a tier, its
+# derived step (the Lanczos upscale and its compares, the FV_HD_POST_URL post
+# script, the keyframe prune) dropped from the script in the same PR, so the
+# script's dry run is the tier's (fv-lab-goldens.sh). The branch stays until the
+# GPU check through both runners (§22.10); S7 then retires it.
+# The rtx6000 tier's pod, as runpod-http.sh gives every FV_FAMILY.
+
+# runpod-matrix.sh `hd`: H3 at the served 1080P canvas, h3-turbo and h3-max at
+# 768p and 1920x1088 / 1088x1920 over prompts-hd.json, then both at 1920x1088
+# for 10 s (one prompt).
+[[tier]]
+name = "hd"
+description = "H3 at the served 1080P canvas: h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3) at 768p and 1920x1088 / 1088x1920 (--oversize-canvas) over prompts-hd.json, and both at 1920x1088 for 10 s: time and peak memory"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["hd-canvases", "hd-10s"]
+
+# runpod-matrix.sh `hd` with FV_PROMPTS=scripts/gpu/prompts-hd5.json: the 1080P
+# serve gate's five prompts (docs/serve/h3-1080p-and-upscaler.md "Gate run"),
+# which fv-lab takes from a cell (fv-lab run ignores FV_PROMPTS with a warning,
+# pod up --extra-env refuses it, §7, §9.4). A sibling tier of
+# the hd family (fv-lab-retired.sh FV_LAB_SIBLINGS): its goldens are the
+# script's dry run with that FV_PROMPTS. The arms keep the script's names, which
+# the hd reports read, so it is a tier, not extra cells of hd. Its 10 s arms
+# are hd's cell (FV_PROMPTS does not reach them). The gate's six arms:
+#   fv-lab run hd5 --cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s
+[[tier]]
+name = "hd5"
+description = "The hd tier over the 1080P serve gate's five prompts (prompts-hd5.json); the gate is its landscape and 10 s arms (--cells)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["hd5-canvases", "hd-10s"]

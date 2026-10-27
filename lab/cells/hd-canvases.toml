@@ -1,0 +1,73 @@
+# runpod-matrix.sh `hd` (docs/serve/h3-1080p-and-upscaler.md; docs/adr/0019-fv-lab.md §22, S2): H3 at the
+# served 1080P canvas (families/h3.toml hd_1080p for sol-h3 and fasth3-4step-vsa). h3-turbo (FastH3 4-step VSA,
+# its technique profile) and h3-max (Sol-H3, the tau ladder) at the trained 768p canvas and at 1920x1088 /
+# 1088x1920 (`h3 gen --oversize-canvas`, the test path: 2.02x the trained pixel cap), the prompts of
+# scripts/gpu/prompts-hd.json in one warm process per arm, clips under <arm>/frames/<prompt>/. The script's
+# derived step (768p clips Lanczos-upscaled with ffmpeg and compared with the native 1080p ones, the
+# FV_HD_POST_URL post script, the keyframe prune) was dropped from it in the same PR (ADR-0019 §22, S2): its
+# findings are recorded (docs/serve/h3-1080p-and-upscaler.md); the canvases' time and memory are what is re-run.
+# The script's per-arm timing line in live.log (benchmark.json's denoise_s / total_s / peak memory) is log only:
+# the numbers are in each arm's benchmark.json.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "hd-canvases"
+description = "h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3) at the trained 768p canvas and at 1920x1088 / 1088x1920 (--oversize-canvas), landscape and portrait, over the prompts of prompts-hd.json"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+prompt_set = "scripts/gpu/prompts-hd.json"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED (gen requires --prompt; the set's prompts replace it); 5 s per prompt, one process per arm; each arm's canvas in its argv (768x1344, 1088x1920 with --oversize-canvas, and their portrait forms). Each recipe's arms share one AdaLN cache file ({runs}/<recipe>-adaln.cache), as the script's: inert for these adapter recipes (ADR-0019 §22.2), kept for equality"
+
+[lists]
+turbo = ["--mode", "fast", "--techniques", "h3/fasth3_4step_vsa", "h3", "gen", "--weights", "{weights}/h3-base",
+  "--h3-recipe", "4step-vsa"]
+max = ["--mode", "fast", "--techniques", "h3/sol_h3_4step_engine_ladder", "h3", "gen", "--weights", "{weights}/h3-base",
+  "--h3-recipe", "sol-h3"]
+common = ["--clip-dir", "{runs}/{arm}/frames", "--seconds", "{seconds}", "--prompt", "{prompt}", "--seed", "{seed}",
+  "--prompts", "{prompt_set}", "--text-encoder", "streamed", "--text-cache", "{scratch}/h3-text-cache",
+  "--text-weights", "{weights}/h3-base"]
+
+[[arm]]
+name = "turbo-768p"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@turbo}", "--height", "768", "--width", "1344", "--adaln-cache", "{runs}/4step-vsa-adaln.cache", "{@common}"]
+
+[[arm]]
+name = "turbo-1080p"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@turbo}", "--height", "1088", "--width", "1920", "--oversize-canvas", "--adaln-cache", "{runs}/4step-vsa-adaln.cache", "{@common}"]
+
+[[arm]]
+name = "turbo-768p-v"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@turbo}", "--height", "1344", "--width", "768", "--adaln-cache", "{runs}/4step-vsa-adaln.cache", "{@common}"]
+
+[[arm]]
+name = "turbo-1080p-v"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@turbo}", "--height", "1920", "--width", "1088", "--oversize-canvas", "--adaln-cache", "{runs}/4step-vsa-adaln.cache", "{@common}"]
+
+[[arm]]
+name = "max-768p"
+gate = "sol-h3"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@max}", "--height", "768", "--width", "1344", "--adaln-cache", "{runs}/sol-h3-adaln.cache", "{@common}"]
+
+[[arm]]
+name = "max-1080p"
+gate = "sol-h3"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@max}", "--height", "1088", "--width", "1920", "--oversize-canvas", "--adaln-cache", "{runs}/sol-h3-adaln.cache", "{@common}"]

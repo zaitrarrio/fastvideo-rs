@@ -229,11 +229,29 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
 
 #[test]
 fn every_cell_file_belongs_to_exactly_one_tier() {
-    // But one: `ltxvae-gen` (ADR-0019 §12) is FV_VAE_GEN=1 runpod-matrix.sh
+    // But two: `ltxvae-gen` (ADR-0019 §12) is FV_VAE_GEN=1 runpod-matrix.sh
     // ltxvae, the ltxvae tier's cells with a gen cell after each workload's,
-    // in the script's order. It shares exactly ltxvae's cells, and no other
-    // tier shares any.
+    // in the script's order. It shares exactly ltxvae's cells. And `hd5`
+    // (§22, S2) is FV_PROMPTS=scripts/gpu/prompts-hd5.json runpod-matrix.sh
+    // hd, whose 10 s arms that setting does not reach: it shares exactly hd's
+    // `hd-10s`. No other tier shares any.
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let cells = |t: &str| -> Vec<&str> {
+        lab.tier(t)
+            .unwrap_or_else(|| panic!("{t}"))
+            .all_cells()
+            .map(String::as_str)
+            .collect()
+    };
+    let (hd, hd5) = (cells("hd"), cells("hd5"));
+    assert_eq!(
+        hd5.iter()
+            .filter(|c| hd.contains(c))
+            .copied()
+            .collect::<Vec<_>>(),
+        ["hd-10s"],
+        "hd5 shares hd's 10 s cell only"
+    );
     let ltxvae = &lab.tier("ltxvae").expect("ltxvae").cells;
     let gen = &lab.tier("ltxvae-gen").expect("ltxvae-gen").cells;
     let shared: Vec<&String> = gen.iter().filter(|c| ltxvae.contains(c)).collect();
@@ -249,7 +267,12 @@ fn every_cell_file_belongs_to_exactly_one_tier() {
         ["ltxvae-gen-4k5s", "ltxvae-gen-1080p20s"]
     );
     let mut seen = BTreeSet::new();
-    for t in lab.tiers.tiers.iter().filter(|t| t.name != "ltxvae-gen") {
+    for t in lab
+        .tiers
+        .tiers
+        .iter()
+        .filter(|t| t.name != "ltxvae-gen" && t.name != "hd5")
+    {
         for c in t.all_cells() {
             assert!(
                 seen.insert(c.as_str()),
@@ -257,11 +280,13 @@ fn every_cell_file_belongs_to_exactly_one_tier() {
             );
         }
     }
-    for c in gen.iter().filter(|c| !ltxvae.contains(c)) {
-        assert!(
-            seen.insert(c.as_str()),
-            "lab/cells/{c}.toml is in two tiers"
-        );
+    for c in gen
+        .iter()
+        .filter(|c| !ltxvae.contains(c))
+        .map(String::as_str)
+        .chain(hd5.iter().copied().filter(|c| !hd.contains(c)))
+    {
+        assert!(seen.insert(c), "lab/cells/{c}.toml is in two tiers");
     }
 }
 

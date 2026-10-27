@@ -7,7 +7,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use fastvideo_lab::knobs::{not_read, RESTORED_MODES};
+use fastvideo_lab::knobs::{not_read, DROPPED_KNOBS, RESTORED_MODES};
 use fastvideo_lab::plan::Lab;
 
 fn repo_root() -> PathBuf {
@@ -23,6 +23,21 @@ fn extra_env_refusals_are_runpod_http_shs() {
     let end = start + t[start..].find('"').expect("closing quote");
     let script: Vec<&str> = t[start..end].split_whitespace().collect();
     assert_eq!(not_read().collect::<Vec<_>>(), script);
+}
+
+/// `runpod-http.sh`'s `FV_DROPPED_KNOBS` (its script path's refusal,
+/// `refuse_dropped`) is fv-lab's `knobs::DROPPED_KNOBS`, in order: hd's
+/// dropped post-script hook (ADR-0019 §22, S2).
+#[test]
+fn dropped_knobs_are_runpod_http_shs() {
+    let p = repo_root().join("scripts/gpu/runpod-http.sh");
+    let t = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let line = t
+        .lines()
+        .find_map(|l| l.strip_prefix("FV_DROPPED_KNOBS=\""))
+        .and_then(|l| l.strip_suffix('"'))
+        .expect("FV_DROPPED_KNOBS=\"…\"");
+    assert_eq!(line.split_whitespace().collect::<Vec<_>>(), DROPPED_KNOBS);
 }
 
 #[test]

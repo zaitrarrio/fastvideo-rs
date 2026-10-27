@@ -43,8 +43,9 @@ fn repo_root() -> PathBuf {
 
 /// A tier's dry-run fixture as fv-lab must print it: the script's lines,
 /// with a restored mode's or a sibling tier's family named by its tier
-/// (`common::Restored`, `common::Sibling`), and a `volume+r2` tier's weight
-/// root its merged root (`common::merged_root`).
+/// (`common::Restored`, `common::Sibling`; a sibling's `prompt set:` line
+/// dropped, `common::Sibling::prompt_set_line`), and a `volume+r2` tier's
+/// weight root its merged root (`common::merged_root`).
 fn dry_run_fixture(lab: &Lab, tier: &str) -> Vec<String> {
     let text = fixture(&format!("{tier}-dry-run.txt"));
     let r2 = lab
@@ -53,7 +54,11 @@ fn dry_run_fixture(lab: &Lab, tier: &str) -> Vec<String> {
     let root = |l: String| if r2 { common::merged_root(&l) } else { l };
     match (common::restored_tier(tier), common::sibling_tier(tier)) {
         (Some(r), _) => text.lines().map(|l| root(r.dry_run_line(l))).collect(),
-        (None, Some(s)) => text.lines().map(|l| root(s.dry_run_line(l))).collect(),
+        (None, Some(s)) => text
+            .lines()
+            .filter(|l| !s.prompt_set_line(l))
+            .map(|l| root(s.dry_run_line(l)))
+            .collect(),
         (None, None) => text.lines().map(|l| root(l.to_owned())).collect(),
     }
 }
@@ -667,4 +672,94 @@ fn the_oracle_r2_tier_dry_runs_as_the_oracle_family_with_sfwan13() {
             "{l}"
         );
     }
+}
+
+/// The `hd` tier (ADR-0019 §22, S2): `runpod-matrix.sh hd` without its
+/// derived step, which left the script in the same PR. Its default run is the
+/// script's eight arms in the script's order (`fixtures/hd-dry-run.txt`, held
+/// line for line by `dry_run_equals_runpod_matrix_sh_for_every_tier`), and
+/// nothing else: no Lanczos upscale, no compare, no metric, no keyframe step.
+/// The six canvas arms read the prompt set `scripts/gpu/prompts-hd.json`; the
+/// two 10 s arms one prompt. `hd5`, its sibling, is the family with
+/// `FV_PROMPTS=scripts/gpu/prompts-hd5.json` (the 1080P serve gate's five
+/// prompts, which fv-lab does not read as a setting and takes from a cell): the same
+/// eight arms with that prompt set, sharing hd's 10 s cell; of its fixture
+/// only the script's `prompt set:` line is not fv-lab's, and it names the
+/// cell's prompt set.
+#[test]
+fn the_hd_tiers_are_the_hd_family_without_its_derived_step() {
+    const ARMS: [&str; 8] = [
+        "turbo-768p",
+        "turbo-1080p",
+        "turbo-768p-v",
+        "turbo-1080p-v",
+        "max-768p",
+        "max-1080p",
+        "turbo-1080p-10s",
+        "max-1080p-10s",
+    ];
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let hd = lab.tier("hd").expect("hd");
+    assert_eq!(hd.cells, ["hd-canvases", "hd-10s"]);
+    assert_eq!(hd.weights, TierWeights::Volume);
+    assert!(hd.extra_cells.is_empty());
+    let hd5 = lab.tier("hd5").expect("hd5");
+    assert_eq!(hd5.cells, ["hd5-canvases", "hd-10s"]);
+    assert_eq!(hd5.weights, TierWeights::Volume);
+    assert_eq!(
+        common::sibling_tier("hd5").map(|s| s.family),
+        Some("hd".to_owned())
+    );
+    assert!(common::sibling_tier("hd").is_none());
+    for (tier, set) in [("hd", "prompts-hd.json"), ("hd5", "prompts-hd5.json")] {
+        let cfg = config(tier);
+        let lines = dry_run_lines(&cfg, &steps(&lab, &cfg));
+        let arms: Vec<&str> = lines
+            .iter()
+            .filter_map(|l| l.split_once("] dry-run "))
+            .map(|(_, r)| r.split_once(": ").map_or(r, |(a, _)| a))
+            .collect();
+        assert_eq!(arms, ARMS, "{tier}: the script's arms, in its order");
+        assert_eq!(
+            lines.first().map(String::as_str),
+            Some(format!("[{tier}] matrix start image=unknown").as_str())
+        );
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some(format!("[{tier}] matrix done").as_str())
+        );
+        assert_eq!(lines.len(), ARMS.len() + 2, "{tier}: nothing but the arms");
+        for l in &lines {
+            for derived in ["lanczos", "keyframes", "ffmpeg", "compare", "upscaler"] {
+                assert!(!l.contains(derived), "{tier}: {derived} in {l}");
+            }
+        }
+        let prompts = format!(" --prompts /opt/fastvideo-rs/scripts/gpu/{set} ");
+        let with_set: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.contains(&prompts))
+            .filter_map(|l| l.split_once("] dry-run "))
+            .filter_map(|(_, r)| r.split_once(": ").map(|(a, _)| a))
+            .collect();
+        assert_eq!(with_set, ARMS[..6], "{tier}: the canvas arms read {set}");
+        // 1088x1920 and 1920x1088 need the test path; the trained canvas not.
+        for l in lines.iter().filter(|l| l.contains("] dry-run ")) {
+            let over = l.contains(" --height 1088 ") || l.contains(" --height 1920 ");
+            assert_eq!(l.contains(" --oversize-canvas "), over, "{l}");
+        }
+    }
+    let raw = fixture("hd5-dry-run.txt");
+    let dropped: Vec<&str> = raw
+        .lines()
+        .filter(|l| l.contains("] prompt set: "))
+        .collect();
+    assert_eq!(
+        dropped,
+        ["[hd] prompt set: /opt/fastvideo-rs/scripts/gpu/prompts-hd5.json"]
+    );
+    assert_eq!(
+        lab.cells["hd5-canvases"].workload.prompt_set.as_deref(),
+        Some("scripts/gpu/prompts-hd5.json")
+    );
+    assert!(!fixture("hd-dry-run.txt").contains("] prompt set: "));
 }

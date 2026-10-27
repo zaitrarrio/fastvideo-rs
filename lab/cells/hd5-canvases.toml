@@ -1,0 +1,71 @@
+# runpod-matrix.sh `hd` with FV_PROMPTS=scripts/gpu/prompts-hd5.json: the 1080P serve gate's prompt set
+# (docs/serve/h3-1080p-and-upscaler.md "Gate run": talking-head, spark-mountain-lake, ltx-frogyoga,
+# ltx-newsbroadcast, h3-demo). The hd-canvases arms, word for word, with that prompt set: the hd5 tier
+# (docs/adr/0019-fv-lab.md §22, S2), a sibling of the hd family (fv-lab-retired.sh FV_LAB_SIBLINGS) whose
+# goldens are the script's dry run with that FV_PROMPTS. The arm names are the script's (the gate's run
+# directories, which hd_report.py and `fv-lab report summary --kind hd` read by name), so this is a tier of
+# its own, not extra cells of hd (a tier's arm names are unique). The gate's six arms:
+#   fv-lab run hd5 --cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "hd5-canvases"
+description = "h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3) at the trained 768p canvas and at 1920x1088 / 1088x1920 (--oversize-canvas), landscape and portrait, over the prompts of prompts-hd5.json (the 1080P serve gate's five prompts)"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+prompt_set = "scripts/gpu/prompts-hd5.json"
+seed = 1024
+seconds = 5
+note = "runpod-matrix.sh's default PROMPT and SEED (gen requires --prompt; the set's prompts replace it); 5 s per prompt, one process per arm; each arm's canvas in its argv (768x1344, 1088x1920 with --oversize-canvas, and their portrait forms). Each recipe's arms share one AdaLN cache file ({runs}/<recipe>-adaln.cache), as the script's: inert for these adapter recipes (ADR-0019 §22.2), kept for equality"
+
+[lists]
+turbo = ["--mode", "fast", "--techniques", "h3/fasth3_4step_vsa", "h3", "gen", "--weights", "{weights}/h3-base",
+  "--h3-recipe", "4step-vsa"]
+max = ["--mode", "fast", "--techniques", "h3/sol_h3_4step_engine_ladder", "h3", "gen", "--weights", "{weights}/h3-base",
+  "--h3-recipe", "sol-h3"]
+common = ["--clip-dir", "{runs}/{arm}/frames", "--seconds", "{seconds}", "--prompt", "{prompt}", "--seed", "{seed}",
+  "--prompts", "{prompt_set}", "--text-encoder", "streamed", "--text-cache", "{scratch}/h3-text-cache",
+  "--text-weights", "{weights}/h3-base"]
+
+[[arm]]
+name = "turbo-768p"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@turbo}", "--height", "768", "--width", "1344", "--adaln-cache", "{runs}/4step-vsa-adaln.cache", "{@common}"]
+
+[[arm]]
+name = "turbo-1080p"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@turbo}", "--height", "1088", "--width", "1920", "--oversize-canvas", "--adaln-cache", "{runs}/4step-vsa-adaln.cache", "{@common}"]
+
+[[arm]]
+name = "turbo-768p-v"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@turbo}", "--height", "1344", "--width", "768", "--adaln-cache", "{runs}/4step-vsa-adaln.cache", "{@common}"]
+
+[[arm]]
+name = "turbo-1080p-v"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@turbo}", "--height", "1920", "--width", "1088", "--oversize-canvas", "--adaln-cache", "{runs}/4step-vsa-adaln.cache", "{@common}"]
+
+[[arm]]
+name = "max-768p"
+gate = "sol-h3"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@max}", "--height", "768", "--width", "1344", "--adaln-cache", "{runs}/sol-h3-adaln.cache", "{@common}"]
+
+[[arm]]
+name = "max-1080p"
+gate = "sol-h3"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["{@max}", "--height", "1088", "--width", "1920", "--oversize-canvas", "--adaln-cache", "{runs}/sol-h3-adaln.cache", "{@common}"]

@@ -1238,20 +1238,29 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3 tau ladder) at the
     # trained 768p canvas and at 1920x1088 / 1088x1920 (`h3 gen
     # --oversize-canvas`, test path only: 2.02x the trained pixel cap), the
-    # prompts of scripts/gpu/prompts-hd.json in one process per cell. Then
-    # each 768p clip is Lanczos-upscaled (ffmpeg) to the 1080p canvas and
-    # compared with the native 1080p clip of the same prompt and seed
-    # (compare-clips: sharpness, jitter, patch-boundary ratios; LPIPS with
-    # FV_LPIPS=1). Keyframes 0/40/80/120 of every clip are kept; the rest of
-    # the PNGs are deleted after the compares (fetch with FV_FETCH_TREE=1 and
-    # FV_FETCH_SKIP='\.cache$'; a skip matching `frames/` also drops
-    # `keyframes/`). FV_HD_POST_URL: a script fetched and run before the prune
-    # with $RUNS (an upscaler benchmark; its weights must already be on the
-    # volumes, see CLAUDE.md). turbo-1080p-10s / max-1080p-10s: the tier at
-    # 10 s (one prompt) for time and memory. The 1080P serve gate runs
-    # FV_PROMPTS=scripts/gpu/prompts-hd5.json FV_CELLS="turbo-768p
-    # turbo-1080p max-768p max-1080p turbo-1080p-10s max-1080p-10s", then
-    # scripts/gpu/lipsync_proxy.py on the speech prompts' MP4s.
+    # prompts of scripts/gpu/prompts-hd.json in one process per cell, clips
+    # under <cell>/frames/<prompt>/. turbo-1080p-10s / max-1080p-10s: the tier
+    # at 10 s (one prompt) for time and memory. The fv-lab tier `hd` is these
+    # arms (lab/cells/hd-canvases.toml, hd-10s.toml; docs/adr/0019-fv-lab.md
+    # §22, S2), held to this branch's dry run by fv-lab-goldens.sh.
+    # The derived step went in S2, in lockstep with the tier: the 768p clips'
+    # Lanczos upscale (ffmpeg) and its compares with the native 1080p clips,
+    # the FV_HD_POST_URL post script (refused below: an upscaler benchmark)
+    # and the keyframe prune. Their findings are recorded in the doc above;
+    # their commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh. The
+    # frames stay on the container disk (each arm's frames.sha256.json is what
+    # the runs compare; a fetch takes no frames without FV_FETCH_TREE=1).
+    # The 1080P serve gate: FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
+    # FV_CELLS="turbo-768p turbo-1080p max-768p max-1080p turbo-1080p-10s
+    # max-1080p-10s", the fv-lab tier `hd5` (fv-lab-retired.sh
+    # FV_LAB_SIBLINGS) with --cells; then scripts/gpu/lipsync_proxy.py on the
+    # speech prompts' MP4s.
+    for k in FV_HD_POST_URL FV_HD_POST_TIMEOUT_S; do
+      if [[ -n "${!k:-}" ]]; then
+        log "FATAL: $k: the hd family's post-script hook was dropped with its derived step (the Lanczos compares, the keyframe prune); nothing runs a fetched script (docs/adr/0019-fv-lab.md §22, S2; the upscaler benchmark's commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh)"
+        exit 2
+      fi
+    done
     : "${FV_PROMPTS:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prompts-hd.json}"
     hd_common=(
       --seconds 5
@@ -1262,6 +1271,8 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
       --text-cache "$SCRATCH/h3-text-cache"
       --text-weights "$W/h3-base"
     )
+    # The timing line after each arm reads its benchmark.json (log only: a
+    # dry run writes none, so it logs none, as fv-lab's).
     hd_cell() {
       local name="$1" wcell="$2" profile="$3" recipe="$4" h="$5" w="$6" over=()
       (( h * w > 768 * 1344 )) && over=(--oversize-canvas)
@@ -1270,7 +1281,7 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
           --height "$h" --width "$w" ${over[@]+"${over[@]}"} \
           --adaln-cache "$RUNS/$recipe-adaln.cache" \
           --clip-dir "$RUNS/$name/frames" "${hd_common[@]}"
-      log "$name $(grep -oE '"(denoise_s|total_s|inference_time_s|peak_memory_mb|peak_allocated_gib)": *[0-9.]+' "$RUNS/$name/benchmark.json" 2>/dev/null | head -8 | tr '\n' ' ')"
+      [[ "$DRY_RUN" == 1 ]] || log "$name $(grep -oE '"(denoise_s|total_s|inference_time_s|peak_memory_mb|peak_allocated_gib)": *[0-9.]+' "$RUNS/$name/benchmark.json" 2>/dev/null | head -8 | tr '\n' ' ')"
     }
     T=(fasth3-4step-vsa h3/fasth3_4step_vsa 4step-vsa)
     M=(sol-h3 h3/sol_h3_4step_engine_ladder sol-h3)
@@ -1290,45 +1301,10 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
           --height 1088 --width 1920 --oversize-canvas --seconds 10 --prompt "$PROMPT" --seed "$SEED" \
           --text-encoder streamed --text-cache "$SCRATCH/h3-text-cache" --text-weights "$W/h3-base" \
           --adaln-cache "$RUNS/$recipe-adaln.cache" --clip-dir "$RUNS/$name/frames"
-      log "$name $(grep -oE '"(denoise_s|total_s|peak_memory_mb|peak_allocated_gib)": *[0-9.]+' "$RUNS/$name/benchmark.json" 2>/dev/null | head -8 | tr '\n' ' ')"
+      [[ "$DRY_RUN" == 1 ]] || log "$name $(grep -oE '"(denoise_s|total_s|peak_memory_mb|peak_allocated_gib)": *[0-9.]+' "$RUNS/$name/benchmark.json" 2>/dev/null | head -8 | tr '\n' ' ')"
     }
     hd_long turbo-1080p-10s "${T[@]}"
     hd_long max-1080p-10s "${M[@]}"
-    # 768p -> 1080p Lanczos baselines, then native 1080p against them.
-    for pair in turbo-768p:turbo-1080p:1920:1088 turbo-768p-v:turbo-1080p-v:1088:1920 max-768p:max-1080p:1920:1088; do
-      IFS=: read -r lo hi uw uh <<<"$pair"
-      [[ -d "$RUNS/$lo/frames" && -d "$RUNS/$hi/frames" ]] || continue
-      for d in "$RUNS/$lo/frames"/*/; do
-        p="$(basename "$d")"
-        [[ "$p" == cold || "$p" == warmup ]] && continue
-        compgen -G "$d/frame-*.png" >/dev/null || continue
-        up="$RUNS/$lo-lanczos/frames/$p"
-        mkdir -p "$up"
-        ffmpeg -nostdin -loglevel error -y -start_number 0 -i "$d/frame-%03d.png" \
-          -vf "scale=$uw:$uh:flags=lanczos" -start_number 0 "$up/frame-%03d.png" >>"$RUNS/lanczos.log" 2>&1 \
-          || log "lanczos $lo/$p failed"
-      done
-      compare_cells "$lo-lanczos" "$hi"
-    done
-    if [[ -n "${FV_HD_POST_URL:-}" ]]; then
-      log "post script $FV_HD_POST_URL"
-      if curl -fsSL "$FV_HD_POST_URL" -o "$SCRATCH/hd-post.sh"; then
-        FV_GEN_TIMEOUT_S="${FV_HD_POST_TIMEOUT_S:-3600}" run_cell upscaler env FV_BIN="$BIN" FV_LPIPS_ARGS="${LPIPS_ARGS[*]+${LPIPS_ARGS[*]}}" bash "$SCRATCH/hd-post.sh" "$RUNS"
-      else
-        log "post script fetch failed"
-      fi
-    fi
-    for c in "$RUNS"/*/frames; do
-      for d in "$c"/*/; do
-        [[ -d "$d" ]] || continue
-        k="${d%/frames/*}/keyframes/$(basename "$d")"
-        mkdir -p "$k"
-        for n in 000 040 080 120; do
-          [[ -f "$d/frame-$n.png" ]] && cp "$d/frame-$n.png" "$k/"
-        done
-        rm -f "$d"/frame-*.png
-      done
-    done
     ;;
   serve-engine)
     # Serve engine CUDA backend (WP-11): for each family, the CLI generation
