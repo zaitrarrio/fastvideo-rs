@@ -1,0 +1,44 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] taehv available for the distilled presets (/fvscratch/weights/auxiliary/tae)
+[fastvideo] wan load: host peak RSS 75.8 GiB (eager dit)
+[INFO] wan/load_mmaudio {"seconds":3.319329945}
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":19426,"moe":null,"seconds":26.158678553999998}
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] vsa: grid (21, 30, 52) tiles 624 topk 125 group 32
+[fastvideo] vsa fine kernel: Mma (sm12, dim 128, auto)
+[fastvideo] vsa fine kernel: Tma ring (3 slots) (sm12, 128B swizzle)
+[fastvideo] sdpa auto (sm_12x rule): bh=12 sq=32760 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=32760 Sk=512 D=128
+[fastvideo] dmd step 1/3 t=1000 done in 699ms
+[fastvideo] dmd step 2/3 t=757 done in 641ms
+[fastvideo] dmd step 3/3 t=522 done in 641ms
+[fastvideo] dmd 3 steps done in 1982ms
+[fastvideo] taehv.decode done in 309ms
+[fastvideo] sdpa auto (sm_12x rule): bh=640 sq=730 sk=730 d=80 -> flash_mma_fwd2
+[fastvideo] sdpa: device dense B=40 H=16 Sq=730 Sk=730 D=80 query_chunk=574
+[fastvideo] sdpa auto (sm_12x rule): bh=32928 sq=8 sk=9 d=64 -> flash_mma_fwd2
+[fastvideo] audio sidecar (mmaudio): 1.81s generate, 1.97s total, rtf 0.358 -> /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/frames/cold/output.mp4
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.04s, 0.04 GiB, synced), ffmpeg feed blocked 0.10s, mp4 tail 0.06s, buffered peak 0.09 GiB of 41.27
+[fastvideo] wrote mp4 /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/frames/cold/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/frames/cold (text 0.41s, denoise 1.98s, decode+mp4 0.39s, png 0.04s)
+[fastvideo] generate done in 4800ms
+[INFO] wan/cold_generation {"audio_generate_s":1.810583459,"audio_s":1.9667973060000001,"decode_s":0.392313588,"decoder":"taehv","denoise_s":1.9825918200000001,"step_s":[0.700064812,0.641283019,0.641183149],"text_cache":"miss","text_s":0.408764214,"total_s":4.800299416,"video_encode_s":0.057857731,"video_push_s":0.015424195,"video_rgb_s":0.17273583299583234,"video_vae_s":0.318001091003418,"video_wait_s":0.019648351,"write_s":0.037385019}
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 644ms
+[fastvideo] dmd step 2/3 t=757 done in 640ms
+[fastvideo] dmd step 3/3 t=522 done in 640ms
+[fastvideo] dmd 3 steps done in 1924ms
+[fastvideo] taehv.decode done in 101ms
+[fastvideo] audio sidecar (mmaudio): 1.74s generate, 1.89s total, rtf 0.344 -> /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/frames/output.mp4
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.04s, 0.04 GiB, synced), ffmpeg feed blocked 0.12s, mp4 tail 0.04s, buffered peak 0.09 GiB of 41.09
+[fastvideo] wrote mp4 /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/frames/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/frames (text 0.00s, denoise 1.93s, decode+mp4 0.30s, png 0.04s)
+[fastvideo] generate done in 4170ms
+[INFO] wan/timings {"audio_generate_s":1.742331372,"audio_s":1.89374699,"decode_s":0.29801501,"decoder":"taehv","denoise_s":1.9252209,"frames_sha256":"8ca05693a4368bc9a30d8f6f07367e441d313e3c26b9405d70aa6af7d9748d19","peak_mib":29540,"step_s":[0.644413364,0.640599669,0.640138167],"text_cache":"hit","text_s":0.001308982,"total_s":4.133181275,"video_encode_s":0.03750747,"video_push_s":0.000013909999999999999,"video_rgb_s":0.012397278996443988,"video_vae_s":0.2587444753646851,"video_wait_s":0.199461244,"write_s":0.037409609}
+wan gen default: total 4.13s (text 0.00s, denoise 1.93s, decode 0.30s) png 0.04s peak Some(29540) MiB frames 8ca05693a4368bc9a30d8f6f07367e441d313e3c26b9405d70aa6af7d9748d19
+[PASS] wan/frames {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/frames/frame-040.png","mean":0.2926840008516744,"std":0.20320183148333149} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (35.7s)

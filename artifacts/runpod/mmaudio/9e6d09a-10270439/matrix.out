@@ -1,0 +1,12 @@
+[04:40:20] [mmaudio] matrix start image=a1fd90552b7e549e
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-c78992cf-68a0-604e-b2be-4d8fdf3e2920)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[04:40:20] [mmaudio] ▶ wan13-audio  env FASTVIDEO_MMAUDIO_WEIGHTS=/fvscratch/weights/mmaudio-44k-v2 FASTVIDEO_TAE_DIR=/fvscratch/weights/auxiliary/tae /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast --vsa wan gen --weights /fvscratch/weights/fastwan21-1.3b --prompt A red fox running through tall grass at dusk. A narrator says <S>The fox cuts through the meadow at dusk.<E>
+Audio: male narration, grass rustle, wind, distant strings, cricket night --seed 1024 --warm --audio mmaudio --clip-dir /fvscratch/runs/mmaudio/9e6d09a-10270439/wan13-audio/frames  (wall cap 3600s; 0=none)
+[04:41:02] [mmaudio] ok wan13-audio  42s  /fvscratch/runs/mmaudio/9e6d09a-10270439/wan13-audio/stderr.log:wan gen default: total 4.14s (text 0.00s, denoise 1.93s, decode 0.30s) png 0.09s peak Some(29540) MiB frames 8ca05693a4368bc9a30d8f6f07367e441d313e3c26b9405d70aa6af7d9748d19
+[04:41:02] [mmaudio] skip sfwan13-audio (not in FV_CELLS)
+[04:41:02] [mmaudio] ▶ ours-v2a  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast mmaudio v2a --weights /fvscratch/weights/mmaudio-44k-v2 --video /fvscratch/runs/mmaudio/9e6d09a-10270439/wan13-audio/frames/output.mp4 --prompt A red fox running through tall grass at dusk. A narrator says <S>The fox cuts through the meadow at dusk.<E>
+Audio: male narration, grass rustle, wind, distant strings, cricket night --seed 1000 --runs 3 --out /fvscratch/runs/mmaudio/9e6d09a-10270439/ours-v2a  (wall cap 3600s; 0=none)
+[04:41:12] [mmaudio] ok ours-v2a  10s  
+[04:41:12] [mmaudio] matrix done
+matrix_exit=0

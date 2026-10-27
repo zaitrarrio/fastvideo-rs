@@ -1,0 +1,15 @@
+{
+  "id": "63uo1bfslyc0ls",
+  "name": "fv-lab-mmaudio-9e6d09a-1027043746-261c",
+  "family": "mmaudio",
+  "tag": "9e6d09a-1027043746-261c",
+  "sha": "9e6d09a",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:3db97a7ff6badc522665bd818df676f3a0f94c100e1400e287f2455afd0eaffd",
+  "url": "https://63uo1bfslyc0ls-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793075869.5595236,
+  "cap_s": 3600,
+  "memory_gb": 94.0,
+  "vcpus": 32.0
+}
