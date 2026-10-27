@@ -1,0 +1,142 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "dit_residency": "resident",
+        "mem_used_mib": 12930,
+        "moe": null,
+        "seconds": 25.021705909
+      }
+    },
+    {
+      "limits": {},
+      "name": "cold_generation",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 0.485627109,
+        "decoder": "taehv",
+        "denoise_s": 1.999999568,
+        "step_s": [
+          0.715051895,
+          0.642900021,
+          0.641882543
+        ],
+        "text_cache": "miss",
+        "text_s": 0.436879277,
+        "total_s": 3.003435901,
+        "video_encode_s": 0.094805668,
+        "video_push_s": 0.059847339,
+        "video_rgb_s": 0.1907159950061542,
+        "video_vae_s": 0.33726050949096686,
+        "video_wait_s": 0.053831352000000006,
+        "write_s": 0.06903648
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 0.327285569,
+        "decoder": "taehv",
+        "denoise_s": 1.9333735330000001,
+        "frames_sha256": "85e8d7aaed5ebf54c073d8f63412a729e28ce5345a87dbf2628311d4b784c8a4",
+        "peak_mib": 22692,
+        "step_s": [
+          0.647102993,
+          0.643416999,
+          0.642663752
+        ],
+        "text_cache": "hit",
+        "text_s": 0.002146645,
+        "total_s": 2.297721097,
+        "video_encode_s": 0.05935126,
+        "video_push_s": 0.00001819,
+        "video_rgb_s": 0.015550647001436591,
+        "video_vae_s": 0.26542351818084714,
+        "video_wait_s": 0.193373519,
+        "write_s": 0.066377506
+      }
+    },
+    {
+      "limits": {
+        "expected": 81
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 81,
+        "written": 81
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/wan/0ebddb0-10270616/wan13-dmd/frames/frame-040.png",
+        "mean": 0.47105173553912355,
+        "std": 0.2784241593422323
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/wan/0ebddb0-10270616/wan13-dmd/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast",
+    "request": {
+      "cond_cache": true,
+      "dmd": true,
+      "dmd_steps": [
+        1000,
+        757,
+        522
+      ],
+      "flow_shift": 8.0,
+      "guidance": 1.0,
+      "guidance_2": null,
+      "height": 480,
+      "num_frames": 81,
+      "plug": null,
+      "preset": "fast_wan_t2v_480p",
+      "prompt_set": null,
+      "step_distill": null,
+      "steps": 3,
+      "text_cache": "/fvscratch/runs/wan/0ebddb0-10270616/wan13-dmd/text-cache",
+      "unipc_sigmas": "fastvideo",
+      "vae": "auto",
+      "vsa": true,
+      "warm": true,
+      "weights": "/fvscratch/weights/fastwan21-1.3b",
+      "width": 832
+    }
+  },
+  "elapsed_s": 31.018155292,
+  "env": {
+    "FASTVIDEO_TAE_DIR": "/fvscratch/weights/auxiliary/tae",
+    "FASTVIDEO_VSA": "1"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "wan",
+  "status": "pass"
+}

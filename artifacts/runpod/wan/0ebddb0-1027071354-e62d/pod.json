@@ -1,0 +1,16 @@
+{
+  "id": "rm5d1sifi65sp1",
+  "name": "fv-lab-wan-0ebddb0-1027071354-e62d",
+  "family": "wan",
+  "tag": "0ebddb0-1027071354-e62d",
+  "sha": "0ebddb0",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:cac8223a2eacfe99204ab9e3baccba8725324c1b1c57b22602cba8c0fbd63d3e",
+  "url": "https://rm5d1sifi65sp1-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793085237.8360536,
+  "cap_s": 3600,
+  "min_ram_gb": 256,
+  "memory_gb": 283.0,
+  "vcpus": 28.0
+}
