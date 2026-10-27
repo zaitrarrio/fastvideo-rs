@@ -92,12 +92,16 @@ pub const MODE_KNOBS: [&str; 18] = [
 /// `FV_SF_SWITCH` (the stream's prompt and switch prompt); the tier's cell
 /// is their defaults.
 ///
+/// `mmaudio` (ADR-0019 §22, S5), whose branch stays until its GPU check:
+/// `FV_MMAUDIO_PROMPT` (the sidecar arms' prompt); the tier's cell is its
+/// default.
+///
 /// `wan` (ADR-0019 §22, S6), whose branch stays until its GPU check: its
 /// branch reads no knob of its own (`FV_CELLS` selects its arms, as fv-lab's
 /// `--cells` does); `FV_SFWAN_CELLS` is `sfwan`'s pick of `wan`'s arms
 /// (`runpod-matrix.sh sfwan`, which runs the branch with it as `FV_CELLS`),
 /// which on the `wan` tier is `--cells` itself.
-pub const SCRIPT_KNOBS: [&str; 15] = [
+pub const SCRIPT_KNOBS: [&str; 16] = [
     "FV_ORACLE_TARGETS",
     "FV_ORACLE_F32",
     "FV_ORACLE_OWN_TEXT",
@@ -112,6 +116,7 @@ pub const SCRIPT_KNOBS: [&str; 15] = [
     "FV_SFSTREAM_RUNS",
     "FV_SF_PROMPT",
     "FV_SF_SWITCH",
+    "FV_MMAUDIO_PROMPT",
     "FV_SFWAN_CELLS",
 ];
 
@@ -208,6 +213,12 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
         return Some(format!(
             "{key}: no tier reads it (it changed runpod-matrix.sh sfstream's runs or prompts); the sfstream tier's cell (lab/cells/sfstream-rollout.toml) is the script's defaults, its arms sfstream-main and sfstream-10min, selected with --cells (FV_CELLS); another run list or prompt is another cell (ADR-0019 §22, S4)"
         ));
+    }
+    if key == "FV_MMAUDIO_PROMPT" {
+        return Some(
+            "FV_MMAUDIO_PROMPT: no tier reads it (it changed runpod-matrix.sh mmaudio's prompt); the mmaudio tier's cell (lab/cells/mmaudio-sidecar.toml) is the script's default, its arms wan13-audio, sfwan13-audio and ours-v2a, selected with --cells (FV_CELLS); another prompt is another cell (ADR-0019 §22, S5)"
+                .to_owned(),
+        );
     }
     if key == "FV_SFWAN_CELLS" {
         return Some(
@@ -524,6 +535,35 @@ mod tests {
     }
 
     #[test]
+    fn the_mmaudio_prompt_is_refused_by_fv_lab_only() {
+        // mmaudio's prompt (ADR-0019 §22, S5): refused by fv-lab with a
+        // pointer to the tier's cell, in --extra-env and in fv-lab run's
+        // environment, for any tier; the script's branch still reads it, so
+        // runpod-http.sh's FV_LAB_NOT_READ gains it when the branch goes (S7).
+        let key = "FV_MMAUDIO_PROMPT";
+        for tier in ["mmaudio", "sfstream", "rtx6000"] {
+            let e = check_extra_env(tier, &[format!("{key}=a fox")]).unwrap_err();
+            assert!(
+                e.contains(&format!("--extra-env {key}: no tier reads it")),
+                "{e}"
+            );
+            assert!(e.contains("lab/cells/mmaudio-sidecar.toml"), "{e}");
+            assert!(e.contains("wan13-audio, sfwan13-audio and ours-v2a"), "{e}");
+            let env = |k: &str| (k == key).then(|| "a fox".to_owned());
+            let e = check_run_env(tier, env).unwrap_err();
+            assert!(e.contains(&format!("{key}: no tier reads it")), "{e}");
+            assert!(e.contains("ADR-0019 §22, S5"), "{e}");
+        }
+        assert!(SCRIPT_KNOBS.contains(&key));
+        assert!(!MODE_KNOBS.contains(&key));
+        assert!(!DROPPED_KNOBS.contains(&key));
+        assert!(!not_read().any(|k| k == key));
+        // Unset or empty, nothing is refused.
+        assert!(check_run_env("mmaudio", |_| None).is_ok());
+        assert!(check_run_env("mmaudio", |k| (k == key).then(String::new)).is_ok());
+    }
+
+    #[test]
     fn the_sfwan_cells_knob_is_refused_by_fv_lab_only() {
         // sfwan's pick of wan's arms (ADR-0019 §22, S6): refused by fv-lab
         // with the arms to pass as --cells, in --extra-env and in fv-lab
@@ -549,7 +589,9 @@ mod tests {
         assert!(!MODE_KNOBS.contains(&key));
         assert!(!not_read().any(|k| k == key));
         // The wan branch's own selection stays fv-lab's input.
-        assert!(check_run_env("wan", |k: &str| (k == "FV_CELLS").then(|| "kernels-wan".to_owned())).is_ok());
+        assert!(check_run_env("wan", |k: &str| (k == "FV_CELLS")
+            .then(|| "kernels-wan".to_owned()))
+        .is_ok());
     }
 
     #[test]

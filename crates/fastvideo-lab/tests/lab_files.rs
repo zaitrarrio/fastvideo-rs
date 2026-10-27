@@ -200,6 +200,51 @@ fn a_volume_r2_script_tier_reads_trees_on_the_volume_or_in_r2() {
     assert_eq!(tier.container_disk_gb, 150);
 }
 
+/// `mmaudio` (ADR-0019 §22, S5): each arm gates on a verify-weights.sh
+/// cell and names manifest trees, all three in R2 (none on the EU volume);
+/// fv-lab's R2 plan over the three arms fetches each tree once (79.61 GB)
+/// and holds at most fastwan21-1.3b and mmaudio-44k-v2 (50.68 GB) at once,
+/// which the tier's 180 GB holds with the 120 GB reserve.
+#[test]
+fn the_mmaudio_tier_reads_its_three_trees_from_r2_within_its_disk() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier("mmaudio").expect("mmaudio");
+    assert_eq!(tier.weights, TierWeights::VolumeR2);
+    let verify = read("scripts/gpu/verify-weights.sh");
+    let cells_line = verify
+        .split("CELLS=(")
+        .nth(1)
+        .and_then(|r| r.split(')').next())
+        .expect("verify-weights.sh CELLS=(…)");
+    let gates: BTreeSet<&str> = cells_line.split_whitespace().collect();
+    let sources = TreeSources::load(&repo_root()).expect("volumes.sh, weights-r2.tsv");
+    let mut arms = Vec::new();
+    for c in tier.all_cells().filter_map(|c| lab.cells.get(c)) {
+        for a in &c.arms {
+            let gate = a.gate.as_deref().expect("every arm gated");
+            assert!(gates.contains(gate), "{}: gate {gate}", a.name);
+            for t in &a.trees {
+                assert!(
+                    matches!(sources.source(t), Source::R2(_)),
+                    "{}: {t} in R2 only",
+                    a.name
+                );
+            }
+            arms.push((a.name.as_str(), a.trees.as_slice()));
+        }
+    }
+    assert_eq!(arms.len(), 3);
+    let plan = WeightsPlan::new(&sources, &arms).expect("its R2 trees");
+    assert_eq!(
+        plan.fetch_bytes,
+        29_212_120_229 + 28_928_814_212 + 21_464_170_647
+    );
+    assert_eq!(plan.peak_bytes, 29_212_120_229 + 21_464_170_647);
+    let peak_gb = plan.peak_bytes.div_ceil(1_000_000_000);
+    assert!(u64::from(tier.container_disk_gb) >= peak_gb + DISK_RESERVE_GB);
+    assert_eq!(tier.container_disk_gb, 180);
+}
+
 /// `wan` (ADR-0019 §22, S6): every arm gated on a verify-weights.sh cell
 /// whose trees are all R2-only (none on the EU volume), but four ungated
 /// ones (kernels-wan and the three compare-dumps); in the script's arm order
@@ -213,7 +258,11 @@ fn the_wan_tier_fetches_its_trees_in_turn_within_its_disk() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let tier = lab.tier("wan").expect("wan");
     assert_eq!(tier.weights, TierWeights::VolumeR2);
-    assert_eq!(tier.min_ram_gb, Some(256), "the 14B arms' host load, as gold's");
+    assert_eq!(
+        tier.min_ram_gb,
+        Some(256),
+        "the 14B arms' host load, as gold's"
+    );
     let verify = read("scripts/gpu/verify-weights.sh");
     let cells_line = verify
         .split("CELLS=(")
@@ -232,7 +281,12 @@ fn the_wan_tier_fetches_its_trees_in_turn_within_its_disk() {
                 continue;
             };
             assert!(gates.contains(gate.as_str()), "{}: gate {gate}", a.name);
-            assert_eq!(a.trees, [gate.clone()], "{}: its gate's one tree", a.name);
+            assert_eq!(
+                a.trees,
+                std::slice::from_ref(gate),
+                "{}: its gate's one tree",
+                a.name
+            );
             for t in &a.trees {
                 assert!(
                     matches!(sources.source(t), Source::R2(_)),
@@ -307,7 +361,10 @@ fn the_wan_tier_fetches_its_trees_in_turn_within_its_disk() {
         .filter(|(n, _)| ["wan13-dmd", "wan13-dmd-dense", "cli-fw22", "engine-fw22"].contains(n))
         .collect();
     let p = WeightsPlan::new(&sources, &check).expect("the check's trees");
-    assert_eq!(p.fetch_bytes, bytes("fastwan21-1.3b") + bytes("fastwan22-ti2v-5b"));
+    assert_eq!(
+        p.fetch_bytes,
+        bytes("fastwan21-1.3b") + bytes("fastwan22-ti2v-5b")
+    );
     assert_eq!(p.fetch_bytes, 53_413_890_791);
     assert_eq!(p.peak_bytes, bytes("fastwan21-1.3b"));
     assert_eq!(p.fetch_bytes.div_ceil(1_000_000_000) + DISK_RESERVE_GB, 174);
@@ -339,9 +396,10 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
         assert!(t.tae, "tier {} has TAE arms: tae = true", t.name);
     }
     // Addition 16 (ADR-0019 §22.4): the arms that read `{tae}` without a
-    // `tae` file are sfstream's two (`FASTVIDEO_TAE_DIR={tae}`), in a `tae =
-    // true` tier (`Lab::load` refuses any other), and the file they need,
-    // taew2_1, is one fetch-tae.sh fetches.
+    // `tae` file are sfstream's two and mmaudio's two Wan arms (§22, S5)
+    // (`FASTVIDEO_TAE_DIR={tae}`), in a `tae = true` tier (`Lab::load`
+    // refuses any other), and the file they need, taew2_1, is one
+    // fetch-tae.sh fetches.
     let readers: Vec<(&str, &str)> = lab
         .tiers
         .tiers
@@ -353,17 +411,29 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
                 .map(move |a| (t.name.as_str(), a))
         })
         .collect();
-    let (wan, others): (Vec<(&str, &str)>, Vec<(&str, &str)>) =
-        readers.iter().partition(|(t, _)| *t == "wan");
+    let wan: Vec<(&str, &str)> = readers
+        .iter()
+        .copied()
+        .filter(|(t, _)| *t == "wan")
+        .collect();
+    let others: Vec<(&str, &str)> = readers
+        .iter()
+        .copied()
+        .filter(|(t, _)| *t != "wan")
+        .collect();
     assert_eq!(
         others,
         [
             ("sfstream", "sfstream-main"),
-            ("sfstream", "sfstream-10min")
+            ("sfstream", "sfstream-10min"),
+            ("mmaudio", "wan13-audio"),
+            ("mmaudio", "sfwan13-audio")
         ]
     );
     assert!(lab.tier("sfstream").is_some_and(|t| t.tae));
-    // sfstream's arms read the directory; `wan stream` reads taew2_1 in it.
+    assert!(lab.tier("mmaudio").is_some_and(|t| t.tae));
+    // sfstream's arms read the directory; `wan stream` reads taew2_1 in it,
+    // and so does mmaudio's `wan gen` (the distilled presets' TAEHV).
     assert!(fetch.contains("\nfetch taew2_1.safetensors "));
     // wan (ADR-0019 §22, S6): each of its 45 gated arms reads the directory
     // (FASTVIDEO_TAE_DIR={tae}), the oracle arms taew2_2 in it too; the `auto`
@@ -436,8 +506,8 @@ fn every_tae_file_a_tae_dir_arm_names_is_one_fetch_tae_sh_fetches() {
         }
     }
     assert!(
-        readers_seen >= 2 + 45,
-        "sfstream's two arms and wan's 45 at least"
+        readers_seen >= 4 + 45,
+        "sfstream's two arms, mmaudio's two Wan arms and wan's 45 at least"
     );
 }
 

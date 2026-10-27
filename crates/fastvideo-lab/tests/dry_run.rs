@@ -28,6 +28,8 @@
 //! `sfstream` (ADR-0019 §22, S4) too, its arms' `FASTVIDEO_TAE_DIR={tae}` the
 //! merged root's `auxiliary/tae` where the script's is the volume's
 //! (`the_sfstream_tier_is_the_sfstream_family_with_tae_dir_per_arm`).
+//! `mmaudio` (ADR-0019 §22, S5) too, its three R2 trees fetched and dropped
+//! per arm (`the_mmaudio_tier_is_the_cut_mmaudio_family`).
 //! `wan` (ADR-0019 §22, S6) too: its 45 gated arms' `FASTVIDEO_TAE_DIR={tae}`,
 //! its oracle arms' `{tae}/taew2_2.safetensors`, its references under the
 //! container disk's `oracle-ref/` on both sides
@@ -1026,6 +1028,186 @@ fn the_sfstream_tier_is_the_sfstream_family_with_tae_dir_per_arm() {
     );
 }
 
+/// The `mmaudio` tier (ADR-0019 §22, S5): `runpod-matrix.sh mmaudio` cut, in
+/// the same commit, to the arms the tier keeps (the upstream venv / clone,
+/// inject, compare-dumps and waveform arms gone), with its two `export`s
+/// moved into each Wan arm's env and composite gates. Its default run is
+/// exactly the cut branch's three arms in the branch's order
+/// (`fixtures/mmaudio-dry-run.txt`, held line for line by
+/// `dry_run_equals_runpod_matrix_sh_for_every_tier`) and nothing else: no
+/// TAE fetch, no `V2A clip:` line, no WARN, no compare. The two Wan arms set
+/// `FASTVIDEO_MMAUDIO_WEIGHTS={weights}/mmaudio-44k-v2` and
+/// `FASTVIDEO_TAE_DIR={tae}` (Addition 16: not TAE-gated, in a `tae = true`
+/// tier) and gate on the composite cells of their Wan tree and
+/// mmaudio-44k-v2; `ours-v2a` reads wan13-audio's static clip and neither
+/// variable, gated on mmaudio-44k-v2. Being `volume+r2`, fv-lab's R2 plan
+/// fetches fastwan21-1.3b and mmaudio-44k-v2 before `wan13-audio`, drops
+/// fastwan21-1.3b and fetches sfwan21-1.3b before `sfwan13-audio`, and has
+/// nothing to do before `ours-v2a` (a tree is dropped only to make room for a
+/// fetch): at most 50.68 GB at once.
+#[test]
+fn the_mmaudio_tier_is_the_cut_mmaudio_family() {
+    const ARMS: [&str; 3] = ["wan13-audio", "sfwan13-audio", "ours-v2a"];
+    const GATES: [&str; 3] = [
+        "fastwan21-1.3b-mmaudio",
+        "sfwan21-1.3b-mmaudio",
+        "mmaudio-44k-v2",
+    ];
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier("mmaudio").expect("mmaudio");
+    assert_eq!(tier.cells, ["mmaudio-sidecar"]);
+    assert_eq!(tier.weights, TierWeights::VolumeR2);
+    assert_eq!(tier.container_disk_gb, 180);
+    assert_eq!(tier.cell_timeout_s, 3600);
+    assert!(
+        tier.tae,
+        "Addition 16: a {{tae}} reader's tier fetches the files"
+    );
+    assert!(tier.extra_cells.is_empty());
+    assert!(common::sibling_tier("mmaudio").is_none());
+    assert!(common::restored_tier("mmaudio").is_none());
+    let cell = lab.cells.get("mmaudio-sidecar").expect("the cell");
+    assert_eq!(
+        cell.arms
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect::<Vec<_>>(),
+        ARMS
+    );
+    assert_eq!(cell.tae_dir_arms(), ["wan13-audio", "sfwan13-audio"]);
+    assert!(cell.arms.iter().all(|a| a.tae.is_none()));
+    let trees: Vec<Vec<&str>> = cell
+        .arms
+        .iter()
+        .map(|a| a.trees.iter().map(String::as_str).collect())
+        .collect();
+    assert_eq!(
+        trees,
+        [
+            vec!["fastwan21-1.3b", "mmaudio-44k-v2"],
+            vec!["sfwan21-1.3b", "mmaudio-44k-v2"],
+            vec!["mmaudio-44k-v2"],
+        ]
+    );
+    let cfg = config("mmaudio");
+    let rendered = steps(&lab, &cfg);
+    let mut seen = Vec::new();
+    for s in Step::flatten(&rendered) {
+        match s {
+            Step::Arm {
+                name, gate, tae, ..
+            } => {
+                seen.push((name.as_str(), gate.as_deref()));
+                assert_eq!(*tae, None, "{name}: not TAE-gated");
+            }
+            other => panic!("only arms: {other:?}"),
+        }
+    }
+    assert_eq!(
+        seen,
+        ARMS.iter()
+            .zip(GATES)
+            .map(|(a, g)| (*a, Some(g)))
+            .collect::<Vec<_>>()
+    );
+    let all = dry_run_lines(&cfg, &rendered);
+    let r2: Vec<&String> = all.iter().filter(|l| r2_line(l)).collect();
+    assert_eq!(
+        r2,
+        [
+            "[mmaudio] dry-run weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 3 R2 trees (79.61 GB) fetched before the arms that read them, at most 50.68 GB on the container disk at once",
+            "[mmaudio] dry-run r2 wan13-audio: fetch fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef (29.21 GB), mmaudio-44k-v2@eu-20261011 (21.46 GB) into /fvscratch/weights",
+            "[mmaudio] dry-run r2 sfwan13-audio: drop fastwan21-1.3b (29.21 GB); fetch sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004 (28.93 GB) into /fvscratch/weights",
+        ],
+        "ours-v2a fetches nothing (mmaudio-44k-v2 is held), so it has no R2 step"
+    );
+    let lines: Vec<String> = all.into_iter().filter(|l| !r2_line(l)).collect();
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("[mmaudio] matrix start image=unknown")
+    );
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("[mmaudio] matrix done")
+    );
+    assert_eq!(lines.len(), ARMS.len() + 2, "nothing but the arms");
+    let bin = "/opt/fastvideo-rs/target/release/fv-gpucheck";
+    let env = "env FASTVIDEO_MMAUDIO_WEIGHTS=/fvscratch/weights/mmaudio-44k-v2 FASTVIDEO_TAE_DIR=/fvscratch/weights/auxiliary/tae ";
+    let runs = "/fvscratch/runs/mmaudio/1234567-10241200";
+    let wants = [
+        format!("{env}{bin} --mode fast --vsa wan gen --weights /fvscratch/weights/fastwan21-1.3b --prompt $'"),
+        format!("{env}{bin} --mode fast wan gen --weights /fvscratch/weights/sfwan21-1.3b --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 --num-frames 81 --prompt $'"),
+        format!("{bin} --mode fast mmaudio v2a --weights /fvscratch/weights/mmaudio-44k-v2 --video {runs}/wan13-audio/frames/output.mp4 --prompt $'"),
+    ];
+    let ends = [
+        format!(" --seed 1024 --warm --audio mmaudio --clip-dir {runs}/wan13-audio/frames "),
+        format!(" --seed 1024 --warm --audio mmaudio --clip-dir {runs}/sfwan13-audio/frames "),
+        format!(" --seed 1000 --runs 3 --out {runs}/ours-v2a "),
+    ];
+    for ((l, arm), (want, end)) in lines[1..lines.len() - 1]
+        .iter()
+        .zip(ARMS)
+        .zip(wants.iter().zip(&ends))
+    {
+        let cmd = l
+            .strip_prefix(&format!("[mmaudio] dry-run {arm}: "))
+            .unwrap_or_else(|| panic!("{arm}: {l}"));
+        assert!(cmd.starts_with(want.as_str()), "{arm}: {cmd}");
+        assert!(cmd.ends_with(end.as_str()), "{arm}: {cmd}");
+        assert!(
+            cmd.contains("<E>\\nAudio: male narration"),
+            "{arm}: the two-line prompt, ANSI-C quoted: {cmd}"
+        );
+        assert!(
+            !cmd.contains("/workspace/weights"),
+            "the merged root: {cmd}"
+        );
+    }
+    // The cut branch in the script's golden: the arms, each Wan arm's own env
+    // with the volume's paths, nothing of the upstream / inject / waveform
+    // arms, no TAE fetch, no WARN, no clip line (ADR-0019 §22.15).
+    let raw = fixture("mmaudio-dry-run.txt");
+    assert_eq!(
+        raw.matches(": env FASTVIDEO_MMAUDIO_WEIGHTS=/workspace/weights/mmaudio-44k-v2 FASTVIDEO_TAE_DIR=/workspace/weights/auxiliary/tae /opt/fastvideo-rs/target/release/fv-gpucheck ").count(),
+        2
+    );
+    for gone in [
+        "up-env",
+        "up-sidecar",
+        "mm-pixels",
+        "mm-features",
+        "mm-e2e",
+        "diff-",
+        "wave-",
+        "V2A clip",
+        "WARN",
+        "tae-fetch",
+        "compare",
+    ] {
+        assert!(!raw.contains(gone), "{gone}: {raw}");
+    }
+    assert_eq!(raw.lines().count(), 5);
+    assert_eq!(
+        fixture("mmaudio-gates.tsv")
+            .lines()
+            .map(|l| l.split('\t').take(4).collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>(),
+        [
+            "arm wan13-audio fastwan21-1.3b-mmaudio -",
+            "arm sfwan13-audio sfwan21-1.3b-mmaudio -",
+            "arm ours-v2a mmaudio-44k-v2 -"
+        ],
+        "the composite gates, no TAE file"
+    );
+    // fv-lab's refusal of the script's knob names this cell's arms.
+    let e = fastvideo_lab::knobs::check_extra_env("mmaudio", &["FV_MMAUDIO_PROMPT=x".into()])
+        .unwrap_err();
+    assert!(
+        e.contains("its arms wan13-audio, sfwan13-audio and ours-v2a"),
+        "{e}"
+    );
+}
+
 /// The `wan` tier (ADR-0019 §22, S6): `runpod-matrix.sh wan` with its
 /// `export FASTVIDEO_TAE_DIR="$TAE"` moved into each gated arm's env and
 /// `engine-fw22`'s `--tae-dir "$TAE"` dropped, in the same commit (§22.4's
@@ -1058,7 +1240,10 @@ fn the_wan_tier_is_the_wan_family_with_tae_dir_per_arm() {
     assert_eq!(tier.container_disk_gb, 210);
     assert_eq!(tier.cell_timeout_s, 3600);
     assert_eq!(tier.min_ram_gb, Some(256));
-    assert!(tier.tae, "Addition 16: a {{tae}} reader's tier fetches the files");
+    assert!(
+        tier.tae,
+        "Addition 16: a {{tae}} reader's tier fetches the files"
+    );
     assert!(tier.extra_cells.is_empty());
     assert!(common::sibling_tier("wan").is_none());
     assert!(common::restored_tier("wan").is_none());
@@ -1092,14 +1277,19 @@ fn the_wan_tier_is_the_wan_family_with_tae_dir_per_arm() {
     let count = |p: &str| theirs.iter().filter(|s| s.starts_with(p)).count();
     assert_eq!(count("compare "), 29);
     assert_eq!(count("gate "), 20);
-    let refs: Vec<&String> = theirs.iter().filter(|s| s.starts_with("reference ")).collect();
+    let refs: Vec<&String> = theirs
+        .iter()
+        .filter(|s| s.starts_with("reference "))
+        .collect();
     assert_eq!(refs, ["reference wan22-ti2v", "reference fastwan22-ti2v"]);
     assert_eq!(theirs.len() - 29 - 20 - 2, 49, "49 commands");
     // fv-lab's steps hold the same arms: 45 gated, 4 ungated, none TAE-gated.
     let arms: Vec<(&str, bool)> = Step::flatten(&rendered)
         .into_iter()
         .filter_map(|s| match s {
-            Step::Arm { name, gate, tae, .. } => {
+            Step::Arm {
+                name, gate, tae, ..
+            } => {
                 assert_eq!(*tae, None, "{name}: not TAE-gated");
                 Some((name.as_str(), gate.is_some()))
             }
@@ -1110,7 +1300,12 @@ fn the_wan_tier_is_the_wan_family_with_tae_dir_per_arm() {
     let ungated: Vec<&str> = arms.iter().filter(|(_, g)| !g).map(|(n, _)| *n).collect();
     assert_eq!(
         ungated,
-        ["kernels-wan", "wan5b-oracle-diff", "wan5b-oracle-exact-diff", "fw22-oracle-diff"]
+        [
+            "kernels-wan",
+            "wan5b-oracle-diff",
+            "wan5b-oracle-exact-diff",
+            "fw22-oracle-diff"
+        ]
     );
     for c in tier.cells.iter().filter_map(|c| lab.cells.get(c)) {
         let gated: Vec<&str> = c
@@ -1119,7 +1314,12 @@ fn the_wan_tier_is_the_wan_family_with_tae_dir_per_arm() {
             .filter(|a| a.gate.is_some())
             .map(|a| a.name.as_str())
             .collect();
-        assert_eq!(c.tae_dir_arms(), gated, "{}: every gated arm reads {{tae}}", c.name);
+        assert_eq!(
+            c.tae_dir_arms(),
+            gated,
+            "{}: every gated arm reads {{tae}}",
+            c.name
+        );
     }
     // Each gated arm's command starts with its own FASTVIDEO_TAE_DIR (the
     // merged root's auxiliary/tae, the script's $TAE on an R2 run); the
@@ -1138,7 +1338,10 @@ fn the_wan_tier_is_the_wan_family_with_tae_dir_per_arm() {
         );
         assert_eq!(cmd.contains("auxiliary/tae"), *gated, "{name}");
         assert!(!cmd.contains("--tae-dir"), "{name}");
-        assert!(!cmd.contains("/workspace/weights"), "the merged root: {cmd}");
+        assert!(
+            !cmd.contains("/workspace/weights"),
+            "the merged root: {cmd}"
+        );
         assert_eq!(
             cmd.contains(&format!(" --taehv {tae}/taew2_2.safetensors")),
             ["wan5b-oracle", "fw22-oracle"].contains(name),
@@ -1175,7 +1378,9 @@ fn the_wan_tier_is_the_wan_family_with_tae_dir_per_arm() {
         ]
     );
     assert!(r2[1].ends_with(" into /fvscratch/weights") && !r2[1].contains("drop "));
-    assert!(r2[2..].iter().all(|l| l.contains(": drop ") && l.contains("; fetch ")));
+    assert!(r2[2..]
+        .iter()
+        .all(|l| l.contains(": drop ") && l.contains("; fetch ")));
     // The lockstep lines are in the script's golden: 45 env entries with the
     // volume's $TAE, no --tae-dir, no TAE fetch in a dry run.
     assert_eq!(
@@ -1183,10 +1388,15 @@ fn the_wan_tier_is_the_wan_family_with_tae_dir_per_arm() {
             .count(),
         45
     );
-    assert!(!raw.contains("--tae-dir"), "the lockstep change is in the golden");
+    assert!(
+        !raw.contains("--tae-dir"),
+        "the lockstep change is in the golden"
+    );
     assert!(!raw.contains("WARN") && !raw.contains("tae-fetch"), "{raw}");
     assert_eq!(raw.matches("dry-run reference ").count(), 2);
-    assert!(raw.contains("[wan] dry-run reference wan22-ti2v: /fvscratch/oracle-ref/wan22-ti2v/dump\n"));
+    assert!(
+        raw.contains("[wan] dry-run reference wan22-ti2v: /fvscratch/oracle-ref/wan22-ti2v/dump\n")
+    );
     assert!(
         fixture("wan-gates.tsv")
             .lines()
