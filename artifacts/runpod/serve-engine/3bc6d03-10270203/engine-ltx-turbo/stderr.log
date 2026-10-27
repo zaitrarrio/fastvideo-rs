@@ -1,0 +1,153 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] ltx2 technique profile: ltx2/ltx25_distill_sol
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+[fastvideo] ltx2 dit: loaded block 8/48 (88.5 GiB free)
+[fastvideo] ltx2 dit: loaded block 16/48 (82.8 GiB free)
+[fastvideo] ltx2 dit: loaded block 24/48 (77.0 GiB free)
+[fastvideo] ltx2 dit: loaded block 32/48 (71.2 GiB free)
+[fastvideo] ltx2 dit: loaded block 40/48 (65.4 GiB free)
+[fastvideo] ltx2 dit: loaded block 48/48 (59.7 GiB free)
+[fastvideo] ltx2 dit: 48 blocks resident
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":115.16,"viewed_gb":39.11,"prefetch_read_gb":39.11,"prefetch_skipped_gb":0.00,"prefetch_busy_s":1778.2,"viewed_gbps":0.34,"window_wait_s":0.0,"fill_s":0.7,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":108.2,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"ltx25-distill-sol\")): PoolEntry { executor: 0, model: ModelId(\"ltx25-distill-sol\"), warm: true, state: Resident, warmup: Off }} }","readiness":"Ready","seconds":115.703155602}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 28.37s, upload wait 0.16s, compute starved 28.50s
+[fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+[fastvideo] ltx2 memory text: peak 43.56 GiB used, 43.62 GiB reserved; 37.55 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 6.06 | pool_reserved 0.07 | non_pool 0.69 | total 44.25 GiB
+[fastvideo] ltx2 ancestral step 1/8 sigma 1.000000 (0.39s)
+[fastvideo] ltx2 ancestral step 2/8 sigma 0.993750 (0.36s)
+[fastvideo] ltx2 ancestral step 3/8 sigma 0.987500 (0.36s)
+[fastvideo] ltx2 ancestral step 4/8 sigma 0.981250 (0.36s)
+[fastvideo] ltx2 ancestral step 5/8 sigma 0.975000 (0.36s)
+[fastvideo] ltx2 ancestral step 6/8 sigma 0.909375 (0.36s)
+[fastvideo] ltx2 ancestral step 7/8 sigma 0.725000 (0.36s)
+[fastvideo] ltx2 ancestral step 8/8 sigma 0.421875 (0.36s)
+[fastvideo] ltx2 memory stage1: peak 37.99 GiB used, 38.25 GiB reserved; 37.55 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 0.49 | pool_reserved 0.26 | non_pool 0.69 | total 38.68 GiB
+[fastvideo] ltx2 memory upsample: peak 40.17 GiB used, 40.31 GiB reserved; 37.76 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | upsampler 0.00 (max 1.85) | activations 0.82 | pool_reserved 0.14 | non_pool 0.69 | total 40.86 GiB
+[fastvideo] ltx2 upsample 6.26s → latent grid [16, 22, 40]
+[fastvideo] ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), distilled lora not beside weights
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=14080 sk=14080 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=14080 sk=1024 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa auto (sm_12x rule): bh=32 sq=14080 sk=126 d=64 -> flash_mma_fwd2
+[fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=14080 blocks=220 sink=0
+[fastvideo] ltx2 step transfers: d2h 0 MiB in 0 copies, h2d 1908 MiB in 86 copies
+[fastvideo] ltx2 step 1/3 sigma 0.909375 (1.35s)
+[fastvideo] ltx2 step 2/3 sigma 0.725000 (1.32s)
+[fastvideo] ltx2 step 3/3 sigma 0.421875 (1.31s)
+[fastvideo] ltx2 memory stage2: peak 39.49 GiB used, 40.12 GiB reserved; 37.76 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 1.99 | pool_reserved 0.64 | non_pool 0.69 | total 40.18 GiB
+[fastvideo] ltx vae: channels-last bf16 decoder (0.01s to convert weights)
+[fastvideo] ltx2 video decode 1.24s: vae 1.22s, rgb 0.09s, push 0.00s, wait 0.44s
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.18s, 0.10 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.30 GiB of 43.38
+[fastvideo] ltx2 video decode + mp4 1.31s (mp4 tail 0.07s); png frames after it 0.18s
+[fastvideo] ltx2 memory decode: peak 40.45 GiB used, 41.38 GiB reserved; 38.49 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 2.95 | pool_reserved 0.93 | non_pool 1.26 | total 41.71 GiB
+[INFO] engine/timings {"first_step_s":89.886628934,"load_s":115.703155602,"metrics":{"build_rtf":2.616499175801653,"inference_s":13.191516678000001,"peak_memory_mb":44600.696281433105,"stage_durations":{"audio_decode":0.189107319,"denoise":13.191516678000001,"encode":0.093975572,"stage1":2.945543272,"stage2":3.98495992,"text":89.459246599,"upsample":6.261013486,"video_decode":1.311947495}},"stages":[{"at_s":0.00027091,"stage":"text"},{"at_s":89.493366443,"stage":"denoise"},{"at_s":92.430779527,"stage":"upsample"},{"at_s":98.706604535,"stage":"refine"},{"at_s":102.699972974,"stage":"video_decode"}],"submit_to_mp4_s":104.492683077}
+[PASS] engine/progress {"events":11,"last":[11,11]} (limits {"events":11,"steps":11})
+[PASS] engine/mp4 {"audio_rate":48000,"bytes":2189446,"duration_s":5.042,"fps":24.0,"frames":121,"height":704,"path":"/fvscratch/runs/serve-engine/3bc6d03-10270203/engine-ltx-turbo/out/3ab40e57-a3b5-4805-976e-bd82144edf68/output.mp4","width":1280} (limits {"audio":true,"frames":121,"height":704,"width":1280})
+[PASS] engine/frames {"frames_sha256":"6d7fb543408ef908d760e81c5cd3e214bdbc57dedac6f7101131ff1eba037f08","pngs":121} (limits {"frames":121})
+[PASS] engine/identical_to_cli {"cli_dir":"/fvscratch/runs/serve-engine/3bc6d03-10270203/cli-ltx-turbo/frames","cli_frames":121,"cli_sha256":"6d7fb543408ef908d760e81c5cd3e214bdbc57dedac6f7101131ff1eba037f08","engine_frames":121,"engine_sha256":"6d7fb543408ef908d760e81c5cd3e214bdbc57dedac6f7101131ff1eba037f08","first_differing_frame":null} (limits {"identical":true})
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 0.21s, upload wait 0.18s, compute starved 0.40s
+[fastvideo] ltx2 memory text: peak 44.52 GiB used, 44.59 GiB reserved; 38.52 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 7.03 | pool_reserved 0.07 | non_pool 0.69 | total 45.21 GiB
+[fastvideo] ltx2 step transfers: d2h 376 MiB in 120 copies, h2d 26994 MiB in 1019 copies
+[fastvideo] ltx2 ancestral step 1/8 sigma 1.000000 (0.37s)
+[fastvideo] ltx2 ancestral step 2/8 sigma 0.993750 (0.36s)
+[fastvideo] ltx2 ancestral step 3/8 sigma 0.987500 (0.36s)
+[fastvideo] ltx2 ancestral step 4/8 sigma 0.981250 (0.36s)
+[PASS] engine/cancel {"cancel_at_s":13.249283112,"cancel_to_end_s":0.3660309799999997,"cancelled_at_step":3,"end":"cancelled","end_s":13.615314092,"leftover_frames_dir":null,"pool_used_after":41331335368,"pool_used_before":41331335368,"steps_after_cancel":1} (limits {"end":"cancelled","steps_after_cancel_max":1})
+[PASS] stage engine → gpucheck-out/engine.json (235.4s)
