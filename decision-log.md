@@ -2246,6 +2246,17 @@ Project code: FVID
 - Open: the GPU check §22.18 (the coordinator's; the oracle cells optional, needing $20.50 at their start); S7 for `wan` must not delete the branch while `sfwan` runs it (wait for S8, retire `sfwan` with it, or route its wan half through `fv-lab run wan --cells`, §22.18 "Then")
 - Review (2026-10-27, coordinator's independent review, nothing blocking): the optional oracle block expects `fw22-oracle` to fail alike (its last run, `9b2c963-09282019`, failed the DiT rel-L2 5e-2 limit; fal-parity §5.4/§5.5), O0 reading its exit and O2 its two DiT checks, re-simulated (23 mutations); notes added on the compares' and gates' env, the 210 GB headroom, a full run's ~3.1 h against ~3.67 h usable, the balance's readiness / retry allowance ($14.66), the image's `lab/` for `runpod.sh matrix wan`, the unreachable `$W` fallback
 
+### FVID · 2026-10-27 · FVID-2026-10-27-d1-s6-podup-cells-ref
+- Trigger: the S6 GPU check's fv-lab side (`fv-lab pod up --family wan --cells wan13-dmd,wan13-dmd-dense,kernels-wan,cli-fw22,engine-fw22`, `SHA=0ebddb0`) was refused before any pod: "tier `wan` reads upstream references", though no selected arm is in an oracle cell; the script side ran alone (~$0.25), not compared
+- Options: check only the reference cells holding a selected arm when `--cells` is given; or make `Lab::resolve_selected` filter a tier's `cells` by the selection (changes `run`, `gate` and the goldens' plans)
+- Decision: (agent, on the coordinator's instruction) the first, in `pod up` only; without `--cells` a tier with a reference cell stays refused; `baseline_for_pod` left on the whole tier (the pod's `run` needs `FV_BASELINE_SHA` and fetches the baseline for any baseline arm, selected or not, and no tier mixes baseline cells with others)
+- Reason: the pod's run already skips an unselected reference cell with a log line and nothing else (`Runner::reference_cell`, `start_prefetch`), as the script's guard skips its oracle blocks, so §22.18's pass block is unchanged
+- Reversibility: high (one condition in `fv-lab.rs`, one test)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §22.18 ("First attempt")
+- Verification: `tests/fv_lab_bin.rs` `a_wan_pod_needs_references_only_for_the_oracle_arms_it_selects` (failed before the fix with the GPU check's error, passes after)
+- Open: the GPU check §22.18 re-run with fv-lab built from this fix
+
 ### FVID · 2026-10-27 · FVID-2026-10-27-d1-s7-retire-four
 - Trigger: the coordinator's slice S7 of FVID-2026-10-26-d1-remaining (ADR-0019 §22.6): retire `hd` (with its sibling `hd5`), `serve-engine`, `sfstream` and `mmaudio` from `runpod-matrix.sh` after their GPU checks passed (§22.10, §22.12, §22.14, §22.16, evidence merged); `wan` and `sfwan` (S8) and `oracle` out of scope
 - Options:

@@ -1032,7 +1032,12 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
     // A tier of oracle cells reads upstream references (ADR-0019 §15):
     // without their URL every cell is skipped, and a reference the upstream
     // pods never make is waited for (FV_ORACLE_WAIT_S, 3 h) on a GPU pod.
-    if cells.iter().any(|c| c.reference.is_some()) {
+    // With --cells, only the oracle cells holding a selected arm: the run
+    // skips the others without fetching or waiting (`Runner::reference_cell`,
+    // `start_prefetch`), so `wan`'s non-oracle arms need no URL (§22.18).
+    if cells.iter().any(|c| {
+        c.reference.is_some() && only.is_none_or(|o| c.arms.iter().any(|a| o.contains(&a.name)))
+    }) {
         let urls: Vec<String> = so
             .extra_env
             .iter()
