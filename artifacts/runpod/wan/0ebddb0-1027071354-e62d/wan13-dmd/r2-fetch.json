@@ -1,0 +1,1 @@
+{"state": "done", "bytes_done": 29212120229, "bytes_total": 29212120229, "elapsed_s": 23.4, "mb_per_s": 1249.9, "trees": {"fastwan21-1.3b": "ready"}, "error": null, "stream": false, "ready": false, "retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 1, "boosts": 0}

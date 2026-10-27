@@ -1,0 +1,150 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/wan/0ebddb0-1027071354-e62d artifacts/runpod/wan/0ebddb0-10270616
+same cli-fw22: {"exit":0,"skipped":null}, 121 frames byte-identical
+same engine-fw22: {"exit":0,"skipped":null}, no frames
+same kernels-wan: {"exit":0,"skipped":null}, no frames
+same wan13-dmd: {"exit":0,"skipped":null}, 162 frames byte-identical
+same wan13-dmd-dense: {"exit":0,"skipped":null}, 162 frames byte-identical
+same compare/compare-clips-fw22--fw22-taehv.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-sfwan13-81f-composed--sfwan13-81f-flash.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-sfwan13-81f-flash--sfwan13-81f-wholeclip.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-sfwan13-81f-fullvae--sfwan13-81f-flash.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-bf16act--wan13-fuse.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-dmd--wan13-dmd-dense.json: {"status":"pass","off_identity":"different"}
+same compare/compare-clips-wan13-dmd--wan13-dmd-nocache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-dmd--wan13-dmd-sol.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-dmd--wan13-dmd-teacache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-dmd-fullvae--wan13-dmd.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-dmd-fullvae-chunk1--wan13-dmd-fullvae.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-f32act--wan13-bf16act.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-f32act--wan13-fuse.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-f32act--wan13-mxfp8.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-f32act--wan13-w8a8.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-fuse--wan13-mxfp8.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-fuse--wan13-w8a8.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14--wan14-easycache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14--wan14-fullstack.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14--wan14-sol.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14--wan14-teacache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14-4step--wan14-4step-nocache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14b-f32act--wan14b-bf16act.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14b-f32act--wan14b-mxfp8.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan5b--fw22.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan5b--wan5b-easycache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan5b--wan5b-taehv.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan5b-f32act--wan5b-bf16act.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan5b-f32act--wan5b-mxfp8.json: {"status":"skipped","off_identity":null}
+5 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 29 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+exit 0
+
+# ADR-0019 §22.18 main pass block as written at 0ebddb0 (L and S filled in, ROOT the checkout: fv-lab-compare-runs.sh and
+# fixtures/wan-dry-run.txt are the same at 0ebddb0 and at main 49022979), on the two run directories (stderr included).
+# The script side (S) is the first attempt's (06:16:53Z, pod l5uqpb1s8hkvtz; fv-lab's pod up refused at once, fixed in #233);
+# the fv-lab side (L) the re-run at 07:13:54Z (pod rm5d1sifi65sp1, fv-lab 0.1.83 on the driver); both pods image sha-0ebddb0.
+same cli-fw22: {"exit":0,"skipped":null}, 121 frames byte-identical
+same engine-fw22: {"exit":0,"skipped":null}, no frames
+same kernels-wan: {"exit":0,"skipped":null}, no frames
+same wan13-dmd: {"exit":0,"skipped":null}, 162 frames byte-identical
+same wan13-dmd-dense: {"exit":0,"skipped":null}, 162 frames byte-identical
+same compare/compare-clips-fw22--fw22-taehv.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-sfwan13-81f-composed--sfwan13-81f-flash.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-sfwan13-81f-flash--sfwan13-81f-wholeclip.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-sfwan13-81f-fullvae--sfwan13-81f-flash.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-bf16act--wan13-fuse.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-dmd--wan13-dmd-dense.json: {"status":"pass","off_identity":"different"}
+same compare/compare-clips-wan13-dmd--wan13-dmd-nocache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-dmd--wan13-dmd-sol.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-dmd--wan13-dmd-teacache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-dmd-fullvae--wan13-dmd.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-dmd-fullvae-chunk1--wan13-dmd-fullvae.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-f32act--wan13-bf16act.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-f32act--wan13-fuse.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-f32act--wan13-mxfp8.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-f32act--wan13-w8a8.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-fuse--wan13-mxfp8.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan13-fuse--wan13-w8a8.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14--wan14-easycache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14--wan14-fullstack.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14--wan14-sol.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14--wan14-teacache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14-4step--wan14-4step-nocache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14b-f32act--wan14b-bf16act.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan14b-f32act--wan14b-mxfp8.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan5b--fw22.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan5b--wan5b-easycache.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan5b--wan5b-taehv.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan5b-f32act--wan5b-bf16act.json: {"status":"skipped","off_identity":null}
+same compare/compare-clips-wan5b-f32act--wan5b-mxfp8.json: {"status":"skipped","off_identity":null}
+5 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 29 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+FAIL 0
+PASS 1 artifacts/runpod/wan/0ebddb0-1027071354-e62d
+PASS 1 artifacts/runpod/wan/0ebddb0-10270616
+PASS 2
+PASS 3
+PASS 4
+PASS 5 artifacts/runpod/wan/0ebddb0-1027071354-e62d
+PASS 5 artifacts/runpod/wan/0ebddb0-10270616
+PASS 6 fv-lab
+PASS 6 script
+PASS 7
+mp4 video streams: differ (reported, not judged)
+1c1
+< ./engine-fw22/out/af2d4e5b-af15-4d1a-97b9-447f290a7a36/output.mp4 0,v,SHA256=be6e2ae7e45bbacd12073207d8c575cd72caada50335db99031100d5421ab925
+---
+> ./engine-fw22/out/93282dd9-106d-44c8-bcf5-9fa8163e0c43/output.mp4 0,v,SHA256=be6e2ae7e45bbacd12073207d8c575cd72caada50335db99031100d5421ab925
+
+# Item 0 printed FAIL 0 on its guard alone: the grep for
+#   same compare/compare-clips-wan13-dmd--wan13-dmd-dense.json: {"status":"[a-z]*","off_identity":null}
+# in want.txt, whose line is built from fv-lab's own report and reads {"status":"pass","off_identity":"different"}
+# (on both sides, by the comparator's line above). rc was 0, want.txt had 35 lines and 29 compare lines, and want.txt
+# equals the comparator's output (diff empty); the guard's && stopped the chain before that diff ran in the block.
+# compare-clips always records off_identity (crates/fastvideo-gpucheck/src/clipcmp.rs:321-333, set at 626-628) and
+# makes it a hard gate only when --off-identity is passed (531-546, "not requested" at 544; 650-662, else a note at 663-665,
+# report.rs:154-163, ok: true). The VSA / dense compare (lab/cells/wan-fastwan21-1.3b.toml:216-219) passes no
+# --off-identity: .context.thresholds.off_identity is "not requested", the off_identity check a note with ok true,
+# {"max_abs_diff_uint8":255,"nonidentical_frames":81,"pairs":81,"status":"different"} on both sides. VSA and dense are
+# different attention, so "different" is the right value. The null came from artifacts/runpod/wan/9b2c963-09282019,
+# where this compare was a skipped report ({"stage":…,"status":"skipped","reason":"frames missing"}, no context).
+# Item 0 again with only the guard's off_identity corrected from null to "different" (ADR-0019 §22.18 "Result"):
+$ L=artifacts/runpod/wan/0ebddb0-1027071354-e62d; S=artifacts/runpod/wan/0ebddb0-10270616; ROOT=.
+$ T=$(mktemp -d)
+$ bash "$ROOT/scripts/gpu/fv-lab-compare-runs.sh" $L $S >$T/cmp.txt; rc=$?
+$ { …want.txt built exactly as in the block… } >$T/want.txt
+$ [ "$rc" = 0 ] && [ "$(wc -l <$T/want.txt)" = 35 ] && [ "$(grep -c '^same compare/' $T/want.txt)" = 29 ] \
+>   && grep -q '^same compare/compare-clips-wan13-dmd--wan13-dmd-dense.json: {"status":"[a-z]*","off_identity":"different"}$' $T/want.txt \
+>   && diff $T/want.txt $T/cmp.txt && echo "PASS 0" || echo "FAIL 0"
+PASS 0
+$ echo "rc=$rc want=$(wc -l <$T/want.txt) lines, $(grep -c '^same compare/' $T/want.txt) compare lines"; grep 'wan13-dmd--wan13-dmd-dense' $T/want.txt
+rc=0 want=35 lines, 29 compare lines
+same compare/compare-clips-wan13-dmd--wan13-dmd-dense.json: {"status":"pass","off_identity":"different"}
+# The corrected item also fails, checked on copies of the two run directories: off_identity "ok" on both sides,
+# the report skipped on both, "ok" on the script side only, no context.off_identity on both: FAIL 0 each.
+
+# The reported (not judged) mp4 line printed "differ" for two reasons that are the block's, not the runs': ffmpeg
+# without -nostdin read the while loop's stdin, so two of the five paths lost their leading "./" and were "unreadable"
+# on both sides alike, and the engine's job directory (out/<uuid>/, one per job) differs across the pods. Again with
+# -nostdin and the job directory named <job>:
+$ vh() { (cd $1 && find . -name '*.mp4' | LC_ALL=C sort | while read -r f; do
+>   echo "$(sed -E 's#^\./engine-fw22/out/[^/]+/#./engine-fw22/out/<job>/#' <<<"$f") $(ffmpeg -nostdin -v error -i "$f" -map 0:v:0 -c copy -f streamhash - 2>/dev/null || echo unreadable)"; done); }
+$ VL=$(vh $L); VS=$(vh $S); [ "$VL" = "$VS" ] && echo "mp4 video streams: the same ($(wc -l <<<"$VL"))" \
+>   || { echo "mp4 video streams: differ (reported, not judged)"; diff <(echo "$VL") <(echo "$VS"); }
+mp4 video streams: the same (5)
+./engine-fw22/out/<job>/output.mp4 0,v,SHA256=be6e2ae7e45bbacd12073207d8c575cd72caada50335db99031100d5421ab925
+./wan13-dmd-dense/frames/cold/output.mp4 0,v,SHA256=63cd9635c6ac26511c077b69c35a60c4c0861b9fb36b30f1c4aacb3430866832
+./wan13-dmd-dense/frames/output.mp4 0,v,SHA256=63cd9635c6ac26511c077b69c35a60c4c0861b9fb36b30f1c4aacb3430866832
+./wan13-dmd/frames/cold/output.mp4 0,v,SHA256=f7afde394fd85bdf454aa70e7a041d27bed388f9c5f52eb1ed95bdb840080b2c
+./wan13-dmd/frames/output.mp4 0,v,SHA256=f7afde394fd85bdf454aa70e7a041d27bed388f9c5f52eb1ed95bdb840080b2c
+
+# The whole main block as corrected in ADR-0019 §22.18 (item 0's guard and the mp4 line), on the two run directories
+# (the comparator's 35 lines, printed by item 0, as at the top):
+PASS 0
+PASS 1 artifacts/runpod/wan/0ebddb0-1027071354-e62d
+PASS 1 artifacts/runpod/wan/0ebddb0-10270616
+PASS 2
+PASS 3
+PASS 4
+PASS 5 artifacts/runpod/wan/0ebddb0-1027071354-e62d
+PASS 5 artifacts/runpod/wan/0ebddb0-10270616
+PASS 6 fv-lab
+PASS 6 script
+PASS 7
+mp4 video streams: the same (5)

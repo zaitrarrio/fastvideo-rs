@@ -1,0 +1,38 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] taehv available for the distilled presets (/fvscratch/weights/auxiliary/tae)
+[fastvideo] wan load: host peak RSS 75.9 GiB (eager dit)
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":12930,"moe":null,"seconds":25.021705909}
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] vsa: grid (21, 30, 52) tiles 624 topk 125 group 32
+[fastvideo] vsa fine kernel: Mma (sm12, dim 128, auto)
+[fastvideo] vsa fine kernel: Tma ring (3 slots) (sm12, 128B swizzle)
+[fastvideo] sdpa auto (sm_12x rule): bh=12 sq=32760 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=32760 Sk=512 D=128
+[fastvideo] dmd step 1/3 t=1000 done in 712ms
+[fastvideo] dmd step 2/3 t=757 done in 642ms
+[fastvideo] dmd step 3/3 t=522 done in 641ms
+[fastvideo] dmd 3 steps done in 1997ms
+[fastvideo] taehv.decode done in 331ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.07s, 0.04 GiB, synced), ffmpeg feed blocked 0.18s, mp4 tail 0.09s, buffered peak 0.09 GiB of 129.38
+[fastvideo] wrote mp4 /fvscratch/runs/wan/0ebddb0-10270616/wan13-dmd/frames/cold/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/wan/0ebddb0-10270616/wan13-dmd/frames/cold (text 0.44s, denoise 2.00s, decode+mp4 0.49s, png 0.07s)
+[fastvideo] generate done in 3003ms
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.485627109,"decoder":"taehv","denoise_s":1.999999568,"step_s":[0.715051895,0.642900021,0.641882543],"text_cache":"miss","text_s":0.436879277,"total_s":3.003435901,"video_encode_s":0.094805668,"video_push_s":0.059847339,"video_rgb_s":0.1907159950061542,"video_vae_s":0.33726050949096686,"video_wait_s":0.053831352000000006,"write_s":0.06903648}
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 646ms
+[fastvideo] dmd step 2/3 t=757 done in 643ms
+[fastvideo] dmd step 3/3 t=522 done in 642ms
+[fastvideo] dmd 3 steps done in 1932ms
+[fastvideo] taehv.decode done in 108ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.07s, 0.04 GiB, synced), ffmpeg feed blocked 0.15s, mp4 tail 0.06s, buffered peak 0.09 GiB of 129.33
+[fastvideo] wrote mp4 /fvscratch/runs/wan/0ebddb0-10270616/wan13-dmd/frames/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/wan/0ebddb0-10270616/wan13-dmd/frames (text 0.00s, denoise 1.93s, decode+mp4 0.33s, png 0.07s)
+[fastvideo] generate done in 2364ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.327285569,"decoder":"taehv","denoise_s":1.9333735330000001,"frames_sha256":"85e8d7aaed5ebf54c073d8f63412a729e28ce5345a87dbf2628311d4b784c8a4","peak_mib":22692,"step_s":[0.647102993,0.643416999,0.642663752],"text_cache":"hit","text_s":0.002146645,"total_s":2.297721097,"video_encode_s":0.05935126,"video_push_s":0.00001819,"video_rgb_s":0.015550647001436591,"video_vae_s":0.26542351818084714,"video_wait_s":0.193373519,"write_s":0.066377506}
+wan gen default: total 2.30s (text 0.00s, denoise 1.93s, decode 0.33s) png 0.07s peak Some(22692) MiB frames 85e8d7aaed5ebf54c073d8f63412a729e28ce5345a87dbf2628311d4b784c8a4
+[PASS] wan/frames {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/wan/0ebddb0-10270616/wan13-dmd/frames/frame-040.png","mean":0.47105173553912355,"std":0.2784241593422323} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/wan/0ebddb0-10270616/wan13-dmd/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (31.0s)

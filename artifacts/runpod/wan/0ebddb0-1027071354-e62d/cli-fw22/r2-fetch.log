@@ -1,0 +1,15 @@
+07:16:12 plan: 1 tree(s), 24.20 GB, URLs valid 2262s -> /fvscratch/r2/plan.json
+07:16:12 [r2-fetch] 1 tree(s) to fetch, 24.20 GB in 193 GETs of up to 2 x 64 MiB, concurrency 64, 224 CPUs; 0 present
+07:16:17 [r2-fetch] r2 6.7/24.2 GB, 1345 MB/s, eta 13s, trees 0/1 (now 1345 MB/s)
+07:16:22 [r2-fetch] r2 14.0/24.2 GB, 1402 MB/s, eta 7s, trees 0/1 (now 1460 MB/s)
+07:16:26 [r2-fetch] fastwan22-ti2v-5b/transformer/diffusion_pytorch_model.safetensors part 22: slow: 0.0 MB/s after 7s (recent parts 29 MB/s): fetched again on a new connection
+07:16:27 [r2-fetch] r2 21.5/24.2 GB, 1433 MB/s, eta 2s, trees 0/1 (now 1496 MB/s)
+07:16:29 [r2-fetch] fastwan22-ti2v-5b/transformer/diffusion_pytorch_model.safetensors part 98: slow: 9.9 MB/s after 6s (recent parts 34 MB/s): fetched again on a new connection
+07:16:29 [r2-fetch] fastwan22-ti2v-5b/transformer/diffusion_pytorch_model.safetensors part 80: slow: 1.4 MB/s after 6s (recent parts 34 MB/s): fetched again on a new connection
+07:16:29 [r2-fetch] fastwan22-ti2v-5b/transformer/diffusion_pytorch_model.safetensors part 92: slow: 0.0 MB/s after 6s (recent parts 34 MB/s): fetched again on a new connection
+07:16:29 [r2-fetch] fastwan22-ti2v-5b/transformer/diffusion_pytorch_model.safetensors part 66: slow: 8.5 MB/s after 6s (recent parts 34 MB/s): fetched again on a new connection
+07:16:30 [r2-fetch] fastwan22-ti2v-5b/transformer/diffusion_pytorch_model.safetensors part 112: slow: 1.2 MB/s after 7s (recent parts 34 MB/s): fetched again on a new connection
+07:16:32 [r2-fetch] fastwan22-ti2v-5b/transformer/diffusion_pytorch_model.safetensors part 79: slow: 6.8 MB/s after 6s (recent parts 34 MB/s): fetched again on a new connection
+07:16:32 [r2-fetch] r2 23.8/24.2 GB, 1188 MB/s, eta 0s, trees 0/1 (now 450 MB/s)
+07:16:36 [r2-fetch] tree fastwan22-ti2v-5b: ready at 3e187042a324f6f5fb68fd22110a78725253de8f (24.20 GB, 15 files, 24s since start)
+07:16:36 [r2-fetch] weights ready: 1 tree(s), 24.20 GB fetched in 23.8s (1018 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 7

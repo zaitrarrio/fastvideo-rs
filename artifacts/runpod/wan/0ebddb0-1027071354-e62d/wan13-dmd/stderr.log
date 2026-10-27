@@ -1,0 +1,38 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] taehv available for the distilled presets (/fvscratch/weights/auxiliary/tae)
+[fastvideo] wan load: host peak RSS 75.9 GiB (eager dit)
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":12930,"moe":null,"seconds":28.364646005}
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] vsa: grid (21, 30, 52) tiles 624 topk 125 group 32
+[fastvideo] vsa fine kernel: Mma (sm12, dim 128, auto)
+[fastvideo] vsa fine kernel: Tma ring (3 slots) (sm12, 128B swizzle)
+[fastvideo] sdpa auto (sm_12x rule): bh=12 sq=32760 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=32760 Sk=512 D=128
+[fastvideo] dmd step 1/3 t=1000 done in 704ms
+[fastvideo] dmd step 2/3 t=757 done in 641ms
+[fastvideo] dmd step 3/3 t=522 done in 639ms
+[fastvideo] dmd 3 steps done in 1985ms
+[fastvideo] taehv.decode done in 314ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.04s, 0.04 GiB, synced), ffmpeg feed blocked 0.11s, mp4 tail 0.06s, buffered peak 0.09 GiB of 1061.73
+[fastvideo] wrote mp4 /fvscratch/runs/wan/0ebddb0-1027071354-e62d/wan13-dmd/frames/cold/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/wan/0ebddb0-1027071354-e62d/wan13-dmd/frames/cold (text 0.44s, denoise 1.99s, decode+mp4 0.39s, png 0.04s)
+[fastvideo] generate done in 2880ms
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.394734047,"decoder":"taehv","denoise_s":1.98780435,"step_s":[0.706808856,0.641187507,0.639719097],"text_cache":"miss","text_s":0.439714449,"total_s":2.880204657,"video_encode_s":0.057571031,"video_push_s":0.013848449,"video_rgb_s":0.17697195600149693,"video_vae_s":0.32279075241088867,"video_wait_s":0.018705137,"write_s":0.043061973}
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 642ms
+[fastvideo] dmd step 2/3 t=757 done in 641ms
+[fastvideo] dmd step 3/3 t=522 done in 640ms
+[fastvideo] dmd 3 steps done in 1924ms
+[fastvideo] taehv.decode done in 104ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.04s, 0.04 GiB, synced), ffmpeg feed blocked 0.12s, mp4 tail 0.04s, buffered peak 0.09 GiB of 1061.68
+[fastvideo] wrote mp4 /fvscratch/runs/wan/0ebddb0-1027071354-e62d/wan13-dmd/frames/output.mp4
+[fastvideo] wrote 81 png frames → /fvscratch/runs/wan/0ebddb0-1027071354-e62d/wan13-dmd/frames (text 0.00s, denoise 1.92s, decode+mp4 0.30s, png 0.04s)
+[fastvideo] generate done in 2274ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.298721202,"decoder":"taehv","denoise_s":1.924566921,"frames_sha256":"85e8d7aaed5ebf54c073d8f63412a729e28ce5345a87dbf2628311d4b784c8a4","peak_mib":22724,"step_s":[0.642676807,0.641524177,0.640264627],"text_cache":"hit","text_s":0.001347759,"total_s":2.2379629800000003,"video_encode_s":0.036300125,"video_push_s":0.000015620000000000003,"video_rgb_s":0.01488276299619031,"video_vae_s":0.2605752954483032,"video_wait_s":0.20292197699999998,"write_s":0.036073154}
+wan gen default: total 2.24s (text 0.00s, denoise 1.92s, decode 0.30s) png 0.04s peak Some(22724) MiB frames 85e8d7aaed5ebf54c073d8f63412a729e28ce5345a87dbf2628311d4b784c8a4
+[PASS] wan/frames {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/wan/0ebddb0-1027071354-e62d/wan13-dmd/frames/frame-040.png","mean":0.47105173553912355,"std":0.2784241593422323} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/wan/0ebddb0-1027071354-e62d/wan13-dmd/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (34.2s)

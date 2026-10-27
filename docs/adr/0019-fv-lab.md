@@ -52,8 +52,10 @@
   §22.16 "Result", with item 5's report path corrected); S7 retired `mmaudio` from the script (§22.19). S6 (§22.17: `wan` as a
   `volume+r2` tier of six cells, its `export FASTVIDEO_TAE_DIR` moved into each gated arm's `env` and `engine-fw22`'s
   `--tae-dir` dropped in lockstep; `taew2_2` in `fetch-tae.sh`; the upstream targets `wan22-ti2v` and
-  `fastwan22-ti2v` with R2 trees; `runpod.sh matrix` running `wan` through fv-lab) is done CPU-side; its GPU check is
-  §22.18, the coordinator's. S7 (§22.19) is done for four families, after their GPU checks: `hd` (with its sibling
+  `fastwan22-ti2v` with R2 trees; `runpod.sh matrix` running `wan` through fv-lab) is done, CPU-side and GPU-side:
+  its GPU check §22.18 passed on `0ebddb0` (2026-10-27, §22.18 "Result", with item 0's guard corrected; the fv-lab side
+  re-run about an hour after the script side, after #233's `pod up` fix); `wan` retires from the script with `sfwan`
+  in S8 (§22.18 "Then", §22.19). S7 (§22.19) is done for four families, after their GPU checks: `hd` (with its sibling
   `hd5`), `serve-engine`, `sfstream` and `mmaudio` are retired from the script (`FV_LAB_RETIRED`, branches deleted,
   goldens frozen, their knobs in `FV_LAB_NOT_READ`); partial, since `wan`'s branch, which `sfwan` runs, goes with
   `sfwan` in S8. The script keeps `wan`, `sfwan` and `oracle`
@@ -3905,9 +3907,9 @@ only). The review's corrections are folded in below, and the coordinator's decis
 family moves or retires in its own slice (§22.6; S1 is done, §22.8; S2 is done, its GPU check passed on `d53ea62`
 2026-10-27, §22.9-§22.10; S3 is done, its GPU check passed on `3bc6d03` 2026-10-27, §22.11-§22.12; S4 is done,
 its GPU check passed on `b7ddf5f` 2026-10-27, §22.13-§22.14; S5 is done, its GPU check passed on `9e6d09a`
-2026-10-27, §22.15-§22.16; S6 is done CPU-side, §22.17, its GPU check §22.18; S7 is done for `hd`, `serve-engine`,
-`sfstream` and `mmaudio`, §22.19, `wan` waiting for S8), and a tier's branch leaves the script only after that tier's
-own check through both runners (§8).
+2026-10-27, §22.15-§22.16; S6 is done, its GPU check passed on `0ebddb0` 2026-10-27, §22.17-§22.18; S7 is done for
+`hd`, `serve-engine`, `sfstream` and `mmaudio`, §22.19, `wan` waiting for S8), and a tier's branch leaves the script
+only after that tier's own check through both runners (§8).
 
 Fifteen `runpod-matrix.sh` families are left besides `oracle` (§18.3). `oracle` retires on its own once §20.7's re-run
 passes (§21.9), so this section leaves it out. For each family it gives:
@@ -3983,9 +3985,10 @@ cache file, and the tiers keep the paths for equality.
 
 #### 22.3 The families
 
-**`wan`** (rpm:796-1106): **(b)**, after §22.4. Done in S6 (§22.17; its GPU check §22.18): six cells, not about a
-dozen (a compare or gate reads arms of its own cell, and the 1.3B baseline's are spread over the first 22 arms); the
-counts below checked against the script's dry run.
+**`wan`** (rpm:796-1106): **(b)**, after §22.4. Done in S6 (§22.17; its GPU check §22.18, `wan13-dmd wan13-dmd-dense
+kernels-wan cli-fw22 engine-fw22`, passed on `0ebddb0` 2026-10-27; the branch retires with `sfwan` in S8): six cells,
+not about a dozen (a compare or gate reads arms of its own cell, and the 1.3B baseline's are spread over the first 22
+arms); the counts below checked against the script's dry run.
 - *Measures*:
   - FastWan2.1 1.3B DMD: VSA against dense; the kernel arms f32act / bf16act / fuse / mxfp8 / w8a8, with lossy gates
     and the fused-vs-unfused `exact` gate; full VAE against TAEHV; the exact-cache identity; Sol-Attn and TeaCache.
@@ -6129,7 +6132,8 @@ T=$(mktemp -d)
 LAB=/fvscratch/weights/auxiliary/tae
 # 0. The runners' compare: exit 0, exactly these lines. The 29 report names are the tier's compares, read off
 #    the golden (fixtures/wan-dry-run.txt: every `dry-run compare <tag>`); all but VSA / dense are `skipped`
-#    (frames missing) on both sides: both runners run every compare whatever FV_CELLS selects.
+#    (frames missing) on both sides: both runners run every compare whatever FV_CELLS selects. VSA / dense's
+#    off_identity is a note, not a gate (no --off-identity), and "different" (corrected after the run, "Result").
 bash "$ROOT/scripts/gpu/fv-lab-compare-runs.sh" $L $S >$T/cmp.txt; rc=$?; cat $T/cmp.txt
 {
   for a in "cli-fw22 121 frames byte-identical" "engine-fw22 no frames" "kernels-wan no frames" \
@@ -6147,7 +6151,7 @@ bash "$ROOT/scripts/gpu/fv-lab-compare-runs.sh" $L $S >$T/cmp.txt; rc=$?; cat $T
   echo '5 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 29 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)'
 } >$T/want.txt
 [ "$rc" = 0 ] && [ "$(wc -l <$T/want.txt)" = 35 ] && [ "$(grep -c '^same compare/' $T/want.txt)" = 29 ] \
-  && grep -q '^same compare/compare-clips-wan13-dmd--wan13-dmd-dense.json: {"status":"[a-z]*","off_identity":null}$' $T/want.txt \
+  && grep -q '^same compare/compare-clips-wan13-dmd--wan13-dmd-dense.json: {"status":"[a-z]*","off_identity":"different"}$' $T/want.txt \
   && diff $T/want.txt $T/cmp.txt && echo "PASS 0" || echo "FAIL 0"
 # 1. The TAE directory each gated arm's env names, reached the binary (wan.json `env`, Report::finish), and the
 #    decoder the arm used: TAEHV for the distilled 1.3B preset's `auto` mode (a missing taew2_1 there would be a
@@ -6222,9 +6226,10 @@ grep -qx matrix_exit=0 $L/matrix.out && grep -qx matrix_exit=0 $S/matrix.out \
   && ! grep -rlE 'X-Amz-Signature|X-Amz-Credential|FV_WEIGHTS_R2_[A-Z_]+[=":]+ *[^ "{$]+|R2_KEY_(ID|SECRET)=[^"$ ]' $L $S \
   && echo "PASS 7" || echo "FAIL 7"
 # Reported, not judged (§20.6: libx264's output depends on the thread count; no item reads an mp4): the video
-# streams of the mp4s both sides fetched (wan13-dmd's and -dense's frames/ and frames/cold/, the engine's out/<job>/).
+# streams of the mp4s both sides fetched (wan13-dmd's and -dense's frames/ and frames/cold/, the engine's out/<job>/,
+# its job id replaced; ffmpeg -nostdin, or it reads the loop's list: both corrected after the run, "Result").
 vh() { (cd $1 && find . -name '*.mp4' | LC_ALL=C sort | while read -r f; do
-  echo "$f $(ffmpeg -v error -i "$f" -map 0:v:0 -c copy -f streamhash - 2>/dev/null || echo unreadable)"; done); }
+  echo "$(sed -E 's#^\./engine-fw22/out/[^/]+/#./engine-fw22/out/<job>/#' <<<"$f") $(ffmpeg -nostdin -v error -i "$f" -map 0:v:0 -c copy -f streamhash - 2>/dev/null || echo unreadable)"; done); }
 VL=$(vh $L); VS=$(vh $S); [ "$VL" = "$VS" ] && echo "mp4 video streams: the same ($(wc -l <<<"$VL"))" \
   || { echo "mp4 video streams: differ (reported, not judged)"; diff <(echo "$VL") <(echo "$VS"); }
 rm -rf $T
@@ -6243,8 +6248,11 @@ tier's `cell_timeout_s`, so the script side's idle limit is the tier's 85 min.) 
   same. Reports: both runners run every arm compare whatever is selected (`compare_cells` / `Step::Compare`), and the
   two directory compares too, because their cell holds `cli-fw22` and `engine-fw22`: **29**, all `skipped` (frames
   missing) but `wan13-dmd--wan13-dmd-dense` (both frames there), whose status the block reads from fv-lab's report
-  and requires on both. No gate report: every gate pair has an arm that did not run (`skip gate … (benchmark.json
-  missing)`, no file). Exit 0.
+  and requires on both. Its `off_identity` is `"different"`, not `null` as the first draft's guard said (corrected after
+  the run, "Result"): `compare-clips` records it whenever frames were paired (`clipcmp.rs:321-333`, 626-628) and gates
+  on it only with `--off-identity` (531-546, 650-665), which this compare does not pass; the draft's `null` was the
+  `skipped` report of `artifacts/runpod/wan/9b2c963-09282019`. No gate report: every gate pair has an arm that did
+  not run (`skip gate … (benchmark.json missing)`, no file). Exit 0.
 - *Item 1*: `wan.json` (`--out` default `gpucheck-out`, stage `wan`) records `env`, every `FASTVIDEO_*` in effect
   (`Report::finish`), and `benchmark.json` its `decoder` (`wan_stage.rs`). The distilled 1.3B preset in the `auto` mode
   decodes with TAEHV when `taew2_1` is in `FASTVIDEO_TAE_DIR`: `taehv`; a missing file falls back to the Wan VAE,
@@ -6284,7 +6292,8 @@ pod's `matrix_exit=1`. The simulation also found the comparator's lister bug (§
 **Pass** (all of it):
 - Both pods end `matrix_exit=0` and items 0-7 print `PASS` (items 1 and 5 once per side, item 6 once per side):
   0. the comparator's 35 lines exactly: the five arms the same (`wan13-dmd` and `-dense` 162 frames byte-identical,
-     `cli-fw22` 121, `kernels-wan` and `engine-fw22` no frames), the 29 reports the same, and "5 arm(s) the same (3 ran
+     `cli-fw22` 121, `kernels-wan` and `engine-fw22` no frames), the 29 reports the same (VSA / dense's `pass` with
+     `off_identity` `different`, a note, not a gate; the others `skipped`), and "5 arm(s) the same (3 ran
      with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control
      arm(s) reported, 29 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)";
   1. `wan.json` `status` `pass` with `FASTVIDEO_TAE_DIR` `/fvscratch/weights/auxiliary/tae` for the three generations,
@@ -6491,7 +6500,8 @@ pod: ``tier `wan` reads upstream references: pass --extra-env FV_ORACLE_URL=…`
 oracle cell. `pod up`'s reference check (§15) asked whether *any* cell of the tier has a `[reference]`
 (`Lab::resolve_selected` returns all of a tier's `cells`; `--cells` filters only its `extra_cells`, §20.3), which only
 `oracle` and `oracle-r2`, made entirely of reference cells, had met before; `wan` is the first tier that mixes them.
-The script side ran alone (`artifacts/runpod/wan/0ebddb0-10270616`, about $0.25) and is not compared. The fix (branch
+The script side ran alone (`artifacts/runpod/wan/0ebddb0-10270616`, about $0.25); it is compared with the fv-lab side's
+re-run after the fix, on the same image and SHA ("Result" below). The fix (branch
 `claude/fv-lab-pod-up-cells-ref`): with `--cells`, the check reads only the reference cells holding a selected arm;
 without `--cells` a tier with a reference cell is refused as before, and a selected oracle arm still needs
 `FV_ORACLE_URL`. The pod's run already skips an unselected reference cell with one log line, `skip <cell> (no arm in
@@ -6503,6 +6513,134 @@ baseline whenever any arm of the plan is `bin = "baseline"`, selected or not (`c
 `tests/fv_lab_bin.rs` `a_wan_pod_needs_references_only_for_the_oracle_arms_it_selects` holds the three cases and the
 run's skip. The fix is in the driver only (`pod up` where the coordinator runs it; `run.rs` is unchanged), so the
 re-run needs fv-lab built from the fix; both pods' image may stay `sha-0ebddb0`.
+
+**Result (2026-10-27): pass** (with item 0's guard corrected, below).
+`SHA=0ebddb0` (main after #231, S6 merged) on both sides, with the commands above. **The two sides ran about an hour
+apart, not in parallel as the earlier checks did**: the script side is the first attempt's (started 06:16:53Z; its
+fv-lab side was refused, above), and the fv-lab side ran alone at 07:13:54Z, after #233 (`07cf2928`) fixed `pod up`.
+The comparison holds because everything that ran on a pod was the same: both pods ran the image
+`ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-0ebddb0` (digest
+`sha256:cac8223a2eacfe99204ab9e3baccba8725324c1b1c57b22602cba8c0fbd63d3e`, as fv-lab's `pod.json` records and the
+registry answers for the tag; build id `6eacc7148797cb21` as both `box.txt` record and the image's
+`dev.fastvideo.build-id` label; tools label `tools-v0.1.82`: the release built at `0ebddb0` itself, its manifest's
+`build_id` `6eacc7148797cb21`, `source_commit` `0ebddb0d77ca…` and `input_hash` `0365b682a010…` equal to
+`scripts/ci/tools-release.sh input-hash 0ebddb0`, its sha256 `b1e3b20e5dfe…` the release body's `manifest-sha256`), so
+both ran that image's `fv-lab run` / `runpod-matrix.sh`, `fv-gpucheck`, `lab/` and `fetch-tae.sh` with `--sha 0ebddb0`.
+Only the local driver differed: fv-lab 0.1.82 (`tools-v0.1.82`) for the first attempt, 0.1.83 (`tools-v0.1.83`, built
+at #233's merge `07cf2928`: `build_id` `2c1aad8c8e7fdb66`, `input_hash` `421b12984a2c…` = `input-hash 07cf2928`,
+`manifest-sha256` `d4a3fc140dae…`) for the re-run. #233 changed only `pod up`'s reference check (`src/bin/fv-lab.rs`
+`cmd_up`) and its test: nothing in `run.rs`, `lab/`, `fv-gpucheck`, `runpod-matrix.sh` or `fetch-tae.sh`, and nothing
+in what `pod up` sends besides the check. Each pod an RTX PRO 6000 Blackwell Server Edition at $2.49/hr in EU-RO-1 with
+the volume's trees linked from `/workspace/weights` (the script side's `bz0ofkfx45`), driver 595.91.07, 283 GB RAM and
+28 vCPUs (the tier's 256 GB floor), `--wall-cap-s 3600` / `FV_POD_CAP_S=3600`. The balance was $15.87 before the
+first attempt (the driver's balance read) and $15.17 before the re-run (fv-deploy's `balance` line), above the $14.66
+(both pods) and $11.33 (fv-lab's guard, one pod) the section asks.
+
+- *fv-lab side*: pod `rm5d1sifi65sp1`, created 07:13:57Z, ready 32.3 s after create, deleted at the end (`done`, about
+  07:19:30Z) → `artifacts/runpod/wan/0ebddb0-1027071354-e62d` (`DONE`, `pod.json`, `wan.arms.json` the five arms;
+  `matrix start` 07:14:28, `matrix done` 07:18:28, `matrix_exit=0`; `skip wan-wan22-ti2v-oracle (no arm in FV_CELLS)`
+  and the same for `wan-fastwan22-ti2v-oracle`, with no fetch and no wait, as #233 said).
+- *Script side*: pod `l5uqpb1s8hkvtz`, created 06:16:56Z, destroyed 06:22:41Z → `artifacts/runpod/wan/0ebddb0-10270616`
+  (`r2-stage.sh` from 06:17:25, `matrix start` 06:18:28, `matrix done` 06:21:39, `matrix_exit=0`).
+- *Both*: the five arms `exit` 0 (`summary.json`, seconds fv-lab / script): `wan13-dmd` 34 / 31, `wan13-dmd-dense`
+  34 / 34, `kernels-wan` 4 / 5, `cli-fw22` 57 / 59, `engine-fw22` 54 / 60. The four gated arms' `<arm>.weights.log`
+  `weights ok: fastwan21-1.3b` / `fastwan22-ti2v-5b`; each preflight's `weights.log` ends `exit=1` with `weights
+  INCOMPLETE: fasth3-8step` (`h3-8step/{transformer,vae,audio_vae}` missing) and the five others `ok`, as expected. No
+  `[FAIL]` in any `stderr.log`, no `gate/` report (every gate pair has an unselected arm), 29 `compare/` reports.
+- *Item 0* (`artifacts/runpod/wan/compare-0ebddb0.txt`, with its command and exit status): the block as written printed
+  `FAIL 0` on its guard alone; corrected (below), `PASS 0`. `fv-lab-compare-runs.sh` exit 0 with exactly the block's 35
+  lines: `cli-fw22` 121 frames byte-identical, `engine-fw22` and `kernels-wan` no frames, `wan13-dmd` and
+  `wan13-dmd-dense` 162 frames byte-identical, the 29 reports the same (28 `skipped`, VSA / dense
+  `{"status":"pass","off_identity":"different"}`), "5 arm(s) the same (3 ran with byte-identical frames, …), 29
+  report(s) the same, …, 0 difference(s)".
+- *Item 1*: `PASS 1` on both sides: `wan.json` `status` `pass` for the three generations with `FASTVIDEO_TAE_DIR`
+  `/fvscratch/weights/auxiliary/tae` (and `FASTVIDEO_VSA` `1` for `wan13-dmd`, `FASTVIDEO_WAN_VAE` `full` for
+  `cli-fw22`); `benchmark.json` `decoder` `taehv`, `taehv`, `wan-vae`.
+- *Item 2*: `PASS 2`: `frames_sha256` equal across the sides: `wan13-dmd` `85e8d7aaed5e…`, `wan13-dmd-dense`
+  `b55bc77685dd…`, `cli-fw22` `d104ea1744f8…`.
+- *Item 3*: `PASS 3`: `kernels-wan`'s 38 `[PASS] kernels/…` names the same on both sides, among them the 14
+  block-causal checks (7 `…_vs_f64`, 7 `…_vs_sdpa_composed`) and the 3 `wan_qk_norm_rope_vs_host_*`; no `[FAIL]`;
+  `kernels.json` `pass` (42 records, none failed) on both; fv-lab's `live.log` echoes 39 `[kernels-wan] [PASS]` lines,
+  the 39 `[PASS]` lines of its `stderr.log` (the 38 and the stage line).
+- *Item 4*: `PASS 4`: `engine-fw22` printed `ready`, `progress` (3 events), `mp4` (121 frames, 1280x704, 24 fps,
+  5.042 s, 4,062,498 bytes), `frames` (121 PNGs), `identical_to_cli` (121 / 121, `first_differing_frame` null) and
+  `cancel` (cancelled at step 1, one step after) once each on both sides; the engine's digest `d104ea1744f8…` is its
+  side's CLI clip's, `cli-fw22`'s `frames_sha256` and the other side's; `engine.json` `pass` with `FASTVIDEO_TAE_DIR`
+  in its env and no `--tae-dir`.
+- *Item 5*: `PASS 5` on both sides: `tae.log` `tae ok (volume copy /workspace/weights/auxiliary/tae/<file>):
+  /fvscratch/tae/<file>` for `taeh3`, `taeltx2_3_wide`, `taew2_1` and `taew2_2`, then `exit=0`.
+- *Item 6*: `PASS 6 fv-lab` and `PASS 6 script`, each file read from the side that fetched it (python3 installed first
+  on both, `r2-apt.log`):
+  - fv-lab (`$L/live.log`): exactly the block's six lines: `weights /fvscratch/weights: 10 volume trees linked from
+    /workspace/weights; 2 R2 trees (53.41 GB) fetched before the arms that read them, at most 29.21 GB on the container
+    disk at once`; `fastwan21-1.3b@25e7ed7f41fd…` fetched for `wan13-dmd` (29.21 GB in 23.4 s, 1250 MB/s); before
+    `cli-fw22` `drop fastwan21-1.3b (29.21 GB)` and `fastwan22-ti2v-5b@3e187042a324…` fetched (24.20 GB in 23.8 s, 1018
+    MB/s); retries 0, bad parts 0; both `r2-fetch.json` `done`.
+  - Script side (`$S/r2-stage.log`): `r2_key=env`, both trees staged before the matrix (53.41 GB in 56.8 s, 940 MB/s;
+    retries 0, bad parts 0, slow restarts 1), `weights /fvscratch/weights: 10 volume trees linked from
+    /workspace/weights; 2 R2 trees (2 fetched): fastwan21-1.3b@… fastwan22-ti2v-5b@…`, `exit=0`; `r2-fetch.json`
+    `done`.
+- *Item 7*: `PASS 7`: both `matrix_exit=0`, no PNG fetched, no key value or presigned URL in any fetched file.
+- *Item 0's guard, corrected after the run.* The block as written (`compare-0ebddb0.txt`) required
+  `{"status":"[a-z]*","off_identity":null}` for VSA / dense in `want.txt`; `want.txt` builds that line from fv-lab's
+  own report, which reads `{"status":"pass","off_identity":"different"}` (and so does the script side's, by the
+  comparator's line). Everything else in item 0 held: `rc` 0, 35 lines, 29 compare lines, and `want.txt` equal to the
+  comparator's output (the guard's `&&` stopped the block before that `diff`; run separately it is empty). The guard
+  was wrong:
+  - `compare-clips` records `off_identity` whenever frames were paired: `ok` when every pair is byte-identical,
+    `different` otherwise, with `pairs`, `nonidentical_frames`, `max_abs_diff_uint8`
+    (`crates/fastvideo-gpucheck/src/clipcmp.rs:321-333`, `report.set("off_identity", …)` at 626-628);
+  - it is a hard gate only when `--off-identity` is passed (`thresholds`, 531-546: `"not requested"` otherwise, 544;
+    the gate at 650-662, else `report.note("off_identity", …)` at 663-665, a record with `ok: true`,
+    `report.rs:154-163`). The VSA / dense compare (`lab/cells/wan-fastwan21-1.3b.toml:216-219`) passes no
+    `--off-identity`: both reports have `.context.thresholds.off_identity` `"not requested"` and the `off_identity`
+    note `ok: true` with `{"max_abs_diff_uint8":255,"nonidentical_frames":81,"pairs":81,"status":"different"}`;
+  - VSA and dense are different attention, so 81 of 81 frames differing is the right value (`psnr_mean` 9.80 on both
+    sides);
+  - the draft's `null` came from `artifacts/runpod/wan/9b2c963-09282019`, where this compare was a `skipped` report
+    (`stage`, `status`, `reason` only, no `context`).
+
+  The guard now requires `"off_identity":"different"` (block item 0 and "Where each expected value comes from"); nothing
+  else in item 0 changed. `ok` would mean VSA and dense made the same frames, so it is not accepted. Re-run on the two
+  run directories it prints `PASS 0` (`compare-0ebddb0.txt`); on copies it prints `FAIL 0` with `off_identity` `ok` on
+  both sides, the report `skipped` on both, `ok` on the script side only, or no `off_identity` on both.
+- *The mp4 line* (reported, not judged): as written it printed "differ", for two faults of the block, not of the runs:
+  `ffmpeg` without `-nostdin` read the `while read` loop's list, so two of five paths lost their `./` and were
+  `unreadable` (alike on both sides), and the engine's job directory (`out/<job id>/`) differs per pod. Corrected in the
+  block (`-nostdin`, the job id replaced by `<job>`), it prints `mp4 video streams: the same (5)`: `wan13-dmd`'s two
+  clips `0,v,SHA256=f7afde394fd8…`, `-dense`'s `63cd9635c6ac…`, the engine's `be6e2ae7e45b…`; the mp4 files
+  themselves byte-identical across the pods (same 28 vCPUs; fv-lab's `box.txt` `cpus=23`).
+- *What was fetched*: no PNG on either side. Per side the five mp4s (`wan13-dmd` 1,035,354 bytes twice, `-dense`
+  761,762 twice, the engine's 4,062,498; `cli-fw22` runs `--no-mp4`) and `wan13-dmd` / `-dense`'s
+  `text-cache/<sha256>.h3text` (819,456 bytes each, byte-identical; the skip `\.png$|\.cache$` does not match it, as in
+  §22.16). fv-lab's run directory is 9,467,677 bytes (94 files), the script's 9,460,888 (90 files).
+- *Timings* (recorded, not judged): the timed generations `wan13-dmd` 2.24 / 2.30 s (denoise 1.92 / 1.93 s, VSA),
+  `wan13-dmd-dense` 2.85 / 2.94 s (denoise 2.54 / 2.58 s), `cli-fw22` 18.58 / 18.86 s (decode 13.46 / 13.61 s, the Wan
+  VAE); the engine's load 30.3 s on fv-lab's side; `kernels-wan` 4.8 / 4.7 s; host memory peak 58,997 MiB of the
+  269,889 MiB limit (`wan13-dmd`, fv-lab). fv-lab's arms ran under caps of 2336-2179 s (what `FV_RUN_DEADLINE` left),
+  the script's under 3600 s. The pods, create to delete, about 5.5 (fv-lab) and 5.75 min (script) against the
+  estimate's ~17-27 min a side.
+- *Cost*: at the list price the two pods' ~5.5 and ~5.75 min come to **about $0.47** ($0.23 and $0.24), under the
+  estimate of ~$1.40-$2.25. The balance read $15.87 before the first attempt, $15.17 before the re-run and $15.06
+  after it (the coordinator's reading); the $0.70 between the runs is more than the script pod's ~$0.24, and the rest
+  is not these pods' (not attributed here); the $0.11 over the re-run is under its pod's $0.23 (billing lags).
+- *The optional oracle block* (§22.6 item 4, the two oracle cells) **was not run**: it needs $20.50 or more at the
+  start (above), and the balance was $15.06 after this check. It waits for a top-up; `wan`'s retirement (S8) does not
+  depend on it.
+- *Secrets*: the two run directories were scanned before the commit (§22.18's `grep` for presigned URLs and R2 key
+  values; `hf_`, `rpa_`, `RUNPOD_API_KEY`, `Bearer`, `AKIA`, `ghp_`, `github_pat_`, `sk-` and private-key patterns,
+  binary files included; this container's credential values; strings of 40 or more base64 characters, which are only
+  paths, check names, GPU UUIDs and hex digests; the only URLs are fv-lab's pod proxy URL in `pod.json` and x264's
+  homepage in the mp4s' encoder string): nothing.
+
+Evidence (force-added, whole): `artifacts/runpod/wan/0ebddb0-1027071354-e62d`, `artifacts/runpod/wan/0ebddb0-10270616`
+and `artifacts/runpod/wan/compare-0ebddb0.txt` (the compare, the block as written with its `FAIL 0` and the mp4 line,
+item 0 corrected and its `PASS 0`, the mp4 line corrected, and the whole corrected block: every item `PASS`). No
+report fixture is needed: `fv-lab-report-goldens.sh` writes one only for its fixed run lists, `artifacts/runpod/hd/*/`
+and `sol-bench/` (`artifacts/runpod/wan/` already holds `9b2c963-09282019` and `9b2c963-09282112` with none), and
+`crates/fastvideo-lab/tests/report.rs` reads the fixtures it lists, not every run directory; its `--check` passes with
+the two new directories in place. S6 is done GPU-side; `wan`'s branch leaves the script with `sfwan` in S8 ("Then",
+option 1, as §22.19 chose).
 
 **Then (S8, not this slice; S7, §22.19, left `wan` for it)**: on a pass, `wan` joins `FV_LAB_RETIRED` and leaves `RP_FV_LAB_TIERS`, its branch is
 deleted and its three fixtures frozen (§10's way; `runpod-http-wan-r2.json` stops being written with it). **One
