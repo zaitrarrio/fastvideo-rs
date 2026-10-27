@@ -1,0 +1,6 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/hd/d53ea62-1027003410-8701 artifacts/runpod/hd/d53ea62-10270034
+same max-1080p: {"exit":0,"skipped":null}, 372 frames byte-identical
+same turbo-1080p: {"exit":0,"skipped":null}, 372 frames byte-identical
+same turbo-768p: {"exit":0,"skipped":null}, 372 frames byte-identical
+3 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+exit 0
