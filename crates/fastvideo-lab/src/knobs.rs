@@ -185,7 +185,7 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
     }
     if key == "FV_ENGINE_CELLS" {
         return Some(
-            "FV_ENGINE_CELLS: the serve-engine tier runs the script's default groups (h3 ltx wan); narrow it by arm with --cells (FV_CELLS), e.g. cli-h3-turbo,engine-h3-turbo (ADR-0019 §22, S3)"
+            "FV_ENGINE_CELLS: no tier reads it (it picked runpod-matrix.sh serve-engine's groups h3 / ltx / wan); select arms with --cells (FV_CELLS); serve-engine's arms are cli-h3-turbo, engine-h3-turbo, cli-ltx-turbo, engine-ltx-turbo, cli-wan-turbo, engine-wan-turbo (ADR-0019 §22, S3)"
                 .to_owned(),
         );
     }
@@ -449,15 +449,22 @@ mod tests {
         // with a pointer to selecting by arm, in --extra-env and in fv-lab
         // run's environment; the script's branch still reads it, so
         // runpod-http.sh's FV_LAB_NOT_READ gains it when the branch goes (S7).
-        let e = check_extra_env("serve-engine", &["FV_ENGINE_CELLS=h3".into()]).unwrap_err();
-        assert!(
-            e.contains("--extra-env FV_ENGINE_CELLS: the serve-engine tier runs the script's default groups"),
-            "{e}"
-        );
-        assert!(e.contains("narrow it by arm with --cells"), "{e}");
+        // The message fits any tier it is set for.
+        for tier in ["serve-engine", "rtx6000"] {
+            let e = check_extra_env(tier, &["FV_ENGINE_CELLS=h3".into()]).unwrap_err();
+            assert!(
+                e.contains("--extra-env FV_ENGINE_CELLS: no tier reads it"),
+                "{e}"
+            );
+            assert!(e.contains("select arms with --cells (FV_CELLS)"), "{e}");
+            assert!(
+                e.contains("serve-engine's arms are cli-h3-turbo, engine-h3-turbo,"),
+                "{e}"
+            );
+        }
         let env = |k: &str| (k == "FV_ENGINE_CELLS").then(|| "wan".to_owned());
         let e = check_run_env("serve-engine", env).unwrap_err();
-        assert!(e.contains("FV_ENGINE_CELLS: the serve-engine tier"), "{e}");
+        assert!(e.contains("FV_ENGINE_CELLS: no tier reads it"), "{e}");
         assert!(e.contains("ADR-0019 §22, S3"), "{e}");
         assert!(SCRIPT_KNOBS.contains(&"FV_ENGINE_CELLS"));
         assert!(!MODE_KNOBS.contains(&"FV_ENGINE_CELLS"));

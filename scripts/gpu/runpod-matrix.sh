@@ -1316,10 +1316,13 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # docs/adr/0019-fv-lab.md §22, S3), held to this branch's dry run by
     # fv-lab-goldens.sh; it selects by arm (--cells / FV_CELLS) and refuses
     # FV_ENGINE_CELLS. The engine arms pass no --tae-dir since S3, in lockstep
-    # with the tier: fv-gpucheck engine reads <weights root>/auxiliary/tae,
-    # which is $TAE whenever the volume's TAE copy is complete (bz0ofkfx45; on
-    # an FV_R2_TREES run the merged root's link to it), as the gold engine
-    # cells do.
+    # with the tier, as the gold engine cells: fv-gpucheck engine then takes
+    # <weights root>/auxiliary/tae, which is $TAE when the volume's TAE copy is
+    # complete (bz0ofkfx45; on an FV_R2_TREES run the merged root's link to
+    # it) but not otherwise ($SCRATCH/tae, or FV_TAE_DIR / FV_AUX_DIR's). No
+    # recipe here reads that directory (h3-turbo and ltx-turbo name no tiny
+    # decoder; fastwan21-1.3b decodes with the full VAE), so only the recorded
+    # path can differ (ADR-0019 §22.11).
     want() { [[ " ${FV_ENGINE_CELLS:-h3 ltx wan} " == *" $1 "* ]]; }
     if want h3; then
       h3geo=(--height 480 --width 832 --num-frames 124 --prompt "$PROMPT" --seed "$SEED" --adaln-cache "$RUNS/h3-adaln.cache")
@@ -1353,8 +1356,10 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
           --reference "$RUNS/cli-wan-turbo/frames" --cancel-after-step 1 --clip-out "$RUNS/engine-wan-turbo/out"
     fi
     # Keep the reports and MP4s; the PNG frames were compared on the box
-    # (disk only: each arm's frames.sha256.json was written right after it,
-    # and that is what two runs compare; the tier does not copy this).
+    # (disk only: a CLI arm's frames.sha256.json was written right after it,
+    # and an engine arm's frames, under out/<job>/frames, are recorded by its
+    # `engine/frames` check, frames_sha256 in stderr.log and engine.json; the
+    # tier does not copy this removal).
     rm -rf "$RUNS"/cli-*/frames "$RUNS"/engine-*/out/*/frames
     ;;
   *)

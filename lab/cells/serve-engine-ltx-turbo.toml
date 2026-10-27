@@ -1,9 +1,9 @@
 # runpod-matrix.sh `serve-engine`, its ltx group (docs/serve/design.md "GPU check"; docs/adr/0019-fv-lab.md §22, S3):
 # the CLI generation of the served `ltx-turbo` recipe (LTX-2.5 distilled two-stage with its Sol technique profile,
 # `ltx2 gen --two-stage`), then the same request through EngineService + CudaBackend (`fv-gpucheck engine --model
-# ltx-turbo`): its frames byte-compared with the CLI's, then a second job cancelled after step 3. The engine reads its
-# tiny autoencoder from `<weights root>/auxiliary/tae` (no `--tae-dir`: dropped from the script's engine arms in the
-# same commit as this tier, §22, S3; serve-engine-h3-turbo.toml says why that is argv only). The script's removal of
+# ltx-turbo`): its frames byte-compared with the CLI's, then a second job cancelled after step 3. No `--tae-dir`
+# (dropped from the script's engine arms in the same commit as this tier, §22, S3): ltx-turbo, `ltx25-distill-sol`,
+# names no tiny decoder, so the frames do not change (serve-engine-h3-turbo.toml, §22.11). The script's removal of
 # the PNG frames after the family is disk only and not copied. Schema: crates/fastvideo-lab/schemas/cell.v1.json.
 schema = 1
 name = "serve-engine-ltx-turbo"

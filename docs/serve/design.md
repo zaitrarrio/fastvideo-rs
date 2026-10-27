@@ -2086,9 +2086,9 @@ additions and readings; everything is re-exported from the crate root.
   ltx-turbo and fastwan21-1.3b, each the CLI arm then the engine arm;
   `fv-lab pod up --family serve-engine`, `--cells` by arm), which is the
   `serve-engine` family of `runpod-matrix.sh` until that branch retires after
-  the tier's GPU check (docs/adr/0019-fv-lab.md §22.11, §22.12). The engine
-  reads its tiny autoencoders from `<weights root>/auxiliary/tae` (no
-  `--tae-dir`).
+  the tier's GPU check (docs/adr/0019-fv-lab.md §22.11, §22.12). Its engine
+  arms pass no `--tae-dir` (the engine's default, `<weights
+  root>/auxiliary/tae`); none of the three recipes reads a tiny decoder.
 - Pod results through the fal queue (`scripts/serve/fal-queue-smoke.sh`,
   `configs/serve/runpod.toml`, RTX PRO 6000, NVENC post encoder):
   h3-turbo T2V 1344x768 124 frames + 32 kHz AAC in 32.8 s wall (19.1 s

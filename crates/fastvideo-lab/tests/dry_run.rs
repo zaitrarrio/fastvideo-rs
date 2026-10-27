@@ -870,6 +870,13 @@ fn the_serve_engine_tier_is_the_serve_engine_family_without_tae_dir() {
         common::merged_root("x --weights-root /workspace/weights --y /workspace/weights/h3-base /workspace/weights2 /workspace/weights"),
         "x --weights-root /fvscratch/weights --y /fvscratch/weights/h3-base /workspace/weights2 /fvscratch/weights"
     );
+    // fv-lab's refusal of the script's group picker names these arms.
+    let e = fastvideo_lab::knobs::check_extra_env("serve-engine", &["FV_ENGINE_CELLS=h3".into()])
+        .unwrap_err();
+    assert!(
+        e.contains(&format!("serve-engine's arms are {} (", ARMS.join(", "))),
+        "{e}"
+    );
     let raw = fixture("serve-engine-dry-run.txt");
     assert!(
         !raw.contains("--tae-dir"),

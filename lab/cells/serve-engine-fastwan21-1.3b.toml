@@ -1,9 +1,9 @@
 # runpod-matrix.sh `serve-engine`, its wan group (docs/serve/design.md "GPU check"; docs/adr/0019-fv-lab.md §22, S3):
 # the CLI generation of FastWan2.1 1.3B (DMD, VSA, the full Wan VAE: `wan gen`), then the served variant
 # `fastwan21-1.3b` through EngineService + CudaBackend (`fv-gpucheck engine`): its frames byte-compared with the CLI's,
-# then a second job cancelled after step 1. The engine reads its tiny autoencoder from `<weights root>/auxiliary/tae`
-# (no `--tae-dir`: dropped from the script's engine arms in the same commit as this tier, §22, S3;
-# serve-engine-h3-turbo.toml says why that is argv only). `fastwan21-1.3b` (29.21 GB) is R2-only since 2026-10-13,
+# then a second job cancelled after step 1. No `--tae-dir` (dropped from the script's engine arms in the same commit
+# as this tier, §22, S3): the variant decodes with the full Wan VAE (`decoder = "full"`), which never searches a TAE
+# directory, so the frames do not change (serve-engine-h3-turbo.toml, §22.11). `fastwan21-1.3b` (29.21 GB) is R2-only since 2026-10-13,
 # so the tier is `weights = "volume+r2"`: fetched onto the container disk before the CLI arm, which reads it first.
 # The script's removal of the PNG frames after the family is disk only and not copied.
 # Schema: crates/fastvideo-lab/schemas/cell.v1.json.

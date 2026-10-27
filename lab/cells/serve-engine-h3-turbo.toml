@@ -2,12 +2,14 @@
 # the serve engine's CUDA backend (WP-11) against the CLI. First the CLI generation of the served `h3-turbo` recipe
 # (FastH3 4-step VSA, `h3 gen`), then the same recipe, canvas, prompt and seed through EngineService + CudaBackend
 # (`fv-gpucheck engine --model h3-turbo`): an MP4 out, its frames byte-compared with the CLI's (`--reference`), then a
-# second job cancelled after step 2 (`--cancel-after-step`). The engine reads its tiny autoencoders from its default,
-# `<weights root>/auxiliary/tae` (fv-gpucheck engine's `--tae-dir`, unset; the gold engine cells pass none): the
-# script's `--tae-dir "$TAE"` was dropped from its engine arms in the same commit as this tier (§22, S3), an argv-only
-# change where the volume's TAE copy is complete (bz0ofkfx45; on an R2 run the merged root's link to it). The script's
-# removal of the PNG frames after the family (disk only: each arm's frames.sha256.json is written right after it) is
-# not copied. Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+# second job cancelled after step 2 (`--cancel-after-step`). No `--tae-dir`, as the gold engine cells: the script's
+# `--tae-dir "$TAE"` was dropped from its engine arms in the same commit as this tier (§22, S3, §22.11). The engine's
+# TAE directory is then `<weights root>/auxiliary/tae`, the script's `$TAE` when the volume's TAE copy is complete;
+# none of the three recipes reads it (h3-turbo, `fasth3-4step-vsa`, names no `taeh3`), so the frames do not change.
+# The script's removal of the PNG frames after the family is disk only and not copied: the CLI arm's frames are
+# recorded in its frames.sha256.json, written right after it; the engine arm's (under `<arm>/out/<job>/frames`, so no
+# frames.sha256.json) by its `engine/frames` check (`frames_sha256` in stderr.log and gpucheck-out/engine.json).
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
 schema = 1
 name = "serve-engine-h3-turbo"
 description = "h3-turbo (FastH3 4-step VSA) at 832x480, 124 frames: the CLI generation, then the same request through the serve engine (frames byte-compared with the CLI's, a second job cancelled after step 2)"

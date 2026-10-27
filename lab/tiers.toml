@@ -635,9 +635,10 @@ cells = ["hd5-canvases", "hd-10s"]
 
 # ---- D1, slice S3 (docs/adr/0019-fv-lab.md §22, S3): the `serve-engine` family
 # as a tier, the script's `--tae-dir "$TAE"` dropped from its three engine arms
-# in the same commit (fv-gpucheck engine defaults it to <weights
-# root>/auxiliary/tae, the same files where the volume's TAE copy is complete),
-# so the script's dry run is the tier's (fv-lab-goldens.sh). The branch stays
+# in the same commit (fv-gpucheck engine then takes <weights
+# root>/auxiliary/tae; none of the three recipes reads a tiny decoder, so the
+# frames do not change, §22.11), so the script's dry run is the tier's
+# (fv-lab-goldens.sh). The branch stays
 # until the GPU check through both runners (§22.12); S7 then retires it.
 # runpod-matrix.sh `serve-engine`: for h3-turbo, ltx-turbo and fastwan21-1.3b,
 # the CLI generation, then the same request through the serve engine's CUDA

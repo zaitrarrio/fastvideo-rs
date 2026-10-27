@@ -467,20 +467,23 @@ arm's `benchmark.json`, which `report summary --kind hd` prints.
 [ADR-0019 §22](../adr/0019-fv-lab.md) (S3, §22.11). `runpod-matrix.sh serve-engine` as a tier: one cell per group
 (`lab/cells/serve-engine-h3-turbo.toml`, `-ltx-turbo.toml`, `-fastwan21-1.3b.toml`), each the CLI arm and then the
 engine arm that reads the CLI arm's frames as `--reference`, held to the branch's dry run by `fv-lab-goldens.sh`. In the
-same change the branch's engine arms lost `--tae-dir "$TAE"`: `fv-gpucheck engine` reads `<weights root>/auxiliary/tae`
-without it, which is the same directory wherever the volume's TAE copy is complete (on R2 runs the merged root's
-link to it), as the gold engine cells always did. The tier is `weights = "volume+r2"`: `fastwan21-1.3b` is R2-only
+same change the branch's engine arms lost `--tae-dir "$TAE"`, as the gold engine cells never pass it: `fv-gpucheck
+engine` then takes `<weights root>/auxiliary/tae` (the script's `$TAE` only when the volume's TAE copy is complete),
+and none of the three recipes reads a tiny decoder (h3-turbo and ltx-turbo name none, fastwan21-1.3b decodes with the
+full VAE), so the frames do not change ([ADR-0019 §22.11](../adr/0019-fv-lab.md)). The tier is `weights = "volume+r2"`: `fastwan21-1.3b` is R2-only
 and is fetched before `cli-wan-turbo` onto a 150 GB container disk. The branch's `FV_ENGINE_CELLS` (groups `h3 ltx
 wan`) is `--cells` by arm; fv-lab refuses it (`fv-lab run`'s environment, `pod up --extra-env`). The branch's removal
-of the PNG frames after the family is not copied (disk only: each arm's `frames.sha256.json` is what runs compare).
+of the PNG frames after the family is not copied (disk only: a CLI arm's frames are in its `frames.sha256.json`, an
+engine arm's in its `engine/frames` check's `frames_sha256`).
 
 ```sh
 ./fv-lab run serve-engine --dry-run             # the script's six arms, nothing else (plus the R2 plan)
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family serve-engine --yes --wait
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family serve-engine --cells cli-h3-turbo,engine-h3-turbo --yes --wait
-# the script's side of the same run (until S7): the wan group's tree from R2 on the tier's disk
+# the script's side of the same run (until S7): the wan group's tree from R2 on the tier's disk; its R2 records
+# (r2-stage.log, r2-fetch.json) are in the run directory, which only a tree fetch takes
 RUNPOD_API_KEY=… FV_FAMILY=serve-engine FV_R2_TREES=fastwan21-1.3b FV_CONTAINER_DISK_GB=150 \
-  bash scripts/gpu/runpod-http.sh run <7>
+  FV_FETCH_TREE=1 FV_FETCH_SKIP='\.png$|\.cache$' bash scripts/gpu/runpod-http.sh run <7>
 ```
 
 Each engine arm's own checks (`engine/identical_to_cli`, `engine/cancel`) are in its `stderr.log` and
