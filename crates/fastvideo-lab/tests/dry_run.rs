@@ -22,6 +22,9 @@
 //! reads the volume (`common::merged_root`), and its R2 plan lines (`dry-run
 //! weights …`, `dry-run r2 <arm>: …`, ADR-0019 §16.4) are its own, checked on
 //! their own (`the_oracle_r2_tier_dry_runs_as_the_oracle_family_with_sfwan13`).
+//! `serve-engine` (ADR-0019 §22, S3) is a `volume+r2` tier of its own live
+//! branch, read the same way (its engine arms' `--weights-root` is the root
+//! itself; `the_serve_engine_tier_is_the_serve_engine_family_without_tae_dir`).
 
 mod common;
 
@@ -762,4 +765,118 @@ fn the_hd_tiers_are_the_hd_family_without_its_derived_step() {
         Some("scripts/gpu/prompts-hd5.json")
     );
     assert!(!fixture("hd-dry-run.txt").contains("] prompt set: "));
+}
+
+/// The `serve-engine` tier (ADR-0019 §22, S3): `runpod-matrix.sh
+/// serve-engine` with `--tae-dir "$TAE"` dropped from its three engine arms in
+/// the same commit (`fv-gpucheck engine` reads `<weights root>/auxiliary/tae`
+/// without it). Its default run is the script's six arms in the script's
+/// order, each group's CLI arm before its engine arm, which reads the CLI
+/// arm's frames as `--reference` (`fixtures/serve-engine-dry-run.txt`, held
+/// line for line by `dry_run_equals_runpod_matrix_sh_for_every_tier`), and
+/// nothing else: no `--tae-dir`, no `{tae}`, no compare, no frame removal (the
+/// script's `rm -rf` of the PNG frames after the family is disk only and runs
+/// in no dry run). Being `volume+r2`, its engine arms read the merged root as
+/// `--weights-root` (`common::merged_root`, the root as a whole word), and
+/// fv-lab's R2 plan fetches `fastwan21-1.3b` once, before `cli-wan-turbo`.
+#[test]
+fn the_serve_engine_tier_is_the_serve_engine_family_without_tae_dir() {
+    const ARMS: [&str; 6] = [
+        "cli-h3-turbo",
+        "engine-h3-turbo",
+        "cli-ltx-turbo",
+        "engine-ltx-turbo",
+        "cli-wan-turbo",
+        "engine-wan-turbo",
+    ];
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier("serve-engine").expect("serve-engine");
+    assert_eq!(
+        tier.cells,
+        [
+            "serve-engine-h3-turbo",
+            "serve-engine-ltx-turbo",
+            "serve-engine-fastwan21-1.3b"
+        ]
+    );
+    assert_eq!(tier.weights, TierWeights::VolumeR2);
+    assert_eq!(tier.container_disk_gb, 150);
+    assert!(tier.extra_cells.is_empty());
+    assert!(common::sibling_tier("serve-engine").is_none());
+    assert!(common::restored_tier("serve-engine").is_none());
+    let cfg = config("serve-engine");
+    let all = dry_run_lines(&cfg, &steps(&lab, &cfg));
+    let r2: Vec<&String> = all.iter().filter(|l| r2_line(l)).collect();
+    assert_eq!(r2.len(), 2, "{r2:?}");
+    assert!(
+        r2[0].starts_with("[serve-engine] dry-run weights /fvscratch/weights: ")
+            && r2[0].contains("; 1 R2 trees (29.21 GB) fetched before the arms that read them, at most 29.21 GB on the container disk at once"),
+        "{}",
+        r2[0]
+    );
+    assert_eq!(
+        r2[1],
+        "[serve-engine] dry-run r2 cli-wan-turbo: fetch fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef (29.21 GB) into /fvscratch/weights"
+    );
+    let i = all.iter().position(|l| l == r2[1]).expect("the r2 line");
+    assert!(
+        all[i + 1].starts_with("[serve-engine] dry-run cli-wan-turbo: env FASTVIDEO_WAN_VAE=full ")
+    );
+    let lines: Vec<String> = all.into_iter().filter(|l| !r2_line(l)).collect();
+    let arms: Vec<&str> = lines
+        .iter()
+        .filter_map(|l| l.split_once("] dry-run "))
+        .map(|(_, r)| r.split_once(": ").map_or(r, |(a, _)| a))
+        .collect();
+    assert_eq!(arms, ARMS, "the script's arms, in its order");
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("[serve-engine] matrix start image=unknown")
+    );
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("[serve-engine] matrix done")
+    );
+    assert_eq!(lines.len(), ARMS.len() + 2, "nothing but the arms");
+    for l in &lines {
+        for gone in ["--tae-dir", "auxiliary/tae", "rm -rf", "compare"] {
+            assert!(!l.contains(gone), "{gone} in {l}");
+        }
+        assert!(!l.contains("/workspace/weights"), "the merged root: {l}");
+    }
+    let runs = format!("/fvscratch/runs/serve-engine/{TAG}");
+    for (cli, engine) in ARMS.iter().step_by(2).zip(ARMS.iter().skip(1).step_by(2)) {
+        let cmd = |arm: &str| {
+            lines
+                .iter()
+                .find_map(|l| l.strip_prefix(&format!("[serve-engine] dry-run {arm}: ")))
+                .unwrap_or_else(|| panic!("{arm}"))
+                .to_owned()
+        };
+        let (c, e) = (cmd(cli), cmd(engine));
+        assert!(!c.contains(" engine "), "{c}");
+        assert!(
+            e.contains(" engine --model ")
+                && e.contains(" --weights-root /fvscratch/weights ")
+                && e.contains(&format!(" --reference {runs}/{cli}/frames "))
+                && e.contains(" --cancel-after-step ")
+                && e.contains(&format!(" --clip-out {runs}/{engine}/out ")),
+            "{e}"
+        );
+    }
+    // The script's lines read with the merged root: the root itself, as a
+    // whole word, and paths under it; nothing that merely starts with it.
+    assert_eq!(
+        common::merged_root("x --weights-root /workspace/weights --y /workspace/weights/h3-base /workspace/weights2 /workspace/weights"),
+        "x --weights-root /fvscratch/weights --y /fvscratch/weights/h3-base /workspace/weights2 /fvscratch/weights"
+    );
+    let raw = fixture("serve-engine-dry-run.txt");
+    assert!(
+        !raw.contains("--tae-dir"),
+        "the lockstep change is in the golden"
+    );
+    assert_eq!(
+        raw.matches(" --weights-root /workspace/weights ").count(),
+        3
+    );
 }

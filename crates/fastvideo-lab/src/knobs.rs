@@ -82,7 +82,11 @@ pub const MODE_KNOBS: [&str; 18] = [
 /// the clip-metric targets (§20: the tier's extra cells are their defaults):
 /// `FV_LTX_REF_PROMPT`, `FV_LTX_A2V_PROMPT`, `FV_LTX_A2V_I2V_PROMPT`,
 /// `FV_LTX_RETAKE_PROMPT`, `FV_LTX_EXTEND_PROMPT`.
-pub const SCRIPT_KNOBS: [&str; 10] = [
+///
+/// `serve-engine` (ADR-0019 §22, S3), whose branch stays until its GPU check:
+/// `FV_ENGINE_CELLS`, its family picker (`h3 ltx wan`); the tier's cells are
+/// its default, selected by arm (`--cells`).
+pub const SCRIPT_KNOBS: [&str; 11] = [
     "FV_ORACLE_TARGETS",
     "FV_ORACLE_F32",
     "FV_ORACLE_OWN_TEXT",
@@ -93,6 +97,7 @@ pub const SCRIPT_KNOBS: [&str; 10] = [
     "FV_LTX_A2V_I2V_PROMPT",
     "FV_LTX_RETAKE_PROMPT",
     "FV_LTX_EXTEND_PROMPT",
+    "FV_ENGINE_CELLS",
 ];
 
 /// The knobs of a step dropped from a live family's branch, which neither
@@ -177,6 +182,12 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
         return Some(format!(
             "{key}: the attn3 tier runs the script's default arms (FV_ATTN3_ARMS \"v2 cudnn\", FV_ATTN3_VSA \"0 1\"); narrow it by arm with --cells (FV_CELLS) (ADR-0019 §17.2, §17.6)"
         ));
+    }
+    if key == "FV_ENGINE_CELLS" {
+        return Some(
+            "FV_ENGINE_CELLS: the serve-engine tier runs the script's default groups (h3 ltx wan); narrow it by arm with --cells (FV_CELLS), e.g. cli-h3-turbo,engine-h3-turbo (ADR-0019 §22, S3)"
+                .to_owned(),
+        );
     }
     if DROPPED_KNOBS.contains(&key) {
         return Some(format!(
@@ -430,6 +441,27 @@ mod tests {
             assert!(MODE_KNOBS.contains(&k), "{k}");
             assert!(not_read().any(|n| n == k), "{k}");
         }
+    }
+
+    #[test]
+    fn the_serve_engine_family_picker_is_refused_by_fv_lab_only() {
+        // serve-engine's FV_ENGINE_CELLS (ADR-0019 §22, S3): refused by fv-lab
+        // with a pointer to selecting by arm, in --extra-env and in fv-lab
+        // run's environment; the script's branch still reads it, so
+        // runpod-http.sh's FV_LAB_NOT_READ gains it when the branch goes (S7).
+        let e = check_extra_env("serve-engine", &["FV_ENGINE_CELLS=h3".into()]).unwrap_err();
+        assert!(
+            e.contains("--extra-env FV_ENGINE_CELLS: the serve-engine tier runs the script's default groups"),
+            "{e}"
+        );
+        assert!(e.contains("narrow it by arm with --cells"), "{e}");
+        let env = |k: &str| (k == "FV_ENGINE_CELLS").then(|| "wan".to_owned());
+        let e = check_run_env("serve-engine", env).unwrap_err();
+        assert!(e.contains("FV_ENGINE_CELLS: the serve-engine tier"), "{e}");
+        assert!(e.contains("ADR-0019 §22, S3"), "{e}");
+        assert!(SCRIPT_KNOBS.contains(&"FV_ENGINE_CELLS"));
+        assert!(!MODE_KNOBS.contains(&"FV_ENGINE_CELLS"));
+        assert!(!not_read().any(|k| k == "FV_ENGINE_CELLS"));
     }
 
     #[test]

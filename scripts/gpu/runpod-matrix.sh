@@ -1311,7 +1311,15 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # (`h3|ltx2|wan gen`) and the same recipe / canvas / seed through
     # EngineService + CudaBackend (`fv-gpucheck engine`): MP4 out, frames
     # byte-compared with the CLI clip, then a second job cancelled mid-run.
-    # FV_ENGINE_CELLS picks families (h3 ltx wan).
+    # FV_ENGINE_CELLS picks families (h3 ltx wan). The fv-lab tier
+    # `serve-engine` is these six arms (lab/cells/serve-engine-*.toml;
+    # docs/adr/0019-fv-lab.md §22, S3), held to this branch's dry run by
+    # fv-lab-goldens.sh; it selects by arm (--cells / FV_CELLS) and refuses
+    # FV_ENGINE_CELLS. The engine arms pass no --tae-dir since S3, in lockstep
+    # with the tier: fv-gpucheck engine reads <weights root>/auxiliary/tae,
+    # which is $TAE whenever the volume's TAE copy is complete (bz0ofkfx45; on
+    # an FV_R2_TREES run the merged root's link to it), as the gold engine
+    # cells do.
     want() { [[ " ${FV_ENGINE_CELLS:-h3 ltx wan} " == *" $1 "* ]]; }
     if want h3; then
       h3geo=(--height 480 --width 832 --num-frames 124 --prompt "$PROMPT" --seed "$SEED" --adaln-cache "$RUNS/h3-adaln.cache")
@@ -1320,7 +1328,7 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
           "${h3geo[@]}" --text-encoder streamed --text-weights "$W/h3-base" --no-text-cache --no-mp4 \
           --clip-dir "$RUNS/cli-h3-turbo/frames"
       gated_cell engine-h3-turbo fasth3-4step-vsa \
-        "$BIN" --keep-going --mode fast --techniques h3/fasth3_4step_vsa engine --model h3-turbo --weights-root "$W" --tae-dir "$TAE" \
+        "$BIN" --keep-going --mode fast --techniques h3/fasth3_4step_vsa engine --model h3-turbo --weights-root "$W" \
           "${h3geo[@]}" --text-encoder streamed --reference "$RUNS/cli-h3-turbo/frames" --cancel-after-step 2 \
           --clip-out "$RUNS/engine-h3-turbo/out"
     fi
@@ -1332,7 +1340,7 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
           --clip "$RUNS/cli-ltx-turbo/frames"
       gated_cell engine-ltx-turbo ltx25-two-stage \
         "$BIN" --keep-going --mode fast --techniques ltx2/ltx25_distill_sol engine --model ltx-turbo --weights-root "$W" \
-          --tae-dir "$TAE" "${ltxgeo[@]}" --ltx-text streamed --reference "$RUNS/cli-ltx-turbo/frames" \
+          "${ltxgeo[@]}" --ltx-text streamed --reference "$RUNS/cli-ltx-turbo/frames" \
           --cancel-after-step 3 --clip-out "$RUNS/engine-ltx-turbo/out"
     fi
     if want wan; then
@@ -1341,10 +1349,12 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
         "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" "${wangeo[@]}" --no-text-cache --no-mp4 \
           --clip-dir "$RUNS/cli-wan-turbo/frames"
       gated_cell engine-wan-turbo fastwan21-1.3b \
-        "$BIN" --keep-going --mode fast engine --model fastwan21-1.3b --weights-root "$W" --tae-dir "$TAE" "${wangeo[@]}" \
+        "$BIN" --keep-going --mode fast engine --model fastwan21-1.3b --weights-root "$W" "${wangeo[@]}" \
           --reference "$RUNS/cli-wan-turbo/frames" --cancel-after-step 1 --clip-out "$RUNS/engine-wan-turbo/out"
     fi
-    # Keep the reports and MP4s; the PNG frames were compared on the box.
+    # Keep the reports and MP4s; the PNG frames were compared on the box
+    # (disk only: each arm's frames.sha256.json was written right after it,
+    # and that is what two runs compare; the tier does not copy this).
     rm -rf "$RUNS"/cli-*/frames "$RUNS"/engine-*/out/*/frames
     ;;
   *)

@@ -1,0 +1,39 @@
+# runpod-matrix.sh `serve-engine`, its wan group (docs/serve/design.md "GPU check"; docs/adr/0019-fv-lab.md §22, S3):
+# the CLI generation of FastWan2.1 1.3B (DMD, VSA, the full Wan VAE: `wan gen`), then the served variant
+# `fastwan21-1.3b` through EngineService + CudaBackend (`fv-gpucheck engine`): its frames byte-compared with the CLI's,
+# then a second job cancelled after step 1. The engine reads its tiny autoencoder from `<weights root>/auxiliary/tae`
+# (no `--tae-dir`: dropped from the script's engine arms in the same commit as this tier, §22, S3;
+# serve-engine-h3-turbo.toml says why that is argv only). `fastwan21-1.3b` (29.21 GB) is R2-only since 2026-10-13,
+# so the tier is `weights = "volume+r2"`: fetched onto the container disk before the CLI arm, which reads it first.
+# The script's removal of the PNG frames after the family is disk only and not copied.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "serve-engine-fastwan21-1.3b"
+description = "FastWan2.1 1.3B (DMD, VSA) at 832x480, 81 frames: the CLI generation, then the served fastwan21-1.3b through the serve engine (frames byte-compared with the CLI's, a second job cancelled after step 1)"
+
+[workload]
+model = "wan engine"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+frames = 81
+width = 832
+height = 480
+note = "runpod-matrix.sh's default PROMPT and SEED; the CLI arm decodes with the full Wan VAE (FASTVIDEO_WAN_VAE=full), as the served variant does; the engine arm reads the CLI arm's frames as its reference, so it runs after it"
+
+[lists]
+geo = ["--height", "{height}", "--width", "{width}", "--num-frames", "{frames}", "--prompt", "{prompt}", "--seed", "{seed}"]
+
+[[arm]]
+name = "cli-wan-turbo"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+env = ["FASTVIDEO_WAN_VAE=full"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "--weights", "{weights}/fastwan21-1.3b", "{@geo}", "--no-text-cache",
+  "--no-mp4", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "engine-wan-turbo"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+argv = ["--keep-going", "--mode", "fast", "engine", "--model", "fastwan21-1.3b", "--weights-root", "{weights}", "{@geo}",
+  "--reference", "{runs}/cli-wan-turbo/frames", "--cancel-after-step", "1", "--clip-out", "{runs}/{arm}/out"]

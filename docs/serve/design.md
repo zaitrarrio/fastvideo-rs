@@ -2082,7 +2082,13 @@ additions and readings; everything is re-exported from the crate root.
   executor thread).
 - GPU check: `fv-gpucheck engine` (one model through `EngineService`, frames
   compared with the CLI clip, a second job cancelled mid-run) and the
-  `serve-engine` family of `runpod-matrix.sh`.
+  fv-lab tier `serve-engine` (`lab/cells/serve-engine-*.toml`: h3-turbo,
+  ltx-turbo and fastwan21-1.3b, each the CLI arm then the engine arm;
+  `fv-lab pod up --family serve-engine`, `--cells` by arm), which is the
+  `serve-engine` family of `runpod-matrix.sh` until that branch retires after
+  the tier's GPU check (docs/adr/0019-fv-lab.md §22.11, §22.12). The engine
+  reads its tiny autoencoders from `<weights root>/auxiliary/tae` (no
+  `--tae-dir`).
 - Pod results through the fal queue (`scripts/serve/fal-queue-smoke.sh`,
   `configs/serve/runpod.toml`, RTX PRO 6000, NVENC post encoder):
   h3-turbo T2V 1344x768 124 frames + 32 kHz AAC in 32.8 s wall (19.1 s
