@@ -643,7 +643,10 @@ rp_has_branch() {
 # directory these drivers tail and fetch. These pods carry no R2 key, so its
 # R2 arms are skipped (`r2 fetch failed`), as the script's skipped them
 # (`weights incomplete`: the 500 GB volume has no Wan tree); its ungated
-# kernels-wan runs. A family with a branch runs runpod-matrix.sh. A family
+# kernels-wan runs. Such a family needs an image whose lab/ has its tier:
+# this driver ships only scripts/gpu/ (rp_rsync), so on an older image fv-lab
+# stops with "no tier or cell named" (as ltx has since §17.6). A family with a branch
+# runs runpod-matrix.sh. A family
 # retired with no tier (FV_SCRIPT_RETIRED, §18) and anything else (an
 # experiment tier, gold, an unknown name) dies here, before a pod exists.
 rp_family_cmd() {

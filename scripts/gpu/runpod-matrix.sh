@@ -584,9 +584,11 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # the tier (§22.4, Addition 16: `{tae}` without a TAE gate):
     #   - FASTVIDEO_TAE_DIR="$TAE" is each gated arm's own env entry, first,
     #     not an `export` before the arms, so the dry run shows it (the same
-    #     value reaches the same 45 commands; the four ungated ones,
-    #     kernels-wan and the three compare-dumps, read no TAE and no longer
-    #     carry it);
+    #     value reaches the same 45 commands; every other command no longer
+    #     carries it: the four ungated ones (kernels-wan, the three
+    #     compare-dumps) and the 29 compare-clips and 20 gate runs, whose
+    #     reports' env then lacks it; none reads a TAE, and
+    #     fv-lab-compare-runs.sh reads their status, not their env);
     #   - engine-fw22 passes no --tae-dir (as serve-engine's engine arms since
     #     S3): the engine then takes <weights root>/auxiliary/tae, which is
     #     $TAE whenever the volume's auxiliary/tae is complete, and its

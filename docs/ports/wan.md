@@ -478,8 +478,10 @@ see "Not measured" below. SF-Wan is measured in the next section.
   tier `wan`, fetching each tree from R2 before its arms):
   `fv-lab pod up --sha <7> --family wan --cells wan5b-bf16act,... --yes --wait`.
 - SF-Wan on RTX PRO 6000: none was in stock in US-CA-2, so the numbers
-  below are from H100. To rerun (EU volume, the default; the US volume was
-  deleted 2026-10): `ORACLE_TARGETS=sfwan13 FV_ORACLE_FAMILY=sfwan UP_AFTER=cells:fv-sfwan13
+  below are from H100. To rerun (the US volume was deleted 2026-10 and
+  `sfwan21-1.3b` is R2-only since 2026-10-13: `oracle.sh` fetches it from R2
+  on both pods, the upstream step `r2:sfwan21-1.3b` and the runtime pod's
+  `FV_R2_TREES`, ADR-0019 §21): `ORACLE_TARGETS=sfwan13 FV_ORACLE_FAMILY=sfwan UP_AFTER=cells:fv-sfwan13
   UP_IMAGE_TAG=latest FASTVIDEO_DUMP_OPS=0,1,15,29 FV_PROMPTS=5 FV_LPIPS=1
   scripts/gpu/oracle.sh <sha>`. This runs the oracle and the upstream bench
   on one pod, and the oracle and SF-Wan cells on the other.

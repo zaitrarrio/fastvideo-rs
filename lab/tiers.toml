@@ -763,7 +763,14 @@ cells = ["mmaudio-sidecar"]
 # 2026-10-13, and each arm drops what it does not read before fetching what it
 # does (§16.4): eleven fetches, 428.10 GB in a full run, at most 80.41 GB
 # (wan21-t2v-14b) on the container disk at once, so 210 GB (81 and the 120 GB
-# every volume tier keeps, rounded up). min_ram_gb = 256: the 14B arms' host
+# every volume tier keeps is 201; the 9 GB over it is headroom). wan21-t2v-14b
+# is fetched twice (about 161 GB), for its kernel A/B and again for its cache
+# block, to keep the script's order. wall_cap_s = 14400: a full run is about
+# 3.1 h of arms, fetches and compares (UNVERIFIED: never run whole on this GPU)
+# against about 3.67 h usable (the cap less pod::RUN_DEADLINE_RESERVE_S), so it
+# fits but thinly; an arm that cannot fit in the time left is skipped as
+# `wall cap near` and the run still ends and is fetched (§22.17).
+# min_ram_gb = 256: the 14B arms' host
 # load, as gold's (§16.10; their own peak is unmeasured). `tae = true`: the
 # pod's fetch-tae.sh fetches taew2_1 and taew2_2 (the latter since S6) when the
 # volume lacks them; the oracle arms read {tae}/taew2_2.safetensors.

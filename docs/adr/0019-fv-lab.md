@@ -5903,7 +5903,17 @@ FVID-2026-10-27-d1-s6-wan), as the `wan` entry of §22.3 and §22.6 items 3-5 de
   `fastwan22-ti2v-5b` (`fw22-oracle`), `wan22-ti2v-5b` (`wan5b-580p-161f`), `fastwan22-ti2v-5b` (`cli-fw22`),
   `sfwan21-1.3b` (`sfwan13-81f-fullvae`): **eleven fetches, 428,103,503,172 bytes (428.10 GB), at most
   `wan21-t2v-14b`'s 80,406,918,983 bytes (80.41 GB) on the disk at once**, as §22.3 says. 210 GB holds that and the
-  120 GB every volume tier keeps (81 + 120 = 201, rounded up). `tests/lab_files.rs`
+  120 GB every volume tier keeps (81 + 120 = 201; the 9 GB over it is headroom, not a rounding). `wan21-t2v-14b` is
+  among the eleven twice (`wan14b-f32act`, then `wan14` after the 1.3B full-VAE arms), about 161 GB of the 428.10, to
+  keep the script's order: reordering arms to fetch it once would change the dry run, which is the script's.
+  **Duration** (UNVERIFIED: the branch has never run whole on this GPU class): about 3.1 h of arms, fetches and
+  compares. From the records: the fw22 cell ~28 min (`artifacts/runpod/wan/9b2c963-09282019`, ten arms 1,782 s), the
+  14B cache block's seven generations ~20 min on H100 plus seven 14B loads (`docs/ports/wan.md`), the 1.3B and SF-Wan
+  arms ~1-2 min each, the 5B recipe and kernel arms, the oracle cells ~10 min, 428.10 GB of fetches at §21.7's
+  0.7-1.1 GB/s ~7-10 min, 29 compares and 20 gates ~15 min, boot ~5 min. `wall_cap_s = 14400` less
+  `pod::RUN_DEADLINE_RESERVE_S` (1,200 s: the fetch reserve and `DONE`) leaves about 3.67 h, so a full run fits but
+  thinly. Near the cap it degrades without failing: `Runner::prepare_arm` skips an arm that cannot fit in the time
+  left (`SKIP <arm>: wall cap near`), the run still ends with `matrix done` and is fetched. `tests/lab_files.rs`
   `the_wan_tier_fetches_its_trees_in_turn_within_its_disk` derives the eleven from the cells and the bytes from
   `weights-r2.tsv` and checks `WeightsPlan` against them; the dry-run test checks the eleven `dry-run r2 <arm>:` lines
   and the weights line (`5 R2 trees (428.10 GB) …, at most 80.41 GB`). The reference cells are skipped without
@@ -5928,8 +5938,12 @@ FVID-2026-10-27-d1-s6-wan), as the `wan` entry of §22.3 and §22.6 items 3-5 de
   golden changes (the start command names the script, not its list).
 - **The lockstep change, in the same commit** (`runpod-matrix.sh` `wan`, rpm:568-878 at `9e6d09ae`):
   1. `export FASTVIDEO_TAE_DIR="$TAE"` (rpm:589) became `env FASTVIDEO_TAE_DIR="$TAE"` at the head of each of the 45
-     gated arms' commands (in the helpers `wan_arm`, `sf_arm`, `base_arm`, before their own entries); the four
-     ungated arms, which read no TAE, no longer carry it;
+     gated arms' commands (in the helpers `wan_arm`, `sf_arm`, `base_arm`, before their own entries). Every other
+     command of the branch no longer carries it either: the four ungated arms (`kernels-wan`, the three
+     `compare-dumps`), and the 29 `compare-clips` and 20 `gate` invocations, whose reports' `env` (`Report::finish`
+     records the `FASTVIDEO_*` variables) then lacks it, on both runners alike. None of them reads a TAE (they read
+     kernels, dumps or PNG frames), and `fv-lab-compare-runs.sh` reads a compare report's `status` (and
+     `off_identity`'s) and a gate report's presence, never its `env`;
   2. `engine-fw22`'s `--tae-dir "$TAE"` (rpm:871) is dropped, as `serve-engine`'s engine arms' in S3. §22.11's
      reasoning, re-checked for this recipe: `wan-turbo` is `fastwan22-ti2v-5b` (`caps.rs:1334`), `decoder = "full"`
      and `tae_dir = "${tae}"` (`families/wan.toml:129, 140`); the engine sets `FASTVIDEO_WAN_VAE=full` and
@@ -5975,7 +5989,10 @@ FVID-2026-10-27-d1-s6-wan), as the `wan` entry of §22.3 and §22.6 items 3-5 de
   upstream pod gets the largest selected target's disk, not the sum (`oracle::upstream_launch`). `up_steps` then gives
   `info:box r2:wan22-ti2v-5b r2:fastwan22-ti2v-5b oracle:wan22-ti2v,fastwan22-ti2v` and the body carries the two R2
   secret references (§21.2). `scripts/gpu/upstream/oracle.sh` `oracle_wan22` / `oracle_fastwan22` read `$UW/<tree>`
-  when the `r2:<tree>` step completed it, else the volume's path as before (`oracle_sfwan`'s fallback, §21.2). Golden:
+  when the `r2:<tree>` step completed it, else the volume's path as before (`oracle_sfwan`'s fallback, §21.2). That
+  fallback reaches nothing today, for these two and for `oracle_sfwan`: the EU volume holds H3 and LTX only (no Wan
+  tree since 2026-10-13), so without the `r2:` step the reference fails on a missing tree; it is kept for a volume
+  that holds the tree again, and the R2 step is what makes the reference. Golden:
   `runpod-http-upstream-fastvideo-wan22.json` (`plan-upstream` with those steps, 210 GB, the stack's 192 GB RAM floor);
   `tests/oracle_driver.rs` holds fv-lab's body to it and plans `fv-lab oracle --family wan` over the six oracle arms
   (one `fastvideo` pod, both targets, 210 GB, the R2 references; a generation arm refused in `--cells`);
@@ -5992,7 +6009,11 @@ FVID-2026-10-27-d1-s6-wan), as the `wan` entry of §22.3 and §22.6 items 3-5 de
   fetch failed`), as the script skipped them (`weights incomplete`: the 500 GB volume has no Wan tree), and
   `kernels-wan` runs; a run that fetches the trees is `fv-lab pod up --family wan`. `runpod-plan.test.sh`: `matrix`
   and `plan matrix` start `fv-lab run wan` with those settings and no runpod-matrix.sh, and the command, run as the
-  pod's shell runs it, reaches a stand-in fv-lab with them (or exits 2 naming `fv-lab pod up` without fv-lab).
+  pod's shell runs it, reaches a stand-in fv-lab with them (or exits 2 naming `fv-lab pod up` without fv-lab). The
+  image must therefore carry this `lab/` (a `wan` tier in its `lab/tiers.toml`): `runpod.sh` ships only `scripts/gpu/`
+  to the pod (`rp_rsync … scripts/gpu/`), and fv-lab reads `lab/` beside its binary, so on an image built before S6
+  `matrix wan` fails with fv-lab's ``no tier or cell named `wan` `` (`plan.rs`) instead of running the branch, as
+  `ltx` has since §17.6. Use an image `sha-<7>` at or after this change (or the script, `runpod-http.sh`, until then).
 - **A comparator fix found by §22.18's simulation**: `fv-lab-compare-runs.sh`'s listers (`arms`, `reports`, `vfiles`,
   `mfiles`) ended on the last glob's test; when that glob matched nothing in the fv-lab run (no gate report, no
   `hashes.json`, no `metrics.txt`), the failed test under `set -e` stopped the `{ <fv-lab>; <script>; }` group before
@@ -6262,9 +6283,13 @@ check's `cli-wan-turbo`, one such generation, took 39-42 s with its load), ~1-2 
 causal and fused kernels at SF-Wan shapes, with timings); `cli-fw22` and `engine-fw22`: 139 s and 135 s at
 `9b2c963` (`artifacts/runpod/wan/9b2c963-09282019`); the tree fetch at the end ~1-2 min (logs, JSON, two arms' mp4s).
 In all **~17-27 min a side, ~$0.70-$1.12 a side, ~$1.40-$2.25 both** (§22.3 said ~$2.65, 32 min a side). Bounded by
-the 1 h caps at the tier's $2.50 price cap: $2.50 a pod, $5.00 both. **Balance needed**: at least $10.25 before
-starting at the estimate ($8 floor + $2.25), and $13 to stay above the floor even if both pods ran to their caps
-(CLAUDE.md: stop before the balance would drop below $8). At about $17 both bounds hold.
+the 1 h caps at the tier's $2.50 price cap: $2.50 a pod, $5.00 both, plus §21.7's allowance for what a cap does not
+bound: fv-deploy's two replaced readiness cycles for the fv-lab pod (2 x 600 s at $2.50/hr, $0.83) and the script
+side's create retries (up to $0.83), about $1.66: **$6.66 at worst**. **Balance needed**: at least $10.25 before
+starting at the estimate ($8 floor + $2.25), and **$14.66** to stay above the floor even if both pods ran to their
+caps with those cycles and retries (CLAUDE.md: stop before the balance would drop below $8); fv-lab's own guard
+(§19.1) asks $8 + its pod over 3,600 + 1,200 s ($3.33) = $11.33. At about $17 (about $16.31 after §22.16) every
+bound holds; stop the build pod first, as its spend counts toward the guard.
 
 **Optional: the two oracle cells** (§22.6 item 4: the coordinator's call at run time). All six oracle arms on both
 runners, on **one** pair of references made by `fv-lab oracle`'s upstream pod and held for the script side, as §21.7.
@@ -6296,9 +6321,16 @@ T=$(mktemp -d)
 #     exactly these lines. The script runs all 29 compares (27 arm compares and its two compare_one of
 #     wan-fastwan22-ti2v-5b, `skipped` without frames); fv-lab runs the 27 and not the cell's two directory
 #     compares, none of whose arms is selected (§22.17 difference 4): two `only in the runpod-http run` lines.
+#     fw22-oracle's last run failed (artifacts/runpod/wan/9b2c963-09282019, live.log:87, exit=1: the DiT out rel-L2
+#     6.75e-2 / 6.86e-2 over wan_oracle.rs's 5e-2; docs/serve/fal-parity.md §5.4, §5.5), so it is expected to fail
+#     alike: `{"exit":1,…}` on both sides, "1 failed in both". It is read off fv-lab's side and must be exit 0 or 1
+#     (the comparator then requires the script side's to be the same); a pass on both sides is "0 failed in both".
 bash "$ROOT/scripts/gpu/fv-lab-compare-runs.sh" $L $S >$T/cmp.txt; rc=$?; cat $T/cmp.txt
+FE=$(jq -ce '{exit, skipped} | select(.skipped == null and (.exit == 0 or .exit == 1))' $L/fw22-oracle/summary.json) || FE=bad
+NF=$(jq -r .exit <<<"$FE" 2>/dev/null || echo bad)
 {
-  for a in fw22-oracle fw22-oracle-diff wan5b-oracle wan5b-oracle-diff wan5b-oracle-exact wan5b-oracle-exact-diff; do
+  echo "same fw22-oracle: $FE, no frames"
+  for a in fw22-oracle-diff wan5b-oracle wan5b-oracle-diff wan5b-oracle-exact wan5b-oracle-exact-diff; do
     echo "same $a: {\"exit\":0,\"skipped\":null}, no frames"
   done
   grep -oE '\] dry-run compare [^ ]+' "$ROOT/crates/fastvideo-lab/fixtures/wan-dry-run.txt" \
@@ -6309,26 +6341,38 @@ bash "$ROOT/scripts/gpu/fv-lab-compare-runs.sh" $L $S >$T/cmp.txt; rc=$?; cat $T
           *) echo "same $r: {\"status\":\"skipped\",\"off_identity\":null}" ;;
         esac
       done
-  echo '6 arm(s) the same (0 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 3 with the same compare-dumps lines), 0 control arm(s) reported, 27 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 2 difference(s)'
+  echo "6 arm(s) the same (0 ran with byte-identical frames, 0 skipped in both, $NF failed in both; 3 with the same compare-dumps lines), 0 control arm(s) reported, 27 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 2 difference(s)"
   echo 'no arm ran with frames in both runs: nothing was compared'
 } >$T/want.txt
-[ "$rc" = 1 ] && [ "$(wc -l <$T/want.txt)" = 37 ] && diff $T/want.txt $T/cmp.txt && echo "PASS O0" || echo "FAIL O0"
-# O1. Each diff arm's compare-dumps lines (the same on both sides by O0): present on both sides.
+[ "$rc" = 1 ] && [ "$FE" != bad ] && [ "$(wc -l <$T/want.txt)" = 37 ] && diff $T/want.txt $T/cmp.txt && echo "PASS O0" || echo "FAIL O0"
+# O1. Each diff arm's compare-dumps lines (the same on both sides by O0): present on both sides. fw22-oracle writes
+#     its dump before its checks (wan_oracle.rs `write` per tensor), so fw22-oracle-diff runs although it failed.
 for a in wan5b-oracle-diff wan5b-oracle-exact-diff fw22-oracle-diff; do
   [ "$(grep -ac '^compare-dumps ' $L/$a/stderr.log)" -gt 0 ] && [ "$(grep -ac '^compare-dumps ' $S/$a/stderr.log)" -gt 0 ] || echo "FAIL O1 $a"
 done | grep . || echo "PASS O1"
-# O2. The two production-mode oracle arms decoded with TAEHV taew2_2 from {tae} (`--taehv`, a load failure fails
-#     the arm), and their reports passed with the TAE directory in their env, on both sides.
+# O2. The three `wan oracle` reports with the TAE directory in their env, on both sides; the two production-mode
+#     arms decoded with TAEHV taew2_2 from {tae} (`--taehv`, a load failure fails the arm: the taehv_vs_vae_decode
+#     note). wan5b-oracle and wan5b-oracle-exact passed. fw22-oracle (expected to fail, O0) failed on nothing but the
+#     two DiT output checks, the same ones on both sides, and its report's status matches its exit (fail with 1).
+fwf() { jq -ce '[.checks[] | select(.ok == false) | .name] | sort' $1/fw22-oracle/gpucheck-out/wan.json; }
 for X in $L $S; do
   ok=1
-  for a in wan5b-oracle fw22-oracle wan5b-oracle-exact; do
+  for a in wan5b-oracle wan5b-oracle-exact; do
     jq -e --arg t /fvscratch/weights/auxiliary/tae '.status == "pass" and .env.FASTVIDEO_TAE_DIR == $t' $X/$a/gpucheck-out/wan.json >/dev/null || ok=0
   done
   for a in wan5b-oracle fw22-oracle; do
     jq -e '[.checks[] | select(.name == "taehv_vs_vae_decode")] | length == 1' $X/$a/gpucheck-out/wan.json >/dev/null || ok=0
   done
+  st=$(jq -r 'select(.status == "pass" or .status == "fail") | .status' $X/fw22-oracle/gpucheck-out/wan.json) || ok=0
+  jq -e --arg t /fvscratch/weights/auxiliary/tae '.env.FASTVIDEO_TAE_DIR == $t' $X/fw22-oracle/gpucheck-out/wan.json >/dev/null || ok=0
+  f=$(fwf $X) || ok=0
+  case "$NF/$st/$f" in
+    '0/pass/[]' | '1/fail/["i2v_dit_out_rel_l2","t2v_dit_out_rel_l2"]' | '1/fail/["i2v_dit_out_rel_l2"]' | '1/fail/["t2v_dit_out_rel_l2"]') ;;
+    *) ok=0 ;;
+  esac
   [ $ok = 1 ] && echo "PASS O2 $X" || echo "FAIL O2 $X"
 done
+[ "$(fwf $L)" = "$(fwf $S)" ] && echo "PASS O2 fw22-oracle the same failed checks" || echo "FAIL O2 fw22-oracle the same failed checks"
 # O3. The driver and the upstream pod: both references served, released, deleted; their R2 steps.
 jq -e '.served == ["wan22-ti2v", "fastwan22-ti2v"] and .missing == [] and .runtime_ok == true and .runtime_exit_code == 0
   and .problems == [] and (.upstream | length == 1) and .upstream[0].deleted == {"Ok": null}' $D/report.json >/dev/null \
@@ -6360,17 +6404,33 @@ rm -rf $T
 
 **Oracle pass** (all of it): `fv-lab oracle rc=0`, both runtime pods `matrix_exit=0`, and O0-O5 `PASS`:
 - O0: the comparator exits 1 by construction, with exactly these 37 lines: the six arms the same with no frames
-  (`wan oracle` writes dumps, not `<arm>/frames`) and exit 0, "3 with the same compare-dumps lines"; the 27 arm
+  (`wan oracle` writes dumps, not `<arm>/frames`), five with exit 0 and `fw22-oracle` with its exit on fv-lab's side,
+  which must be 0 or 1 (and the comparator requires the script side's equal); "N failed in both" with N that exit,
+  "3 with the same compare-dumps lines"; the 27 arm
   compares `skipped` on both sides; and `DIFF compare/compare-clips-wan5b--fw22.json: only in the runpod-http run` and
   the same for `sfwan13-81f-fullvae--sfwan13-81f-flash` (§22.17 difference 4: no arm of their cell is selected, so
   fv-lab does not run them; the script writes them `skipped`); "…, 27 report(s) the same, …, 2 difference(s)" and "no
   arm ran with frames in both runs: nothing was compared". (Before §22.17's comparator fix those two lines were
   missing: the fv-lab run has no gate report, so the script run's list was never read.)
-- O1: each diff arm has `compare-dumps` lines on both sides (equal by O0).
-- O2: the three `wan oracle` reports `pass` with the TAE directory in their env, and `wan5b-oracle` / `fw22-oracle`
-  each with its `taehv_vs_vae_decode` note (`wan_oracle.rs`: `--taehv` loaded `taew2_2` from `{tae}`), on both
-  sides. A check failed alike on both sides is a finding about module parity on this GPU class, not about the
-  runners: report it.
+- **`fw22-oracle` is expected to fail alike** (`{"exit":1,"skipped":null}` on both sides, "1 failed in both"). Its last
+  run, `artifacts/runpod/wan/9b2c963-09282019` (`live.log:87`, `FAIL fw22-oracle 81s exit=1`), failed the DiT output
+  checks: rel-L2 6.75e-2 (t2v) / 6.86e-2 (i2v) over `wan_oracle.rs`'s 5e-2 (`d.within(5e-2)`, unchanged), the open
+  finding of `docs/serve/fal-parity.md` §5.4 and §5.5. With `--keep-going` the arm still writes its dump (`write` per
+  tensor, before the checks) and its `wan.json` (`status` `fail`, its env), so `fw22-oracle-diff` runs on both sides.
+  Neither runner's exit follows an arm's: `fv-lab run` returns after `matrix done` whatever its arms did
+  (`Runner::run`), the script's `matrix_exit=0` was recorded with that failure, `fv-lab oracle`'s `problems` hold pod
+  and reference events only, so O3 and O5 do not read the arm's status. What the comparator prints for it is derived
+  from `fv-lab-compare-runs.sh`: equal summaries are `same <arm>: {"exit":1,"skipped":null}, no frames`, counted in
+  `failed` (`.exit != 0`, not skipped), and its exit is 1 anyway (no arm ran with frames). If it passes on both sides
+  (a fix), N is 0 and O2 accepts that too.
+- O1: each diff arm has `compare-dumps` lines on both sides (equal by O0); `compare-dumps` records no check, so its
+  arms exit 0 (`perf::compare_dumps`).
+- O2: the three `wan oracle` reports with the TAE directory in their env, `wan5b-oracle` / `fw22-oracle` each with its
+  `taehv_vs_vae_decode` note (`wan_oracle.rs`: `--taehv` loaded `taew2_2` from `{tae}`), on both sides;
+  `wan5b-oracle` and `wan5b-oracle-exact` `pass`; `fw22-oracle` failed on nothing but `t2v_dit_out_rel_l2` /
+  `i2v_dit_out_rel_l2`, the same ones on both sides, its `status` matching its exit (`fail` with 1, `pass` with 0).
+  A check failed alike on both sides is a finding about module parity on this GPU class, not about the runners:
+  report it (for `fw22-oracle`, with its rel-L2 next to 9b2c963's).
 - O3: the driver's report `"served": ["wan22-ti2v", "fastwan22-ti2v"]`, nothing missing, the runtime side ok, one
   upstream pod deleted; the upstream run's `box.txt` `r2_key=env`, `steps.tsv` both `r2:` steps `0`, both
   `r2-<tree>.json` `done`, both references' `cell.json` exit 0.
@@ -6379,10 +6439,15 @@ rm -rf $T
   (`oracle: <target> reference <size>`); the script side's `r2-stage.log` with both trees staged, `exit=0`.
 - O5: no PNG, weight file or dump fetched, no key value or presigned URL in the three runs.
 
-The block was run on synthetic runs too: all `PASS` when equal (with the fixed comparator), and `FAIL` with the dump
-lines differing, fv-lab running a directory compare, a `skipped` report missing in fv-lab, an oracle arm failed
-alike, no `taehv` note, `wan.json` missing, no `compare-dumps` lines, one reference not served, an upstream `r2:` step
-failed, no drop, the script side without a reference line, a dump fetched, a key fetched.
+The block was run on synthetic runs too (`fw22-oracle` failed alike on both sides, as expected): all `PASS` when
+equal (with the fixed comparator), and all `PASS` with `fw22-oracle` passing on both; `FAIL` with the dump lines
+differing, fv-lab running a directory compare, a `skipped` report missing in fv-lab, `wan5b-oracle` failed alike,
+`fw22-oracle` failed on one side only, crashed alike (exit 101), with a VAE check failed too, with different failed
+checks on the two sides, with exit 1 and a `pass` report, without its TAE directory, note or `wan.json`;
+`fw22-oracle-diff` skipped alike, no `taehv` note, a `wan.json` missing, `wan5b-oracle`'s report `fail`, no
+`compare-dumps` lines, one reference not served, an upstream `r2:` step failed, no drop, the script side without a
+reference line, a dump fetched, a key fetched (23 mutations). The block as first written (O0 exit 0, O2 `pass` for
+`fw22-oracle`) printed `FAIL O0` and `FAIL O2` on the expected failure: the review's finding.
 
 **Oracle cost** ($2.49/hr, UNVERIFIED): the upstream pod ready in 3.5-15 min (§19.7), `info:box` and the two fetches
 (58.41 GB, ~1-2 min, §21.7's rate), the two references (Diffusers modules of a 5B: the VAE on a 704x1280 clip and a
@@ -6397,9 +6462,17 @@ refuses it; it needs a top-up first, or waits.
 **Then (S7, not this slice)**: on a pass, `wan` joins `FV_LAB_RETIRED` and leaves `RP_FV_LAB_TIERS`, its branch is
 deleted and its three fixtures frozen (§10's way; `runpod-http-wan-r2.json` stops being written with it). **One
 ordering constraint for the coordinator**: `sfwan` runs this branch (`bash runpod-matrix.sh wan` with its
-`FV_CELLS`), so deleting it while `sfwan` lives breaks `sfwan`; S7 for `wan` therefore either waits for S8 (`sfwan`
-retired with `oracle`, §21.9 item 5, which waits on §20.7's re-run) or retires `sfwan` with it, refused with a pointer
-to its two halves (`fv-lab oracle --family oracle-r2` and `fv-lab run wan --cells
-kernels-wan,sfwan13-81f-flash,sfwan13-81f-composed,sfwan13-81f-wholeclip,sfwan13-81f-fullvae`); `oracle.sh`'s
-`FV_ORACLE_FAMILY=sfwan` goes with it. `FV_SFWAN_CELLS` then moves to `FV_LAB_NOT_READ`. `docs/ports/wan.md` then
-names only the tier.
+`FV_CELLS`), so deleting it while `sfwan` lives breaks `sfwan`. S7 for `wan` therefore does one of three:
+1. waits for S8 (`sfwan` retired with `oracle`, §21.9 item 5, which waits on §20.7's re-run);
+2. retires `sfwan` with it, refused with a pointer to its two halves (`fv-lab oracle --family oracle-r2` and `fv-lab
+   run wan --cells kernels-wan,sfwan13-81f-flash,sfwan13-81f-composed,sfwan13-81f-wholeclip,sfwan13-81f-fullvae`);
+   `oracle.sh`'s `FV_ORACLE_FAMILY=sfwan` goes with it;
+3. routes `sfwan`'s wan half through the image's fv-lab in the same change: the branch's second call becomes
+   `FV_RUNS_DIR="$RUNS" <fv-lab> run wan --cells <those five>` (with `FV_WORK` and `FV_SCRATCH` as `runpod.sh`'s
+   command sets them; `FV_SFWAN_CELLS` mapped to `--cells`), so the arms land in `sfwan`'s run directory as
+   now and its oracle half stays the script's until S8. A named change of `sfwan`'s dry run (fv-lab's lines for the
+   script's), its golden regenerated in that commit; the pod needs the R2 key for `sfwan21-1.3b` (the script's pods
+   via `FV_R2_TREES`, not `runpod.sh`'s).
+
+In 1 and 2 `FV_SFWAN_CELLS` then moves to `FV_LAB_NOT_READ` (in 3 it is read until `sfwan` goes); in each,
+`docs/ports/wan.md` then names only the tier.

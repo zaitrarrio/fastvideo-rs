@@ -585,7 +585,8 @@ with `after`); the two oracle blocks are `[reference]` cells (`wan22-ti2v`, `fas
 `fetch-tae.sh` fetches `taew2_2` too since S6 (the oracle arms' `--taehv`), and `benchmark.json`'s `decoder` shows
 whether the distilled presets decoded with TAEHV or fell back to the Wan VAE. Every Wan tree is R2-only: fv-lab drops
 and fetches per arm (eleven fetches, 428.10 GB in a full run, at most 80.41 GB at once on 210 GB); `min_ram_gb = 256`
-for the 14B arms. `runpod.sh matrix` runs it through the image's fv-lab. `sfwan` still runs the branch's SF-Wan arms
+for the 14B arms. `runpod.sh matrix` runs it through the image's fv-lab, so it needs an image whose `lab/` has the
+tier (`runpod.sh` ships only `scripts/gpu/`; an image from before S6 stops with fv-lab's "no tier or cell named", as `ltx` since §17.6). `sfwan` still runs the branch's SF-Wan arms
 (`FV_SFWAN_CELLS`, which fv-lab refuses: `--cells` on this tier).
 
 ```sh

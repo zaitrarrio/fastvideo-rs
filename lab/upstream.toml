@@ -78,7 +78,9 @@ container_disk_gb = 180
 # timestep 757. Both trees are R2-only since 2026-10-13, so each target's step
 # r2:<tree> fetches it onto the container disk at $UW/<tree> (pod.sh
 # weights_r2), read from there when complete, else from the volume as before
-# (oracle.sh's fallback, as oracle_sfwan's, §21.2). 210 GB each: the stack's 150
+# (oracle.sh's fallback, as oracle_sfwan's, §21.2; it reaches nothing today: the
+# EU volume holds H3 and LTX only, so the r2 step is what makes the reference).
+# 210 GB each: the stack's 150
 # and both trees (34.20 + 24.20 GB), since the `wan` tier's two oracle cells run
 # together (§22.18) and the pod gets the largest selected target's disk, not
 # the sum.
