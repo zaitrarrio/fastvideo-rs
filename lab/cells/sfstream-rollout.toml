@@ -1,10 +1,11 @@
-# runpod-matrix.sh `sfstream` (docs/ports/wan.md "Open-ended streaming"; docs/adr/0019-fv-lab.md §22, S4): the
+# Was runpod-matrix.sh `sfstream` (retired after its GPU check, docs/adr/0019-fv-lab.md §22.19; docs/ports/wan.md
+# "Open-ended streaming"; §22, S4): the
 # open-ended causal SF-Wan 1.3B rollout (`fv-gpucheck wan stream`, wan::stream::CausalRollout, the rollout the served
 # sfwan21-1.3b causal sessions run). `sfstream-main`: `--parity` (the streamed clip against the bounded 81-frame
 # path), a 120 s rebased sink-15 run, and prompt switches with `keep` (at 15 s of 30) and `reset` (at 10 s of 20);
 # `sfstream-10min`: a 600 s rebased sink-15 run in 30 s windows (memory growth). The script's defaults: its
 # FV_SFSTREAM_RUNS, FV_SF_PROMPT and FV_SF_SWITCH are this cell's argv and workload (fv-lab refuses them,
-# knobs::SCRIPT_KNOBS); select an arm with --cells.
+# knobs::MODE_KNOBS, and runpod-http.sh since the branch went); select an arm with --cells.
 # TAEHV (taew2_1) decodes every block, found through FASTVIDEO_TAE_DIR={tae}: the script's `$TAE` (the volume's
 # auxiliary/tae when complete, else the container disk's copy). The arms read `{tae}` without a `tae` file
 # (ADR-0019 §22.4, Addition 16): they are not TAE-gated (no fetch-tae.sh, no `tae weights missing` skip) and gate on

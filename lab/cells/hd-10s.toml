@@ -1,4 +1,5 @@
-# runpod-matrix.sh `hd`'s 10 s arms (docs/adr/0019-fv-lab.md §22, S2): the 1080P tier at 10 s, one prompt, for the
+# Was runpod-matrix.sh `hd`'s 10 s arms (retired after its GPU check, docs/adr/0019-fv-lab.md §22.19; §22, S2): the
+# 1080P tier at 10 s, one prompt, for the
 # time and peak memory of a longer clip at the served canvas, against the serve engine's working-set estimate
 # (fastvideo_models::h3::memory::measured_working_bytes). h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3) at
 # 1920x1088 (`--oversize-canvas`). FV_PROMPTS does not reach these arms in the script, so the hd5 tier (the 1080P

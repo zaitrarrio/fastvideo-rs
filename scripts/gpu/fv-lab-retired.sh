@@ -2,8 +2,9 @@
 # Sourced, not run. The runpod-matrix.sh families retired to fv-lab
 # (docs/adr/0019-fv-lab.md §8, §9.5, §10, §11.6 for b4a, the first with
 # a verdict step, §15.10 for det-short and determinism, the [repeats]
-# families, and §17.6 for fuse, attn3 and ltx, D1f's): each passed its GPU
-# gate (one
+# families, §17.6 for fuse, attn3 and ltx, D1f's, and §22.19 for hd (with its
+# sibling hd5, below), serve-engine, sfstream and mmaudio, §22's S7): each
+# passed its GPU gate (one
 # `fv-lab pod up --wait` run and one `runpod-http.sh run` of the same commit,
 # `fv-lab-compare-runs.sh` exit 0), so its `case` branch is gone from
 # runpod-matrix.sh and the tier lives only in lab/ (lab/tiers.toml,
@@ -21,7 +22,7 @@
 # A family joins this list in the PR that deletes its branch, never before.
 # The restored modes below join it in the PR that restores them: their branch
 # was already gone, so they start frozen.
-FV_LAB_RETIRED="rtx6000 techniques b6 rtx5090 fastvideo h3arms trace ltxfps ltxvae precision precision-nvfp4 ltxvae-gen b4a det-short determinism fuse attn3 ltx"
+FV_LAB_RETIRED="rtx6000 techniques b6 rtx5090 fastvideo h3arms trace ltxfps ltxvae precision precision-nvfp4 ltxvae-gen b4a det-short determinism fuse attn3 ltx hd hd5 serve-engine sfstream mmaudio"
 
 # Script modes restored as tiers (ADR-0019 §12, owner decision 2026-10-25):
 # `<tier>:<family>:<K=V>` is the mode `FV_EXTRA_ENV=<K=V> runpod-matrix.sh
@@ -45,9 +46,7 @@ FV_LAB_EXPERIMENTS="h3-graphs"
 # Sibling tiers of a live runpod-matrix.sh family (ADR-0019 §20.5, §21, §22):
 # `<tier>:<family>` is a tier whose cells are targets of <family>'s branch
 # that its own tier cannot run (another pod: `oracle-r2`, the oracle family's
-# sfwan13 target, reads its tree from R2, `weights = "volume+r2"`; another
-# prompt set: `hd5`, the hd family with FV_PROMPTS=scripts/gpu/prompts-hd5.json,
-# the 1080P serve gate's, which fv-lab takes from a cell, §22, S2). Its
+# sfwan13 target, reads its tree from R2, `weights = "volume+r2"`). Its
 # fixtures are <family>'s dry run under the tier's settings
 # (tests/fv-lab-goldens.sh fam_env) and runpod-http.sh plan's body for the
 # tier; fv-lab's dry run equals the first with the tier's name for the
@@ -56,8 +55,22 @@ FV_LAB_EXPERIMENTS="h3-graphs"
 # runpod-http.sh refuses `run` / `all` for it and names fv-lab's command; the
 # script runs those targets as <family> (FV_FAMILY=<family>, with
 # fv_lab_sibling_mode's settings). A sibling of a family that retires is
-# frozen with it (FV_LAB_RETIRED, ADR-0019 §10).
-FV_LAB_SIBLINGS="oracle-r2:oracle hd5:hd"
+# frozen with it (FV_LAB_RETIRED, ADR-0019 §10) and moves to
+# FV_LAB_RETIRED_SIBLINGS below.
+FV_LAB_SIBLINGS="oracle-r2:oracle"
+
+# Sibling tiers frozen with their family (ADR-0019 §22.10 "Then", §22.19):
+# `<tier>:<family>`, both in FV_LAB_RETIRED. `hd5` is the hd family with
+# FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json (the 1080P serve
+# gate's prompt set, which fv-lab takes from its hd5-canvases cell, §22, S2).
+# Its fixtures stay as the script wrote them as a sibling (the hd family's
+# dry run under that setting, `[hd]` lines and its `prompt set:` line; its pod
+# body runpod-http.sh plan's for FV_FAMILY=hd5): the tests read them with the
+# family's name as the tier's and without that line, as while it was live
+# (crates/fastvideo-lab/tests/common Sibling). Like every tier of
+# FV_LAB_RETIRED it is fv-lab only: runpod-http.sh run / plan route it to
+# fv-lab pod up, runpod.sh to fv-lab run, runpod-matrix.sh refuses it.
+FV_LAB_RETIRED_SIBLINGS="hd5:hd"
 
 # The runpod-matrix.sh families retired with no tier (ADR-0019 §18, D1g,
 # coordinator decision 2026-10-26): finished experiments and one-time
@@ -100,7 +113,6 @@ fv_lab_sibling() {
 fv_lab_sibling_mode() {
   case "${1:-}" in
     oracle-r2) echo "FV_ORACLE_TARGETS=sfwan13" ;;
-    hd5) echo "FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json" ;;
   esac
 }
 

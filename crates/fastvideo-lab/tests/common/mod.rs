@@ -137,29 +137,46 @@ pub struct Sibling {
     pub family: String,
 }
 
-/// `FV_LAB_SIBLINGS` of `scripts/gpu/fv-lab-retired.sh`.
+/// `FV_LAB_SIBLINGS` of `scripts/gpu/fv-lab-retired.sh`: the siblings of a
+/// live family.
 pub fn siblings() -> Vec<Sibling> {
+    sibling_list("FV_LAB_SIBLINGS")
+}
+
+/// `FV_LAB_RETIRED_SIBLINGS` of `scripts/gpu/fv-lab-retired.sh`: the
+/// siblings frozen with their family (ADR-0019 §22.19: `hd5` with `hd`). Their
+/// fixtures are what the script wrote while they were live, so they are read
+/// as a live sibling's.
+pub fn retired_siblings() -> Vec<Sibling> {
+    sibling_list("FV_LAB_RETIRED_SIBLINGS")
+}
+
+fn sibling_list(var: &str) -> Vec<Sibling> {
     let p = repo_root().join("scripts/gpu/fv-lab-retired.sh");
     let t = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let prefix = format!("{var}=\"");
     let line = t
         .lines()
-        .find_map(|l| l.strip_prefix("FV_LAB_SIBLINGS=\""))
+        .find_map(|l| l.strip_prefix(prefix.as_str()))
         .and_then(|l| l.strip_suffix('"'))
-        .expect("FV_LAB_SIBLINGS=\"…\"");
+        .unwrap_or_else(|| panic!("{var}=\"…\""));
     line.split_whitespace()
         .map(|e| match e.split_once(':') {
             Some((t, f)) if !t.is_empty() && !f.is_empty() && !f.contains(':') => Sibling {
                 tier: t.into(),
                 family: f.into(),
             },
-            _ => panic!("FV_LAB_SIBLINGS entry `{e}` is not <tier>:<family>"),
+            _ => panic!("{var} entry `{e}` is not <tier>:<family>"),
         })
         .collect()
 }
 
-/// The sibling a tier is, if it is one.
+/// The sibling a tier is, if it is one, live or frozen with its family.
 pub fn sibling_tier(tier: &str) -> Option<Sibling> {
-    siblings().into_iter().find(|s| s.tier == tier)
+    siblings()
+        .into_iter()
+        .chain(retired_siblings())
+        .find(|s| s.tier == tier)
 }
 
 impl Sibling {

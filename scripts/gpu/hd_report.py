@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarise an hd matrix run (runpod-matrix.sh hd) fetched with FV_FETCH_TREE=1.
+"""Summarise an hd run (the fv-lab tier hd, was runpod-matrix.sh hd) fetched with FV_FETCH_TREE=1.
 
     python3 scripts/gpu/hd_report.py artifacts/runpod/hd/<tag> [--jpg-out DIR]
 

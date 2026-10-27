@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Runs ON a Runpod GPU box. Family: mmaudio | sfwan | sfstream | wan | oracle |
-# hd | serve-engine
+# Runs ON a Runpod GPU box. Family: sfwan | wan | oracle
 # One process per family. Continues to the next cell on failure.
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) unless a
 # cell sets it.
@@ -9,7 +8,8 @@
 # fv-lab-retired.sh (rtx6000, techniques, b6, rtx5090, fastvideo, h3arms,
 # trace, ltxfps, ltxvae, precision; b4a, with its verdict step, §11.6;
 # det-short and determinism, with their [repeats] hashes, §15.10; fuse, attn3
-# and ltx, D1f's, §17.6) passed their GPU gate and their branches are gone;
+# and ltx, D1f's, §17.6; hd with its sibling hd5, serve-engine, sfstream and
+# mmaudio, §22.19) passed their GPU gate and their branches are gone;
 # they are tiers of lab/ (`fv-lab run <tier>` on the box, `runpod-http.sh run`
 # / `fv-lab pod up` from a host). This script refuses them (exit 2). Two
 # modes of them are fv-lab tiers too (§12, FV_LAB_RESTORED):
@@ -37,16 +37,16 @@
 # FV_DRY_RUN=1: no GPU and no weights needed. Each cell's command line is
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
-# bash scripts/gpu/runpod-matrix.sh hd (or any family). A dry run fetches
-# no weights, references or baseline, and no TAE file: `sfstream` (since
-# S4), `mmaudio` (S5) and `wan` (S6; `sfwan` through it) skip their
-# fetch_taehv.sh in a dry run (ADR-0019 §22.13, §22.15, §22.17). With
+# bash scripts/gpu/runpod-matrix.sh wan (or any family). A dry run fetches
+# no weights, references or baseline, and no TAE file: `wan` (since S6;
+# `sfwan` through it) skips its fetch_taehv.sh in a dry run (ADR-0019
+# §22.17), as `sfstream` and `mmaudio` did before their branches went. With
 # FV_DRY_RUN_GATES=<file> it appends one line per gated cell ("arm", its
 # verify-weights.sh cell, -) and per promotion gate ("gate", kind, OFF arm
 # or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh) when a
 # family moves to lab/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh mmaudio|sfwan|sfstream|wan|oracle|hd|serve-engine (retired to fv-lab or with no tier: fv-lab-retired.sh)}"
+FAMILY="${1:?usage: runpod-matrix.sh sfwan|wan|oracle (retired to fv-lab or with no tier: fv-lab-retired.sh)}"
 DRY_RUN="${FV_DRY_RUN:-0}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
@@ -467,59 +467,6 @@ if [[ "$DRY_RUN" != 1 ]]; then
 fi
 
 case "$FAMILY" in
-  mmaudio)
-    # The MMAudio V2A sidecar on the video-only Wan family (docs/ports/mmaudio.md):
-    #   wan13-audio / sfwan13-audio  FastWan 1.3B DMD and SF-Wan 1.3B, 480x832x81,
-    #                                 warm, with `--audio mmaudio` (video, audio,
-    #                                 audio RTF, e2e, peak VRAM in benchmark.json;
-    #                                 the soundtrack as frames/output.wav, muxed
-    #                                 into frames/output.mp4)
-    #   ours-v2a                      our port (`mmaudio v2a`) on wan13-audio's
-    #                                 clip, timed (mmaudio.json, mmaudio.wav)
-    # The fv-lab tier `mmaudio` is these three arms (lab/cells/mmaudio-sidecar.toml;
-    # docs/adr/0019-fv-lab.md §22, S5), held to this branch's dry run by
-    # fv-lab-goldens.sh; it refuses FV_MMAUDIO_PROMPT (its cell is the default;
-    # knobs::SCRIPT_KNOBS). Since S5, in lockstep with the tier (a real-run
-    # change, §22.15):
-    #   - the branch is cut to these arms: the upstream MMAudio venv and clone
-    #     (up-env), its timed sidecar and dump (up-sidecar), the three inject
-    #     arms with compare-dumps (mm-pixels / mm-features / mm-e2e, diff-*)
-    #     and the five waveform comparisons (wave-*) are gone, with no tier.
-    #     Their results stand at 778c65e (docs/ports/mmaudio.md "Results");
-    #     the commands: git show b7ddf5fa:scripts/gpu/runpod-matrix.sh.
-    #     mmaudio_oracle.py and mmaudio_wave_compare.py stay as by-hand tools;
-    #   - FASTVIDEO_MMAUDIO_WEIGHTS and FASTVIDEO_TAE_DIR are each Wan arm's own
-    #     env entries, not `export`s before the arms, so the dry run shows them
-    #     (the same values reach the same two commands; ours-v2a reads neither:
-    #     it takes --weights, reads the mp4's frames with ffmpeg and decodes
-    #     no latents, so no TAE);
-    #   - the two Wan arms gate on composite verify-weights.sh cells (their Wan
-    #     tree and mmaudio-44k-v2), and ours-v2a on mmaudio-44k-v2: an
-    #     incomplete MMAudio tree now skips them ("weights incomplete") where
-    #     it only logged a WARN before and let the sidecar fail;
-    #   - ours-v2a reads the static wan13-audio/frames/output.mp4 (no `find`
-    #     fallback, no "V2A clip:" line): a run without that clip fails the
-    #     arm, as fv-lab's does, where the fallback ended the whole script
-    #     under `set -e` (and every dry run, at exit 1);
-    #   - the taew2_1 fetch (fetch_taehv.sh) is skipped in a dry run, as
-    #     sfstream's since S4 (a real run is unchanged).
-    MMW="$W/mmaudio-44k-v2"
-    MM_PROMPT="${FV_MMAUDIO_PROMPT:-A red fox running through tall grass at dusk. A narrator says <S>The fox cuts through the meadow at dusk.<E>
-Audio: male narration, grass rustle, wind, distant strings, cricket night}"
-    TAEW="$TAE/taew2_1.safetensors"
-    [[ -f "$TAEW" || "$DRY_RUN" == 1 ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
-      || log "WARN: taew2_1 fetch failed"
-    gated_cell wan13-audio fastwan21-1.3b-mmaudio env FASTVIDEO_MMAUDIO_WEIGHTS="$MMW" FASTVIDEO_TAE_DIR="$TAE" \
-      "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" --prompt "$MM_PROMPT" --seed "$SEED" \
-        --warm --audio mmaudio --clip-dir "$RUNS/wan13-audio/frames"
-    gated_cell sfwan13-audio sfwan21-1.3b-mmaudio env FASTVIDEO_MMAUDIO_WEIGHTS="$MMW" FASTVIDEO_TAE_DIR="$TAE" \
-      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 \
-        --num-frames 81 --prompt "$MM_PROMPT" --seed "$SEED" --warm --audio mmaudio \
-        --clip-dir "$RUNS/sfwan13-audio/frames"
-    gated_cell ours-v2a mmaudio-44k-v2 \
-      "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$RUNS/wan13-audio/frames/output.mp4" \
-        --prompt "$MM_PROMPT" --seed 1000 --runs 3 --out "$RUNS/ours-v2a"
-    ;;
   sfwan)
     # SF-Wan 1.3B on one pod: the oracle diff against FastVideo's dump (when
     # FV_ORACLE_URL serves one), then the wan family's SF-Wan cells and the
@@ -529,39 +476,6 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     fi
     FV_RUNS_DIR="$RUNS" FV_CELLS="${FV_SFWAN_CELLS:-kernels-wan sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae}" \
       bash "${BASH_SOURCE[0]}" wan || true
-    ;;
-  sfstream)
-    # Open-ended causal SF-Wan (wan::stream, serve E6): parity with the
-    # bounded 81-frame path, long runs (drift, fps, TTFF), prompt switches,
-    # and a 10-minute memory-growth run. TAEHV decodes every block.
-    # The fv-lab tier `sfstream` is these two arms (lab/cells/sfstream-rollout.toml;
-    # docs/adr/0019-fv-lab.md §22, S4), held to this branch's dry run by
-    # fv-lab-goldens.sh; it refuses FV_SFSTREAM_RUNS, FV_SF_PROMPT and
-    # FV_SF_SWITCH (its cell is their defaults; knobs::SCRIPT_KNOBS). Since S4,
-    # in lockstep with the tier (§22.4, Addition 16: `{tae}` without a TAE
-    # gate): FASTVIDEO_TAE_DIR="$TAE" is each arm's own env entry, not an
-    # `export` before them, so the dry run shows it (the same value reaches
-    # the same two commands; nothing else here reads it). And the taew2_1
-    # fetch below (fetch_taehv.sh) is skipped in a dry run, which fetched it
-    # into $TAE before (a real run is unchanged). fv-lab's tier has no such
-    # per-arm fetch: its pod's start command runs fetch-tae.sh (`tae = true`,
-    # as runpod-http.sh's does for this branch) into the container disk's
-    # tae/, which is $TAE only when the volume's copy is incomplete; a file
-    # still missing then is the arm's failure, not a skip.
-    TAE_W="$TAE/taew2_1.safetensors"
-    [[ -f "$TAE_W" || "$DRY_RUN" == 1 ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
-      || log "WARN: taew2_1 fetch failed (tae-fetch.log)"
-    SF_PROMPT="${FV_SF_PROMPT:-A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed}"
-    SF_SWITCH="${FV_SF_SWITCH:-A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed}"
-    sf_stream() {
-      local name="$1"; shift
-      gated_cell "$name" sfwan21-1.3b env FASTVIDEO_TAE_DIR="$TAE" "$BIN" --keep-going --mode fast wan stream \
-        --weights "$W/sfwan21-1.3b" --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
-    }
-    # shellcheck disable=SC2086
-    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run reb-sink15-120s,seconds=120,rope=rebased,sink=15 \
-      --run switch-keep-30s,seconds=30,switch_at=15,switch=keep --run switch-reset-20s,seconds=20,switch_at=10,switch=reset}
-    sf_stream sfstream-10min --run reb-sink15-600s,seconds=600,rope=rebased,sink=15 --window-s 30
     ;;
   wan)
     # FastWan2.1 1.3B DMD, 3 steps (1000/757/522), 480x832, 81 frames: the
@@ -1251,135 +1165,6 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
       # The dumps are hundreds of MB each; the report keeps the numbers.
       rm -rf "$ours" "$ours-f32" "$ours-owntext" "$ours-ownenc" "$ours-ownimg" "$ours-ownaud" "$ref"
     done
-    ;;
-  hd)
-    # H3 at 1080p-class canvases (docs/serve/h3-1080p-and-upscaler.md):
-    # h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3 tau ladder) at the
-    # trained 768p canvas and at 1920x1088 / 1088x1920 (`h3 gen
-    # --oversize-canvas`, test path only: 2.02x the trained pixel cap), the
-    # prompts of scripts/gpu/prompts-hd.json in one process per cell, clips
-    # under <cell>/frames/<prompt>/. turbo-1080p-10s / max-1080p-10s: the tier
-    # at 10 s (one prompt) for time and memory. The fv-lab tier `hd` is these
-    # arms (lab/cells/hd-canvases.toml, hd-10s.toml; docs/adr/0019-fv-lab.md
-    # §22, S2), held to this branch's dry run by fv-lab-goldens.sh.
-    # The derived step went in S2, in lockstep with the tier: the 768p clips'
-    # Lanczos upscale (ffmpeg) and its compares with the native 1080p clips,
-    # the FV_HD_POST_URL post script (refused below: an upscaler benchmark)
-    # and the keyframe prune. Their findings are recorded in the doc above;
-    # their commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh. The
-    # frames stay on the container disk (each arm's frames.sha256.json is what
-    # the runs compare; a fetch takes no frames without FV_FETCH_TREE=1).
-    # The 1080P serve gate: FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
-    # FV_CELLS="turbo-768p turbo-1080p max-768p max-1080p turbo-1080p-10s
-    # max-1080p-10s", the fv-lab tier `hd5` (fv-lab-retired.sh
-    # FV_LAB_SIBLINGS) with --cells; then scripts/gpu/lipsync_proxy.py on the
-    # speech prompts' MP4s.
-    for k in FV_HD_POST_URL FV_HD_POST_TIMEOUT_S; do
-      if [[ -n "${!k:-}" ]]; then
-        log "FATAL: $k: the hd family's post-script hook was dropped with its derived step (the Lanczos compares, the keyframe prune); nothing runs a fetched script (docs/adr/0019-fv-lab.md §22, S2; the upscaler benchmark's commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh)"
-        exit 2
-      fi
-    done
-    : "${FV_PROMPTS:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prompts-hd.json}"
-    hd_common=(
-      --seconds 5
-      --prompt "$PROMPT"
-      --seed "$SEED"
-      --prompts "$FV_PROMPTS"
-      --text-encoder streamed
-      --text-cache "$SCRATCH/h3-text-cache"
-      --text-weights "$W/h3-base"
-    )
-    # The timing line after each arm reads its benchmark.json (log only: a
-    # dry run writes none, so it logs none, as fv-lab's).
-    hd_cell() {
-      local name="$1" wcell="$2" profile="$3" recipe="$4" h="$5" w="$6" over=()
-      (( h * w > 768 * 1344 )) && over=(--oversize-canvas)
-      gated_cell "$name" "$wcell" \
-        "$BIN" --mode fast --techniques "$profile" h3 gen --weights "$W/h3-base" --h3-recipe "$recipe" \
-          --height "$h" --width "$w" ${over[@]+"${over[@]}"} \
-          --adaln-cache "$RUNS/$recipe-adaln.cache" \
-          --clip-dir "$RUNS/$name/frames" "${hd_common[@]}"
-      [[ "$DRY_RUN" == 1 ]] || log "$name $(grep -oE '"(denoise_s|total_s|inference_time_s|peak_memory_mb|peak_allocated_gib)": *[0-9.]+' "$RUNS/$name/benchmark.json" 2>/dev/null | head -8 | tr '\n' ' ')"
-    }
-    T=(fasth3-4step-vsa h3/fasth3_4step_vsa 4step-vsa)
-    M=(sol-h3 h3/sol_h3_4step_engine_ladder sol-h3)
-    hd_cell turbo-768p "${T[@]}" 768 1344
-    hd_cell turbo-1080p "${T[@]}" 1088 1920
-    hd_cell turbo-768p-v "${T[@]}" 1344 768
-    hd_cell turbo-1080p-v "${T[@]}" 1920 1088
-    hd_cell max-768p "${M[@]}" 768 1344
-    hd_cell max-1080p "${M[@]}" 1088 1920
-    # The 1080P tier at 10 s, one prompt ($FV_PROMPT): time and peak memory
-    # of a longer tier clip, against the serve engine's working-set estimate
-    # (fastvideo_models::h3::memory::measured_working_bytes).
-    hd_long() {
-      local name="$1" wcell="$2" profile="$3" recipe="$4"
-      gated_cell "$name" "$wcell" \
-        "$BIN" --mode fast --techniques "$profile" h3 gen --weights "$W/h3-base" --h3-recipe "$recipe" \
-          --height 1088 --width 1920 --oversize-canvas --seconds 10 --prompt "$PROMPT" --seed "$SEED" \
-          --text-encoder streamed --text-cache "$SCRATCH/h3-text-cache" --text-weights "$W/h3-base" \
-          --adaln-cache "$RUNS/$recipe-adaln.cache" --clip-dir "$RUNS/$name/frames"
-      [[ "$DRY_RUN" == 1 ]] || log "$name $(grep -oE '"(denoise_s|total_s|peak_memory_mb|peak_allocated_gib)": *[0-9.]+' "$RUNS/$name/benchmark.json" 2>/dev/null | head -8 | tr '\n' ' ')"
-    }
-    hd_long turbo-1080p-10s "${T[@]}"
-    hd_long max-1080p-10s "${M[@]}"
-    ;;
-  serve-engine)
-    # Serve engine CUDA backend (WP-11): for each family, the CLI generation
-    # (`h3|ltx2|wan gen`) and the same recipe / canvas / seed through
-    # EngineService + CudaBackend (`fv-gpucheck engine`): MP4 out, frames
-    # byte-compared with the CLI clip, then a second job cancelled mid-run.
-    # FV_ENGINE_CELLS picks families (h3 ltx wan). The fv-lab tier
-    # `serve-engine` is these six arms (lab/cells/serve-engine-*.toml;
-    # docs/adr/0019-fv-lab.md §22, S3), held to this branch's dry run by
-    # fv-lab-goldens.sh; it selects by arm (--cells / FV_CELLS) and refuses
-    # FV_ENGINE_CELLS. The engine arms pass no --tae-dir since S3, in lockstep
-    # with the tier, as the gold engine cells: fv-gpucheck engine then takes
-    # <weights root>/auxiliary/tae, which is $TAE when the volume's TAE copy is
-    # complete (bz0ofkfx45; on an FV_R2_TREES run the merged root's link to
-    # it) but not otherwise ($SCRATCH/tae, or FV_TAE_DIR / FV_AUX_DIR's). No
-    # recipe here reads that directory (h3-turbo and ltx-turbo name no tiny
-    # decoder; fastwan21-1.3b decodes with the full VAE), so only the recorded
-    # path can differ (ADR-0019 §22.11).
-    want() { [[ " ${FV_ENGINE_CELLS:-h3 ltx wan} " == *" $1 "* ]]; }
-    if want h3; then
-      h3geo=(--height 480 --width 832 --num-frames 124 --prompt "$PROMPT" --seed "$SEED" --adaln-cache "$RUNS/h3-adaln.cache")
-      gated_cell cli-h3-turbo fasth3-4step-vsa \
-        "$BIN" --mode fast --techniques h3/fasth3_4step_vsa h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
-          "${h3geo[@]}" --text-encoder streamed --text-weights "$W/h3-base" --no-text-cache --no-mp4 \
-          --clip-dir "$RUNS/cli-h3-turbo/frames"
-      gated_cell engine-h3-turbo fasth3-4step-vsa \
-        "$BIN" --keep-going --mode fast --techniques h3/fasth3_4step_vsa engine --model h3-turbo --weights-root "$W" \
-          "${h3geo[@]}" --text-encoder streamed --reference "$RUNS/cli-h3-turbo/frames" --cancel-after-step 2 \
-          --clip-out "$RUNS/engine-h3-turbo/out"
-    fi
-    if want ltx; then
-      ltxgeo=(--height 704 --width 1280 --num-frames 121 --prompt "$PROMPT" --seed "$SEED")
-      gated_cell cli-ltx-turbo ltx25-two-stage \
-        "$BIN" --mode fast --techniques ltx2/ltx25_distill_sol ltx2 gen --model-version 2.5 --weights "$W/ltx25" \
-          --dit "$W/ltx25" "${ltxgeo[@]}" --two-stage --text streamed --no-text-cache --no-mp4 \
-          --clip "$RUNS/cli-ltx-turbo/frames"
-      gated_cell engine-ltx-turbo ltx25-two-stage \
-        "$BIN" --keep-going --mode fast --techniques ltx2/ltx25_distill_sol engine --model ltx-turbo --weights-root "$W" \
-          "${ltxgeo[@]}" --ltx-text streamed --reference "$RUNS/cli-ltx-turbo/frames" \
-          --cancel-after-step 3 --clip-out "$RUNS/engine-ltx-turbo/out"
-    fi
-    if want wan; then
-      wangeo=(--height 480 --width 832 --num-frames 81 --prompt "$PROMPT" --seed "$SEED")
-      gated_cell cli-wan-turbo fastwan21-1.3b env FASTVIDEO_WAN_VAE=full \
-        "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" "${wangeo[@]}" --no-text-cache --no-mp4 \
-          --clip-dir "$RUNS/cli-wan-turbo/frames"
-      gated_cell engine-wan-turbo fastwan21-1.3b \
-        "$BIN" --keep-going --mode fast engine --model fastwan21-1.3b --weights-root "$W" "${wangeo[@]}" \
-          --reference "$RUNS/cli-wan-turbo/frames" --cancel-after-step 1 --clip-out "$RUNS/engine-wan-turbo/out"
-    fi
-    # Keep the reports and MP4s; the PNG frames were compared on the box
-    # (disk only: a CLI arm's frames.sha256.json was written right after it,
-    # and an engine arm's frames, under out/<job>/frames, are recorded by its
-    # `engine/frames` check, frames_sha256 in stderr.log and engine.json; the
-    # tier does not copy this removal).
-    rm -rf "$RUNS"/cli-*/frames "$RUNS"/engine-*/out/*/frames
     ;;
   *)
     # A restored mode (fv-lab-retired.sh FV_LAB_RESTORED, docs/adr/0019-fv-lab.md

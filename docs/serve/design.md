@@ -2084,9 +2084,11 @@ additions and readings; everything is re-exported from the crate root.
   compared with the CLI clip, a second job cancelled mid-run) and the
   fv-lab tier `serve-engine` (`lab/cells/serve-engine-*.toml`: h3-turbo,
   ltx-turbo and fastwan21-1.3b, each the CLI arm then the engine arm;
-  `fv-lab pod up --family serve-engine`, `--cells` by arm), which is the
-  `serve-engine` family of `runpod-matrix.sh` until that branch retires after
-  the tier's GPU check (docs/adr/0019-fv-lab.md §22.11, §22.12). Its engine
+  `fv-lab pod up --family serve-engine`, `--cells` by arm; or
+  `FV_FAMILY=serve-engine scripts/gpu/runpod-http.sh run <sha>`, which runs
+  the same). It was the `serve-engine` family of `runpod-matrix.sh`, whose
+  branch was deleted after the tier's GPU check passed
+  (docs/adr/0019-fv-lab.md §22.11, §22.12, §22.19). Its engine
   arms pass no `--tae-dir` (the engine's default, `<weights
   root>/auxiliary/tae`); none of the three recipes reads a tiny decoder.
 - Pod results through the fal queue (`scripts/serve/fal-queue-smoke.sh`,

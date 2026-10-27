@@ -1,11 +1,12 @@
-# runpod-matrix.sh `mmaudio` (docs/ports/mmaudio.md; docs/adr/0019-fv-lab.md §22, S5): the MMAudio large-44k-v2 V2A
+# Was runpod-matrix.sh `mmaudio` (retired after its GPU check, docs/adr/0019-fv-lab.md §22.19; docs/ports/mmaudio.md;
+# §22, S5): the MMAudio large-44k-v2 V2A
 # sidecar on the video-only Wan family, without upstream parity. `wan13-audio` and `sfwan13-audio`: FastWan 1.3B DMD
 # (VSA) and SF-Wan 1.3B (4 steps, shift 5) at 480x832, 81 frames, warm, with `--audio mmaudio` (the soundtrack generated
 # on the finished clip, written as frames/output.wav and muxed into frames/output.mp4; benchmark.json's `audio` holds
 # the video / audio / end-to-end split and the audio real-time factor). `ours-v2a`: our port alone (`fv-gpucheck
 # mmaudio v2a`) on wan13-audio's clip, three timed runs, seed 1000 (mmaudio.json, mmaudio.wav, mmaudio.f32,
 # sidecar.mp4 in its directory).
-# The script's FV_MMAUDIO_PROMPT is the workload's prompt (fv-lab refuses it, knobs::SCRIPT_KNOBS); select an arm with
+# The script's FV_MMAUDIO_PROMPT is the workload's prompt (fv-lab refuses it, knobs::MODE_KNOBS, and runpod-http.sh since the branch went); select an arm with
 # --cells. Not here, and gone from the script's branch in the same commit (S5, a real-run change): the upstream
 # MMAudio venv and clone, its timed sidecar and dump, the three inject arms with compare-dumps and the five waveform
 # comparisons; their results stand at 778c65e (docs/ports/mmaudio.md "Results").

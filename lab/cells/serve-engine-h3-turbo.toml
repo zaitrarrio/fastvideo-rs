@@ -1,4 +1,5 @@
-# runpod-matrix.sh `serve-engine`, its h3 group (docs/serve/design.md "GPU check"; docs/adr/0019-fv-lab.md §22, S3):
+# Was runpod-matrix.sh `serve-engine`, its h3 group (retired after its GPU check, docs/adr/0019-fv-lab.md §22.19;
+# docs/serve/design.md "GPU check"; §22, S3):
 # the serve engine's CUDA backend (WP-11) against the CLI. First the CLI generation of the served `h3-turbo` recipe
 # (FastH3 4-step VSA, `h3 gen`), then the same recipe, canvas, prompt and seed through EngineService + CudaBackend
 # (`fv-gpucheck engine --model h3-turbo`): an MP4 out, its frames byte-compared with the CLI's (`--reference`), then a

@@ -687,12 +687,17 @@ tier_value() {
 # §11.6, answered with FV_CELLS; det-short's and determinism's FV_DET_* since
 # theirs went, §15.10, FV_DET_CELLS answered with FV_CELLS; attn3's arm
 # pickers FV_ATTN3_ARMS / FV_ATTN3_VSA since its branch went, §17.6, answered
-# with FV_CELLS), hd's dropped post-script hook (FV_DROPPED_KNOBS below, §22),
+# with FV_CELLS; serve-engine's group picker FV_ENGINE_CELLS, sfstream's run
+# list and prompts FV_SFSTREAM_RUNS / FV_SF_PROMPT / FV_SF_SWITCH and
+# mmaudio's prompt FV_MMAUDIO_PROMPT since theirs went, §22.19, the first
+# answered with FV_CELLS, the others with the tier's cell), hd's dropped
+# post-script hook (FV_DROPPED_KNOBS below, §22),
 # the prompts fv-lab ignores (§7), and what the start command sets after
 # FV_EXTRA_ENV anyway.
 FV_LAB_NOT_READ="FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_GEN FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS
   FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS
   FV_DET_CELLS FV_DET_REPEATS FV_DET_PROMPT FV_DET_T2V_PROMPT FV_DET_I2V_PROMPT FV_ATTN3_ARMS FV_ATTN3_VSA
+  FV_ENGINE_CELLS FV_SFSTREAM_RUNS FV_SF_PROMPT FV_SF_SWITCH FV_MMAUDIO_PROMPT
   FV_HD_POST_URL FV_HD_POST_TIMEOUT_S
   FV_PROMPTS FV_PROMPT FV_SEED FV_WORK FV_SCRATCH FV_RUN_TAG FV_CELLS FV_GEN_TIMEOUT_S"
 
@@ -701,7 +706,8 @@ FV_LAB_NOT_READ="FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_GEN FV_VAE_TRACE FV_
 # derived step (docs/adr/0019-fv-lab.md §22, S2). Nothing reads them any more,
 # so a run that sets them is refused, not silently different: on the script
 # path here (refuse_dropped, before any pod), on the fv-lab route through
-# FV_LAB_NOT_READ, by fv-lab (knobs::DROPPED_KNOBS) and by runpod-matrix.sh.
+# FV_LAB_NOT_READ and by fv-lab (knobs::DROPPED_KNOBS); runpod-matrix.sh
+# refused them until hd's branch went (§22.19) and now refuses hd itself.
 FV_DROPPED_KNOBS="FV_HD_POST_URL FV_HD_POST_TIMEOUT_S"
 dropped_why() {
   echo "$1: the hd family's post-script hook was dropped with its derived step (the Lanczos compares, the keyframe prune); nothing runs a fetched script (docs/adr/0019-fv-lab.md §22, S2; the upscaler benchmark's commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh)"
@@ -786,8 +792,9 @@ fv_lab_route() {
     [[ "${!v:-0}" != 1 ]] || refuse "has no $v=1"
   done
   # The retired families' pair, group and arm selectors (ADR-0019 §9.4,
-  # §11.5, §15.10, §17.6): ignored, the run would cover every cell of the tier.
-  for v in FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_DET_CELLS FV_ATTN3_ARMS FV_ATTN3_VSA; do
+  # §11.5, §15.10, §17.6, §22.19): ignored, the run would cover every cell of
+  # the tier.
+  for v in FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_DET_CELLS FV_ATTN3_ARMS FV_ATTN3_VSA FV_ENGINE_CELLS; do
     [[ -z "${!v:-}" ]] || refuse "has no $v: it selects by arm, FV_CELLS (fv-lab pod up --cells)"
   done
   # The tier's values (lab/tiers.toml).
@@ -850,6 +857,15 @@ fv_lab_route() {
       FV_ATTN3_ARMS|FV_ATTN3_VSA)
         keys+=("$k")
         why+=("$k: attn3 runs the script's default arms (FV_ATTN3_ARMS \"v2 cudnn\", FV_ATTN3_VSA \"0 1\") and selects by arm, as every tier: FV_CELLS, e.g. FV_CELLS=\"fasth3-4step-vsa-768p-b160 fasth3-4step-vsa-768p-b161\" (fv-lab pod up --cells; ADR-0019 §17.2, §17.6)") ;;
+      FV_ENGINE_CELLS)
+        keys+=("$k")
+        why+=("$k: serve-engine selects by arm, as every tier (FV_ENGINE_CELLS picked runpod-matrix.sh serve-engine's groups h3 / ltx / wan): FV_CELLS, e.g. FV_CELLS=\"cli-h3-turbo engine-h3-turbo\" (fv-lab pod up --cells; ADR-0019 §22, S3, §22.19)") ;;
+      FV_SFSTREAM_RUNS|FV_SF_PROMPT|FV_SF_SWITCH)
+        keys+=("$k")
+        why+=("$k: the sfstream tier's cell (lab/cells/sfstream-rollout.toml) is runpod-matrix.sh sfstream's defaults, its arms sfstream-main and sfstream-10min selected with FV_CELLS; another run list or prompt is another cell (ADR-0019 §22, S4, §22.19)") ;;
+      FV_MMAUDIO_PROMPT)
+        keys+=("$k")
+        why+=("$k: the mmaudio tier's cell (lab/cells/mmaudio-sidecar.toml) is runpod-matrix.sh mmaudio's default prompt, its arms wan13-audio, sfwan13-audio and ours-v2a selected with FV_CELLS; another prompt is another cell (ADR-0019 §22, S5, §22.19)") ;;
       FV_HD_POST_URL|FV_HD_POST_TIMEOUT_S)
         keys+=("$k")
         why+=("$(dropped_why "$k")") ;;
@@ -915,14 +931,14 @@ cmd_run() {
     die "gold is no runpod-matrix.sh family (docs/adr/0023-lab-report-and-ci-bridge.md): fv-lab pod up --sha $sha --family gold --yes --wait"
   fi
   # Nor is a sibling tier (fv-lab-retired.sh FV_LAB_SIBLINGS): its cells are
-  # its family's targets on another pod (oracle-r2: weights from R2).
-  # hd5: the hd family's prompts-hd5.json mode, whose prompt set its tier's
-  # cells carry (§22, S2).
+  # its family's targets on another pod (oracle-r2: weights from R2). hd5,
+  # the hd family's prompts-hd5.json mode (§22, S2), was one until hd's branch
+  # went (§22.19): frozen with it, it is FV_LAB_RETIRED and routed below.
   local sib
   if sib="$(fv_lab_sibling "$FAMILY")" && [[ "$mode" == run || "$mode" == all ]]; then
     [[ "$sib" == oracle ]] \
       && die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib's targets its tier cannot run (docs/adr/0019-fv-lab.md §21): fv-lab oracle --family $FAMILY --sha $sha --cells <arms> --yes, or fv-lab pod up --sha $sha --family $FAMILY --cells <arms> --yes --wait; the script runs them as FV_FAMILY=$sib"
-    die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib in a mode its tier does not run (docs/adr/0019-fv-lab.md §22, S2): fv-lab pod up --sha $sha --family $FAMILY --yes --wait (narrowed by arm with --cells <arms>); the script runs it as FV_FAMILY=$sib $(fv_lab_sibling_mode "$FAMILY")"
+    die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib in a mode its tier does not run (docs/adr/0019-fv-lab.md §21, §22): fv-lab pod up --sha $sha --family $FAMILY --yes --wait (narrowed by arm with --cells <arms>); the script runs it as FV_FAMILY=$sib $(fv_lab_sibling_mode "$FAMILY")"
   fi
   # Nor were the tiers made from a port one-off (fv-lab-retired.sh FV_LAB_EXPERIMENTS).
   if fv_lab_experiment "$FAMILY" && [[ "$mode" == run || "$mode" == all ]]; then

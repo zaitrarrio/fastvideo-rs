@@ -1,4 +1,5 @@
-# runpod-matrix.sh `serve-engine`, its ltx group (docs/serve/design.md "GPU check"; docs/adr/0019-fv-lab.md §22, S3):
+# Was runpod-matrix.sh `serve-engine`, its ltx group (retired after its GPU check, docs/adr/0019-fv-lab.md §22.19;
+# docs/serve/design.md "GPU check"; §22, S3):
 # the CLI generation of the served `ltx-turbo` recipe (LTX-2.5 distilled two-stage with its Sol technique profile,
 # `ltx2 gen --two-stage`), then the same request through EngineService + CudaBackend (`fv-gpucheck engine --model
 # ltx-turbo`): its frames byte-compared with the CLI's, then a second job cancelled after step 3. No `--tae-dir`

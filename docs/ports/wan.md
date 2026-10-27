@@ -672,7 +672,16 @@ counts (cuDNN algorithm choice), not the carried state.
 ### Throughput and memory (H100 80GB HBM3, US-CA-2, 832x480, 16 fps video)
 
 `runpod-matrix.sh sfstream` (`fv-gpucheck wan stream`), warm process,
-steady state = blocks 8 onward (full 21-frame window).
+steady state = blocks 8 onward (full 21-frame window). That family is the
+fv-lab tier `sfstream` now (`lab/cells/sfstream-rollout.toml`: `sfstream-main`,
+the parity check, the 120 s rebased sink-15 run and the keep / reset prompt
+switches; `sfstream-10min`, the memory-growth run): `fv-lab pod up --sha <sha>
+--family sfstream --yes --wait` (`--cells sfstream-main` for one arm), or
+`FV_FAMILY=sfstream scripts/gpu/runpod-http.sh run <sha>`, which runs the same.
+Its script branch was deleted after the tier's GPU check passed (ADR-0019
+§22.14, §22.19); its run lists and prompts (`FV_SFSTREAM_RUNS`, `FV_SF_PROMPT`,
+`FV_SF_SWITCH`) are the cell's and are refused as settings: another run list is
+another cell, or `fv-gpucheck wan stream --run <spec>` by hand.
 
 | Policy | Block s (denoise / context / decode) | Frames/s | TTFF |
 |---|---|---|---|
