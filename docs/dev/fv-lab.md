@@ -460,8 +460,11 @@ prune are gone (their findings are in `docs/serve/h3-1080p-and-upscaler.md`; the
 4f8822a0:scripts/gpu/runpod-matrix.sh`). `FV_HD_POST_URL` and `FV_HD_POST_TIMEOUT_S` are refused by fv-lab
 (`run`'s environment, `pod up --extra-env`) and `runpod-http.sh` (both paths). Both tiers are **retired from the
 script** since their GPU check passed (§22.10 on `d53ea62`; S7, §22.19): `runpod-matrix.sh hd` and `hd5` refuse (exit
-2), `FV_FAMILY=hd` / `hd5 runpod-http.sh run` runs `fv-lab pod up`, and the frozen sibling `hd5` keeps the fixtures
-the script wrote with `FV_PROMPTS=…/prompts-hd5.json` (`FV_LAB_RETIRED_SIBLINGS`); that setting itself is refused.
+2), `FV_FAMILY=hd runpod-http.sh run` (or `FV_FAMILY=hd5`) runs `fv-lab pod up`, and the frozen sibling `hd5` keeps
+the fixtures the script wrote with `FV_PROMPTS=…/prompts-hd5.json` (`FV_LAB_RETIRED_SIBLINGS`, which carries that
+mode). That setting with `hd` is refused naming `hd5` (`runpod-matrix.sh`, `runpod-http.sh run` / `all` / `plan`
+from the host environment or `FV_EXTRA_ENV`, fv-lab's `--extra-env` and `run`): dropping it alone would run `hd`'s
+own prompt set under the same arm names. Use `FV_FAMILY=hd5` (`fv-lab pod up --family hd5`).
 
 `hd5` is the 1080P serve gate: the script ran it as `FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json`, which
 fv-lab does not read (`fv-lab run` ignores it with a warning, `pod up --extra-env` refuses it: a cell's workload is its
@@ -648,9 +651,9 @@ lost; their commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
 
 | family | what replaces it | lost |
 |---|---|---|
-| `sfquality` | nothing: the R12 long-rollout study is finished and its outcome shipped (the 15-frame sink, the causal session caps; `docs/ports/wan.md` R12); `sfstream` keeps a pod check of the rollout | the sweep in one command, the f32 and second-seed rollouts (by hand: `fv-gpucheck wan stream --run <spec>`) |
+| `sfquality` | nothing: the R12 long-rollout study is finished and its outcome shipped (the 15-frame sink, the causal session caps; `docs/ports/wan.md` R12); the `sfstream` tier keeps a pod check of the rollout | the sweep in one command, the f32 and second-seed rollouts (by hand: `fv-gpucheck wan stream --run <spec>`) |
 | `headline` | its nine arms as four `fv-lab run <tier> --cells …` calls: `fastvideo`, `rtx6000`, `rtx5090`, `precision` (the refusal lists the arms) | the nine arms on one pod, and its use on a new GPU type (each tier fixes its `gpu`) |
-| `speechtest` | nothing: `docs/ports/mmaudio.md` "Speech" answers it; `mmaudio` keeps the sidecar checked on a pod | the Whisper check in one command (`scripts/gpu/speech_transcribe.py` by hand) |
+| `speechtest` | nothing: `docs/ports/mmaudio.md` "Speech" answers it; the `mmaudio` tier keeps the sidecar checked on a pod | the Whisper check in one command (`scripts/gpu/speech_transcribe.py` by hand) |
 | `cold` | nothing: no result was recorded | the page-cache-cold end-to-end time with load included (sol-engine's e2e) |
 | `eval` | `precision`'s f32act / bf16act pairs with lossy gates, `fuse`'s `exact` gates with an OFF arm, prompt sets in cells, `--lpips` on any run | the combination in one run, the `BF16_ACT=0` OFF-identity gate, the five-prompt LPIPS pairs, the LPIPS self-test on a pod (by hand: `fv-gpucheck lpips --weights <dir>`) |
 | `ltxoffload` | nothing: its numbers are in `docs/ports/ltx25.md`; `b6-ltx25-offload-cpu` still checks `--offload cpu` across builds | LTX `cpu`-against-resident identity, the 4K `cpu` peaks |

@@ -131,10 +131,18 @@ pub fn experiments() -> Vec<String> {
 /// (`scripts/gpu/tests/fv-lab-goldens.sh` `fam_env`), so they carry the
 /// family's name where fv-lab writes the tier's, and, the tier being
 /// `volume+r2`, the volume's weight root where fv-lab reads its merged root.
+///
+/// Or one `<tier>:<family>:<K=V>` entry of `FV_LAB_RETIRED_SIBLINGS`
+/// (ADR-0019 §22.19): a sibling frozen with its family when the family's
+/// branch went (`hd5`, the `hd` family with `FV_PROMPTS=…/prompts-hd5.json`).
+/// Its fixtures are the ones the script wrote while it was live, read the same
+/// way; `mode` is the setting that made the family's run the tier's (`None`
+/// for a live sibling).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sibling {
     pub tier: String,
     pub family: String,
+    pub mode: Option<String>,
 }
 
 /// `FV_LAB_SIBLINGS` of `scripts/gpu/fv-lab-retired.sh`: the siblings of a
@@ -144,11 +152,18 @@ pub fn siblings() -> Vec<Sibling> {
 }
 
 /// `FV_LAB_RETIRED_SIBLINGS` of `scripts/gpu/fv-lab-retired.sh`: the
-/// siblings frozen with their family (ADR-0019 §22.19: `hd5` with `hd`). Their
-/// fixtures are what the script wrote while they were live, so they are read
-/// as a live sibling's.
+/// siblings frozen with their family (ADR-0019 §22.19: `hd5` with `hd`), each
+/// with its mode. Their fixtures are what the script wrote while they were
+/// live, so they are read as a live sibling's.
 pub fn retired_siblings() -> Vec<Sibling> {
-    sibling_list("FV_LAB_RETIRED_SIBLINGS")
+    let s = sibling_list("FV_LAB_RETIRED_SIBLINGS");
+    for e in &s {
+        assert!(
+            e.mode.as_deref().is_some_and(|m| m.contains('=')),
+            "FV_LAB_RETIRED_SIBLINGS entry {e:?} has no <K=V> mode"
+        );
+    }
+    s
 }
 
 fn sibling_list(var: &str) -> Vec<Sibling> {
@@ -161,12 +176,16 @@ fn sibling_list(var: &str) -> Vec<Sibling> {
         .and_then(|l| l.strip_suffix('"'))
         .unwrap_or_else(|| panic!("{var}=\"…\""));
     line.split_whitespace()
-        .map(|e| match e.split_once(':') {
-            Some((t, f)) if !t.is_empty() && !f.is_empty() && !f.contains(':') => Sibling {
-                tier: t.into(),
-                family: f.into(),
-            },
-            _ => panic!("{var} entry `{e}` is not <tier>:<family>"),
+        .map(|e| {
+            let mut it = e.splitn(3, ':');
+            match (it.next(), it.next(), it.next()) {
+                (Some(t), Some(f), mode) if !t.is_empty() && !f.is_empty() => Sibling {
+                    tier: t.into(),
+                    family: f.into(),
+                    mode: mode.map(str::to_owned),
+                },
+                _ => panic!("{var} entry `{e}` is not <tier>:<family>[:<K=V>]"),
+            }
         })
         .collect()
 }

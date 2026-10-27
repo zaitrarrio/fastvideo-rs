@@ -4641,6 +4641,10 @@ Built on `claude/d1-s2-hd` from `4f8822a0`, main merged in at `3a5d2ac9` (S1, §
 
 #### 22.10 S2: the GPU check
 
+*Superseded by §22.19 (historical record):* the script side of this procedure no longer exists. `runpod-matrix.sh hd`
+refuses (exit 2), and `FV_FAMILY=hd runpod-http.sh run` routes to fv-lab, which refuses `FV_R2_TREES` and `FV_PROMPTS=…/prompts-hd5.json` (that form names `hd5`). Both sides
+of a re-check are now `fv-lab pod up --family hd`.
+
 §8's procedure, as §17.5's: one commit `SHA` for both sides (this PR's head or its merge, once
 `fastvideo-rs-runtime:sha-<7>` is published with its `lab/`, fv-lab and `runpod-matrix.sh`: the script side needs the
 branch without its derived step), both sides in parallel, then `fv-lab-compare-runs.sh`. One RTX PRO 6000 Blackwell
@@ -4737,8 +4741,12 @@ fv-lab 0.1.78's `report summary --kind hd` prints both byte for byte (`tests/rep
 
 **Then (S7, not this slice; done in §22.19)**: on a pass, `hd` joins `FV_LAB_RETIRED`, its branch is deleted and its three
 fixtures frozen (§10's way); `hd5`, a sibling of the family, is frozen with it (out of `FV_LAB_SIBLINGS`, into
-`FV_LAB_RETIRED`, its fixtures kept as they are: the restored modes' way, §12, with the `prompt set:` line mapped as
-here), and `FV_HD_POST_*` stay refused.
+`FV_LAB_RETIRED`, its fixtures kept as they are with the `prompt set:` line mapped as here), and `FV_HD_POST_*` stay
+refused. As done (§22.19), `hd5` is not recorded the restored modes' way (§12, `FV_LAB_RESTORED`). That list's
+entries are rebuilt by `fv-lab-restored-goldens.sh` from `5987e6a4`, whose `hd` branch still had the derived step
+(and had no `hd5` tier), so it would not reproduce `hd5`'s fixtures. It is recorded in `FV_LAB_RETIRED_SIBLINGS`
+(`hd5:hd:FV_PROMPTS=…/prompts-hd5.json`) instead: the tests read the fixtures with the tier's name, and the mode
+makes every refusal of `hd` with that setting name `hd5`.
 
 #### 22.11 S3: `serve-engine` as a tier (done, CPU-side)
 
@@ -4805,8 +4813,8 @@ Built on `claude/d1-s3-serve-engine` from `d53ea62e` (main with S2 merged; FVID-
      the removal).
   3. *`FV_ENGINE_CELLS`* (`h3 ltx wan`, the branch's group picker) is `--cells` / `FV_CELLS` by arm. fv-lab refuses
      it (`knobs::SCRIPT_KNOBS`, `run`'s environment and `pod up --extra-env`, "§22, S3"), as it refused
-     `FV_ATTN3_*` while `attn3`'s branch lived (§17.2); `runpod-http.sh`'s `FV_LAB_NOT_READ` gains it in S7, when
-     the branch goes, as `FV_ATTN3_*` did (§17.6).
+     `FV_ATTN3_*` while `attn3`'s branch lived (§17.2); `runpod-http.sh`'s `FV_LAB_NOT_READ` gained it in S7,
+     when the branch went, as `FV_ATTN3_*` did (§17.6; done in §22.19).
 - **Test support**: `common::merged_root` reads the volume's root as the merged root also as a whole word (the
   engine arms' `--weights-root /workspace/weights `), not only as a path prefix; a longer name that starts with it
   is left alone (tested). `tests/payload_golden.rs` counts three `volume+r2` tiers (`gold`, `oracle-r2`,
@@ -4834,6 +4842,10 @@ Built on `claude/d1-s3-serve-engine` from `d53ea62e` (main with S2 merged; FVID-
 - **Lost**: nothing a run records. `FV_ENGINE_CELLS` by group is now six arm names.
 
 #### 22.12 S3: the GPU check
+
+*Superseded by §22.19 (historical record):* the script side of this procedure no longer exists. `runpod-matrix.sh serve-engine`
+refuses (exit 2), and `FV_FAMILY=serve-engine runpod-http.sh run` routes to fv-lab, which refuses `FV_R2_TREES`. Both sides
+of a re-check are now `fv-lab pod up --family serve-engine`.
 
 §8's procedure, as §22.10's: one commit `SHA` for both sides (this PR's head or its merge, once
 `fastvideo-rs-runtime:sha-<7>` is published with its `lab/`, fv-lab and `runpod-matrix.sh`: the script side needs the
@@ -5062,7 +5074,7 @@ the `sfstream` entry of §22.3 and §22.6 item 3 decide.
      script's header said "a dry run fetches nothing"; it now names these exceptions.
   3. *`FV_SFSTREAM_RUNS`, `FV_SF_PROMPT`, `FV_SF_SWITCH`* (the branch's run list and prompts) are the cell's defaults.
      fv-lab refuses them (`knobs::SCRIPT_KNOBS`, `fv-lab run`'s environment and `pod up --extra-env`, "§22, S4"), as
-     it refused `FV_ENGINE_CELLS` in S3; `runpod-http.sh`'s `FV_LAB_NOT_READ` gains them in S7, when the branch goes.
+     it refused `FV_ENGINE_CELLS` in S3; `runpod-http.sh`'s `FV_LAB_NOT_READ` gained them in S7, when the branch went (§22.19).
   4. *The TAE fetch*: on **both** sides the pod's start command runs `fetch-tae.sh` whenever TAE is not skipped
      (`runpod-http.sh`'s `FV_SKIP_TAE` unset for the script; the tier's `tae = true` for fv-lab), copying `taeh3`,
      `taeltx2_3_wide` and `taew2_1` from the volume (or downloading them) into `/fvscratch/tae`. Only the branch's own
@@ -5111,6 +5123,10 @@ the `sfstream` entry of §22.3 and §22.6 item 3 decide.
 - **Lost**: nothing a run records. Another run list or prompt is another cell, not an environment setting.
 
 #### 22.14 S4: the GPU check
+
+*Superseded by §22.19 (historical record):* the script side of this procedure no longer exists. `runpod-matrix.sh sfstream`
+refuses (exit 2), and `FV_FAMILY=sfstream runpod-http.sh run` routes to fv-lab, which refuses `FV_R2_TREES`. Both sides
+of a re-check are now `fv-lab pod up --family sfstream`.
 
 §8's procedure, as §22.12's: one commit `SHA` for both sides (this PR's head or its merge, once
 `fastvideo-rs-runtime:sha-<7>` is published with its `lab/`, fv-lab and `runpod-matrix.sh`: the script side needs the
@@ -5474,7 +5490,7 @@ Built on `claude/d1-s5-mmaudio` from `b7ddf5fa` (main with S4 merged; FVID-2026-
      (and `sfwan` through it) as still fetching in a dry run, until S6.
   6. *`FV_MMAUDIO_PROMPT`* (the branch's prompt) is the cell's default. fv-lab refuses it (`knobs::SCRIPT_KNOBS`, `fv-lab
      run`'s environment and `pod up --extra-env`, "§22, S5"), as S4 refused `FV_SF_PROMPT`; `runpod-http.sh`'s
-     `FV_LAB_NOT_READ` gains it in S7, when the branch goes.
+     `FV_LAB_NOT_READ` gained it in S7, when the branch went (§22.19).
   7. *The TAE fetch*: as §22.13 item 4. Both pods' start commands run `fetch-tae.sh` (the script side's `FV_SKIP_TAE`
      unset, the tier's `tae = true`); on `bz0ofkfx45` the volume's copy is complete, so `$TAE` and `{tae}` are its
      `auxiliary/tae` (the merged root's link on an R2 run) and the branch's own `fetch_taehv.sh` does not run. When the
@@ -5535,6 +5551,10 @@ Built on `claude/d1-s5-mmaudio` from `b7ddf5fa` (main with S4 merged; FVID-2026-
   directory in that form); this branch's fetched nothing.
 
 #### 22.16 S5: the GPU check
+
+*Superseded by §22.19 (historical record):* the script side of this procedure no longer exists. `runpod-matrix.sh mmaudio`
+refuses (exit 2), and `FV_FAMILY=mmaudio runpod-http.sh run` routes to fv-lab, which refuses `FV_R2_TREES`. Both sides
+of a re-check are now `fv-lab pod up --family mmaudio`.
 
 §8's procedure, as §22.14's: one commit `SHA` for both sides (this PR's head or its merge, once
 `fastvideo-rs-runtime:sha-<7>` is published with its `lab/`, fv-lab, `runpod-matrix.sh` and `verify-weights.sh`: the
@@ -6466,10 +6486,11 @@ upstream pod over 7,200 + 1,200 s + the runtime pod over 3,600 + 1,200 s), and t
 the start must cover it too: **$20.50 or more**. At about $17 before the main check (about $15 after it) fv-lab
 refuses it; it needs a top-up first, or waits.
 
-**Then (S7, not this slice)**: on a pass, `wan` joins `FV_LAB_RETIRED` and leaves `RP_FV_LAB_TIERS`, its branch is
+**Then (S8, not this slice; S7, §22.19, left `wan` for it)**: on a pass, `wan` joins `FV_LAB_RETIRED` and leaves `RP_FV_LAB_TIERS`, its branch is
 deleted and its three fixtures frozen (§10's way; `runpod-http-wan-r2.json` stops being written with it). **One
 ordering constraint for the coordinator**: `sfwan` runs this branch (`bash runpod-matrix.sh wan` with its
-`FV_CELLS`), so deleting it while `sfwan` lives breaks `sfwan`. S7 for `wan` therefore does one of three:
+`FV_CELLS`), so deleting it while `sfwan` lives breaks `sfwan`. S7 for `wan` therefore does one of three (S7 took 1,
+§22.19):
 1. waits for S8 (`sfwan` retired with `oracle`, §21.9 item 5, which waits on §20.7's re-run);
 2. retires `sfwan` with it, refused with a pointer to its two halves (`fv-lab oracle --family oracle-r2` and `fv-lab
    run wan --cells kernels-wan,sfwan13-81f-flash,sfwan13-81f-composed,sfwan13-81f-wholeclip,sfwan13-81f-fullvae`);
@@ -6495,14 +6516,23 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
 - **The list.** `FV_LAB_RETIRED` (`scripts/gpu/fv-lab-retired.sh`) gains `hd hd5 serve-engine sfstream mmaudio`
   (23 tiers). `hd5` was a sibling of the live `hd` family (`FV_LAB_SIBLINGS`, §22.9); it is frozen with `hd`, as
   §22.10 "Then" says. It leaves `FV_LAB_SIBLINGS`, which keeps only `oracle-r2:oracle`, and is recorded in a new
-  list, `FV_LAB_RETIRED_SIBLINGS="hd5:hd"`. The tests need that pair to read `hd5`'s frozen fixtures, which are the
-  `hd` family's dry run under `FV_PROMPTS=…/prompts-hd5.json` (`[hd]` lines and the `prompt set:` line). They read
-  them as while `hd5` was live: `tests/common` `sibling_tier` searches both lists (`retired_siblings()`). The
-  restored modes' list (`FV_LAB_RESTORED`, §12) was not used for this: `fv-lab-restored-goldens.sh` reproduces
-  every entry from `5987e6a4`, where `hd5` did not exist. `fv_lab_sibling_mode` loses its `hd5` case.
+  list with its mode, `FV_LAB_RETIRED_SIBLINGS="hd5:hd:FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json"`.
+  - *The fixtures*: the tests need the pair to read `hd5`'s frozen fixtures, which are the `hd` family's dry run
+    under that setting (`[hd]` lines and the `prompt set:` line). They read them as while `hd5` was live:
+    `tests/common` `sibling_tier` searches both lists (`retired_siblings()`, each with its `mode`).
+  - *The mode*: `hd` with that setting is `hd5`, and every refusal of it names `hd5` (below). Refusing
+    `FV_PROMPTS` alone would send the caller to `hd`'s own prompt set under the same arm names: a silent
+    wrong run.
+  - *Not a restored mode*: the restored modes' list (`FV_LAB_RESTORED`, §12) was not used.
+    `fv-lab-restored-goldens.sh` rebuilds every entry of it from `5987e6a4`. `hd` and `prompts-hd5.json` existed
+    there, but its `hd` branch still had the derived step (§22.9) and there was no `hd5` tier, so it would not
+    reproduce `hd5`'s fixtures.
+
+  `fv_lab_sibling_mode` loses its `hd5` case; `fv_lab_retired_sibling_mode <family> <K> <V>` (new) matches a frozen
+  sibling's mode, a path value by its file name.
 - **The branches.** The four `case` branches are deleted from `runpod-matrix.sh`: 215 lines (`mmaudio` 53,
   `sfstream` 33, `hd` 73, `serve-engine` 56). With the header and usage text the file loses 223 lines and gains 8
-  (1,413 to 1,198). With them go the branch-local helpers `hd_cell`, `hd_long`, `sf_stream` and `want`, hd's
+  (1,413 to 1,198; 1,208 with the `hd5` mode's pointer below). With them go the branch-local helpers `hd_cell`, `hd_long`, `sf_stream` and `want`, hd's
   `FV_HD_POST_*` check, the per-arm timing lines, the `FV_ENGINE_CELLS` / `FV_SFSTREAM_RUNS` / `FV_SF_PROMPT` /
   `FV_SF_SWITCH` / `FV_MMAUDIO_PROMPT` reads, the two `fetch_taehv.sh` calls (sfstream's, mmaudio's) and
   serve-engine's frame removal. **No shared helper went.** Each top-level function and variable was checked for
@@ -6523,9 +6553,18 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
     `exec env FV_WORK=/workspace "$lab" run <f>`, and for the `volume+r2` three also `FV_SCRATCH=/fvscratch
     FV_RUNS_DIR=/workspace/runs/<f>`, as for `wan` (§22.17); never `runpod-matrix.sh`.
   No driver code changed for this (`rp_family_cmd` and `fv_lab_route` read the list). The script-side forms are
-  refused on the fv-lab route:
-  - `FV_R2_TREES` (fv-lab fetches a `volume+r2` tier's trees itself);
-  - `FV_FAMILY=hd FV_PROMPTS=…/prompts-hd5.json` (`FV_PROMPTS` is no setting fv-lab reads; use `FV_FAMILY=hd5`).
+  refused:
+  - `FV_R2_TREES` on the fv-lab route (fv-lab fetches a `volume+r2` tier's trees itself);
+  - `hd` with `FV_PROMPTS=…/prompts-hd5.json` (any path to that file), the script's form of the 1080P gate
+    (`docs/serve/h3-1080p-and-upscaler.md`'s run tables). It is refused **naming `hd5`**:
+    - by `runpod-matrix.sh hd` (the `*)` branch, before the generic pointer);
+    - by `runpod-http.sh run` / `all` / `plan`, from the host environment or `FV_EXTRA_ENV`, before any other refusal
+      (`refuse_retired_sibling_mode`): "use FV_FAMILY=hd5 without FV_PROMPTS (fv-lab pod up --family hd5); without
+      FV_PROMPTS the run would be hd's own";
+    - by fv-lab's `pod up --extra-env` and `fv-lab run`'s environment (`knobs::RETIRED_SIBLING_MODES`).
+
+    `hd5` with its own setting is told to drop it. Another `FV_PROMPTS` on `hd` keeps the generic refusal (fv-lab
+    run: the warning).
 - **Goldens frozen.** `fv-lab-goldens.sh` no longer writes the four families' fixtures, nor `hd5`'s
   (`{hd,hd5,serve-engine,sfstream,mmaudio}-dry-run.txt`, `-gates.tsv`, `runpod-http-*.json`). It no longer writes the
   script sides' GPU-check bodies either (`runpod-http-{serve-engine,sfstream,mmaudio}-r2.json`), since `runpod-http.sh
@@ -6534,10 +6573,11 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
   - the tier is a tier;
   - the tier and its family are both in `FV_LAB_RETIRED`;
   - neither has a branch;
-  - the tier is no live sibling.
+  - the tier is no live sibling;
+  - the entry has a `<K=V>` mode.
 
   Its `hd5` `fam_env` case and the unused `dry_env` go. `tests/dry_run.rs` lists the five among the retired and holds
-  `FV_LAB_RETIRED_SIBLINGS` to `hd5:hd` (both retired, no branch, not a live sibling). `tests/payload_golden.rs` reads
+  `FV_LAB_RETIRED_SIBLINGS` to `hd5:hd` (both retired, no branch, not a live sibling, with a mode). `tests/payload_golden.rs` reads
   the three frozen R2 bodies as before. No crate test ran these branches live, unlike `tests/verdict.rs` (§11.6) and
   `tests/repeats_oracle.rs` (§15.10), so no frozen copy of the script is needed: the fixtures are the reference.
 - **Knobs.** `knobs.rs`: `FV_ENGINE_CELLS`, `FV_SFSTREAM_RUNS`, `FV_SF_PROMPT`, `FV_SF_SWITCH` and
@@ -6548,13 +6588,21 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
     sfstream and mmaudio knobs name the tier's cell;
   - `FV_ENGINE_CELLS` joins the host-environment selector check, as `FV_ATTN3_*` did.
 
-  hd has no knob of its own left: `FV_PROMPTS` was already refused (§7), and `FV_HD_POST_*` stay refused as dropped
-  knobs, on the script path by `refuse_dropped` (any family's `FV_EXTRA_ENV`), on the fv-lab route and by fv-lab.
-  `FV_SFWAN_CELLS` stays a script knob until S8.
+  hd has no knob of its own left. `FV_PROMPTS` was already refused (§7); with `prompts-hd5.json` it names `hd5`,
+  in fv-lab too: `knobs::RETIRED_SIBLING_MODES` (held equal to `FV_LAB_RETIRED_SIBLINGS` by `tests/knobs.rs`
+  `retired_sibling_modes_are_fv_lab_retired_shs`) makes `--extra-env` and `fv-lab run`'s environment refuse it for
+  `hd` (pointing at `hd5`) and `hd5` (drop it), where `fv-lab run` only warned about `FV_PROMPTS` before.
+  `FV_HD_POST_*` stay refused as dropped knobs, on the script path by `refuse_dropped` (any family's
+  `FV_EXTRA_ENV`), on the fv-lab route and by fv-lab. `FV_SFWAN_CELLS` stays a script knob until S8.
 - **Tests.** `fv-lab-route.test.sh`:
   - the five are routed (by arm for `hd5`'s gate), `all` refused, `plan` fv-lab's, and `runpod-matrix.sh` refuses
     each (exit 2, the pointer);
-  - `FV_R2_TREES` and `hd`'s `FV_PROMPTS` are refused;
+  - `FV_R2_TREES` is refused;
+  - `hd` with `prompts-hd5.json` (the image's path and a relative one) names `hd5` in `run` / `all` / `plan`, from the
+    host environment and `FV_EXTRA_ENV` (before an `FV_AVOID_MACHINES` refusal), and in `runpod-matrix.sh`;
+  - `hd5` with its own setting is told to drop it;
+  - another prompt set on `hd`, or `prompts-hd5.json` on `wan`, does not name `hd5`;
+  - the `sfquality` and `speechtest` pointers name their tier;
   - the five knobs are refused in `FV_EXTRA_ENV` and `FV_ENGINE_CELLS` in the host environment;
   - `FV_HD_POST_*` are refused on the script path (now `wan`'s), on the fv-lab route and by `plan`;
   - the families are named in the test, not read from the list.
@@ -6573,18 +6621,26 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
     - `FV_ENGINE_CELLS` out of the host-environment check (route);
     - `FV_MMAUDIO_PROMPT`'s own answer removed (route);
     - a frozen `runpod-http-sfstream-r2.json` or `hd5-dry-run.txt` deleted (goldens);
-    - `runpod-matrix.sh`'s `FV_LAB_RETIRED` refusal removed (route).
+    - `runpod-matrix.sh`'s `FV_LAB_RETIRED` refusal removed (route);
+    - the `hd5`-mode refusal removed from `run` / `all`, or from `plan`, or `FV_EXTRA_ENV` not read for it (route);
+    - `hd5`'s mode dropped from `FV_LAB_RETIRED_SIBLINGS` (goldens, route);
+    - the mode matched by full path, not file name (route);
+    - `runpod-matrix.sh`'s `hd5` pointer removed (route);
+    - the `sfquality` pointer reverted to "family" (route).
   - Rust (on the build pod):
     - `FV_MMAUDIO_PROMPT` back in `SCRIPT_KNOBS` (`knobs::tests::the_retired_mmaudio_prompt_is_not_read`,
       `tests/knobs.rs` `extra_env_refusals_are_runpod_http_shs`);
     - `FV_LAB_RETIRED_SIBLINGS` emptied (three `tests/dry_run.rs` tests: the retired list, the hd tiers, every tier's
       dry run);
-    - `hd` out of `FV_LAB_RETIRED` (`retired_families_are_frozen_tiers_without_a_branch`).
+    - `hd` out of `FV_LAB_RETIRED` (`retired_families_are_frozen_tiers_without_a_branch`);
+    - `RETIRED_SIBLING_MODES`' value changed (`tests/knobs.rs` `retired_sibling_modes_are_fv_lab_retired_shs`);
+    - the `hd5`-mode refusal in `knobs::why` disabled
+      (`knobs::tests::the_hd5_prompts_with_hd_name_the_hd5_tier`).
 - **Dry runs compared** (§22.1's settings: `FV_DRY_RUN=1`, the volume's `auxiliary/tae` marked complete,
   `FV_BASELINE_SHA` set, no `FV_LAB_BIN`). Output had its time stamps, temporary directory and root normalised; the
   `FV_DRY_RUN_GATES` records, stderr, exit status and any file fetched into a TAE directory were compared too. Base:
   `scripts/gpu` at `0ebddb0d`; after: this branch.
-  - **Byte-identical, 57 forms**:
+  - **Byte-identical, 55 forms**:
     - `wan` (102 lines, 65 records), with `FV_ORACLE_URL` (102, 65), with the GPU check's
       `FV_CELLS="wan13-dmd wan13-dmd-dense kernels-wan cli-fw22 engine-fw22"` (94, 24) and with `FV_TAE_DIR` (102,
       65);
@@ -6592,12 +6648,17 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
     - `oracle` (26, 8), with `FV_ORACLE_TARGETS=sfwan13` (18, 4; also with `FV_GEN_TIMEOUT_S=5400`), its nine
       tensor-diff targets (43, 14) and ten clip-metric targets (145, 23) at `FV_GEN_TIMEOUT_S=5400`, and with
       `FV_ORACLE_URL` (26, 8);
-    - the 44 refusals that already existed (2 lines, exit 2): `FV_LAB_RETIRED`'s eighteen, `FV_SCRIPT_RETIRED`'s
-      twenty, the two restored modes as family and setting, `oracle-r2`, `h3-graphs`, `gold` and an unknown name.
+    - 42 of the 44 refusals that already existed (2 lines, exit 2): `FV_LAB_RETIRED`'s eighteen,
+      `FV_SCRIPT_RETIRED`'s twenty but `sfquality` and `speechtest`, the two restored modes as family and setting,
+      `oracle-r2`, `h3-graphs`, `gold` and an unknown name.
+  - **One named difference, 2 forms**: `sfquality`'s and `speechtest`'s pointers read "The sfstream tier (fv-lab run
+    sfstream) keeps …" / "the mmaudio tier (fv-lab run mmaudio) keeps …" where they said "family". Their output
+    equals the base's with that substitution; their exit, stderr and records are unchanged.
   - **Now refused, 10 forms** (2 lines, `matrix start` and the `FATAL` pointer, exit 2, no record; `hd`'s
     `FV_PROMPTS` form keeps its `prompt set:` line first, 3 lines):
-    - `hd` (was 10 lines, 8 records, exit 0), with `FV_PROMPTS=…/prompts-hd5.json` (11, 8) and with
-      `FV_HD_POST_URL` (was its own `FATAL`, exit 2);
+    - `hd` (was 10 lines, 8 records, exit 0), with `FV_HD_POST_URL` (was its own `FATAL`, exit 2), and with
+      `FV_PROMPTS=…/prompts-hd5.json` (was 11, 8), whose `FATAL` names `hd5`: "FV_PROMPTS=… with hd is the fv-lab
+      tier hd5 now …: fv-lab run hd5 on the box, FV_FAMILY=hd5 runpod-http.sh run or fv-lab pod up --family hd5";
     - `hd5` (was `unknown family`, exit 2);
     - `serve-engine` (8, 6) and with `FV_ENGINE_CELLS=h3` (4, 2);
     - `sfstream` (4, 2) and with `FV_SFSTREAM_RUNS` (4, 2);
@@ -6608,9 +6669,17 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
 - **Docs.** `docs/serve/h3-1080p-and-upscaler.md` "Reproduce", `docs/serve/design.md`'s GPU check, `docs/ports/wan.md`
   (the streaming throughput section), `docs/ports/mmaudio.md`, `docs/dev/fv-lab.md` (overview, family table, the
   `runpod-http.sh` refusals, the four slice sections, the frozen list), `lab/README.md`, `lab/tiers.toml` and the
-  eight cells ("Was runpod-matrix.sh …") name the tiers. `fv_script_retired_why`'s `sfquality` and `speechtest`
-  pointers still say "the sfstream / mmaudio family keeps …". They were left as they are, so that the existing
-  refusals stay byte-identical; the tier of the same name keeps that check.
+  eight cells ("Was runpod-matrix.sh …") name the tiers. So do `fv_script_retired_why`'s `sfquality` and
+  `speechtest` pointers, and `docs/dev/fv-lab.md`'s table of them (the named difference above).
+  - *Stale "until S7" text for `wan`* now says S8: `lab/tiers.toml`, `runpod.sh`, `runpod-plan.test.sh`,
+    `docs/serve/fal-parity.md`, `docs/ports/wan.md` and §22.18's "Then".
+  - *GPU-check procedures*: §22.10, §22.12, §22.14 and §22.16 carry a note that this section superseded their
+    script side.
+  - *Kept*: the `FV_POD_FILES` comment in `runpod-http.sh`'s pod start command still gives
+    `FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh` as its example. That comment is in every pod body: all
+    34 `runpod-http-*.json` goldens, the frozen ones and the restored modes' (reproduced from `5987e6a4`), and
+    fv-lab's `pod-start.sh.in`. Editing it would rewrite every pod golden and break the restored modes'
+    reproduction (§22.9 item 1). A host-side comment above `start_cmd` says so.
 - **Left in the script**: `wan`, `sfwan` and `oracle`, and the `*)` branch (the refusals). `wan`'s branch goes with
   `sfwan` in `oracle`'s retirement PR (S8, §21.9 item 5), after §20.7's re-run; then `runpod-matrix.sh` has no
   branch left (§22.6).

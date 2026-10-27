@@ -40,6 +40,27 @@ pub const RESTORED_MODES: [RestoredMode; 2] = [
     },
 ];
 
+/// `FV_LAB_RETIRED_SIBLINGS` of `scripts/gpu/fv-lab-retired.sh`, in its
+/// order (ADR-0019 §22.19): a sibling tier frozen with its family, and the
+/// setting that made the family's run the tier's. `hd5` is `hd` with
+/// `FV_PROMPTS=…/prompts-hd5.json`; refusing that setting alone would send the
+/// caller to `hd`'s own prompt set under the same arm names, so it names the
+/// tier ([`retired_sibling_mode`]). A path value matches by its file name.
+pub const RETIRED_SIBLING_MODES: [RestoredMode; 1] = [RestoredMode {
+    tier: "hd5",
+    family: "hd",
+    key: "FV_PROMPTS",
+    value: "/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json",
+}];
+
+/// The frozen sibling whose mode `key=value` is (by file name for a path).
+pub fn retired_sibling_mode(key: &str, value: &str) -> Option<&'static RestoredMode> {
+    let name = |v: &str| v.rsplit('/').next().unwrap_or(v).to_owned();
+    RETIRED_SIBLING_MODES
+        .iter()
+        .find(|m| m.key == key && !value.is_empty() && name(value) == name(m.value))
+}
+
 /// The retired families' knobs that changed their arms (ADR-0019 §9.4) or
 /// picked their pairs or groups (`FV_TECH_CELLS`, `FV_B6_CELLS`,
 /// `FV_B4A_CELLS`, `FV_DET_CELLS`): no tier reads them. `FV_B4A_CELLS` joined
@@ -173,6 +194,20 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
             )
         });
     }
+    if let Some(m) = retired_sibling_mode(key, value) {
+        if tier == Some(m.family) {
+            return Some(format!(
+                "{key}={value}: with the {} family it is the fv-lab tier {} now ({}'s {key} mode, frozen with it); run {} (fv-lab run {} / pod up --family {}) without {key}: without it the run would be {}'s own (ADR-0019 §22.19)",
+                m.family, m.tier, m.family, m.tier, m.tier, m.tier, m.family
+            ));
+        }
+        if tier == Some(m.tier) {
+            return Some(format!(
+                "{key}={value}: the tier {} is the {} family's {key} mode already; drop the setting (ADR-0019 §22.19)",
+                m.tier, m.family
+            ));
+        }
+    }
     if key == "FV_B4A_CELLS" {
         return Some(
             "FV_B4A_CELLS: fv-lab selects by arm: pass --cells <cell>-base <cell>-pr (FV_CELLS), not FV_B4A_CELLS"
@@ -283,15 +318,21 @@ pub fn check_extra_env(tier: &str, entries: &[String]) -> Result<(), String> {
         .flat_map(|e| e.split_whitespace())
         .filter_map(|e| {
             let (k, v) = e.split_once('=').unwrap_or((e, ""));
-            why(Some(tier), k, v, true)
-                .map(|w| (restored_mode(k, v).is_some(), format!("--extra-env {w}")))
+            why(Some(tier), k, v, true).map(|w| {
+                (
+                    restored_mode(k, v).is_some() || retired_sibling_mode(k, v).is_some(),
+                    format!("--extra-env {w}"),
+                )
+            })
         })
         .collect();
     message(found)
 }
 
 /// `fv-lab run`: the [`MODE_KNOBS`], [`SCRIPT_KNOBS`] and [`DROPPED_KNOBS`] set (non-empty) in
-/// its environment, the oracle's `FASTVIDEO_DUMP_OPS`, and `FV_ORACLE_URL`
+/// its environment, a frozen sibling's mode for its family or tier
+/// ([`RETIRED_SIBLING_MODES`]: `hd` or `hd5` with `FV_PROMPTS=…/prompts-hd5.json`;
+/// any other `FV_PROMPTS` only warns), the oracle's `FASTVIDEO_DUMP_OPS`, and `FV_ORACLE_URL`
 /// for `determinism` (which the script's branch read to run the oracle
 /// first; the tier does not, ADR-0019 §15.10). `get` reads one variable (the
 /// process environment in the binary).
@@ -300,10 +341,16 @@ pub fn check_run_env(tier: &str, get: impl Fn(&str) -> Option<String>) -> Result
         .iter()
         .chain(&SCRIPT_KNOBS)
         .chain(&DROPPED_KNOBS)
+        .chain(RETIRED_SIBLING_MODES.iter().map(|m| &m.key))
         .chain(&["FASTVIDEO_DUMP_OPS", "FV_ORACLE_URL"])
         .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (*k, v)))
         .filter_map(|(k, v)| {
-            why(Some(tier), k, &v, false).map(|w| (restored_mode(k, &v).is_some(), w))
+            why(Some(tier), k, &v, false).map(|w| {
+                (
+                    restored_mode(k, &v).is_some() || retired_sibling_mode(k, &v).is_some(),
+                    w,
+                )
+            })
         })
         .collect();
     message(found)
@@ -618,6 +665,37 @@ mod tests {
                 "{k}"
             );
         }
+    }
+
+    #[test]
+    fn the_hd5_prompts_with_hd_name_the_hd5_tier() {
+        // hd with prompts-hd5.json is the frozen hd5 tier (ADR-0019 §22.19):
+        // named in --extra-env and in fv-lab run's environment, for any path
+        // to the file; the tier with its own setting drops it; another
+        // prompt set, or another tier, is not this refusal.
+        for v in [
+            "/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json",
+            "scripts/gpu/prompts-hd5.json",
+        ] {
+            let e = check_extra_env("hd", &[format!("FV_PROMPTS={v}")]).unwrap_err();
+            assert!(e.contains("it is the fv-lab tier hd5 now"), "{e}");
+            assert!(e.contains("pod up --family hd5) without FV_PROMPTS"), "{e}");
+            let env = |k: &str| (k == "FV_PROMPTS").then(|| v.to_owned());
+            let e = check_run_env("hd", env).unwrap_err();
+            assert!(e.contains("fv-lab run hd5"), "{e}");
+            let e = check_run_env("hd5", env).unwrap_err();
+            assert!(
+                e.contains("the tier hd5 is the hd family's FV_PROMPTS mode already"),
+                "{e}"
+            );
+        }
+        let other = |k: &str| (k == "FV_PROMPTS").then(|| "scripts/gpu/prompts-hd.json".to_owned());
+        assert!(check_run_env("hd", other).is_ok());
+        let hd5 = |k: &str| (k == "FV_PROMPTS").then(|| "scripts/gpu/prompts-hd5.json".to_owned());
+        assert!(check_run_env("rtx6000", hd5).is_ok());
+        let e =
+            check_extra_env("hd", &["FV_PROMPTS=scripts/gpu/prompts-hd.json".into()]).unwrap_err();
+        assert!(!e.contains("hd5"), "{e}");
     }
 
     #[test]

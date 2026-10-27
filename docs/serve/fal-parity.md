@@ -647,7 +647,8 @@ else one prompt.
   each cell's one prompt: fv-lab refuses `FV_PROMPTS` (a prompt set is a
   cell's workload, ADR-0019 §7), so the 5-prompt medians above need a cell
   with that prompt set; until one exists they rerun on the script path
-  (`runpod-matrix.sh wan` with `FV_PROMPTS=5`, kept until S7).
+  (`runpod-matrix.sh wan` with `FV_PROMPTS=5`, kept until `wan`'s branch goes in
+  S8, ADR-0019 §22.19).
 
 ### 5.5 Left from P0
 

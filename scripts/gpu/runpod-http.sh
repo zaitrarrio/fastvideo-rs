@@ -279,6 +279,14 @@ WDEOF
 }
 
 # $1 = image, $2 = run tag, $3 = mode (run|weights)
+# The FV_POD_FILES comment inside the command below still gives
+# FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh as its example, a knob
+# refused since §22's S2 (refuse_dropped). It is kept on purpose: that comment
+# is part of every pod body, so every runpod-http-*.json golden carries it, the
+# frozen ones (§10, §22.19) and the restored modes' reproduced from 5987e6a4
+# (§12) too, and fv-lab's pod-start.sh.in, which tests/payload_golden.rs holds
+# equal to them; editing it would rewrite every pod golden for a comment
+# (docs/adr/0019-fv-lab.md §22.9 item 1, §22.19).
 start_cmd() {
   local tag="$2" mode="$3"
   if [[ "$mode" == upstream ]]; then
@@ -721,6 +729,34 @@ refuse_dropped() {
   return 0
 }
 
+# A frozen sibling's mode (fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS,
+# docs/adr/0019-fv-lab.md §22.19), asked for as its family plus its setting in
+# the host environment or FV_EXTRA_ENV: refused naming the tier, before any
+# other refusal. FV_FAMILY=hd with FV_PROMPTS=…/prompts-hd5.json is the hd5
+# tier; refusing FV_PROMPTS alone would send the caller to hd's own prompt set,
+# under the same arm names. The tier with its own setting: drop it.
+refuse_retired_sibling_mode() {
+  local r t f m key e v extra=() vals=()
+  read -r -a extra <<<"${FV_EXTRA_ENV:-}"
+  for r in $FV_LAB_RETIRED_SIBLINGS; do
+    IFS=: read -r t f m <<<"$r"
+    [[ "$FAMILY" == "$f" || "$FAMILY" == "$t" ]] || continue
+    key="${m%%=*}"
+    vals=()
+    [[ -n "${!key:-}" ]] && vals+=("${!key}")
+    for e in ${extra[@]+"${extra[@]}"}; do
+      [[ "${e%%=*}" == "$key" ]] && vals+=("${e#*=}")
+    done
+    for v in ${vals[@]+"${vals[@]}"}; do
+      fv_lab_retired_sibling_mode "$f" "$key" "$v" >/dev/null || continue
+      [[ "$FAMILY" == "$t" ]] \
+        && die "FV_FAMILY=$t is the $f family's $key=${m#*=} mode already: drop $key (docs/adr/0019-fv-lab.md §22.19)"
+      die "$key=$v with FV_FAMILY=$f is the fv-lab tier $t now ($f's $key mode, frozen with it: fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS, docs/adr/0019-fv-lab.md §22.19): use FV_FAMILY=$t without $key (fv-lab pod up --family $t); without $key the run would be $f's own"
+    done
+  done
+  return 0
+}
+
 # fv_lab_route run|plan <sha> [tag]: `fv-lab pod up` for $FAMILY with this
 # driver's settings mapped across (FV_CELLS -> --cells, FV_BASELINE_SHA ->
 # --baseline-sha, FV_EXTRA_ENV -> --extra-env, FV_LPIPS=1 -> --lpips,
@@ -945,6 +981,7 @@ cmd_run() {
     die "$FAMILY is no runpod-matrix.sh family: an fv-lab tier made from a port one-off (docs/adr/0019-fv-lab.md §14): fv-lab pod up --sha $sha --family $FAMILY --yes --wait"
   fi
   if [[ "$mode" == run || "$mode" == all ]] && fv_lab_retired "$FAMILY"; then
+    refuse_retired_sibling_mode
     [[ "$mode" == run ]] || die "\`all\` runs runpod-matrix.sh $FAMILY after the kernels, and $FAMILY is fv-lab only (fv-lab-retired.sh): run \`kernels\`, then \`run\`"
     fv_lab_route run "$sha"
     return
@@ -1013,6 +1050,7 @@ case "${1:-}" in
     # The body `run` would send for <sha> and <tag>; nothing is created.
     sha="${2:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
     if fv_lab_retired "$FAMILY"; then
+      refuse_retired_sibling_mode
       fv_lab_route plan "$sha" "${3:-}"
       exit 0
     fi

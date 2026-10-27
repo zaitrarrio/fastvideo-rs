@@ -274,7 +274,7 @@ and is deleted once it is fetched), and the recipe arms with
 (`fv-lab oracle --cells` takes reference cells' arms only). The
 five-prompt medians (`FV_PROMPTS=5`) have no fv-lab form yet (fv-lab refuses
 `FV_PROMPTS`; a prompt set is a cell's workload): the script path with
-`FV_PROMPTS=5` until S7. The upstream bench cells `fv-wan22-5b,fv-wan22-5b-i2v` are `pod.sh` cells, run
+`FV_PROMPTS=5` until `wan`'s branch goes in S8 (ADR-0019 §22.19). The upstream bench cells `fv-wan22-5b,fv-wan22-5b-i2v` are `pod.sh` cells, run
 apart (`scripts/gpu/upstream/`).
 
 Not ported here: the Wan 2.1 encoder (`WanEncoder::load_wan_2_1`) still

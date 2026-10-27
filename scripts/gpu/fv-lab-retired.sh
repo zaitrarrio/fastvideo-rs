@@ -60,9 +60,14 @@ FV_LAB_EXPERIMENTS="h3-graphs"
 FV_LAB_SIBLINGS="oracle-r2:oracle"
 
 # Sibling tiers frozen with their family (ADR-0019 §22.10 "Then", §22.19):
-# `<tier>:<family>`, both in FV_LAB_RETIRED. `hd5` is the hd family with
+# `<tier>:<family>:<K=V>`, both in FV_LAB_RETIRED, <K=V> the setting that made
+# the family's run the tier's. `hd5` is the hd family with
 # FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json (the 1080P serve
 # gate's prompt set, which fv-lab takes from its hd5-canvases cell, §22, S2).
+# That setting with the family names the tier in every refusal
+# (fv_lab_retired_sibling_mode below: runpod-matrix.sh, runpod-http.sh run /
+# all / plan, fv-lab's --extra-env), since dropping it alone would run the
+# family's own prompt set under the same arm names.
 # Its fixtures stay as the script wrote them as a sibling (the hd family's
 # dry run under that setting, `[hd]` lines and its `prompt set:` line; its pod
 # body runpod-http.sh plan's for FV_FAMILY=hd5): the tests read them with the
@@ -70,7 +75,7 @@ FV_LAB_SIBLINGS="oracle-r2:oracle"
 # (crates/fastvideo-lab/tests/common Sibling). Like every tier of
 # FV_LAB_RETIRED it is fv-lab only: runpod-http.sh run / plan route it to
 # fv-lab pod up, runpod.sh to fv-lab run, runpod-matrix.sh refuses it.
-FV_LAB_RETIRED_SIBLINGS="hd5:hd"
+FV_LAB_RETIRED_SIBLINGS="hd5:hd:FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json"
 
 # The runpod-matrix.sh families retired with no tier (ADR-0019 §18, D1g,
 # coordinator decision 2026-10-26): finished experiments and one-time
@@ -116,6 +121,21 @@ fv_lab_sibling_mode() {
   esac
 }
 
+# fv_lab_retired_sibling_mode <family> <K> <V>: the frozen sibling tier
+# (FV_LAB_RETIRED_SIBLINGS) whose mode <family> with <K>=<V> is, printed as
+# "<tier> <K=V>"; false for any other setting. A path value matches by its file
+# name (prompts-hd5.json from the repository, the image or a checkout).
+fv_lab_retired_sibling_mode() {
+  local e t f m m_v
+  for e in $FV_LAB_RETIRED_SIBLINGS; do
+    IFS=: read -r t f m <<<"$e"
+    [[ "$f" == "${1:-}" && "${m%%=*}" == "${2:-}" && -n "${3:-}" ]] || continue
+    m_v="${m#*=}"
+    [[ "${3##*/}" == "${m_v##*/}" ]] && { echo "$t $m"; return 0; }
+  done
+  return 1
+}
+
 # fv_script_retired <family>: true when the family is retired with no tier.
 fv_script_retired() {
   [[ " $FV_SCRIPT_RETIRED " == *" ${1:-} "* ]]
@@ -135,9 +155,9 @@ fv_script_retired_why() {
     precision-debug) echo "the precision tiers run the same precision variants, but not its per-step CUPTI trace (FASTVIDEO_GPU_TRACE_STEP) or its FASTVIDEO_DUMP_DIR + compare-dumps diffs; those by hand: git show b019ccb2:scripts/gpu/runpod-matrix.sh (ADR-0019 §14.7, §18)" ;;
     identity) echo "the det-short and determinism tiers cover it (ADR-0019 §14.7, §18)" ;;
     h3attn) echo "its arms are measured and recorded (docs/techniques.md \"H3 attention arms\"; the served variants' gold files); no attention arm of it is open (ADR-0019 §14.7, §18)" ;;
-    sfquality) echo "a finished study (design risk R12) whose outcome has shipped: the default sink of 15 frames (families/wan.toml) and the causal session caps (docs/serve/design.md); written up in docs/ports/wan.md (R12) and docs/serve/e2e/wan.md, its last run artifacts/serve/e2e/wan/r12/2c987e8-09282029-sfq-main.json.gz. The sfstream family keeps a pod check of the rollout. Lost: the sweep in one command, and the f32 and second-seed rollouts; by hand: fv-gpucheck wan stream --run <spec>, the specs in git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
+    sfquality) echo "a finished study (design risk R12) whose outcome has shipped: the default sink of 15 frames (families/wan.toml) and the causal session caps (docs/serve/design.md); written up in docs/ports/wan.md (R12) and docs/serve/e2e/wan.md, its last run artifacts/serve/e2e/wan/r12/2c987e8-09282029-sfq-main.json.gz. The sfstream tier (fv-lab run sfstream) keeps a pod check of the rollout. Lost: the sweep in one command, and the f32 and second-seed rollouts; by hand: fv-gpucheck wan stream --run <spec>, the specs in git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
     headline) echo "its nine arms are cells of four tiers: fv-lab run <tier> --cells <arms> on a box, or fv-lab pod up --family <tier> --cells <arms> from a host, for fastvideo (fasth3-4step-vsa-480p fasth3-8step-480p fasth3-4step-vsa-768p fasth3-8step-768p), rtx6000 (sol-h3), rtx5090 (h3-768p-fullopt ltx25-4k5s-sol) and precision (ltx25-4k5s-sol-bf16act-fp8); the served numbers are the gold tier's. Lost: the nine arms on one pod, and its use on a new GPU type (each tier fixes its gpu); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
-    speechtest) echo "a finished question (can MMAudio say a given line?), answered in docs/ports/mmaudio.md \"Speech\" (run fc6053d); nothing served depends on it, and the mmaudio family keeps the sidecar checked on a pod. Lost: the Whisper check in one command (scripts/gpu/speech_transcribe.py by hand); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
+    speechtest) echo "a finished question (can MMAudio say a given line?), answered in docs/ports/mmaudio.md \"Speech\" (run fc6053d); nothing served depends on it, and the mmaudio tier (fv-lab run mmaudio) keeps the sidecar checked on a pod. Lost: the Whisper check in one command (scripts/gpu/speech_transcribe.py by hand); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
     cold) echo "no result of it was recorded and nothing reads one. Lost: the page-cache-cold end-to-end time with load included (sol-engine's e2e), which no tier measures (rtx5090's LTX-2.5 4k5s / 1080p20s arms run warm); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
     eval) echo "its pieces run elsewhere: the precision tiers' f32act / bf16act pairs with lossy gates, fuse's exact gates with an OFF arm, prompt sets in cells (h3-graphs), and LPIPS as --lpips on any fv-lab run. Lost: a prompt set, LPIPS and the promotion gate in one run; the BF16_ACT=0 OFF-identity gate; the 480p / 512p five-prompt LPIPS pairs (never recorded); the LPIPS self-test on a pod (by hand: fv-gpucheck lpips --weights <dir>); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
     ltxoffload) echo "a finished measurement: its numbers are in docs/ports/ltx25.md (runs a73173e-09270009, a2cd194-09270039, a2cd194-09270103), and the b6 tier's b6-ltx25-offload-cpu arm still checks --offload cpu across builds. Lost: LTX cpu-against-resident identity and the 4K cpu peaks; its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;

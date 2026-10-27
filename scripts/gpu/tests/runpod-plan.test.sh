@@ -10,7 +10,7 @@
 #   - a family retired to fv-lab (fv-lab-retired.sh, here ltx) runs the
 #     image's `fv-lab run <tier>` and never runpod-matrix.sh, which refuses it;
 #     so does wan since S6 (docs/adr/0019-fv-lab.md §22.17: a tier whose
-#     branch stays until S7), with FV_SCRATCH on the container disk and its
+#     branch stays until S8, §22.19), with FV_SCRATCH on the container disk and its
 #     runs in /workspace/runs/wan, as a volume+r2 tier needs; `matrix` gives
 #     both the tier's per-arm cap (no FV_GEN_TIMEOUT_S=300) and starts
 #     runpod-matrix.sh for neither;

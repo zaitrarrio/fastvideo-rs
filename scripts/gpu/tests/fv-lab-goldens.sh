@@ -101,10 +101,11 @@ for e in $FV_LAB_SIBLINGS; do
   ! fv_lab_retired "$t" && ! fv_lab_experiment "$t" || { echo "fv-lab-goldens: sibling tier $t is in another list of fv-lab-retired.sh" >&2; exit 2; }
 done
 # A sibling frozen with its family (FV_LAB_RETIRED_SIBLINGS, ADR-0019 §22.19):
-# a tier, both it and its family retired to fv-lab, neither with a branch, and
-# no live sibling.
+# a tier, both it and its family retired to fv-lab, neither with a branch, no
+# live sibling, and a <K=V> mode (the setting refusals answer with the tier).
 for e in $FV_LAB_RETIRED_SIBLINGS; do
-  t="${e%%:*}" f="${e#*:}"
+  IFS=: read -r t f m <<<"$e"
+  [[ "$m" == ?*=?* ]] || { echo "fv-lab-goldens: retired sibling $e has no <tier>:<family>:<K=V> mode" >&2; exit 2; }
   grep -qx "$t" <<<"$FAMILIES" || { echo "fv-lab-goldens: retired sibling tier $t is no tier of lab/tiers.toml" >&2; exit 2; }
   fv_lab_retired "$t" && fv_lab_retired "$f" || { echo "fv-lab-goldens: retired sibling $t or its family $f is not in FV_LAB_RETIRED" >&2; exit 2; }
   ! has_branch "$t" && ! has_branch "$f" || { echo "fv-lab-goldens: retired sibling $t or its family $f has a runpod-matrix.sh branch" >&2; exit 2; }

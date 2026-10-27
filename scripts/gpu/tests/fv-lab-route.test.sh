@@ -256,19 +256,46 @@ for fam in hd hd5 serve-engine sfstream mmaudio; do
     FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
   mx "matrix: $fam is retired" "FATAL: $fam is retired to fv-lab (fv-lab-retired.sh): fv-lab run $fam on the box, runpod-http.sh run or fv-lab pod up --family $fam from a host" "$fam"
 done
-# hd5 is frozen with hd (FV_LAB_RETIRED_SIBLINGS): no longer a live sibling,
-# so run reaches fv-lab rather than the sibling refusal.
-[[ " $FV_LAB_RETIRED_SIBLINGS " == *" hd5:hd "* && " $FV_LAB_SIBLINGS " != *" hd5:"* ]] \
-  && ok "hd5: a retired sibling of hd, not a live one" || bad "hd5: FV_LAB_SIBLINGS=$FV_LAB_SIBLINGS FV_LAB_RETIRED_SIBLINGS=$FV_LAB_RETIRED_SIBLINGS"
+# hd5 is frozen with hd (FV_LAB_RETIRED_SIBLINGS, with its mode): no longer a
+# live sibling, so run reaches fv-lab rather than the sibling refusal.
+hd5_mode=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
+[[ " $FV_LAB_RETIRED_SIBLINGS " == *" hd5:hd:FV_PROMPTS=$hd5_mode "* && " $FV_LAB_SIBLINGS " != *" hd5:"* ]] \
+  && ok "hd5: a retired sibling of hd with its FV_PROMPTS mode, not a live one" || bad "hd5: FV_LAB_SIBLINGS=$FV_LAB_SIBLINGS FV_LAB_RETIRED_SIBLINGS=$FV_LAB_RETIRED_SIBLINGS"
 dry "hd5: the 1080P gate by arm through fv-lab" 0 \
   "fv-lab pod up --sha abc1234 --family hd5 --root $ROOT --cells turbo-768p turbo-1080p max-768p max-1080p turbo-1080p-10s max-1080p-10s --yes --wait" \
   FV_FAMILY=hd5 FV_CELLS="turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s"
-# The hd family's prompts-hd5.json mode is the hd5 tier: FV_PROMPTS is no
-# setting fv-lab reads (§7), in the host environment or FV_EXTRA_ENV.
-dry "hd: FV_PROMPTS refused (the hd5 tier is that mode)" 1 "which has no FV_PROMPTS" \
-  FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
-dry "hd: FV_PROMPTS in FV_EXTRA_ENV refused" 1 "reads no FV_PROMPTS from FV_EXTRA_ENV" \
-  FV_FAMILY=hd FV_EXTRA_ENV=FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
+# The hd family's prompts-hd5.json mode is the hd5 tier: the script's form of
+# the 1080P gate (docs/serve/h3-1080p-and-upscaler.md's run tables) is refused
+# naming hd5, in every mode, from the host environment or FV_EXTRA_ENV, for any
+# path to the file; refusing FV_PROMPTS alone would send it to hd's own
+# prompt set under the same arm names. hd5 with its own setting: drop it.
+# Another prompt set on hd: the generic refusal.
+hd5_why="with FV_FAMILY=hd is the fv-lab tier hd5 now (hd's FV_PROMPTS mode, frozen with it: fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS, docs/adr/0019-fv-lab.md §22.19): use FV_FAMILY=hd5 without FV_PROMPTS (fv-lab pod up --family hd5); without FV_PROMPTS the run would be hd's own"
+for v in "$hd5_mode" scripts/gpu/prompts-hd5.json; do
+  for mode in run all plan; do
+    expect "hd + FV_PROMPTS=$v names hd5 ($mode)" 1 "FV_PROMPTS=$v $hd5_why" -- \
+      FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=hd FV_PROMPTS="$v" FV_CELLS="turbo-768p turbo-1080p" bash "$HTTP" "$mode" abc1234
+    expect "hd + FV_EXTRA_ENV FV_PROMPTS=$v names hd5 ($mode)" 1 "FV_PROMPTS=$v $hd5_why" -- \
+      FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=hd FV_EXTRA_ENV="FASTVIDEO_X=1 FV_PROMPTS=$v" FV_AVOID_MACHINES=m1 bash "$HTTP" "$mode" abc1234
+  done
+done
+dry "hd5 with its own FV_PROMPTS: drop it" 1 "FV_FAMILY=hd5 is the hd family's FV_PROMPTS=$hd5_mode mode already: drop FV_PROMPTS" \
+  FV_FAMILY=hd5 FV_PROMPTS="$hd5_mode"
+dry "hd: another FV_PROMPTS refused, no hd5 in the answer" 1 "which has no FV_PROMPTS; unset it" \
+  FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json
+dry "hd: FV_PROMPTS in FV_EXTRA_ENV refused (another prompt set)" 1 "reads no FV_PROMPTS from FV_EXTRA_ENV" \
+  FV_FAMILY=hd FV_EXTRA_ENV=FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json
+out="$(cd "$TMP" && clean FV_DRY_RUN=1 FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json bash "$HTTP" run abc1234 2>&1 || true)"
+[[ "$out" != *hd5* ]] && ok "hd: another prompt set's refusal does not name hd5" || bad "hd: $out"
+dry "wan: prompts-hd5.json is not hd5's mode for another family" 0 "on the script path, nothing created" \
+  FV_FAMILY=wan FV_PROMPTS="$hd5_mode"
+for v in "$hd5_mode" scripts/gpu/prompts-hd5.json; do
+  mx "matrix: hd + FV_PROMPTS=$v names hd5" \
+    "FATAL: FV_PROMPTS=$v with hd is the fv-lab tier hd5 now (hd's FV_PROMPTS mode, frozen with it: fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS, ADR-0019 §22.19; without it the run would be hd's own): fv-lab run hd5 on the box, FV_FAMILY=hd5 runpod-http.sh run or fv-lab pod up --family hd5 from a host" \
+    FV_PROMPTS="$v" hd
+done
+mx "matrix: hd + another FV_PROMPTS is the retired family" "FATAL: hd is retired to fv-lab (fv-lab-retired.sh): fv-lab run hd " \
+  FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json hd
 # The volume+r2 tiers' GPU-check form (FV_R2_TREES, §21.8) was the script
 # side's; fv-lab fetches the tier's trees itself, so it is refused.
 for kv in "serve-engine fastwan21-1.3b 150" "sfstream sfwan21-1.3b 150" "mmaudio fastwan21-1.3b 180"; do
@@ -440,6 +467,15 @@ for fam in $retired_18 $retired_22; do
   expect "$fam: all refused" 2 "$msg" -- FV_FAMILY="$fam" bash "$HTTP" all abc1234
   expect "$fam: plan refused" 2 "$msg" -- FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
   mx "matrix: $fam is retired with no tier" "FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED): $why" "$fam"
+done
+
+# Two pointers name a tier S7 retired from the script (ADR-0019 §22.19): the
+# check they point at is the tier's, no script family's.
+for kv in "sfquality sfstream" "speechtest mmaudio"; do
+  read -r fam tier <<<"$kv"
+  why="$(fv_script_retired_why "$fam")"
+  [[ "$why" == *"he $tier tier (fv-lab run $tier) keeps"* && "$why" != *"$tier family"* ]] \
+    && ok "$fam: its pointer names the $tier tier" || bad "$fam: $why"
 done
 
 # A script family's dry run creates nothing.

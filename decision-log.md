@@ -2256,10 +2256,12 @@ Project code: FVID
   - `hd5` frozen with `hd` in a new `FV_LAB_RETIRED_SIBLINGS="hd5:hd"`, its fixtures kept as the script wrote them and read with the tier's name as while it was live;
   - the 15 fixtures and the three script-side R2 bodies (`runpod-http-{serve-engine,sfstream,mmaudio}-r2.json`) frozen;
   - `FV_ENGINE_CELLS`, `FV_SFSTREAM_RUNS`, `FV_SF_PROMPT`, `FV_SF_SWITCH`, `FV_MMAUDIO_PROMPT` from `SCRIPT_KNOBS` to `MODE_KNOBS` and `runpod-http.sh`'s `FV_LAB_NOT_READ`, each with its own answer; `FV_ENGINE_CELLS` refused in the host environment too;
-  - the existing refusal texts left byte-identical (`sfquality`'s and `speechtest`'s pointers still say "family")
-- Reason: the tiers passed their runner-equality checks; the restored-mode list would have broken its own reproduction, and a live-sibling entry needs a live branch
+  - (after the coordinator's review) `hd5`'s mode in that list (`hd5:hd:FV_PROMPTS=…/prompts-hd5.json`), so `hd` with that setting is refused naming `hd5` everywhere (`runpod-matrix.sh`, `runpod-http.sh run` / `all` / `plan`, fv-lab's `--extra-env` and `run` via `knobs::RETIRED_SIBLING_MODES`): refusing `FV_PROMPTS` alone would send it to `hd`'s own prompt set under the same arm names;
+  - `sfquality`'s and `speechtest`'s pointers name the tier ("the sfstream tier (fv-lab run sfstream) keeps …"), one named difference in the dry-run comparison;
+  - the pod start command's `FV_HD_POST_URL` example comment kept: it is in all 34 pod goldens and fv-lab's `pod-start.sh.in` (§22.9 item 1)
+- Reason: the tiers passed their runner-equality checks; the restored-mode list is rebuilt from `5987e6a4` (whose `hd` branch still had the derived step, and no `hd5` tier), and a live-sibling entry needs a live branch
 - Reversibility: high (the branches at `0ebddb0d` in git; lists, fixtures, knobs)
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §22.19
-- Verification: dry runs before (`0ebddb0d`) and after: 57 forms byte-identical (`wan`, `sfwan`, `oracle` in every form, the 44 existing refusals), the four families' 10 forms now refused (exit 2, a pointer); `fv-lab-goldens.sh --check` and the other three goldens scripts; `fv-lab-route.test.sh`, `runpod-plan.test.sh`; `cargo test -p fastvideo-lab --features cli` on the build pod; shell and Rust mutations each caught (§22.19)
+- Verification: dry runs before (`0ebddb0d`) and after: 55 forms byte-identical (`wan`, `sfwan`, `oracle` in every form, 42 existing refusals), `sfquality` / `speechtest` with the named pointer change only, the four families' 10 forms now refused (exit 2, a pointer; `hd` with the hd5 prompts naming `hd5`); `fv-lab-goldens.sh --check` and the other three goldens scripts; `fv-lab-route.test.sh`, `runpod-plan.test.sh`; `cargo test -p fastvideo-lab --features cli` on the build pod; shell and Rust mutations each caught (§22.19)
 - Open: S8: `wan`'s branch with `sfwan` in `oracle`'s retirement PR, after §20.7's re-run (blocked on the owner's `fv_hf_token`)

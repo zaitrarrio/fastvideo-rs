@@ -1179,6 +1179,16 @@ case "$FAMILY" in
         restored_tier="$r_tier" restored_why="$r_tier is an fv-lab tier (the $r_fam family's $r_mode mode), never a runpod-matrix.sh family"
       fi
     done
+    # A frozen sibling's mode (fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS,
+    # docs/adr/0019-fv-lab.md §22.19): hd with FV_PROMPTS=…/prompts-hd5.json is
+    # the hd5 tier, not hd (whose own prompt set has the same arm names).
+    for r in $FV_LAB_RETIRED_SIBLINGS; do
+      IFS=: read -r r_tier r_fam r_mode <<<"$r"
+      r_key="${r_mode%%=*}"
+      if [[ "$FAMILY" == "$r_fam" ]] && fv_lab_retired_sibling_mode "$FAMILY" "$r_key" "${!r_key:-}" >/dev/null; then
+        restored_tier="$r_tier" restored_why="$r_key=${!r_key} with $r_fam is the fv-lab tier $r_tier now ($r_fam's $r_key mode, frozen with it: fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS, ADR-0019 §22.19; without it the run would be $r_fam's own)"
+      fi
+    done
     if [[ -n "$restored_tier" ]]; then
       log "FATAL: $restored_why: fv-lab run $restored_tier on the box, FV_FAMILY=$restored_tier runpod-http.sh run or fv-lab pod up --family $restored_tier from a host"
     elif fv_lab_retired "$FAMILY"; then

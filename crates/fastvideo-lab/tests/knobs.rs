@@ -7,7 +7,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use fastvideo_lab::knobs::{not_read, DROPPED_KNOBS, RESTORED_MODES};
+use fastvideo_lab::knobs::{not_read, DROPPED_KNOBS, RESTORED_MODES, RETIRED_SIBLING_MODES};
 use fastvideo_lab::plan::Lab;
 
 fn repo_root() -> PathBuf {
@@ -49,6 +49,24 @@ fn restored_modes_are_fv_lab_retired_shs_and_tiers() {
         assert_eq!(
             (m.tier, m.family, format!("{}={}", m.key, m.value)),
             (r.tier.as_str(), r.family.as_str(), r.mode.clone())
+        );
+        assert!(lab.tier(m.tier).is_some(), "{}: a tier", m.tier);
+        assert!(lab.tier(m.family).is_some(), "{}: a tier", m.family);
+    }
+}
+
+/// The frozen siblings' modes fv-lab names (`knobs::RETIRED_SIBLING_MODES`)
+/// are `fv-lab-retired.sh`'s `FV_LAB_RETIRED_SIBLINGS`, in order, each a tier
+/// of its family (ADR-0019 §22.19).
+#[test]
+fn retired_sibling_modes_are_fv_lab_retired_shs() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let script = common::retired_siblings();
+    assert_eq!(script.len(), RETIRED_SIBLING_MODES.len());
+    for (m, s) in RETIRED_SIBLING_MODES.iter().zip(&script) {
+        assert_eq!(
+            (m.tier, m.family, Some(format!("{}={}", m.key, m.value))),
+            (s.tier.as_str(), s.family.as_str(), s.mode.clone())
         );
         assert!(lab.tier(m.tier).is_some(), "{}: a tier", m.tier);
         assert!(lab.tier(m.family).is_some(), "{}: a tier", m.family);
