@@ -1,0 +1,1 @@
+{"state": "done", "bytes_done": 50676290876, "bytes_total": 50676290876, "elapsed_s": 50.1, "mb_per_s": 1011.6, "trees": {"fastwan21-1.3b": "ready", "mmaudio-44k-v2": "ready"}, "error": null, "stream": false, "ready": false, "retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 59, "boosts": 0}

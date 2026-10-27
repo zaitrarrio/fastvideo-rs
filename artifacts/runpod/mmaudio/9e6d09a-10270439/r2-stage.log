@@ -1,0 +1,19 @@
+[04:39:34] r2-stage: r2_key=env
+[04:39:34] r2-stage: no python3 in the image: apt-get install python3 (apt's output in r2-apt.log)
+[04:39:40] r2-stage: python3 installed
+[04:39:40] r2-stage: fetch fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef mmaudio-44k-v2@eu-20261011 into /fvscratch/weights (cap 3600s)
+04:39:41 plan: 2 tree(s), 50.68 GB, URLs valid 4200s -> /fvscratch/r2/plan.json
+04:39:41 [r2-fetch] 2 tree(s) to fetch, 50.68 GB in 407 GETs of up to 2 x 64 MiB, concurrency 64, 256 CPUs; 0 present
+04:39:46 [r2-fetch] r2 6.7/50.7 GB, 1332 MB/s, eta 33s, trees 0/2 (now 1333 MB/s)
+04:39:51 [r2-fetch] r2 13.2/50.7 GB, 1314 MB/s, eta 29s, trees 0/2 (now 1297 MB/s)
+04:39:56 [r2-fetch] r2 19.6/50.7 GB, 1303 MB/s, eta 24s, trees 0/2 (now 1279 MB/s)
+04:40:01 [r2-fetch] r2 27.4/50.7 GB, 1367 MB/s, eta 17s, trees 0/2 (now 1562 MB/s)
+04:40:02 [r2-fetch] tree mmaudio-44k-v2: ready at eu-20261011 (21.46 GB, 20 files, 21s since start)
+04:40:06 [r2-fetch] r2 35.3/50.7 GB, 1411 MB/s, eta 11s, trees 1/2 (now 1586 MB/s)
+04:40:11 [r2-fetch] r2 44.2/50.7 GB, 1472 MB/s, eta 4s, trees 1/2 (now 1774 MB/s)
+04:40:16 [r2-fetch] fastwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 24: slow: 8.1 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+04:40:16 [r2-fetch] r2 50.5/50.7 GB, 1441 MB/s, eta 0s, trees 1/2 (now 1254 MB/s)
+04:40:19 [r2-fetch] tree fastwan21-1.3b: ready at 25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef (29.21 GB, 16 files, 39s since start)
+04:40:19 [r2-fetch] weights ready: 2 tree(s), 50.68 GB fetched in 38.7s (1310 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 1
+[04:40:19] r2-stage: weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 2 R2 trees (2 fetched): fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef mmaudio-44k-v2@eu-20261011
+exit=0

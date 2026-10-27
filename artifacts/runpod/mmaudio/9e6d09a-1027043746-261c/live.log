@@ -1,0 +1,18 @@
+[04:38:13] [mmaudio] matrix start image=a1fd90552b7e549e
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-68719e04-5e0b-eecb-0648-55288e79788a)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[04:38:14] [mmaudio] pod memory: cgroup v2 /sys/fs/cgroup, limit 89645 MiB, oom_kills 0
+[04:38:14] [mmaudio] weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 2 R2 trees (50.68 GB) fetched before the arms that read them, at most 50.68 GB on the container disk at once
+[04:38:14] [mmaudio] r2: no python3 in the image: apt-get install python3 (r2-apt.log)
+[04:38:20] [mmaudio] r2 wan13-audio: fetch fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef mmaudio-44k-v2@eu-20261011 (50.68 GB) into /fvscratch/weights
+[04:39:12] [mmaudio] r2 wan13-audio: weights ready: 2 tree(s), 50.68 GB fetched in 50.1s (1012 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 59
+[04:39:12] [mmaudio] ▶ wan13-audio  env FASTVIDEO_MMAUDIO_WEIGHTS=/fvscratch/weights/mmaudio-44k-v2 FASTVIDEO_TAE_DIR=/fvscratch/weights/auxiliary/tae /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast --vsa wan gen --weights /fvscratch/weights/fastwan21-1.3b --prompt A red fox running through tall grass at dusk. A narrator says <S>The fox cuts through the meadow at dusk.<E>
+Audio: male narration, grass rustle, wind, distant strings, cricket night --seed 1024 --warm --audio mmaudio --clip-dir /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/frames  (wall cap 2313s; 0=none)
+[04:39:48] [mmaudio] ok wan13-audio  36s  /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/stderr.log:wan gen default: total 4.13s (text 0.00s, denoise 1.93s, decode 0.30s) png 0.04s peak Some(29540) MiB frames 8ca05693a4368bc9a30d8f6f07367e441d313e3c26b9405d70aa6af7d9748d19
+[04:39:48] [mmaudio] ram wan13-audio: ram 59693 MiB of 89645 MiB, oom_kills 0
+[04:39:48] [mmaudio] skip sfwan13-audio (not in FV_CELLS)
+[04:39:49] [mmaudio] ▶ ours-v2a  /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast mmaudio v2a --weights /fvscratch/weights/mmaudio-44k-v2 --video /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/wan13-audio/frames/output.mp4 --prompt A red fox running through tall grass at dusk. A narrator says <S>The fox cuts through the meadow at dusk.<E>
+Audio: male narration, grass rustle, wind, distant strings, cricket night --seed 1000 --runs 3 --out /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/ours-v2a  (wall cap 2276s; 0=none)
+[04:39:58] [mmaudio] ok ours-v2a  8s  
+[04:39:58] [mmaudio] ram ours-v2a: ram 1507 MiB of 89645 MiB, oom_kills 0
+[04:39:58] [mmaudio] matrix done

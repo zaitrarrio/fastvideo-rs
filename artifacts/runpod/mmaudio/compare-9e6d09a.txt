@@ -1,0 +1,68 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/mmaudio/9e6d09a-1027043746-261c artifacts/runpod/mmaudio/9e6d09a-10270439
+same ours-v2a: {"exit":0,"skipped":null}, no frames
+same wan13-audio: {"exit":0,"skipped":null}, 162 frames byte-identical
+2 arm(s) the same (1 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+exit 0
+
+# ADR-0019 §22.16 pass block as written at 9e6d09a (D, L and S filled in; item 0's compare output to a scratch file), on the two run directories (stderr included):
+# D, the script driver's output (runpod-http.sh run's log to stderr, not in the run directory), has this pod line:
+#   [04:39:22] pod wbndj855ggg88e  $2.49/hr  (hard cap 3600s)  ram=94GB vcpu=32
+same ours-v2a: {"exit":0,"skipped":null}, no frames
+same wan13-audio: {"exit":0,"skipped":null}, 162 frames byte-identical
+2 arm(s) the same (1 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+PASS 0
+PASS 1 artifacts/runpod/mmaudio/9e6d09a-1027043746-261c
+PASS 1 artifacts/runpod/mmaudio/9e6d09a-10270439
+PASS 2
+SAME 3
+cpus: fv-lab box.txt cpus=27 mem=755G, pod.json vcpus=32.0; script vcpu=32
+PASS 4
+jq: error: Could not open file artifacts/runpod/mmaudio/9e6d09a-1027043746-261c/ours-v2a/gpucheck-out/mmaudio.json: No such file or directory
+FAIL 5
+[04:38:14] [mmaudio] weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 2 R2 trees (50.68 GB) fetched before the arms that read them, at most 50.68 GB on the container disk at once
+[04:38:20] [mmaudio] r2 wan13-audio: fetch fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef mmaudio-44k-v2@eu-20261011 (50.68 GB) into /fvscratch/weights
+[04:39:12] [mmaudio] r2 wan13-audio: weights ready: 2 tree(s), 50.68 GB fetched in 50.1s (1012 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 59
+done
+[04:39:34] r2-stage: r2_key=env
+[04:39:34] r2-stage: no python3 in the image: apt-get install python3 (apt's output in r2-apt.log)
+[04:39:40] r2-stage: python3 installed
+[04:39:40] r2-stage: fetch fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef mmaudio-44k-v2@eu-20261011 into /fvscratch/weights (cap 3600s)
+04:39:41 plan: 2 tree(s), 50.68 GB, URLs valid 4200s -> /fvscratch/r2/plan.json
+04:39:41 [r2-fetch] 2 tree(s) to fetch, 50.68 GB in 407 GETs of up to 2 x 64 MiB, concurrency 64, 256 CPUs; 0 present
+04:39:46 [r2-fetch] r2 6.7/50.7 GB, 1332 MB/s, eta 33s, trees 0/2 (now 1333 MB/s)
+04:39:51 [r2-fetch] r2 13.2/50.7 GB, 1314 MB/s, eta 29s, trees 0/2 (now 1297 MB/s)
+04:39:56 [r2-fetch] r2 19.6/50.7 GB, 1303 MB/s, eta 24s, trees 0/2 (now 1279 MB/s)
+04:40:01 [r2-fetch] r2 27.4/50.7 GB, 1367 MB/s, eta 17s, trees 0/2 (now 1562 MB/s)
+04:40:02 [r2-fetch] tree mmaudio-44k-v2: ready at eu-20261011 (21.46 GB, 20 files, 21s since start)
+04:40:06 [r2-fetch] r2 35.3/50.7 GB, 1411 MB/s, eta 11s, trees 1/2 (now 1586 MB/s)
+04:40:11 [r2-fetch] r2 44.2/50.7 GB, 1472 MB/s, eta 4s, trees 1/2 (now 1774 MB/s)
+04:40:16 [r2-fetch] fastwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 24: slow: 8.1 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+04:40:16 [r2-fetch] r2 50.5/50.7 GB, 1441 MB/s, eta 0s, trees 1/2 (now 1254 MB/s)
+04:40:19 [r2-fetch] tree fastwan21-1.3b: ready at 25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef (29.21 GB, 16 files, 39s since start)
+04:40:19 [r2-fetch] weights ready: 2 tree(s), 50.68 GB fetched in 38.7s (1310 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 1
+[04:40:19] r2-stage: weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 2 R2 trees (2 fetched): fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef mmaudio-44k-v2@eu-20261011
+exit=0
+done
+0
+no key value or presigned URL in any fetched file
+
+# Item 5 again with its paths corrected (ADR-0019 §22.16 "Result"): ours-v2a runs `mmaudio v2a --out <arm dir>`, and that
+# value is also fv-gpucheck's global --out (crates/fastvideo-gpucheck/src/main.rs:94, global = true), so the Report writes
+# <arm dir>/mmaudio.json (main.rs:1135-1139 with stage_name "mmaudio" at 709; report.rs:66-69, 165-189), the same path the
+# stage wrote its own record to (mmaudio_stage.rs:219-224), which it overwrites; that record survives as .context.mmaudio
+# (report.set, mmaudio_stage.rs:224); each side's ours-v2a/stderr.log ends "[PASS] stage mmaudio → …/ours-v2a/mmaudio.json".
+# There is no ours-v2a/gpucheck-out/. Above, item 5 stopped at its first read, the missing
+# ours-v2a/gpucheck-out/mmaudio.json; the waveform files' paths were right. Only the two jq reads change:
+$ L=artifacts/runpod/mmaudio/9e6d09a-1027043746-261c; S=artifacts/runpod/mmaudio/9e6d09a-10270439
+# 5. ours-v2a: both reports passed; its waveform (wav and raw f32) byte-identical, its length and rate the same.
+#    --out is the arm's directory, so the report is <arm>/mmaudio.json and the stage's own record its .context.mmaudio.
+$ O=ours-v2a
+> v2a() { jq -e '.stage == "mmaudio" and .status == "pass"' "$1/$O/mmaudio.json" >/dev/null \
+>   && jq -cSe '.context.mmaudio | if .samples > 0 then {variant, samples, sample_rate, duration_s, clip_s} else error("no samples") end' "$1/$O/mmaudio.json" \
+>   && (cd "$1/$O" && [ "$(head -c 4 mmaudio.wav)" = RIFF ] && test -s mmaudio.f32 && sha256sum mmaudio.wav mmaudio.f32); }
+> VL5=$(v2a $L) && VS5=$(v2a $S) && [ "$VL5" = "$VS5" ] && [ "$(wc -l <<<"$VL5")" = 3 ] && echo "PASS 5" || echo "FAIL 5"
+PASS 5
+$ echo "$VL5"
+{"clip_s":5.0625,"duration_s":5.0,"sample_rate":44100,"samples":221184,"variant":"large_44k_v2"}
+b2a279e5880d7f5c8c2327fd71b0db22d47620f55871ca1b2826053146dd93c7  mmaudio.wav
+2c698bbbc5c198b4286bce6a6f8b5c5ae2a945c69c43582b77719473794b1f6c  mmaudio.f32

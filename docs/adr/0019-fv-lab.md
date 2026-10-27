@@ -48,7 +48,8 @@
   corrected from 2 to 1); S7 retires `sfstream` from the script. S5 (§22.15: `mmaudio` as a small `volume+r2` tier,
   its `wan13-audio`, `sfwan13-audio` and `ours-v2a`; the branch cut to those arms in lockstep, the upstream, inject
   and waveform arms gone, its two `export`s moved into each Wan arm's `env`, the arms gated on composite
-  `verify-weights.sh` cells) is done CPU-side; its GPU check is §22.16, the coordinator's. S6 (§22.17: `wan` as a
+  `verify-weights.sh` cells) is done, CPU-side and GPU-side: its GPU check §22.16 passed on `9e6d09a` (2026-10-27,
+  §22.16 "Result", with item 5's report path corrected); S7 retires `mmaudio` from the script. S6 (§22.17: `wan` as a
   `volume+r2` tier of six cells, its `export FASTVIDEO_TAE_DIR` moved into each gated arm's `env` and `engine-fw22`'s
   `--tae-dir` dropped in lockstep; `taew2_2` in `fetch-tae.sh`; the upstream targets `wan22-ti2v` and
   `fastwan22-ti2v` with R2 trees; `runpod.sh matrix` running `wan` through fv-lab) is done CPU-side; its GPU check is
@@ -3897,9 +3898,9 @@ Decision-id FVID-2026-10-26-d1-remaining. It was proposed in #221 (draft PR from
 only). The review's corrections are folded in below, and the coordinator's decisions are in §22.6. Each
 family moves or retires in its own slice (§22.6; S1 is done, §22.8; S2 is done, its GPU check passed on `d53ea62`
 2026-10-27, §22.9-§22.10; S3 is done, its GPU check passed on `3bc6d03` 2026-10-27, §22.11-§22.12; S4 is done,
-its GPU check passed on `b7ddf5f` 2026-10-27, §22.13-§22.14; S5 is done CPU-side, §22.15, its GPU check §22.16; S6
-is done CPU-side, §22.17, its GPU check §22.18), and a
-tier's branch leaves the script only after that tier's own check through both runners (§8).
+its GPU check passed on `b7ddf5f` 2026-10-27, §22.13-§22.14; S5 is done, its GPU check passed on `9e6d09a`
+2026-10-27, §22.15-§22.16; S6 is done CPU-side, §22.17, its GPU check §22.18), and a tier's branch leaves the script
+only after that tier's own check through both runners (§8).
 
 Fifteen `runpod-matrix.sh` families are left besides `oracle` (§18.3). `oracle` retires on its own once §20.7's re-run
 passes (§21.9), so this section leaves it out. For each family it gives:
@@ -4275,7 +4276,7 @@ passed on `d53ea62` 2026-10-27).
 - *GPU check*: all six arms, about 31 min a side: **about $2.55**.
 
 **`mmaudio`** (rpm:468-539): **(b)**, a small tier after §22.4, with no upstream parity. Done in S5 (§22.15; its
-GPU check §22.16, `wan13-audio ours-v2a`).
+GPU check §22.16, `wan13-audio ours-v2a`, passed on `9e6d09a` 2026-10-27).
 - *Measures*:
   - The MMAudio V2A sidecar on FastWan and SF-Wan (`wan gen --audio mmaudio`).
   - Upstream MMAudio, timed and dumped: a Python venv, `pip install torch …`, `git clone` at `974010a`.
@@ -5453,7 +5454,8 @@ Built on `claude/d1-s5-mmaudio` from `b7ddf5fa` (main with S4 merged; FVID-2026-
      no-op for those commands (the same values reach them). `ours-v2a` gets neither: it takes `--weights`, and it
      decodes no latents: it reads the mp4's frames with ffmpeg and runs no TAE or Wan VAE (`mmaudio_stage.rs` reads
      neither variable; `MmAudioPipeline::load` reads only `MMAUDIO_MODEL_PATH`), so
-     the only trace is its report's `env` record (`gpucheck-out/mmaudio.json`), which no longer lists them.
+     the only trace is its report's `env` record (`ours-v2a/mmaudio.json`, not `gpucheck-out/`: §22.16 "Result"),
+     which no longer lists them (`{}` on both sides at `9e6d09a`).
   3. *The composite gates*: an incomplete `mmaudio-44k-v2` now skips the two Wan arms ("weights incomplete") and
      `ours-v2a`, where the branch only logged `WARN: mmaudio weights incomplete` (its stand-alone `verify-weights.sh
      mmaudio-44k-v2`, run even in a dry run, which is gone) and let the sidecar fail at load.
@@ -5585,10 +5587,15 @@ on either side. It also prints each side's CPU counts, recorded, not judged:
 - `FAIL 3`: a clip is missing; the check fails.
 
 Where each field comes from (read from the code): the arm runs in its directory in both runners, and `fv-gpucheck`
-writes `gpucheck-out/<stage>.json` there (`--out` default, the stage `wan` for `wan gen`, `mmaudio` for `mmaudio v2a`:
-`crates/fastvideo-gpucheck/src/main.rs` `stage_name`). `Report::finish` (`report.rs`) writes `status` (`pass` only
+writes its report `<out>/<stage>.json` there (`Report::new(&cli.out, …)`, `main.rs:1135-1139`; `report.rs:66-69`):
+for `wan13-audio` `gpucheck-out/wan.json` (the global `--out`'s default, `main.rs:94`; the stage `wan`, `stage_name`,
+`main.rs:708`). For `ours-v2a` it is `ours-v2a/mmaudio.json`, not `gpucheck-out/mmaudio.json` as the first draft
+said (corrected after the run, see "Result"): `mmaudio v2a`'s own `--out` (`mmaudio_stage.rs:43-44`) shares the global
+`--out`'s name, and the run shows the value given after the subcommand reaching both, so the report (stage `mmaudio`,
+`main.rs:709`) is written to the arm's directory. `Report::finish` (`report.rs`) writes `status` (`pass` only
 when the stage returned no error), `env` (every `FASTVIDEO_*` variable in effect: the arm's two `env` entries and
-`FASTVIDEO_WAN_AUDIO=mmaudio`, which `--audio mmaudio` sets, `wan_stage.rs:239`) and `checks` (a `note` has `limits`
+`FASTVIDEO_WAN_AUDIO=mmaudio`, which `--audio mmaudio` sets, `wan_stage.rs:239`, and `FASTVIDEO_VSA=1`, which `--vsa`
+sets, `main.rs:1111-1113`) and `checks` (a `note` has `limits`
 `{}`; `gen`'s two checks, `frames` and `middle_frame_not_flat`, have limits; with one prompt they carry no prompt
 suffix). `wan gen` writes the clip into `--clip-dir` (`frames/`: 81 PNGs, `output.mp4`, and with `--warm` the untimed
 generation's 81 under `frames/cold/`), so `frames_digest` in both runners records 162 PNGs; the sidecar
@@ -5596,8 +5603,11 @@ generation's 81 under `frames/cold/`), so `frames_digest` in both runners record
 waveform), then muxes it in (the H.264 stream copied, `-c:v copy`). `benchmark.json` is beside the clip directory
 (`benchmark::path_beside`: the arm's directory) with `decoder` (`taehv` when TAEHV decoded) and `audio` (`audio_json`:
 `audio`, `audio_codec`, `audio_clip_s` the waveform's seconds). `mmaudio v2a --out {runs}/ours-v2a` writes
-`mmaudio.wav`, `mmaudio.f32` (the waveform's f32 bytes), `sidecar.mp4` and `mmaudio.json` (`variant`, `clip_s`,
-`duration_s`, `samples`, `sample_rate`, and timings, not compared) into the arm's own directory.
+`mmaudio.wav`, `mmaudio.f32` (the waveform's f32 bytes) and `sidecar.mp4` into the arm's own directory
+(`mmaudio_stage.rs:197-204`), and its record (`variant`, `clip_s`, `duration_s`, `samples`, `sample_rate`, and timings,
+not compared) to `mmaudio.json` there (219-223), then hands the same record to the report (`report.set("mmaudio", …)`,
+224). `Report::finish` (`report.rs:165-189`) then writes the report to that same `ours-v2a/mmaudio.json`, replacing it:
+the file is the report (`stage`, `status`, `env`, `checks` empty, …) and the record is its `.context.mmaudio`.
 
 ```sh
 SHA=<7>
@@ -5652,9 +5662,10 @@ wav() { (cd "$1/wan13-audio/frames" && for f in output.wav cold/output.wav; do
   [ "$(head -c 4 "$f")" = RIFF ] && [ "$(stat -c %s "$f")" -gt 44 ] || exit 1; done && sha256sum output.wav cold/output.wav); }
 AL=$(wav $L) && AS=$(wav $S) && [ "$AL" = "$AS" ] && [ "$(wc -l <<<"$AL")" = 2 ] && echo "PASS 4" || echo "FAIL 4"
 # 5. ours-v2a: both reports passed; its waveform (wav and raw f32) byte-identical, its length and rate the same.
+#    --out is the arm's directory, so the report is <arm>/mmaudio.json and the stage's own record its .context.mmaudio.
 O=ours-v2a
-v2a() { jq -e '.status == "pass"' "$1/$O/gpucheck-out/mmaudio.json" >/dev/null \
-  && jq -cSe 'if .samples > 0 then {variant, samples, sample_rate, duration_s, clip_s} else error("no samples") end' "$1/$O/mmaudio.json" \
+v2a() { jq -e '.stage == "mmaudio" and .status == "pass"' "$1/$O/mmaudio.json" >/dev/null \
+  && jq -cSe '.context.mmaudio | if .samples > 0 then {variant, samples, sample_rate, duration_s, clip_s} else error("no samples") end' "$1/$O/mmaudio.json" \
   && (cd "$1/$O" && [ "$(head -c 4 mmaudio.wav)" = RIFF ] && test -s mmaudio.f32 && sha256sum mmaudio.wav mmaudio.f32); }
 VL5=$(v2a $L) && VS5=$(v2a $S) && [ "$VL5" = "$VS5" ] && [ "$(wc -l <<<"$VL5")" = 3 ] && echo "PASS 5" || echo "FAIL 5"
 # R2, each file from the side that fetched it; no PNG; no key.
@@ -5692,8 +5703,9 @@ on one side, item 1 with `decoder` `wan-vae`, item 2 with one check's `ok` false
   2. the two checks equal on both sides and ok, and the whole `FASTVIDEO_*` env equal.
 - Item 3 prints `SAME 3` or `DIFF 3` (never `FAIL 3`), with the CPU counts; items 4 and 5 as the decision rule above:
   4. `frames/output.wav` and `frames/cold/output.wav` byte-identical on both sides;
-  5. `ours-v2a`'s reports `pass`, `mmaudio.wav` and `mmaudio.f32` byte-identical, its `variant`, `samples`,
-     `sample_rate`, `duration_s` and `clip_s` equal.
+  5. `ours-v2a`'s reports (`ours-v2a/mmaudio.json`; the first draft read `gpucheck-out/mmaudio.json`, which this arm
+     never writes, corrected after the run, "Result") `pass`, `mmaudio.wav` and `mmaudio.f32` byte-identical, its
+     `variant`, `samples`, `sample_rate`, `duration_s` and `clip_s` (the report's `.context.mmaudio`) equal.
 - R2, each file read from the side that fetched it:
   - fv-lab (`$L`): `live.log` (fetched by every fetch) has `weights /fvscratch/weights: 10 volume trees linked from
     /workspace/weights; 2 R2 trees (50.68 GB) fetched before the arms that read them, at most 50.68 GB on the container
@@ -5716,6 +5728,129 @@ side, ~$0.45-$0.66 a side, ~$0.90-$1.35 both** (§22.5's $1.66 assumed 20 min a 
 caps at the tier's $2.50 price cap: $2.50 a pod, $5.00 both. **Balance needed**: at least $9.35 before starting at the
 estimate ($8 floor + $1.35), and $13 to stay above the floor even if both pods ran to their caps (CLAUDE.md: stop
 before the balance would drop below $8). At the about $18.5 the balance stood at when S5 was built, both bounds hold.
+
+**Result (2026-10-27): pass** (with item 5's report path corrected, below).
+`SHA=9e6d09a` (main after #228, S5 merged) on both sides, started in parallel at 04:37:46Z with the commands above;
+both local drivers returned `rc=0`, fv-lab's at 04:40:45Z and the script's at 04:41:56Z: image
+`ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-9e6d09a` (digest
+`sha256:3db97a7ff6badc522665bd818df676f3a0f94c100e1400e287f2455afd0eaffd`, as fv-lab's `pod.json` records and the
+registry answers for the tag; build id `a1fd90552b7e549e` as both `box.txt` record and the image's
+`dev.fastvideo.build-id` label; tools label `tools-v0.1.81`: the release built at `9e6d09a` itself, its manifest's
+`build_id` `a1fd90552b7e549e`, `source_commit` `9e6d09aeca15…` and `input_hash` `2da25d6a0858…` equal to
+`scripts/ci/tools-release.sh input-hash 9e6d09a`, its sha256 the release body's `manifest-sha256`, so the image's
+fv-gpucheck and fv-lab are that release's), fv-lab 0.1.81 from `tools-v0.1.81` on the driver. Each pod an RTX PRO 6000
+Blackwell Server Edition at $2.49/hr in EU-RO-1 on `bz0ofkfx45`, driver 595.91.07, 94 GB RAM and 32 vCPUs, with
+`--wall-cap-s 3600` / `FV_POD_CAP_S=3600`. The balance before the start was $16.57 (fv-deploy's `balance` line),
+above the $13 the section asks.
+
+- *fv-lab side*: pod `63uo1bfslyc0ls`, created 04:37:49Z, ready 26.8 s after create, deleted at the end (`done`, about
+  04:40:45Z) → `artifacts/runpod/mmaudio/9e6d09a-1027043746-261c` (`DONE`, `pod.json`, `mmaudio.arms.json`
+  `["wan13-audio","ours-v2a"]`; `matrix start` 04:38:13, `matrix done` 04:39:58, `matrix_exit=0`).
+- *Script side*: the first create (04:37:49Z) found no capacity; the retry 90 s later made pod `wbndj855ggg88e`
+  (04:39:22Z), destroyed 04:41:56Z → `artifacts/runpod/mmaudio/9e6d09a-10270439` (`r2-stage.sh` from 04:39:34,
+  `matrix start` 04:40:20, `matrix done` 04:41:12, `matrix_exit=0`).
+- *Both*: `wan13-audio` and `ours-v2a` `exit` 0 (`summary.json`), `sfwan13-audio` skipped as not in `FV_CELLS`;
+  `wan13-audio.weights.log` `weights ok: fastwan21-1.3b-mmaudio` and `ours-v2a.weights.log` `weights ok:
+  mmaudio-44k-v2`; each preflight's `weights.log` ends `exit=1` with `weights INCOMPLETE: fasth3-8step`
+  (`h3-8step/{transformer,vae,audio_vae}` missing) and the five other trees it checks `ok`, as expected; `tae.log`
+  `exit=0`. `wan13-audio`'s command line, in `live.log`, starts `env
+  FASTVIDEO_MMAUDIO_WEIGHTS=/fvscratch/weights/mmaudio-44k-v2 FASTVIDEO_TAE_DIR=/fvscratch/weights/auxiliary/tae` on
+  both sides; `ours-v2a`'s has no `env`. No `[FAIL]` in any `stderr.log`. No `compare/`, `gate/`, verdict or
+  `metrics.txt` report on either side.
+- *R2*, each file read from the side that fetched it (python3 installed first on both, `r2-apt.log`, 6 s):
+  - fv-lab (`$L/live.log`): `weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 2 R2 trees
+    (50.68 GB) fetched before the arms that read them, at most 50.68 GB on the container disk at once`; `r2
+    wan13-audio: fetch fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef mmaudio-44k-v2@eu-20261011 (50.68 GB)
+    into /fvscratch/weights` at 04:38:20; `r2 wan13-audio: weights ready: 2 tree(s), 50.68 GB fetched in 50.1s (1012
+    MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 59` at 04:39:12; no `r2 ours-v2a:` line;
+    `wan13-audio/r2-fetch.json` `state` `done` (`wan13-audio/r2-fetch.log`: 407 GETs).
+  - Script side (`$S/r2-stage.log`): `r2_key=env`, python3 installed, `weights ready: 2 tree(s), 50.68 GB fetched in
+    38.7s (1310 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 1`, `weights /fvscratch/weights: 10
+    volume trees linked from /workspace/weights; 2 R2 trees (2 fetched):
+    fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef mmaudio-44k-v2@eu-20261011`, `exit=0`, all before the
+    arms (04:40:19); `r2-fetch.json` `state` `done`.
+- *Item 0* (`artifacts/runpod/mmaudio/compare-9e6d09a.txt`, with its command and exit status): `PASS 0`.
+  `fv-lab-compare-runs.sh` exit 0 with exactly the three lines of the block: `same ours-v2a:
+  {"exit":0,"skipped":null}, no frames`, `same wan13-audio: {"exit":0,"skipped":null}, 162 frames byte-identical` and
+  the "2 arm(s) the same (1 ran with byte-identical frames, …), 0 difference(s)" line (`frames.sha256.json` itself
+  byte-identical; the 81 timed frames' digest `8ca05693a436…` in both `wan.json`).
+- *Item 1*: `PASS 1` on both sides: `wan.json` `status` `pass` (`elapsed_s` 35.7 / 41.3), `env`
+  `{"FASTVIDEO_MMAUDIO_WEIGHTS": "/fvscratch/weights/mmaudio-44k-v2", "FASTVIDEO_TAE_DIR":
+  "/fvscratch/weights/auxiliary/tae", "FASTVIDEO_VSA": "1", "FASTVIDEO_WAN_AUDIO": "mmaudio"}`; `benchmark.json`
+  `decoder` `taehv`, `audio` `{audio: true, audio_codec: "mmaudio", audio_path: "sidecar", variant: "large_44k_v2",
+  audio_clip_s: 5.015510204081632, clip_s: 5.0625}`.
+- *Item 2*: `PASS 2`: the two checks equal on both sides and `ok`, with equal values too: `frames` (81 decoded, 81
+  written; expected 81) and `middle_frame_not_flat` (`frame-040.png`, mean 0.2926840008516744, std
+  0.20320183148333149; `std_min` 0.02); the whole env equal (the four entries above).
+- *Item 3*: `SAME 3`: the H.264 stream of `output.mp4` and `cold/output.mp4`, `0,v,SHA256=9542a1f08950…`, the same for
+  both clips on both sides (the two mp4 files themselves byte-identical too, 1,020,196 bytes, sha256
+  `f629c200813e…`). CPU counts: fv-lab `box.txt` `cpus=27`, `pod.json` `vcpus` 32; the script side `vcpu=32` (its
+  driver's `pod wbndj855ggg88e $2.49/hr (hard cap 3600s) ram=94GB vcpu=32` line, quoted in `compare-9e6d09a.txt`).
+  The two encodes agreed, so the audio is judged by this run.
+- *Item 4*: `PASS 4`: `frames/output.wav` and `frames/cold/output.wav` byte-identical on both sides (442,412 bytes,
+  16-bit PCM mono at 44,100 Hz, sha256 `31d9c532a9b45b2aae1953b6f7aecf419b0b9c7bee282fcaa503bfe379850054`, the
+  timed and untimed generations' alike).
+- *Item 5*: the block as written printed `FAIL 5` on a path alone: `jq: error: Could not open file
+  …/ours-v2a/gpucheck-out/mmaudio.json`, the first read, so nothing after it ran. The arm writes no `gpucheck-out/`:
+  - `ours-v2a` runs `mmaudio v2a … --out {runs}/ours-v2a` (`lab/cells/mmaudio-sidecar.toml`); the stage writes
+    `mmaudio.wav`, `mmaudio.f32` and `sidecar.mp4` there (`crates/fastvideo-gpucheck/src/mmaudio_stage.rs:197-204`) and
+    its record to `<out>/mmaudio.json` (219-223), and puts the same record into the report (`report.set("mmaudio",
+    doc)`, 224);
+  - the report's path is `cli.out.join("<stage>.json")`: `Report::new(&cli.out, &name)`
+    (`crates/fastvideo-gpucheck/src/main.rs:1135-1139`, `name` the `stage_name`, `"mmaudio"` at 709;
+    `crates/fastvideo-gpucheck/src/report.rs:66-69`), with `cli.out` the global `--out` (`main.rs:93-95`, `global =
+    true`, default `gpucheck-out`), which shares its name with `mmaudio v2a`'s own `--out`
+    (`mmaudio_stage.rs:43-44`). The `--out` given after the subcommand reached both: each side's
+    `ours-v2a/stderr.log` ends `[PASS] stage mmaudio → /fvscratch/runs/mmaudio/<tag>/ours-v2a/mmaudio.json`;
+  - so `Report::finish` (`report.rs:165-189`) wrote the report over the stage's record at the same path: the file is
+    `{checks: [], context: {cuda_feature, device, mmaudio, mode}, elapsed_s, env: {}, error: null, git_sha: null,
+    stage: "mmaudio", status: "pass"}`, and the record is its `.context.mmaudio`.
+
+  Item 5 is corrected above to read `.stage` and `.status` from `ours-v2a/mmaudio.json` and the five fields from its
+  `.context.mmaudio` (the block's item 5, the paragraph on where each field comes from, Pass item 5 and §22.15's
+  item 2); nothing else in the block changed. Re-run with it on the two run directories it prints `PASS 5` (in
+  `compare-9e6d09a.txt`): both reports `pass`, `{"clip_s":5.0625,"duration_s":5.0,"sample_rate":44100,
+  "samples":221184,"variant":"large_44k_v2"}` on both sides, `mmaudio.wav` (442,412 bytes) sha256
+  `b2a279e5880d7f5c8c2327fd71b0db22d47620f55871ca1b2826053146dd93c7` and `mmaudio.f32` (884,736 bytes, 221,184 × 4)
+  `2c698bbbc5c198b4286bce6a6f8b5c5ae2a945c69c43582b77719473794b1f6c` on both (and `sidecar.mp4` byte-identical,
+  1,020,142 bytes). The corrected item also fails, checked on copies, with the report's `status` `fail`, `samples` 0,
+  no `.context`, `mmaudio.json` missing on both sides, or one side's `mmaudio.f32` changed.
+- *Decision rule*: `SAME 3` with items 4 and 5 `PASS`: the audio is the same across the runners. **Pass.** The audio's
+  determinism across pods, UNVERIFIED before this run, held here for one prompt and seed on two pods with the same
+  vCPU count: the sidecar's soundtrack and `ours-v2a`'s waveform byte-identical.
+- *Minor finding* (reported, not fixed here): `fv-gpucheck`'s report overwrites a stage's own `<out>/<stage>.json`
+  when `--out` is the arm's directory: `mmaudio v2a` writes `<out>/mmaudio.json` and the report, at the same path,
+  replaces it. Nothing is lost (`report.set` keeps the record under `.context.mmaudio`), but the file is not what the
+  stage wrote, and `mmaudio t2a` writes `<out>/mmaudio.json` the same way (`mmaudio_stage.rs:124-129`). Renaming
+  the stage's file, or not writing it beside the report, is a `mmaudio_stage.rs` change for its own slice; until then
+  readers take `.context.mmaudio`.
+- *What was fetched*: no PNG on either side (`find … -name '*.png'` 0). Expected media only: per side the two clips
+  (`output.mp4`, `cold/output.mp4`) and their two WAVs, and `ours-v2a`'s `mmaudio.wav`, `mmaudio.f32` and
+  `sidecar.mp4`, 5,272,506 bytes a side (`file`: ISO Media MP4, RIFF WAVE 16-bit PCM mono 44,100 Hz, raw data for
+  the f32). Also `wan13-audio/text-cache/<sha256>.h3text` (885,008 bytes, the prompt's text-encoder cache,
+  byte-identical on both sides): the skip `\.png$|\.cache$` does not match it (its directory is `text-cache/`, the
+  file `.h3text`). fv-lab's run directory is 6,222,365 bytes (38 files), the script's 6,210,413 (36 files).
+- *Timings*: `wan13-audio` 36 s on fv-lab's side and 42 s on the script's (the model load 26.2 / 31.6 s, `wan/load`;
+  the MMAudio load 3.3 / 3.9 s; the timed generation 4.13 / 4.14 s end to end, 2.24 s of video and 1.89 / 1.90 s of
+  audio for a 5.06 s clip; host memory peak 59,693 MiB of the 89,645 MiB limit on fv-lab's side); `ours-v2a` 8 s and
+  10 s (load 2.7 / 3.0 s, three runs of 1.8-2.1 s each). R2 fetches of 50.1 s and 38.7 s against the ~2-3 min allowed.
+  The pods, create to delete, about 2.9 and 2.6 min (estimate ~11-16 min a side). fv-lab's arms ran under caps of
+  2313 s and 2276 s (what `FV_RUN_DEADLINE` left of the hour, §16.7), the script's under 3600 s; neither was near
+  them. The timings are recorded, not judged.
+- *Cost*: at the list price the two pods' ~2.9 and ~2.6 min come to **about $0.23**, under the estimate of
+  ~$0.90-$1.35; the balance read $16.57 before the start and $16.31 after (the coordinator's reading), a $0.26 drop.
+- *Secrets*: the two run directories were scanned before the commit (§22.16's `grep` for presigned URLs and R2 key
+  values; `hf_`, `rpa_`, `RUNPOD_API_KEY`, `Bearer`, `AKIA`, `ghp_`, `github_pat_`, `sk-` and private-key patterns,
+  binary files included; this container's credential values; strings of 40 or more base64 characters, which are only
+  paths, GPU UUIDs and hex digests; the only URLs are fv-lab's pod proxy URL in `pod.json` and x264's homepage in the
+  mp4s' encoder string): nothing.
+
+Evidence (force-added, whole): `artifacts/runpod/mmaudio/9e6d09a-1027043746-261c`,
+`artifacts/runpod/mmaudio/9e6d09a-10270439` and `artifacts/runpod/mmaudio/compare-9e6d09a.txt` (the compare, the
+block as written with its `FAIL 5`, and item 5 corrected). No report fixture is needed: `fv-lab-report-goldens.sh`
+writes one only for run directories under `artifacts/runpod/hd/`, `sol-bench/` and its fixed lists (no `mmaudio`
+report exists), and `crates/fastvideo-lab/tests/report.rs` reads the fixtures it lists, not every run directory; its
+`--check` passes with the two new directories in place. S5 is done GPU-side; S7 below is next for `mmaudio`.
 
 **Then (S7, not this slice)**: on a pass, `mmaudio` joins `FV_LAB_RETIRED`, its branch is deleted and its three
 fixtures frozen (§10's way; `runpod-http-mmaudio-r2.json` stops being written with it), and `FV_MMAUDIO_PROMPT` moves
