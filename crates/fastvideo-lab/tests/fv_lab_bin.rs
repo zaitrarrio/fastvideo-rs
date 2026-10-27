@@ -1070,6 +1070,90 @@ fn the_oracle_pod_needs_its_references_and_the_d1d_knobs_are_refused() {
     assert!(err.contains("is not an http(s):// URL"), "{err}");
 }
 
+/// `wan` (ADR-0019 §22.18) holds two oracle cells among four others: `pod up
+/// --cells` naming only the others' arms needs no FV_ORACLE_URL (the first
+/// GPU-check attempt on 0ebddb0 was refused here), one naming an oracle arm
+/// still does, and so does the whole tier. The run skips the unselected
+/// oracle cells: a log line each, no reference named or fetched.
+#[test]
+fn a_wan_pod_needs_references_only_for_the_oracle_arms_it_selects() {
+    let up = [
+        "pod",
+        "up",
+        "--sha",
+        "1234567",
+        "--family",
+        "wan",
+        "--tag",
+        "1234567-10271200",
+    ];
+    let s6 = "wan13-dmd,wan13-dmd-dense,kernels-wan,cli-fw22,engine-fw22";
+    // The S6 arms (no --yes: the plan, no request): past the check.
+    let plan = stdout(fv_lab().args(up).args(["--cells", s6]));
+    let v: serde_json::Value = serde_json::from_str(&plan).expect("json plan");
+    let cmd = v["requests"][0]["body"]["dockerStartCmd"][2]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        cmd.contains("FV_CELLS=\"wan13-dmd wan13-dmd-dense kernels-wan cli-fw22 engine-fw22\""),
+        "{cmd}"
+    );
+    assert!(!cmd.contains("FV_ORACLE_URL"), "{cmd}");
+    // An oracle arm among them, the whole tier: refused without the URL.
+    for cells in [
+        vec!["--cells", "wan13-dmd,wan5b-oracle"],
+        vec!["--cells", "fw22-oracle-diff"],
+        vec![],
+    ] {
+        let (code, _, err) = out_err(fv_lab().args(up).args(&cells));
+        assert_ne!(code, Some(0), "{cells:?}");
+        assert!(
+            err.contains("tier `wan` reads upstream references"),
+            "{cells:?}: {err}"
+        );
+    }
+    // With the URL, an oracle arm passes; with no --cells it stays refused.
+    let url = [
+        "--extra-env",
+        "FV_ORACLE_URL=https://abc-8000.proxy.runpod.net/upstream/1234567-10270100",
+    ];
+    stdout(
+        fv_lab()
+            .args(up)
+            .args(["--cells", "wan13-dmd,wan5b-oracle"])
+            .args(url),
+    );
+    let (code, _, err) = out_err(fv_lab().args(up).args(url));
+    assert_ne!(code, Some(0));
+    assert!(err.contains("reads upstream references"), "{err}");
+    // What the pod's run does with the unselected oracle cells.
+    let out = stdout(
+        fv_lab()
+            .args([
+                "run",
+                "wan",
+                "--dry-run",
+                "--work",
+                "/workspace",
+                "--scratch",
+                "/fvscratch",
+                "--tag",
+                "1234567-10271200",
+            ])
+            .env("FV_CELLS", s6.replace(',', " ")),
+    );
+    for cell in ["wan-wan22-ti2v-oracle", "wan-fastwan22-ti2v-oracle"] {
+        let skip = format!("[wan] skip {cell} (no arm in FV_CELLS)");
+        assert_eq!(
+            out.lines().filter(|l| l.ends_with(&skip)).count(),
+            1,
+            "{out}"
+        );
+    }
+    assert!(!out.contains("dry-run reference"), "{out}");
+    assert!(!out.contains("oracle-ref"), "{out}");
+}
+
 /// `fv-lab oracle` without `--yes` (ADR-0019 §19): the plan of both sides,
 /// no request and no key; its refusals exit non-zero before anything exists.
 #[test]
