@@ -1,0 +1,64 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/sfstream/b7ddf5f-1027031243-ad11 artifacts/runpod/sfstream/b7ddf5f-10270312
+same sfstream-main: {"exit":0,"skipped":null}, no frames
+1 arm(s) the same (0 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+no arm ran with frames in both runs: nothing was compared
+exit 1
+# exit 1 is expected by construction (ADR-0019 §22.14): fv-gpucheck wan stream writes no <arm>/frames, so no arm "ran with byte-identical frames"; item 0 below checks these exact three lines. The runners' identity is items 3-5.
+
+# ADR-0019 §22.14 pass block as written at b7ddf5f (L and S filled in; item 0's compare output to a scratch file), on the two run directories:
+same sfstream-main: {"exit":0,"skipped":null}, no frames
+1 arm(s) the same (0 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+no arm ran with frames in both runs: nothing was compared
+PASS 0
+true
+PASS 1 artifacts/runpod/sfstream/b7ddf5f-1027031243-ad11
+true
+PASS 1 artifacts/runpod/sfstream/b7ddf5f-10270312
+true
+PASS 2
+false
+FAIL 3
+PASS 4
+PASS 5
+[03:13:29] [sfstream] weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees (28.93 GB) fetched before the arms that read them, at most 28.93 GB on the container disk at once
+[03:13:36] [sfstream] r2 sfstream-main: fetch sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004 (28.93 GB) into /fvscratch/weights
+[03:13:57] [sfstream] r2 sfstream-main: weights ready: 1 tree(s), 28.93 GB fetched in 21.0s (1381 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 4
+done
+[03:13:29] r2-stage: r2_key=env
+[03:13:29] r2-stage: no python3 in the image: apt-get install python3 (apt's output in r2-apt.log)
+[03:13:36] r2-stage: python3 installed
+[03:13:36] r2-stage: fetch sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004 into /fvscratch/weights (cap 3600s)
+03:13:36 plan: 1 tree(s), 28.93 GB, URLs valid 4200s -> /fvscratch/r2/plan.json
+03:13:36 [r2-fetch] 1 tree(s) to fetch, 28.93 GB in 230 GETs of up to 2 x 64 MiB, concurrency 64, 256 CPUs; 0 present
+03:13:41 [r2-fetch] r2 7.6/28.9 GB, 1524 MB/s, eta 14s, trees 0/1 (now 1524 MB/s)
+03:13:46 [r2-fetch] r2 17.1/28.9 GB, 1705 MB/s, eta 7s, trees 0/1 (now 1887 MB/s)
+03:13:47 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 40: slow: 10.5 MB/s after 6s (recent parts 37 MB/s): fetched again on a new connection
+03:13:51 [r2-fetch] r2 25.1/28.9 GB, 1674 MB/s, eta 2s, trees 0/1 (now 1612 MB/s)
+03:13:52 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 38: slow: 8.5 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+03:13:52 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 48: slow: 5.3 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+03:13:52 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 50: slow: 4.6 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+03:13:53 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 68: slow: 8.1 MB/s after 7s (recent parts 30 MB/s): fetched again on a new connection
+03:13:56 [r2-fetch] r2 28.7/28.9 GB, 1432 MB/s, eta 0s, trees 0/1 (now 707 MB/s)
+03:13:56 [r2-fetch] sfwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 52: slow: 1.1 MB/s after 8s (recent parts 26 MB/s): fetched again on a new connection
+03:14:01 [r2-fetch] r2 28.8/28.9 GB, 1152 MB/s, eta 0s, trees 0/1 (now 29 MB/s)
+03:14:04 [r2-fetch] sfwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 52: slow: 2.6 MB/s after 8s (recent parts 27 MB/s): fetched again on a new connection
+03:14:06 [r2-fetch] r2 28.8/28.9 GB, 960 MB/s, eta 0s, trees 0/1 (now 0 MB/s)
+03:14:11 [r2-fetch] tree sfwan21-1.3b: ready at 4b44356635ae5e927ca552a220f768022be76004 (28.93 GB, 17 files, 34s since start)
+03:14:11 [r2-fetch] weights ready: 1 tree(s), 28.93 GB fetched in 34.4s (842 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 7
+[03:14:11] r2-stage: weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees (1 fetched): sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004
+exit=0
+done
+0
+no key value or presigned URL in any fetched file
+
+# Item 3 again with run/switch-reset-20s's window floor corrected from >= 2 to >= 1 (ADR-0019 §22.14 "Result": a switch=reset run restarts the decoder's frame count, so its 20 s are one 10 s window). Above, item 3's equality held ([ "$RL" = "$RS" ] passed; the `false` is the window-count jq: 12, 3 and 1 windows); only the floor changes:
+$ L=artifacts/runpod/sfstream/b7ddf5f-1027031243-ad11; S=artifacts/runpod/sfstream/b7ddf5f-10270312
+> W=sfstream-main/gpucheck-out/wan.json
+> # 3. The three runs' notes, without device memory: the same on both sides, with their windows.
+> runs() { jq -cSe '[.checks[] | select(.name | test("^run/[^/]+$")) | {name, frames: .values.frames, blocks: .values.blocks, kv: .values.kv_mib_end, w: [.values.windows[] | del(.mem_used_mib)]}]' "$1/$W"; }
+> RL=$(runs $L) && RS=$(runs $S) && [ "$RL" = "$RS" ] \
+>   && jq -e '(map({key: .name, value: (.w | length)}) | from_entries) as $n | length == 3
+>       and $n["run/reb-sink15-120s"] >= 12 and $n["run/switch-keep-30s"] >= 3 and $n["run/switch-reset-20s"] >= 1' <<<"$RL" \
+>   && echo "PASS 3" || echo "FAIL 3"
+true
+PASS 3

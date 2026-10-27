@@ -1,0 +1,12 @@
+03:13:36 plan: 1 tree(s), 28.93 GB, URLs valid 2346s -> /fvscratch/r2/plan.json
+03:13:36 [r2-fetch] 1 tree(s) to fetch, 28.93 GB in 230 GETs of up to 2 x 64 MiB, concurrency 64, 256 CPUs; 0 present
+03:13:41 [r2-fetch] r2 7.5/28.9 GB, 1490 MB/s, eta 14s, trees 0/1 (now 1491 MB/s)
+03:13:46 [r2-fetch] r2 16.5/28.9 GB, 1647 MB/s, eta 8s, trees 0/1 (now 1804 MB/s)
+03:13:47 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 12: slow: 5.4 MB/s after 8s (recent parts 31 MB/s): fetched again on a new connection
+03:13:51 [r2-fetch] r2 24.3/28.9 GB, 1617 MB/s, eta 3s, trees 0/1 (now 1555 MB/s)
+03:13:53 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 58: slow: 7.7 MB/s after 7s (recent parts 31 MB/s): fetched again on a new connection
+03:13:53 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 64: slow: 0.6 MB/s after 7s (recent parts 31 MB/s): fetched again on a new connection
+03:13:53 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 6: slow: 7.7 MB/s after 8s (recent parts 31 MB/s): fetched again on a new connection
+03:13:56 [r2-fetch] r2 28.8/28.9 GB, 1439 MB/s, eta 0s, trees 0/1 (now 905 MB/s)
+03:13:57 [r2-fetch] tree sfwan21-1.3b: ready at 4b44356635ae5e927ca552a220f768022be76004 (28.93 GB, 17 files, 21s since start)
+03:13:57 [r2-fetch] weights ready: 1 tree(s), 28.93 GB fetched in 21.0s (1381 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 4

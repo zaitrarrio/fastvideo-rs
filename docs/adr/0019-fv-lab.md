@@ -43,8 +43,9 @@
   `serve-engine` as a `volume+r2` tier, `--tae-dir` dropped from its engine arms in lockstep) is done, CPU-side and
   GPU-side: its GPU check §22.12 passed on `3bc6d03` (2026-10-27, §22.12 "Result"); S7 retires `serve-engine` from
   the script. S4 (§22.13: §22.4's Addition 16, `{tae}` without a TAE gate, implemented; `sfstream` as a `volume+r2`
-  tier, its `export FASTVIDEO_TAE_DIR` moved into each arm's `env` in lockstep) is done CPU-side; its GPU check is
-  §22.14, the coordinator's
+  tier, its `export FASTVIDEO_TAE_DIR` moved into each arm's `env` in lockstep) is done, CPU-side and GPU-side: its
+  GPU check §22.14 passed on `b7ddf5f` (2026-10-27, §22.14 "Result", with item 3's window floor for the reset run
+  corrected from 2 to 1); S7 retires `sfstream` from the script
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -3888,9 +3889,9 @@ Status: **accepted** 2026-10-26 (coordinator, after an independent review of #22
 Decision-id FVID-2026-10-26-d1-remaining. It was proposed in #221 (draft PR from `claude/d1-remaining-proposal`, docs
 only). The review's corrections are folded in below, and the coordinator's decisions are in §22.6. Each
 family moves or retires in its own slice (§22.6; S1 is done, §22.8; S2 is done, its GPU check passed on `d53ea62`
-2026-10-27, §22.9-§22.10; S3 is done, its GPU check passed on `3bc6d03` 2026-10-27, §22.11-§22.12; S4 is done
-CPU-side, §22.13, its GPU check §22.14), and a tier's branch leaves the script only after that tier's own check
-through both runners (§8).
+2026-10-27, §22.9-§22.10; S3 is done, its GPU check passed on `3bc6d03` 2026-10-27, §22.11-§22.12; S4 is done,
+its GPU check passed on `b7ddf5f` 2026-10-27, §22.13-§22.14), and a tier's branch leaves the script only after that
+tier's own check through both runners (§8).
 
 Fifteen `runpod-matrix.sh` families are left besides `oracle` (§18.3). `oracle` retires on its own once §20.7's re-run
 passes (§21.9), so this section leaves it out. For each family it gives:
@@ -4050,7 +4051,8 @@ cache file, and the tiers keep the paths for equality.
     `FV_ORACLE_FAMILY=sfwan` and points to the two commands.
 - *Depends*: `oracle` (the recursion at rpm:627) and `wan` (rpm:629).
 
-**`sfstream`** (rpm:632-651): **(b)**, after §22.4. Done in S4 with §22.4 (§22.13; its GPU check §22.14).
+**`sfstream`** (rpm:632-651): **(b)**, after §22.4. Done in S4 with §22.4 (§22.13; its GPU check §22.14,
+`sfstream-main`, passed on `b7ddf5f` 2026-10-27).
 - *Measures*: the open-ended causal SF-Wan rollout (`fv-gpucheck wan stream`):
   - `--parity` (streamed against the bounded 81-frame path);
   - a 120 s rebased sink-15 run;
@@ -5121,12 +5123,14 @@ values, limits}`; a `note` has `limits` `{}`, every `check` of `wan_stream.rs` n
 `absolute`), then per `--run` the `run/<name>` note (`frames`, `blocks`, `kv_mib_end`, `windows`) and its checks:
 `frames` always, `no_device_memory_growth` only with 48 or more blocks (`one_run`: `mems.len() >= 48`; 120 s at
 16 fps is 161 blocks, 30 s 40, 20 s 27). A window is `--window-s` (default 10, not passed by `sfstream-main`) of video
-time (`consume`), so 12, 3 and 2 windows for the 120, 30 and 20 s runs; each holds `t0_s`, `blocks`, picture and
-latent statistics, `latent_hash`, `fresh_decode`, `recaches`, `kv_mib` and `mem_used_mib` (device memory, which may
-differ from pod to pod: dropped). The `parity/absolute` note's values are diffs and flags (`block_frames`,
-`latents_vs_bounded`, `latents_bitwise_equal`, `per_block_vs_whole_clip_decode`, `frames_vs_bounded_clip`,
-`per_block_vs_whole_clip_chunk3`, `rgb8_vs_whole_clip`), no timings (the timings are in the `parity` note's
-`bounded_s` and the `parity/graph_vs_eager/*` notes, not compared). Each run's sheet is
+time (`consume`), so 12 and 3 windows for the 120 and 30 s runs and 1 for the 20 s `switch=reset` run (a window's
+time is the block's frame index since the last reset, which the switch at 10 s restarts at 0, so neither 10 s half
+reaches the 10 s boundary; the first draft said 2, corrected after the run, see "Result"); each holds `t0_s`,
+`blocks`, picture and latent statistics, `latent_hash`, `fresh_decode`, `recaches`, `kv_mib` and `mem_used_mib`
+(device memory, which may differ from pod to pod: dropped). The `parity/absolute` note's values are diffs and flags
+(`block_frames`, `latents_vs_bounded`, `latents_bitwise_equal`, `per_block_vs_whole_clip_decode`,
+`frames_vs_bounded_clip`, `per_block_vs_whole_clip_chunk3`, `rgb8_vs_whole_clip`), no timings (the timings are in the
+`parity` note's `bounded_s` and the `parity/graph_vs_eager/*` notes, not compared). Each run's sheet is
 `gpucheck-out/sheets/<run>.jpg` (`sheet=1` is the default; the `run/<name>` note's `sheet` path holds the run
 directory, so it is not compared). The `run/<name>` notes' timing fields (`open_s`, `ttff_s`, `block_s`, `wall_s`,
 `fps_*`, `per_block`) are not compared.
@@ -5163,7 +5167,7 @@ CL=$(chk $L) && CS=$(chk $S) && [ "$CL" = "$CS" ] \
 runs() { jq -cSe '[.checks[] | select(.name | test("^run/[^/]+$")) | {name, frames: .values.frames, blocks: .values.blocks, kv: .values.kv_mib_end, w: [.values.windows[] | del(.mem_used_mib)]}]' "$1/$W"; }
 RL=$(runs $L) && RS=$(runs $S) && [ "$RL" = "$RS" ] \
   && jq -e '(map({key: .name, value: (.w | length)}) | from_entries) as $n | length == 3
-      and $n["run/reb-sink15-120s"] >= 12 and $n["run/switch-keep-30s"] >= 3 and $n["run/switch-reset-20s"] >= 2' <<<"$RL" \
+      and $n["run/reb-sink15-120s"] >= 12 and $n["run/switch-keep-30s"] >= 3 and $n["run/switch-reset-20s"] >= 1' <<<"$RL" \
   && echo "PASS 3" || echo "FAIL 3"
 # 4. The parity/absolute note (the streamed blocks' TAEHV decode against the whole clip's): the same on both sides.
 par() { jq -cSe '[.checks[] | select(.name == "parity/absolute") | .values] | if length == 1 then .[0] else error("not one parity/absolute note") end' "$1/$W"; }
@@ -5216,7 +5220,8 @@ exactly these two lines, and exits 1:
      per-arm `env` reached the binary on both sides, with the merged root's link to the volume's TAE copy);
   2. the checks, from `wan.json`: equal on both sides, exactly the nine names in the command, every `ok` true;
   3. the three `run/<name>` notes without `mem_used_mib`: equal on both sides (frames, blocks, end KV size, and every
-     window's latent hash, decoded-pixel statistics and fresh-decode differences), at least 12, 3 and 2 windows;
+     window's latent hash, decoded-pixel statistics and fresh-decode differences), at least 12, 3 and 1 windows
+     (the reset run's floor read 2 until the run, a guess against empty output; corrected to 1, "Result");
   4. the `parity/absolute` note's values equal on both sides;
   5. the three sheets byte-identical on both sides.
 - R2, each file read from the side that fetched it:
@@ -5241,6 +5246,124 @@ on this rollout is unmeasured). In all **~13-19 min a side, ~$0.55-$0.80 a side,
 assumed 20 min a side). Bounded by the 1 h caps at the tier's $2.50 price cap: $2.50 a pod, $5.00 both. **Balance
 needed**: at least $9.60 before starting at the estimate ($8 floor + $1.60), and $13 to stay above the floor even if
 both pods ran to their caps (CLAUDE.md: stop before the balance would drop below $8).
+
+**Result (2026-10-27): pass** (with item 3's window floor for `run/switch-reset-20s` corrected from 2 to 1, below).
+`SHA=b7ddf5f` (main after #226, S4 merged) on both sides, started in parallel at 03:12:43Z with the commands above;
+both local drivers returned `rc=0`, fv-lab's at 03:20:23Z and the script's at 03:20:31Z: image
+`ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-b7ddf5f` (digest
+`sha256:7772f3086701b26e201268694ca78e0f597e7b3f238d09a3b50dd1a96f2a351a`, as fv-lab's `pod.json` records and the
+registry answers for the tag; build id `1307610e2da4f41e` as both `box.txt` record and the image's
+`dev.fastvideo.build-id` label; tools label `tools-v0.1.80`: the release built at `b7ddf5f` itself, its manifest's
+`build_id` `1307610e2da4f41e`, `source_commit` `b7ddf5fa0ce6…` and `input_hash` `9e55b9af861d…` equal to
+`scripts/ci/tools-release.sh input-hash b7ddf5f`, its sha256 the release body's `manifest-sha256`, so the image's
+fv-gpucheck and fv-lab are that release's), fv-lab 0.1.80 from `tools-v0.1.80` on the driver. Each pod an RTX PRO 6000
+Blackwell Server Edition at $2.49/hr in EU-RO-1 on `bz0ofkfx45`, driver 595.91.07, with `--wall-cap-s 3600` /
+`FV_POD_CAP_S=3600`. The balance before the start was $18.01 (fv-deploy's `balance` line), above the $13 the section
+asks.
+
+- *fv-lab side*: pod `jdlh20z0mu1lie`, created 03:12:47Z, ready 32.4 s after create, deleted at the end (`done`,
+  about 03:20:23Z) → `artifacts/runpod/sfstream/b7ddf5f-1027031243-ad11` (`DONE`, `pod.json`, `sfstream.arms.json`
+  `["sfstream-main"]`; `matrix start` 03:13:29, `matrix done` 03:19:46, `matrix_exit=0`).
+- *Script side*: pod `31vj67y5pu8pf6`, created 03:12:46Z, destroyed 03:20:31Z →
+  `artifacts/runpod/sfstream/b7ddf5f-10270312` (`r2-stage.sh` from 03:13:29, `matrix start` 03:14:11, `matrix done`
+  03:20:04, `matrix_exit=0`).
+- *Both*: `sfstream-main` `exit` 0 (`summary.json`; 348 s on fv-lab's side, 353 s on the script's), `sfstream-10min`
+  skipped as not in `FV_CELLS`; `sfstream-main.weights.log` `weights ok: sfwan21-1.3b`; each preflight's `weights.log`
+  ends `exit=1` with `weights INCOMPLETE: fasth3-8step` (`h3-8step/{transformer,vae,audio_vae}` missing) and the five
+  other trees it checks `ok`, as expected; `tae.log` `exit=0` (`taeh3`, `taeltx2_3_wide` and `taew2_1` copied from the
+  volume into `/fvscratch/tae`, unread by the arm, §22.13 item 4). Each arm's command line, in `live.log`, starts `env
+  FASTVIDEO_TAE_DIR=/fvscratch/weights/auxiliary/tae` on both sides. No `[FAIL]` in either `stderr.log`; ten `[PASS]`
+  lines a side (the nine checks and the stage). No `compare/`, `gate/`, verdict or `metrics.txt` report on either side.
+- *R2*, each file read from the side that fetched it (python3 installed first on both, `r2-apt.log`, 7 s):
+  - fv-lab (`$L/live.log`): `weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees
+    (28.93 GB) fetched before the arms that read them, at most 28.93 GB on the container disk at once`; `r2
+    sfstream-main: fetch sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004 (28.93 GB) into /fvscratch/weights` at
+    03:13:36; `r2 sfstream-main: weights ready: 1 tree(s), 28.93 GB fetched in 21.0s (1381 MB/s); retries 0, bad parts
+    0, resumed parts 0, slow restarts 4` at 03:13:57; `sfstream-main/r2-fetch.json` `state` `done`
+    (`sfstream-main/r2-fetch.log`: 17 files, 230 GETs).
+  - Script side (`$S/r2-stage.log`): `r2_key=env`, python3 installed, `weights ready: 1 tree(s), 28.93 GB fetched in
+    34.4s (842 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 7`, `weights /fvscratch/weights: 10
+    volume trees linked from /workspace/weights; 1 R2 trees (1 fetched):
+    sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004`, `exit=0`, all before the arm (03:14:11); `r2-fetch.json`
+    `state` `done`.
+- *Item 0* (`artifacts/runpod/sfstream/compare-b7ddf5f.txt`, with its command and exit status): `PASS 0`.
+  `fv-lab-compare-runs.sh` exit 1, by construction, with exactly the three lines above: `same sfstream-main:
+  {"exit":0,"skipped":null}, no frames`, the "1 arm(s) the same (0 ran with byte-identical frames, …), 0
+  difference(s)" line and "no arm ran with frames in both runs: nothing was compared".
+- *Item 1*: `PASS 1` on both sides: `wan.json` `status` `pass` (`elapsed_s` 348.3 / 352.5), `env` exactly
+  `{"FASTVIDEO_TAE_DIR": "/fvscratch/weights/auxiliary/tae"}`.
+- *Item 2*: `PASS 2`: the nine checks, equal on both sides and all `ok`, with equal values too:
+  `parity/graph_bitwise_equals_eager/{rebased,relativistic,absolute}` (29, 20 and 20 blocks, 0 differing);
+  `parity/absolute_stream_is_the_bounded_path` (`bitwise` true, 81 frames, `latent_max_abs` 0.0);
+  `parity/absolute_per_block_decode` (`max_abs` 0.011591434478759766, `psnr_db` 73.4731576481792, `chunk3_max_abs`
+  0.0; limits 0.02 and 60 dB); `run/reb-sink15-120s/no_device_memory_growth` (33,000 MiB settled, end and transient
+  max; limit 256 MiB of growth); `run/reb-sink15-120s/frames` 1929, `run/switch-keep-30s/frames` 489,
+  `run/switch-reset-20s/frames` 330 (`consumer` equal; minimums 1920, 480, 320).
+- *Item 3*: the equality passed; the block as written printed `FAIL 3` on its window-count floor alone. The three
+  `run/<name>` notes without `mem_used_mib` are byte-identical across the sides (the `runs` capture, sha256
+  `735371fcba3237d3b8cfdbf03ca0296773690fd999ef0d807e6c54324c6d4e6a` on both): `reb-sink15-120s` 1929 frames, 161
+  blocks, 12 windows; `switch-keep-30s` 489 frames, 41 blocks, 3 windows; `switch-reset-20s` 330 frames, 28 blocks,
+  **1** window; `kv_mib_end` 9871 each. So all 16 windows' latent hashes, decoded-pixel statistics and fresh-decode
+  differences are equal across the pods. The floor `run/switch-reset-20s >= 2`, written before any run to catch empty
+  output, was wrong for a reset run; the code gives one window:
+  - a window's time is `b.first_frame / fps` and a window closes when it reaches `win_start + window_s`
+    (`crates/fastvideo-gpucheck/src/wan_stream.rs:1021-1034`, `consume`);
+  - `first_frame` is `self.tae_state.emitted()` (`crates/fastvideo-cudarc/src/wan/stream.rs:757`), the decoder's
+    pixel frames "since the last reset" (`StreamBlock::first_frame`, `stream.rs:185-186`);
+  - the switch fires on the run's cumulative frames (`wan_stream.rs:1120`, `frames as f64 / fps >= at`, `frames`
+    summed at 1138) and calls `set_prompt` (1128); with `PromptSwitch::Reset`, `set_prompt_embeds` calls `restart`
+    (`stream.rs:572-573`), which replaces the decoder state with a fresh one (`stream.rs:589`, `tae.decode_state()`,
+    `emitted: 0` at `crates/fastvideo-cudarc/src/rt/taehv.rs:657`, counted up at 718) and sets `block = 0` (591);
+  - so the 20 s run is two 10 s halves of 14 blocks each (`per_block`: indices 0-13 twice, 9 then 13 × 12 frames;
+    the switch `at_frame` 165), each half's last block starts at frame 153 (9.56 s), below the 10 s boundary, and
+    `consume` flushes the 28 blocks as one window at `t0_s` 0.
+
+  The criterion is corrected above to `run/switch-reset-20s >= 1` (the paragraph on windows, the item 3 command and
+  Pass item 3); item 3 re-run with it on the two run directories prints `PASS 3` (in `compare-b7ddf5f.txt`). Nothing
+  else in the block changed. (The section's 40 and 27 blocks for the 30 and 20 s runs were also off by one block
+  each, 41 and 28 as run; only the 48-block threshold of `no_device_memory_growth` reads them, which the 120 s run
+  alone meets, as expected.)
+- *Item 4*: `PASS 4`: the `parity/absolute` values equal on both sides: `block_frames` `[9,12,12,12,12,12,12]`;
+  `latents_bitwise_equal` true and `latents_vs_bounded` `cosine` 1.0, `max_abs` 0.0, `rel_l2` 0.0, `non_finite` 0,
+  `ref_norm` 1198.8918135372562; `per_block_vs_whole_clip_chunk3` bitwise equal (`max_abs` 0.0);
+  `per_block_vs_whole_clip_decode` not bitwise equal, `max_abs` 0.011591434478759766, `psnr_db` 73.4731576481792,
+  `rel_l2` 0.0006133183772399866 (`frames_vs_bounded_clip` the same `max_abs` and `psnr_db`); `rgb8_vs_whole_clip`
+  3,225,758 of 97,044,480 values differing, by at most 2 levels.
+- *Item 5*: `PASS 5`: the three sheets byte-identical on both sides:
+
+  | sheet | bytes | sha256 (both sides) |
+  |---|---|---|
+  | `reb-sink15-120s.jpg` (2520x976, 12 tiles) | 628,961 | `97b585899811c4a9415d863e2e70de9642d235e9473c6a1a4fcce7713d23db7c` |
+  | `switch-keep-30s.jpg` (1260x488, 3 tiles) | 156,730 | `4150d05844043de0074ceeb06fc087a89ff146c927bb1091a51e87244e6615cc` |
+  | `switch-reset-20s.jpg` (420x488, 1 tile) | 64,588 | `a876ec7ccf5aca31b267984fc16a0759c1bc35b6515eb91e58067dc02d11f6f1` |
+
+- *Minor finding* (reported, not fixed here): `fv-gpucheck wan stream` reports a `switch=reset` run as one window. Its
+  windows, sheet tiles and fresh-decode samples are keyed on `first_frame`, which the reset restarts
+  (`wan_stream.rs:1021-1034`, 1175-1178), while the switch fires on the run's cumulative frames (1120). So the 20 s
+  run's one window mixes both halves' statistics and latent hash, and its sheet and `fresh_decode` sample only the
+  first half's first block. Keying them on the run's cumulative frame count would give 2 windows; that is a
+  `wan_stream.rs` change for its own slice, after which this floor could return to 2.
+- *What was fetched*: no PNG on either side (`find … -name '*.png'` 0), and no `.wav` or `.mp4` (the stream path
+  writes neither). fv-lab's run directory is 1,015,270 bytes (24 files), the script's 1,014,090 (22 files), the three
+  sheets 850,279 bytes of each.
+- *Timings*: the arm 348 s on fv-lab's side and 353 s on the script's (estimate ~5-10 min): the model load 20.4 /
+  23.2 s (`wan/load`), the runs' `wall_s` 129.0 / 129.5 s (`reb-sink15-120s`, 14.95 / 14.89 frames/s), 31.8 / 32.0 s
+  and 20.1 / 20.2 s, first block 0.40 s; the rest mostly the parities. The pods, create to delete, about 7.6 and
+  7.75 min (estimate ~13-19 min a side): R2 fetches of 21.0 s and 34.4 s against the ~2 min allowed. fv-lab's arm ran
+  under a 2325 s cap (what `FV_RUN_DEADLINE` left of the hour, §16.7), the script's under 3600 s; neither was near
+  it. The timings are recorded, not judged.
+- *Cost*: at the list price the two pods' ~7.6 and ~7.75 min come to **about $0.64**, under the estimate of
+  ~$1.10-$1.60 (the balance before was $18.01; no reading after was taken for this record).
+- *Secrets*: the two run directories were scanned before the commit (§22.14's `grep` for presigned URLs and R2 key
+  values; `hf_`, `rpa_`, `RUNPOD_API_KEY`, `Bearer`, `AKIA`, `ghp_`, `github_pat_`, `sk-` and private-key patterns;
+  this container's credential values; strings of 40 or more base64 characters, which are only paths, GPU UUIDs and
+  hex digests): nothing.
+
+Evidence (force-added, whole): `artifacts/runpod/sfstream/b7ddf5f-1027031243-ad11`,
+`artifacts/runpod/sfstream/b7ddf5f-10270312` and `artifacts/runpod/sfstream/compare-b7ddf5f.txt` (the compare, the
+block as written and item 3 corrected). No report fixture is needed: `fv-lab-report-goldens.sh` writes one only for
+run directories under `artifacts/runpod/hd/`, `sol-bench/` and its fixed lists (no `sfstream` report exists), and its
+`--check` passes with the two new directories in place. S4 is done GPU-side; S7 below is next for `sfstream`.
 
 **Then (S7, not this slice)**: on a pass, `sfstream` joins `FV_LAB_RETIRED`, its branch is deleted and its three
 fixtures frozen (§10's way; `runpod-http-sfstream-r2.json` stops being written with it), and `FV_SFSTREAM_RUNS`,

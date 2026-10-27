@@ -1,0 +1,15 @@
+{
+  "id": "jdlh20z0mu1lie",
+  "name": "fv-lab-sfstream-b7ddf5f-1027031243-ad11",
+  "family": "sfstream",
+  "tag": "b7ddf5f-1027031243-ad11",
+  "sha": "b7ddf5f",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:7772f3086701b26e201268694ca78e0f597e7b3f238d09a3b50dd1a96f2a351a",
+  "url": "https://jdlh20z0mu1lie-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793070767.0099998,
+  "cap_s": 3600,
+  "memory_gb": 94.0,
+  "vcpus": 32.0
+}
