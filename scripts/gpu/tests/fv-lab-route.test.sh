@@ -9,8 +9,8 @@
 #   - `gold`, the experiment tiers (h3-graphs, ADR-0019 §14) and the sibling
 #     tiers (oracle-r2, §21; hd5, §22) refused for run / all (their plan still
 #     the script's body);
-#   - serve-engine (§22, S3) and sfstream (§22, S4) on the script path, their
-#     GPU checks' FV_R2_TREES forms planned;
+#   - serve-engine (§22, S3), sfstream (§22, S4) and mmaudio (§22, S5) on the
+#     script path, their GPU checks' FV_R2_TREES forms planned;
 #   - hd's dropped post-script hook (FV_HD_POST_URL, FV_HD_POST_TIMEOUT_S,
 #     ADR-0019 §22, S2) refused by runpod-http.sh (script path and fv-lab
 #     route) and runpod-matrix.sh;
@@ -268,6 +268,37 @@ if [[ -e "$TMP/sfw/weights/auxiliary/tae/taew2_1.safetensors" || -e "$TMP/sfs/ru
   bad "sfstream: a dry run fetched taew2_1"
 else
   ok "sfstream: a dry run fetched nothing"
+fi
+
+# mmaudio (ADR-0019 §22, S5): the same, its GPU check's two trees
+# (fastwan21-1.3b, mmaudio-44k-v2) from R2; its branch cut to the tier's
+# three arms: the dry run exits 0 (the `find` fallback that ended it at exit
+# 1 is gone), shows each Wan arm's own FASTVIDEO_MMAUDIO_WEIGHTS and
+# FASTVIDEO_TAE_DIR, runs no upstream / inject / waveform arm and fetches
+# nothing.
+expect "mmaudio: run is the script path" 0 "a pod running runpod-matrix.sh mmaudio" -- \
+  FV_DRY_RUN=1 FV_FAMILY=mmaudio bash "$HTTP" run abc1234
+expect "mmaudio: the GPU check's script side plans" 0 '"name": "fv-lab-mmaudio-abc1234-t"' -- RUNPOD_API_KEY=x \
+  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=mmaudio "FV_R2_TREES=fastwan21-1.3b mmaudio-44k-v2" \
+  FV_CONTAINER_DISK_GB=180 bash "$HTTP" plan abc1234 abc1234-t
+expect "mmaudio: FV_R2_TREES needs a disk for both trees" 2 "(50.68 GB) and 120 GB: FV_CONTAINER_DISK_GB=171 or more" -- \
+  FV_DRY_RUN=1 FV_FAMILY=mmaudio "FV_R2_TREES=fastwan21-1.3b mmaudio-44k-v2" FV_CONTAINER_DISK_GB=170 bash "$HTTP" run abc1234
+mkdir -p "$TMP/mmw/weights/auxiliary/tae" "$TMP/mms"
+: >"$TMP/mmw/weights/auxiliary/tae/.complete"
+expect "mmaudio: each Wan arm's own env, no fetch in a dry run" 0 \
+  "dry-run wan13-audio: env FASTVIDEO_MMAUDIO_WEIGHTS=$TMP/mmw/weights/mmaudio-44k-v2 FASTVIDEO_TAE_DIR=$TMP/mmw/weights/auxiliary/tae " -- \
+  FV_DRY_RUN=1 FV_WORK="$TMP/mmw" FV_SCRATCH="$TMP/mms" bash "$MATRIX" mmaudio
+if [[ -e "$TMP/mmw/weights/auxiliary/tae/taew2_1.safetensors" || -e "$TMP/mms/runs/mmaudio/tae-fetch.log" ]]; then
+  bad "mmaudio: a dry run fetched taew2_1"
+else
+  ok "mmaudio: a dry run fetched nothing"
+fi
+mm_out="$(clean FV_DRY_RUN=1 FV_WORK="$TMP/mmw" FV_SCRATCH="$TMP/mms" bash "$MATRIX" mmaudio 2>&1)"
+mm_arms="$(grep -oE '\] dry-run [a-z0-9-]+:' <<<"$mm_out" | sed -E 's/^\] dry-run //; s/:$//' | tr '\n' ' ')"
+if [[ "$mm_arms" == "wan13-audio sfwan13-audio ours-v2a " ]] && ! grep -qE 'up-env|up-sidecar|mm-(pixels|features|e2e)|diff-|wave-|V2A clip|WARN' <<<"$mm_out"; then
+  ok "mmaudio: the cut branch runs exactly the tier's three arms"
+else
+  bad "mmaudio: the dry run's arms are '$mm_arms'"
 fi
 
 # b4a (ADR-0019 §11.6): fv-lab only, its GPU gate's cell selected by arm;

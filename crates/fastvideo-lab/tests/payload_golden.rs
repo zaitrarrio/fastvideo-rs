@@ -124,13 +124,14 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         common::restored().len(),
         "every restored mode is a tier"
     );
-    // Only the gold, oracle-r2, serve-engine and sfstream tiers read R2 trees
-    // (ADR-0019 §16, §21, §22 S3, S4); every other tier's pod is unchanged.
+    // Only the gold, oracle-r2, serve-engine, sfstream and mmaudio tiers read
+    // R2 trees (ADR-0019 §16, §21, §22 S3, S4, S5); every other tier's pod is
+    // unchanged.
     assert_eq!(
-        r2_tiers, 4,
-        "four volume+r2 tiers (gold, oracle-r2, serve-engine, sfstream)"
+        r2_tiers, 5,
+        "five volume+r2 tiers (gold, oracle-r2, serve-engine, sfstream, mmaudio)"
     );
-    for t in ["gold", "oracle-r2", "serve-engine", "sfstream"] {
+    for t in ["gold", "oracle-r2", "serve-engine", "sfstream", "mmaudio"] {
         assert_eq!(
             lab.tier(t).map(|t| t.weights),
             Some(TierWeights::VolumeR2),
@@ -178,6 +179,22 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         "the TAE fetch runs (FV_SKIP_TAE 0)"
     );
     assert!(!cmd.contains("if [ \"1\" != 1 ]"), "not skipped");
+    // mmaudio's (ADR-0019 §22, S5) likewise: 180 GB (at most fastwan21-1.3b
+    // and mmaudio-44k-v2 at once, 50.68 GB, and the 120 GB), 85 min, and the
+    // TAE fetch at start (its Wan arms read `{tae}` without a TAE gate).
+    let mm = fixture("mmaudio");
+    assert_eq!(mm["containerDiskInGb"], json!(180));
+    let cmd = mm["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert!(
+        cmd.contains("lim=85; [ \"$used\" = 1 ] && lim=85"),
+        "the idle limit"
+    );
+    assert!(
+        cmd.contains(
+            "if [ \"0\" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then"
+        ),
+        "the TAE fetch runs (FV_SKIP_TAE 0)"
+    );
     // Only the gold tier asks for a host-RAM floor (its 14B arm's host load,
     // lab/tiers.toml); every other tier's pod has Runpod's default. 256 GB
     // since the 7e580e5 gold run measured that arm's peak (ADR-0019 §16.10).
@@ -191,12 +208,12 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
 /// references (`weights::r2_env_refs`), the tier's disk and idle limit,
 /// fv-lab's link roots (`TreeSources::link_roots`) and the pinned revision for
 /// `r2-stage.sh`, and the matrix's `$W` the merged root. Without
-/// `FV_R2_TREES` the body has no `env` (`fv-lab-goldens.sh`). Two: the
+/// `FV_R2_TREES` the body has no `env` (`fv-lab-goldens.sh`). Four: the
 /// `oracle` family's `sfwan13` for `oracle-r2`
-/// (`fixtures/runpod-http-oracle-sfwan13-r2.json`, §21.7) and `serve-engine`'s
-/// wan group (`fixtures/runpod-http-serve-engine-r2.json`, §22.12), one
-/// test each.
-fn script_side_r2_pod(tier: &str, golden: &str, plain: &str, tree: &str) {
+/// (`fixtures/runpod-http-oracle-sfwan13-r2.json`, §21.7), `serve-engine`'s
+/// wan group (`fixtures/runpod-http-serve-engine-r2.json`, §22.12),
+/// `sfstream` (§22.14) and `mmaudio`'s two trees (§22.16), one test each.
+fn script_side_r2_pod(tier: &str, golden: &str, plain: &str, trees: &[&str]) {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let sources = fastvideo_lab::weights::TreeSources::load(&repo_root()).expect("trees");
     let t = lab.tier(tier).expect("tier");
@@ -221,15 +238,22 @@ fn script_side_r2_pod(tier: &str, golden: &str, plain: &str, tree: &str) {
         cmd.starts_with("_fvr2_id=\"${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}\""),
         "{tier}"
     );
-    let rev = sources
-        .r2
-        .get(tree)
-        .map(|t| t.rev.clone())
-        .unwrap_or_else(|| panic!("{tree} in weights-r2.tsv"));
+    let specs: Vec<String> = trees
+        .iter()
+        .map(|tree| {
+            let rev = sources
+                .r2
+                .get(*tree)
+                .map(|t| t.rev.clone())
+                .unwrap_or_else(|| panic!("{tree} in weights-r2.tsv"));
+            format!("{tree}@{rev}")
+        })
+        .collect();
     let want = format!(
-        "$SCRATCH/weights $SCRATCH/r2 \"$OUT\" {} /workspace/weights \"{}\" {tree}@{rev} ",
+        "$SCRATCH/weights $SCRATCH/r2 \"$OUT\" {} /workspace/weights \"{}\" {} ",
         t.cell_timeout_s,
-        sources.link_roots().join(" ")
+        sources.link_roots().join(" "),
+        specs.join(" ")
     );
     assert!(cmd.contains(&want), "{tier}: {want}");
     assert!(
@@ -248,7 +272,12 @@ fn script_side_r2_pod(tier: &str, golden: &str, plain: &str, tree: &str) {
 
 #[test]
 fn the_script_side_r2_pod_reads_its_trees_as_the_oracle_r2_tier() {
-    script_side_r2_pod("oracle-r2", "oracle-sfwan13-r2", "oracle", "sfwan21-1.3b");
+    script_side_r2_pod(
+        "oracle-r2",
+        "oracle-sfwan13-r2",
+        "oracle",
+        &["sfwan21-1.3b"],
+    );
     // The oracle tier's 120 GB body plus the tree.
     assert_eq!(fixture("oracle")["containerDiskInGb"].as_u64(), Some(120));
 }
@@ -259,7 +288,7 @@ fn the_script_side_r2_pod_reads_its_trees_as_the_serve_engine_tier() {
         "serve-engine",
         "serve-engine-r2",
         "serve-engine",
-        "fastwan21-1.3b",
+        &["fastwan21-1.3b"],
     );
     // The tier's own body already has its 150 GB.
     assert_eq!(
@@ -270,6 +299,30 @@ fn the_script_side_r2_pod_reads_its_trees_as_the_serve_engine_tier() {
 
 #[test]
 fn the_script_side_r2_pod_reads_its_trees_as_the_sfstream_tier() {
-    script_side_r2_pod("sfstream", "sfstream-r2", "sfstream", "sfwan21-1.3b");
+    script_side_r2_pod("sfstream", "sfstream-r2", "sfstream", &["sfwan21-1.3b"]);
     assert_eq!(fixture("sfstream")["containerDiskInGb"].as_u64(), Some(150));
+}
+
+/// `mmaudio`'s GPU check (ADR-0019 §22, S5, §22.16): the script side stages
+/// both trees its two checked arms read (`wan13-audio`: fastwan21-1.3b and
+/// mmaudio-44k-v2; `ours-v2a`: mmaudio-44k-v2) before the matrix, on the
+/// tier's 180 GB, which holds them (51 GB) and the 120 GB; the whole family
+/// with sfwan21-1.3b too would need 200 GB on the script side, which stages
+/// every tree at once where fv-lab drops a tree no later arm reads.
+#[test]
+fn the_script_side_r2_pod_reads_its_trees_as_the_mmaudio_tier() {
+    script_side_r2_pod(
+        "mmaudio",
+        "mmaudio-r2",
+        "mmaudio",
+        &["fastwan21-1.3b", "mmaudio-44k-v2"],
+    );
+    assert_eq!(fixture("mmaudio")["containerDiskInGb"].as_u64(), Some(180));
+    let sources = fastvideo_lab::weights::TreeSources::load(&repo_root()).expect("trees");
+    let bytes: u64 = ["fastwan21-1.3b", "mmaudio-44k-v2"]
+        .iter()
+        .map(|t| sources.r2.get(*t).map(|t| t.bytes).expect("an R2 tree"))
+        .sum();
+    assert_eq!(bytes, 50_676_290_876);
+    assert!(bytes.div_ceil(1_000_000_000) + 120 <= 180);
 }

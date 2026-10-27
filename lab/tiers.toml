@@ -702,3 +702,43 @@ weights = "volume+r2"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["sfstream-rollout"]
+
+# ---- D1, slice S5 (docs/adr/0019-fv-lab.md §22, S5): the `mmaudio` family as a
+# small tier, without upstream parity (§22.6 item 3). In lockstep, the
+# script's branch was cut to the tier's three arms (the upstream venv / clone,
+# inject, compare-dumps and waveform arms went, a real-run change; their
+# results stand at 778c65e), its `export FASTVIDEO_MMAUDIO_WEIGHTS` /
+# `FASTVIDEO_TAE_DIR` became each Wan arm's env entries, the Wan arms gate on
+# composite verify-weights.sh cells (their tree and mmaudio-44k-v2), ours-v2a
+# on mmaudio-44k-v2, and its taew2_1 fetch is skipped in a dry run, so the
+# script's dry run is the tier's (fv-lab-goldens.sh). The branch stays until
+# the GPU check through both runners (§22.16); S7 then retires it.
+# runpod-matrix.sh `mmaudio`: the MMAudio V2A sidecar (`wan gen --audio
+# mmaudio`) on FastWan 1.3B DMD and SF-Wan 1.3B, then our port alone on the
+# FastWan clip, timed. The script's FV_MMAUDIO_PROMPT is the cell's prompt
+# (fv-lab refuses it: knobs::SCRIPT_KNOBS); select an arm with --cells. The
+# rtx6000 tier's pod, with weights "volume+r2": fastwan21-1.3b (29.21 GB),
+# sfwan21-1.3b (28.93 GB) and mmaudio-44k-v2 (21.46 GB, CC-BY-NC 4.0, read
+# from the owner's R2 copy, never redistributed) are R2-only since
+# 2026-10-13, each fetched before the first arm that reads it and a tree no
+# later arm reads dropped first (at most 50.68 GB at once, so 180 GB: that
+# and the 120 GB every volume tier keeps); `tae = true` fetches taew2_1
+# (fetch-tae.sh) when the volume lacks it (the Wan arms read `{tae}` without
+# a TAE gate, Addition 16).
+[[tier]]
+name = "mmaudio"
+description = "The MMAudio V2A sidecar (wan gen --audio mmaudio) on FastWan 1.3B DMD and SF-Wan 1.3B at 480x832x81, then our MMAudio port alone on the FastWan clip, timed; no upstream parity"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 180
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["mmaudio-sidecar"]
