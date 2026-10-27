@@ -1,0 +1,9 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/serve-engine/3bc6d03-1027020329-d34a artifacts/runpod/serve-engine/3bc6d03-10270203
+same cli-h3-turbo: {"exit":0,"skipped":null}, 124 frames byte-identical
+same cli-ltx-turbo: {"exit":0,"skipped":null}, 121 frames byte-identical
+same cli-wan-turbo: {"exit":0,"skipped":null}, 81 frames byte-identical
+same engine-h3-turbo: {"exit":0,"skipped":null}, no frames
+same engine-ltx-turbo: {"exit":0,"skipped":null}, no frames
+same engine-wan-turbo: {"exit":0,"skipped":null}, no frames
+6 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+exit 0

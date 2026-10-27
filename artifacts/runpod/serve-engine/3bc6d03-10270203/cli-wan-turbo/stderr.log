@@ -1,0 +1,25 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] wan load: host peak RSS 75.7 GiB (eager dit)
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":12898,"moe":null,"seconds":35.062897785}
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] vsa: grid (21, 30, 52) tiles 624 topk 125 group 32
+[fastvideo] vsa fine kernel: Mma (sm12, dim 128, auto)
+[fastvideo] vsa fine kernel: Tma ring (3 slots) (sm12, 128B swizzle)
+[fastvideo] sdpa auto (sm_12x rule): bh=12 sq=32760 sk=512 d=128 -> flash_mma_fwd2
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=32760 Sk=512 D=128
+[fastvideo] dmd step 1/3 t=1000 done in 703ms
+[fastvideo] dmd step 2/3 t=757 done in 644ms
+[fastvideo] dmd step 3/3 t=522 done in 643ms
+[fastvideo] dmd 3 steps done in 1991ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] vae.decode done in 2244ms
+[fastvideo] video writer: 81 frames, png deferred (0 inline, 81 after the mp4 in 0.09s, 0.04 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.09 GiB of 41.37
+[fastvideo] wrote 81 png frames → /fvscratch/runs/serve-engine/3bc6d03-10270203/cli-wan-turbo/frames (text 0.45s, denoise 1.99s, decode+mp4 2.98s, png 0.09s)
+[fastvideo] generate done in 5527ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":2.984181605,"decoder":"wan-vae","denoise_s":1.992843554,"frames_sha256":"8a02c6447912d242268cc532a70a3147128cb887a9e40ba42fe735c0581cda62","peak_mib":27684,"step_s":[0.704920708,0.644090803,0.643755473],"text_cache":"off","text_s":0.446387676,"total_s":5.437282069,"video_encode_s":0.00007614,"video_push_s":0.00003346,"video_rgb_s":0.026628168000577664,"video_vae_s":2.9808159866333006,"video_wait_s":0.7392494810000001,"write_s":0.089853842}
+wan gen default: total 5.44s (text 0.45s, denoise 1.99s, decode 2.98s) png 0.09s peak Some(27684) MiB frames 8a02c6447912d242268cc532a70a3147128cb887a9e40ba42fe735c0581cda62
+[PASS] wan/frames {"decoded":81,"written":81} (limits {"expected":81})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/serve-engine/3bc6d03-10270203/cli-wan-turbo/frames/frame-040.png","mean":0.47452973499850687,"std":0.27414107028111} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/serve-engine/3bc6d03-10270203/cli-wan-turbo/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (41.1s)
