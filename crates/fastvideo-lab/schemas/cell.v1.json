@@ -181,7 +181,7 @@
           "minimum": 0
         },
         "tae": {
-          "description": "A tiny-autoencoder file the arm reads as `{tae}/<file>` (the script's\n`tae_gated_cell`): fetched once with `fetch-tae.sh` when missing, and\nthe arm recorded as skipped (`tae weights missing`) when still absent.",
+          "description": "A tiny-autoencoder file the arm reads as `{tae}/<file>` (the script's\n`tae_gated_cell`): fetched once with `fetch-tae.sh` when missing, and\nthe arm recorded as skipped (`tae weights missing`) when still absent.\nWithout it a gated arm may still read `{tae}` (the directory, or a\nfile under it: ADR-0019 §22.4, Addition 16, the script's `$TAE` in a\n`gated_cell`): it is then not TAE-gated (no fetch by the runner, no\n`tae weights missing` skip) and gates on its trees only, so a file\nstill missing is the arm's failure (or, for a `wan gen` arm in the\n`auto` decoder mode, a silent fall back to the Wan VAE). Such a cell\nruns only in a tier with `tae = true`, whose pod start runs\n`fetch-tae.sh` (an attempt, not a guarantee), and every `{tae}/<file>`\nit names must be a file `fetch-tae.sh` fetches (`tests/lab_files.rs`).",
           "type": [
             "string",
             "null"

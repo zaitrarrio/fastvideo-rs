@@ -9,8 +9,8 @@
 #   - `gold`, the experiment tiers (h3-graphs, ADR-0019 §14) and the sibling
 #     tiers (oracle-r2, §21; hd5, §22) refused for run / all (their plan still
 #     the script's body);
-#   - serve-engine (§22, S3) on the script path, its GPU check's FV_R2_TREES
-#     form planned;
+#   - serve-engine (§22, S3) and sfstream (§22, S4) on the script path, their
+#     GPU checks' FV_R2_TREES forms planned;
 #   - hd's dropped post-script hook (FV_HD_POST_URL, FV_HD_POST_TIMEOUT_S,
 #     ADR-0019 §22, S2) refused by runpod-http.sh (script path and fv-lab
 #     route) and runpod-matrix.sh;
@@ -249,6 +249,26 @@ expect "serve-engine: the GPU check's script side plans" 0 '"name": "fv-lab-serv
   FV_CONTAINER_DISK_GB=150 bash "$HTTP" plan abc1234 abc1234-t
 expect "serve-engine: FV_R2_TREES needs the tier's disk" 2 "FV_CONTAINER_DISK_GB=150 or more" -- \
   FV_DRY_RUN=1 FV_FAMILY=serve-engine FV_R2_TREES=fastwan21-1.3b bash "$HTTP" run abc1234
+
+# sfstream (ADR-0019 §22, S4): the same, its one tree sfwan21-1.3b from R2;
+# its dry run shows each arm's FASTVIDEO_TAE_DIR (the lockstep env entry).
+expect "sfstream: run is the script path" 0 "a pod running runpod-matrix.sh sfstream" -- \
+  FV_DRY_RUN=1 FV_FAMILY=sfstream bash "$HTTP" run abc1234
+expect "sfstream: the GPU check's script side plans" 0 '"name": "fv-lab-sfstream-abc1234-t"' -- RUNPOD_API_KEY=x \
+  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=sfstream FV_R2_TREES=sfwan21-1.3b \
+  FV_CONTAINER_DISK_GB=150 bash "$HTTP" plan abc1234 abc1234-t
+expect "sfstream: FV_R2_TREES needs a disk for the tree" 2 "(28.93 GB) and 120 GB: FV_CONTAINER_DISK_GB=149 or more" -- \
+  FV_DRY_RUN=1 FV_FAMILY=sfstream FV_R2_TREES=sfwan21-1.3b bash "$HTTP" run abc1234
+mkdir -p "$TMP/sfw/weights/auxiliary/tae" "$TMP/sfs"
+: >"$TMP/sfw/weights/auxiliary/tae/.complete"
+expect "sfstream: each arm's own FASTVIDEO_TAE_DIR, no fetch in a dry run" 0 \
+  "dry-run sfstream-main: env FASTVIDEO_TAE_DIR=$TMP/sfw/weights/auxiliary/tae " -- \
+  FV_DRY_RUN=1 FV_WORK="$TMP/sfw" FV_SCRATCH="$TMP/sfs" bash "$MATRIX" sfstream
+if [[ -e "$TMP/sfw/weights/auxiliary/tae/taew2_1.safetensors" || -e "$TMP/sfs/runs/sfstream/tae-fetch.log" ]]; then
+  bad "sfstream: a dry run fetched taew2_1"
+else
+  ok "sfstream: a dry run fetched nothing"
+fi
 
 # b4a (ADR-0019 §11.6): fv-lab only, its GPU gate's cell selected by arm;
 # the script side's FV_B4A_CELLS in FV_EXTRA_ENV is refused with that answer.

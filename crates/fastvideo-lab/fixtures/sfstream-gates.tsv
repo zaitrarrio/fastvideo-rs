@@ -1,0 +1,2 @@
+arm	sfstream-main	sfwan21-1.3b	-	sfwan21-1.3b:transformer sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler
+arm	sfstream-10min	sfwan21-1.3b	-	sfwan21-1.3b:transformer sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler

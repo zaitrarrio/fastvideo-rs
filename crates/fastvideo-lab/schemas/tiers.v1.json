@@ -125,7 +125,7 @@
           "type": "string"
         },
         "tae": {
-          "description": "Fetch the tiny autoencoders (`fetch-tae.sh`) onto the container disk\nat start, as `runpod-http.sh` does unless `FV_SKIP_TAE=1`.",
+          "description": "Fetch the tiny autoencoders (`fetch-tae.sh`) onto the container disk\nat start, as `runpod-http.sh` does unless `FV_SKIP_TAE=1`. Required\nby a cell whose arm reads `{tae}` without an arm `tae` file (ADR-0019\n§22.4, Addition 16): nothing else tries to fetch the files for it (the\nstart's attempt is not retried per arm).",
           "type": "boolean",
           "default": false
         },

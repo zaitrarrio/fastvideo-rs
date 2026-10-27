@@ -25,6 +25,9 @@
 //! `serve-engine` (ADR-0019 §22, S3) is a `volume+r2` tier of its own live
 //! branch, read the same way (its engine arms' `--weights-root` is the root
 //! itself; `the_serve_engine_tier_is_the_serve_engine_family_without_tae_dir`).
+//! `sfstream` (ADR-0019 §22, S4) too, its arms' `FASTVIDEO_TAE_DIR={tae}` the
+//! merged root's `auxiliary/tae` where the script's is the volume's
+//! (`the_sfstream_tier_is_the_sfstream_family_with_tae_dir_per_arm`).
 
 mod common;
 
@@ -98,6 +101,13 @@ fn config(family: &str) -> RunConfig {
     {
         let sources = TreeSources::load(&repo_root()).expect("volumes.sh, weights-r2.tsv");
         c.r2 = Some(R2Setup::new(sources, &c.scratch, None));
+        // Its `$TAE` with the volume's copy complete: the merged root's link
+        // to it (RunConfig::tae reads the marker on the volume and answers
+        // `<merged root>/auxiliary/tae`), as the script's on an FV_R2_TREES
+        // run, and as `common::merged_root` reads the script's
+        // `/workspace/weights/auxiliary/tae` (`sfstream`'s
+        // `FASTVIDEO_TAE_DIR={tae}`, ADR-0019 §22, S4).
+        c.tae_dir = Some("/fvscratch/weights/auxiliary/tae".into());
     }
     c
 }
@@ -885,5 +895,126 @@ fn the_serve_engine_tier_is_the_serve_engine_family_without_tae_dir() {
     assert_eq!(
         raw.matches(" --weights-root /workspace/weights ").count(),
         3
+    );
+}
+
+/// The `sfstream` tier (ADR-0019 §22, S4): `runpod-matrix.sh sfstream` with
+/// its `export FASTVIDEO_TAE_DIR="$TAE"` moved into each arm's env in the
+/// same commit (§22.4's lockstep line). Its default run is the script's two
+/// arms in the script's order (`fixtures/sfstream-dry-run.txt`, held line
+/// for line by `dry_run_equals_runpod_matrix_sh_for_every_tier`), each
+/// `env FASTVIDEO_TAE_DIR=<$TAE> fv-gpucheck --keep-going --mode fast wan
+/// stream …`, and nothing else: no TAE fetch, no compare. The arms read
+/// `{tae}` without a `tae` file (Addition 16): not TAE-gated (no TAE file in
+/// the gates, the script's `gated_cell`), gated on `sfwan21-1.3b` only, in a
+/// `tae = true` tier. Being `volume+r2`, fv-lab's R2 plan fetches
+/// `sfwan21-1.3b` once, before `sfstream-main`, and `{tae}` is the merged
+/// root's `auxiliary/tae` (the script's `/workspace/weights/auxiliary/tae` read
+/// by `common::merged_root`).
+#[test]
+fn the_sfstream_tier_is_the_sfstream_family_with_tae_dir_per_arm() {
+    const ARMS: [&str; 2] = ["sfstream-main", "sfstream-10min"];
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier("sfstream").expect("sfstream");
+    assert_eq!(tier.cells, ["sfstream-rollout"]);
+    assert_eq!(tier.weights, TierWeights::VolumeR2);
+    assert_eq!(tier.container_disk_gb, 150);
+    assert_eq!(tier.cell_timeout_s, 3600);
+    assert!(
+        tier.tae,
+        "Addition 16: a {{tae}} reader's tier fetches the files"
+    );
+    assert!(tier.extra_cells.is_empty());
+    assert!(common::sibling_tier("sfstream").is_none());
+    assert!(common::restored_tier("sfstream").is_none());
+    let cell = lab.cells.get("sfstream-rollout").expect("the cell");
+    assert_eq!(
+        cell.tae_dir_arms(),
+        ARMS,
+        "both arms read {{tae}} without a tae file"
+    );
+    assert!(cell.arms.iter().all(|a| a.tae.is_none()
+        && a.gate.as_deref() == Some("sfwan21-1.3b")
+        && a.trees == ["sfwan21-1.3b"]));
+    let cfg = config("sfstream");
+    let rendered = steps(&lab, &cfg);
+    for s in Step::flatten(&rendered) {
+        match s {
+            Step::Arm {
+                name, gate, tae, ..
+            } => {
+                assert!(ARMS.contains(&name.as_str()), "{name}");
+                assert_eq!(gate.as_deref(), Some("sfwan21-1.3b"));
+                assert_eq!(*tae, None, "{name}: not TAE-gated");
+            }
+            other => panic!("only arms: {other:?}"),
+        }
+    }
+    let all = dry_run_lines(&cfg, &rendered);
+    let r2: Vec<&String> = all.iter().filter(|l| r2_line(l)).collect();
+    assert_eq!(r2.len(), 2, "{r2:?}");
+    assert!(
+        r2[0].starts_with("[sfstream] dry-run weights /fvscratch/weights: ")
+            && r2[0].contains("; 1 R2 trees (28.93 GB) fetched before the arms that read them, at most 28.93 GB on the container disk at once"),
+        "{}",
+        r2[0]
+    );
+    assert!(
+        r2[1].starts_with("[sfstream] dry-run r2 sfstream-main: fetch sfwan21-1.3b@")
+            && r2[1].ends_with(" (28.93 GB) into /fvscratch/weights"),
+        "{}",
+        r2[1]
+    );
+    let lines: Vec<String> = all.into_iter().filter(|l| !r2_line(l)).collect();
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("[sfstream] matrix start image=unknown")
+    );
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("[sfstream] matrix done")
+    );
+    assert_eq!(lines.len(), ARMS.len() + 2, "nothing but the arms");
+    let prefix = "env FASTVIDEO_TAE_DIR=/fvscratch/weights/auxiliary/tae /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast wan stream --weights /fvscratch/weights/sfwan21-1.3b --prompt ";
+    for (l, arm) in lines[1..lines.len() - 1].iter().zip(ARMS) {
+        let cmd = l
+            .strip_prefix(&format!("[sfstream] dry-run {arm}: "))
+            .unwrap_or_else(|| panic!("{arm}: {l}"));
+        assert!(cmd.starts_with(prefix), "{cmd}");
+        assert!(
+            cmd.contains(" --switch-prompt ") && cmd.contains(" --seed 1024 --"),
+            "{cmd}"
+        );
+        assert_eq!(cmd.contains(" --parity "), arm == "sfstream-main", "{cmd}");
+        assert!(
+            !cmd.contains("/workspace/weights"),
+            "the merged root: {cmd}"
+        );
+    }
+    // The lockstep line is in the script's golden: each arm's own env entry
+    // with the volume's $TAE, nothing else changed (ADR-0019 §22.13).
+    let raw = fixture("sfstream-dry-run.txt");
+    assert_eq!(
+        raw.matches(": env FASTVIDEO_TAE_DIR=/workspace/weights/auxiliary/tae /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going ").count(),
+        2
+    );
+    assert!(!raw.contains("WARN") && !raw.contains("tae-fetch"), "{raw}");
+    assert_eq!(
+        fixture("sfstream-gates.tsv")
+            .lines()
+            .map(|l| l.split('\t').take(4).collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>(),
+        [
+            "arm sfstream-main sfwan21-1.3b -",
+            "arm sfstream-10min sfwan21-1.3b -"
+        ],
+        "gated on the tree only, no TAE file"
+    );
+    // fv-lab's refusal of the script's knobs names this cell's arms.
+    let e = fastvideo_lab::knobs::check_extra_env("sfstream", &["FV_SFSTREAM_RUNS=x".into()])
+        .unwrap_err();
+    assert!(
+        e.contains("its arms sfstream-main and sfstream-10min"),
+        "{e}"
     );
 }

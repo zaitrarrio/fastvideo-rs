@@ -196,7 +196,10 @@ pub struct Tier {
     #[serde(default)]
     pub preflight: Vec<String>,
     /// Fetch the tiny autoencoders (`fetch-tae.sh`) onto the container disk
-    /// at start, as `runpod-http.sh` does unless `FV_SKIP_TAE=1`.
+    /// at start, as `runpod-http.sh` does unless `FV_SKIP_TAE=1`. Required
+    /// by a cell whose arm reads `{tae}` without an arm `tae` file (ADR-0019
+    /// §22.4, Addition 16): nothing else tries to fetch the files for it (the
+    /// start's attempt is not retried per arm).
     #[serde(default)]
     pub tae: bool,
     /// The cell files (`lab/cells/<name>.toml`), in run order: the tier's
@@ -845,6 +848,15 @@ pub struct Arm {
     /// A tiny-autoencoder file the arm reads as `{tae}/<file>` (the script's
     /// `tae_gated_cell`): fetched once with `fetch-tae.sh` when missing, and
     /// the arm recorded as skipped (`tae weights missing`) when still absent.
+    /// Without it a gated arm may still read `{tae}` (the directory, or a
+    /// file under it: ADR-0019 §22.4, Addition 16, the script's `$TAE` in a
+    /// `gated_cell`): it is then not TAE-gated (no fetch by the runner, no
+    /// `tae weights missing` skip) and gates on its trees only, so a file
+    /// still missing is the arm's failure (or, for a `wan gen` arm in the
+    /// `auto` decoder mode, a silent fall back to the Wan VAE). Such a cell
+    /// runs only in a tier with `tae = true`, whose pod start runs
+    /// `fetch-tae.sh` (an attempt, not a guarantee), and every `{tae}/<file>`
+    /// it names must be a file `fetch-tae.sh` fetches (`tests/lab_files.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tae: Option<String>,
     /// `K=V` settings, in order, for `env K=V … fv-gpucheck …`. Absent: no
@@ -1056,6 +1068,25 @@ impl CellFile {
         Ok(out)
     }
 
+    /// The arms that read `{tae}` (in `env` or `argv`) without a `tae` file
+    /// of their own (ADR-0019 §22.4, Addition 16): not TAE-gated, so only a
+    /// tier with `tae = true` fetches what they read (`Lab::validate`,
+    /// `Lab::resolve_selected`).
+    pub fn tae_dir_arms(&self) -> Vec<&str> {
+        self.arms
+            .iter()
+            .filter(|a| a.tae.is_none())
+            .filter(|a| {
+                let argv = self.spliced(a).unwrap_or_else(|_| a.argv.clone());
+                a.env_entries()
+                    .iter()
+                    .chain(&argv)
+                    .any(|s| placeholders(s).is_ok_and(|ph| ph.contains(&"tae")))
+            })
+            .map(|a| a.name.as_str())
+            .collect()
+    }
+
     pub fn validate(&self, file: &str) -> Result<(), LabError> {
         if self.schema != CELL_SCHEMA {
             return Err(LabError::Schema {
@@ -1198,11 +1229,15 @@ impl CellFile {
                             format!("`{{{p}}}` in a cell without a [reference]"),
                         ));
                     }
-                    if p == "tae" && arm.tae.is_none() {
+                    // `{tae}` without `tae` (ADR-0019 §22.4, Addition 16):
+                    // allowed in a gated arm, which then gates on its trees
+                    // only; the tier must fetch the files (`tae = true`,
+                    // `Lab::validate`). An ungated arm reads no weights.
+                    if p == "tae" && arm.gate.is_none() {
                         return Err(field(
                             file,
-                            at("argv"),
-                            "`{tae}` in an arm without `tae` (the file it gates on)",
+                            at("gate"),
+                            "an arm that reads `{tae}` gates on its weight trees (an ungated arm reads no weights)",
                         ));
                     }
                     if WORKLOAD_KEYS.contains(&p) {
@@ -2298,6 +2333,25 @@ impl Step {
     }
 }
 
+/// Addition 16 (ADR-0019 §22.4): a cell whose arm reads `{tae}` without a
+/// `tae` file runs only in a tier with `tae = true`. Such an arm is not
+/// TAE-gated, so the tier's pod (`fetch-tae.sh` at start, into
+/// `<scratch>/tae`, the `{tae}` of a volume without its complete copy) is
+/// what provides the files.
+fn tae_dir_tier(t: &Tier, cell: &CellFile) -> Result<(), LabError> {
+    match cell.tae_dir_arms().first() {
+        Some(arm) if !t.tae => Err(field(
+            TIERS_PATH,
+            format!("tier `{}`.tae", t.name),
+            format!(
+                "{CELLS_DIR}/{}.toml arm `{arm}` reads `{{tae}}` without a `tae` file (not TAE-gated, ADR-0019 §22.4): only a tier with `tae = true` fetches the tiny autoencoders",
+                cell.name
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// The checked-in run plan.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lab {
@@ -2412,6 +2466,7 @@ impl Lab {
                         format!("no {CELLS_DIR}/{c}.toml"),
                     )
                 })?;
+                tae_dir_tier(t, cell)?;
                 if let Some(v) = cell.verdict.as_ref().filter(|v| v.family != t.name) {
                     return Err(field(
                         &format!("{CELLS_DIR}/{c}.toml"),
@@ -2479,9 +2534,15 @@ impl Lab {
             .get(target)
             .ok_or_else(|| LabError::Unknown(target.to_owned()))?;
         let tier = match family {
-            Some(f) => self
-                .tier(f)
-                .ok_or_else(|| LabError::Unknown(f.to_owned()))?,
+            Some(f) => {
+                let t = self
+                    .tier(f)
+                    .ok_or_else(|| LabError::Unknown(f.to_owned()))?;
+                // A cell run into another tier's directory: that tier's pod
+                // is the one that fetched (or did not fetch) the TAE files.
+                tae_dir_tier(t, cell)?;
+                t
+            }
             None => self
                 .tiers
                 .tiers
@@ -3054,7 +3115,6 @@ candidate = "x-tae"
             "tae = \"taeh3x.safetensors\"",
             "does not read `{tae}/taeh3x.safetensors`",
         );
-        bad("tae = \"taeh3.safetensors\"\n", "", "without `tae`");
         bad(
             "tae = \"taeh3.safetensors\"",
             "tae = \"a/b\"",
@@ -3062,6 +3122,140 @@ candidate = "x-tae"
         );
         bad("off = \"x-pr\"", "off = \"zz\"", "not an arm");
         bad("bin = \"baseline\"", "bin = \"other\"", "TOML");
+    }
+
+    /// Addition 16 (ADR-0019 §22.4): a gated arm may read `{tae}` (the
+    /// directory, or a file under it) without `tae`. It is then not
+    /// TAE-gated (its step carries no TAE file: `gated_cell`, not
+    /// `tae_gated_cell`) and gates on its trees only; an ungated arm may not
+    /// read it; and the cell runs only in a tier with `tae = true`, also when
+    /// named on its own into another tier (`--family`). `tae = "<file>"`
+    /// keeps its meaning (`baseline_arms_bare_env_tae_and_paired_gates`).
+    #[test]
+    fn tae_without_a_tae_gate_needs_a_tae_tier() {
+        let dir = CELL.replace(
+            "env = [\"FASTVIDEO_TEST_X={weights}/h3-base/x\"]",
+            "env = [\"FASTVIDEO_TAE_DIR={tae}\"]",
+        );
+        assert_ne!(dir, CELL);
+        let c = CellFile::parse(&dir, "c1.toml").unwrap();
+        assert_eq!(c.tae_dir_arms(), ["a1"]);
+        assert!(c.arms[0].tae.is_none());
+        // A file under it, in the argv through a list, counts the same.
+        let file = CELL.replace(
+            "common = [\"--prompt\"",
+            "common = [\"--taehv\", \"{tae}/taew2_1.safetensors\", \"--prompt\"",
+        );
+        let f = CellFile::parse(&file, "c1.toml").unwrap();
+        assert_eq!(f.tae_dir_arms(), ["a1", "a2"]);
+        // An arm with its own `tae` file is TAE-gated, not one of these.
+        let g = CellFile::parse(PAIRS, "p1.toml").unwrap();
+        assert!(g.arms[2].tae.is_some());
+        assert!(g.tae_dir_arms().is_empty());
+        // The script's gated_cell: no TAE file on the step, the trees' gate.
+        let p = paths();
+        let steps = Lab::steps(&[&c], Path::new("/bin/fv"), &p).unwrap();
+        match &steps[0] {
+            Step::Arm {
+                name,
+                gate,
+                tae,
+                command,
+                ..
+            } => {
+                assert_eq!(name, "a1");
+                assert_eq!(gate.as_deref(), Some("h3-base"));
+                assert_eq!(*tae, None, "not TAE-gated");
+                assert_eq!(
+                    command[..3],
+                    ["env", "FASTVIDEO_TAE_DIR=/fvscratch/tae", "/bin/fv"]
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // An ungated arm reads no weights, the tiny autoencoders included.
+        let ungated = dir.replacen("gate = \"h3-base\"\ntrees = [\"h3-base\"]\nenv", "env", 1);
+        assert_ne!(ungated, dir);
+        let ungated = ungated.replace("\"--weights\", \"{weights}/h3-base\", ", "");
+        let e = CellFile::parse(&ungated, "c1.toml")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("arm[0].gate") && e.contains("reads `{tae}`"),
+            "{e}"
+        );
+        // Only a tier with `tae = true` runs such a cell.
+        let lab = |tae: bool| Lab {
+            root: PathBuf::new(),
+            tiers: Tiers::parse(
+                &TIERS.replace(
+                    "cells = [\"c1\"]",
+                    &format!("tae = {tae}\ncells = [\"c1\"]"),
+                ),
+                "tiers.toml",
+            )
+            .unwrap(),
+            cells: [("c1".into(), c.clone())].into(),
+        };
+        lab(true).validate().unwrap();
+        let e = lab(false).validate().unwrap_err().to_string();
+        assert!(
+            e.contains("tier `t1`.tae")
+                && e.contains("lab/cells/c1.toml arm `a1` reads `{tae}` without a `tae` file")
+                && e.contains("ADR-0019 §22.4"),
+            "{e}"
+        );
+        // Named on its own into another tier: that tier's `tae` decides.
+        let mut two = lab(true);
+        two.tiers = Tiers::parse(
+            &format!(
+                "{}\n{}",
+                TIERS.replace("cells = [\"c1\"]", "tae = true\ncells = [\"c1\"]"),
+                TIERS
+                    .replace("schema = 1\n", "")
+                    .replace("name = \"t1\"", "name = \"t2\"")
+                    .replace("cells = [\"c1\"]", "cells = [\"c2\"]")
+            ),
+            "tiers.toml",
+        )
+        .unwrap();
+        two.cells.insert(
+            "c2".into(),
+            CellFile::parse(
+                &CELL
+                    .replace("\"c1\"", "\"c2\"")
+                    .replace("\"a1\"", "\"b1\"")
+                    .replace("\"a2\"", "\"b2\""),
+                "c2.toml",
+            )
+            .unwrap(),
+        );
+        two.validate().unwrap();
+        assert_eq!(two.resolve("c1", None).unwrap().0.name, "t1");
+        let e = two.resolve("c1", Some("t2")).unwrap_err().to_string();
+        assert!(e.contains("tier `t2`.tae"), "{e}");
+        // In a tier's extra cells too: a `tae = false` tier with the reader
+        // among its `extra_cells` is refused.
+        let mut extra = two.clone();
+        extra.tiers = Tiers::parse(
+            &TIERS.replace(
+                "cells = [\"c1\"]",
+                "tae = false\ncells = [\"c2\"]\nextra_cells = [\"c1\"]",
+            ),
+            "tiers.toml",
+        )
+        .unwrap();
+        let e = extra.validate().unwrap_err().to_string();
+        assert!(
+            e.contains("tier `t1`.tae") && e.contains("lab/cells/c1.toml arm `a1`"),
+            "{e}"
+        );
+        // A cell without such an arm runs in any tier.
+        let plain = CellFile::parse(CELL, "c1.toml").unwrap();
+        assert!(plain.tae_dir_arms().is_empty());
+        let mut no = lab(false);
+        no.cells = [("c1".into(), plain)].into();
+        no.validate().unwrap();
     }
 
     const VERDICT: &str = r#"

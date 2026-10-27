@@ -386,6 +386,68 @@ fn baseline_arms_and_tae_arms() {
     assert!(compare < gate);
 }
 
+/// Addition 16 (ADR-0019 §22.4): an arm that reads `{tae}` without a `tae`
+/// file (`sfstream`'s `FASTVIDEO_TAE_DIR={tae}`) is the script's
+/// `gated_cell`: no `fetch-tae.sh` and no `tae weights missing` skip, even
+/// with the TAE directory empty; it gates on its trees only.
+#[test]
+fn a_tae_dir_arm_gates_on_its_trees_only() {
+    const DIR: &str = r#"
+schema = 1
+name = "d"
+description = "{tae} without a tae file"
+
+[workload]
+model = "wan"
+
+[[arm]]
+name = "d-dir"
+gate = "ok"
+trees = ["w"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["gen", "--tae-dir", "{tae}"]
+
+[[arm]]
+name = "e-dir"
+gate = "missing"
+trees = ["w"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["gen"]
+"#;
+    let f = fake("taedir");
+    fetchers(&f, true);
+    let cell = CellFile::parse(DIR, "d.toml").unwrap();
+    assert_eq!(cell.tae_dir_arms(), ["d-dir", "e-dir"]);
+    let cfg = config(&f);
+    // No complete volume copy: `{tae}` is <scratch>/tae, which does not exist.
+    let tae = f.dir.join("scratch/tae");
+    assert_eq!(cfg.tae(), tae);
+    assert!(!tae.exists());
+    let steps = Lab::steps(&[&cell], &cfg.bin, &cfg.paths()).unwrap();
+    Runner::new(cfg).run(&steps).unwrap();
+    let runs = f.dir.join("scratch/runs/fam/t1");
+    assert!(read(&runs.join("d-dir/summary.json")).contains("\"exit\":0,"));
+    assert!(read(&runs.join("d-dir/stdout.log"))
+        .contains(&format!("args: gen --tae-dir {}", tae.display())));
+    // Its trees' gate still decides.
+    assert_eq!(
+        read(&runs.join("e-dir/summary.json")),
+        "{\"cell\":\"e-dir\",\"family\":\"fam\",\"exit\":null,\"skipped\":\"weights incomplete\"}\n"
+    );
+    // No TAE fetch, no TAE skip.
+    assert!(!runs.join("tae-fetch.log").exists());
+    assert!(!tae.exists());
+    let log = read(&runs.join("live.log"));
+    assert!(
+        !log.contains("tae weights missing") && !log.contains("tae-fetch.log"),
+        "{log}"
+    );
+    assert!(
+        log.contains("[fam] SKIP e-dir: weights incomplete"),
+        "{log}"
+    );
+}
+
 #[test]
 fn an_unavailable_baseline_is_fatal_before_any_arm() {
     let f = fake("nobase");

@@ -667,3 +667,38 @@ weights = "volume+r2"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["serve-engine-h3-turbo", "serve-engine-ltx-turbo", "serve-engine-fastwan21-1.3b"]
+
+# ---- D1, slice S4 (docs/adr/0019-fv-lab.md §22, S4): the `sfstream` family as
+# a tier, with §22.4's Addition 16 (an arm may read `{tae}` without a `tae`
+# file: not TAE-gated, gated on its trees only; allowed only in a tier with
+# `tae = true`, which this one is). In lockstep, the script's `export
+# FASTVIDEO_TAE_DIR="$TAE"` became each arm's env entry (and its taew2_1 fetch
+# is skipped in a dry run), so the script's dry run is the tier's
+# (fv-lab-goldens.sh). The branch stays until the GPU check through both
+# runners (§22.14); S7 then retires it.
+# runpod-matrix.sh `sfstream`: SF-Wan 1.3B's open-ended causal rollout (`wan
+# stream`): parity with the bounded path, long runs, prompt switches, a
+# 10-minute memory-growth run. The script's FV_SFSTREAM_RUNS, FV_SF_PROMPT and
+# FV_SF_SWITCH are the cell's defaults (fv-lab refuses them:
+# knobs::SCRIPT_KNOBS); select an arm with --cells. The rtx6000 tier's pod,
+# with weights "volume+r2": sfwan21-1.3b (28.93 GB) is R2-only since
+# 2026-10-13, fetched onto the container disk before the first arm (150 GB:
+# the tree and the 120 GB every volume tier keeps, as oracle-r2's); `tae =
+# true` fetches taew2_1 (fetch-tae.sh) when the volume lacks it.
+[[tier]]
+name = "sfstream"
+description = "SF-Wan 1.3B open-ended causal rollout (fv-gpucheck wan stream, TAEHV per block): parity with the bounded 81-frame path, a 120 s rebased sink-15 run, keep / reset prompt switches, and a 10-minute memory-growth run"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 150
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["sfstream-rollout"]
