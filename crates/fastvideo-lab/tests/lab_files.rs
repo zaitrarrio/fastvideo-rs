@@ -225,6 +225,81 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
     for t in tiers_with_tae_arms {
         assert!(t.tae, "tier {} has TAE arms: tae = true", t.name);
     }
+    // Addition 16 (ADR-0019 §22.4): the arms that read `{tae}` without a
+    // `tae` file are sfstream's two (`FASTVIDEO_TAE_DIR={tae}`), in a `tae =
+    // true` tier (`Lab::load` refuses any other), and the file they need,
+    // taew2_1, is one fetch-tae.sh fetches.
+    let readers: Vec<(&str, &str)> = lab
+        .tiers
+        .tiers
+        .iter()
+        .flat_map(|t| {
+            t.all_cells()
+                .filter_map(|c| lab.cells.get(c))
+                .flat_map(|c| c.tae_dir_arms())
+                .map(move |a| (t.name.as_str(), a))
+        })
+        .collect();
+    assert_eq!(
+        readers,
+        [
+            ("sfstream", "sfstream-main"),
+            ("sfstream", "sfstream-10min")
+        ]
+    );
+    assert!(lab.tier("sfstream").is_some_and(|t| t.tae));
+    // sfstream's arms read the directory; `wan stream` reads taew2_1 in it.
+    assert!(fetch.contains("\nfetch taew2_1.safetensors "));
+}
+
+#[test]
+fn every_tae_file_a_tae_dir_arm_names_is_one_fetch_tae_sh_fetches() {
+    // Addition 16 (ADR-0019 §22.4): an arm that reads `{tae}` without a `tae`
+    // file is not TAE-gated, so nothing but the pod start's fetch-tae.sh (its
+    // tier's `tae = true`) tries to provide what it reads. Every
+    // `{tae}/<file>` such an arm names, in any tier (cells and extra cells),
+    // in `env` or the spliced argv, must then be a file fetch-tae.sh fetches.
+    // (`wan`'s `--taehv {tae}/taew2_2.safetensors`, S6, needs taew2_2 added
+    // to fetch-tae.sh first.)
+    fn tae_files(s: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let mut rest = s;
+        while let Some(i) = rest.find("{tae}/") {
+            let after = &rest[i + "{tae}/".len()..];
+            let end = after.find(['/', ' ', '"', ',']).unwrap_or(after.len());
+            out.push(&after[..end]);
+            rest = &after[end..];
+        }
+        out
+    }
+    assert_eq!(
+        tae_files("--taehv {tae}/taew2_2.safetensors x={tae}/a,{tae}"),
+        ["taew2_2.safetensors", "a"]
+    );
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let fetch = read("scripts/gpu/fetch-tae.sh");
+    let mut readers_seen = 0;
+    for t in &lab.tiers.tiers {
+        for c in t.all_cells().filter_map(|c| lab.cells.get(c)) {
+            let readers = c.tae_dir_arms();
+            for a in c.arms.iter().filter(|a| readers.contains(&a.name.as_str())) {
+                readers_seen += 1;
+                assert!(t.tae, "{}: tier {} without tae = true", a.name, t.name);
+                let argv = c.spliced(a).expect("lists splice");
+                for s in a.env_entries().iter().chain(&argv) {
+                    for file in tae_files(s) {
+                        assert!(
+                            fetch.contains(&format!("\nfetch {file} ")),
+                            "{} (tier {}) reads {{tae}}/{file}, which fetch-tae.sh does not fetch",
+                            a.name,
+                            t.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(readers_seen >= 2, "sfstream's two arms at least");
 }
 
 #[test]

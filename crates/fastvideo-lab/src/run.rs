@@ -3084,6 +3084,52 @@ mod tests {
         );
     }
 
+    /// `RunConfig::tae` on a `volume+r2` run (ADR-0019 §16.3; §22, S4: the
+    /// `{tae}` of `sfstream`'s `FASTVIDEO_TAE_DIR`): with the marker on the
+    /// volume (`<work>/weights/auxiliary/tae/.complete`) the merged root's
+    /// `auxiliary/tae` (its link to the volume's copy, made when the run
+    /// starts), else `<scratch>/tae` (the pod start's `fetch-tae.sh` copy). A
+    /// marker under the merged root alone does not count, and `FV_AUX_DIR`
+    /// reads its own marker.
+    #[test]
+    fn a_volume_r2_run_reads_the_tae_marker_on_the_volume() {
+        let dir = std::env::temp_dir().join(format!("fv-lab-r2-tae-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut c = RunConfig::new("sfstream", Path::new("/opt/fastvideo-rs"));
+        c.work = dir.join("work");
+        c.scratch = dir.join("scratch");
+        let sources = crate::weights::TreeSources {
+            volume: Vec::new(),
+            r2: std::collections::BTreeMap::new(),
+        };
+        c.r2 = Some(crate::weights::R2Setup::new(sources, &c.scratch, None));
+        let merged = dir.join("scratch/weights");
+        assert_eq!(c.weights(), merged);
+        // No marker anywhere: the container disk's copy.
+        assert_eq!(c.tae(), dir.join("scratch/tae"));
+        // A marker under the merged root only (no volume copy): still the
+        // container disk's.
+        std::fs::create_dir_all(merged.join("auxiliary/tae")).unwrap();
+        std::fs::write(merged.join("auxiliary/tae/.complete"), "").unwrap();
+        assert_eq!(c.tae(), dir.join("scratch/tae"));
+        // The volume's marker: the merged root's auxiliary/tae.
+        let vol = dir.join("work/weights/auxiliary/tae");
+        std::fs::create_dir_all(&vol).unwrap();
+        std::fs::write(vol.join(".complete"), "").unwrap();
+        assert_eq!(c.tae(), merged.join("auxiliary/tae"));
+        assert_eq!(c.paths().tae, merged.join("auxiliary/tae"));
+        // FV_AUX_DIR set: its own marker decides.
+        c.aux_dir = Some(dir.join("aux"));
+        assert_eq!(c.tae(), dir.join("scratch/tae"));
+        std::fs::create_dir_all(dir.join("aux/tae")).unwrap();
+        std::fs::write(dir.join("aux/tae/.complete"), "").unwrap();
+        assert_eq!(c.tae(), dir.join("aux/tae"));
+        // FV_TAE_DIR wins over everything.
+        c.tae_dir = Some("/t".into());
+        assert_eq!(c.tae(), Path::new("/t"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `b4-verdict.sh`'s `b4_exit_ok` and `b4_identical` on the stub shapes
     /// of its shell test (pretty-printed reports). Both went with the B4
     /// branches (ADR-0019 §18); the script is frozen in `fixtures/b4a-script/`.
