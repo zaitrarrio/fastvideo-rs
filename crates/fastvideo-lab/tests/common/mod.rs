@@ -198,9 +198,27 @@ impl Sibling {
 
 /// A script's line as a `volume+r2` tier reads its weights: `{weights}` is
 /// the merged root on the container disk (`/fvscratch/weights`, ADR-0019
-/// §16.3) where the script reads the volume (`/workspace/weights`).
+/// §16.3) where the script reads the volume (`/workspace/weights`): a path
+/// under it, or the root itself as a whole word (`serve-engine`'s
+/// `--weights-root /workspace/weights `, ADR-0019 §22, S3). A longer name
+/// that merely starts with it (`/workspace/weights2`) is not the root.
 pub fn merged_root(line: &str) -> String {
-    line.replace("/workspace/weights/", "/fvscratch/weights/")
+    const VOLUME: &str = "/workspace/weights";
+    const MERGED: &str = "/fvscratch/weights";
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(i) = rest.find(VOLUME) {
+        let after = &rest[i + VOLUME.len()..];
+        out.push_str(&rest[..i]);
+        if after.is_empty() || after.starts_with('/') || after.starts_with(' ') {
+            out.push_str(MERGED);
+        } else {
+            out.push_str(VOLUME);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Writes the executable `path` (a fake tool a test then runs) so that this

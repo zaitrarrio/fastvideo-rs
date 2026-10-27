@@ -39,7 +39,9 @@
   and a small `mmaudio` tier after one cell addition, `{tae}` without a TAE gate) is accepted (coordinator,
   2026-10-26, FVID-2026-10-26-d1-remaining); its slices S1-S8 follow. S2 (§22.9: `hd` and its 1080P-gate sibling
   `hd5` as tiers, the script's derived step dropped in lockstep) is done, CPU-side and GPU-side: its GPU check
-  §22.10 passed on `d53ea62` (2026-10-27, §22.10 "Result"); S7 retires `hd` from the script
+  §22.10 passed on `d53ea62` (2026-10-27, §22.10 "Result"); S7 retires `hd` from the script. S3 (§22.11:
+  `serve-engine` as a `volume+r2` tier, `--tae-dir` dropped from its engine arms in lockstep) is done CPU-side; its
+  GPU check is §22.12, the coordinator's
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -4226,7 +4228,8 @@ passed on `d53ea62` 2026-10-27).
 - *Lost*: LTX `cpu`-against-resident identity, and the 4K `cpu` peaks.
 - The 8 GiB cell becomes a new tier when that work starts.
 
-**`serve-engine`** (rpm:1791-1831): **(a)**, with `--tae-dir` dropped in lockstep.
+**`serve-engine`** (rpm:1791-1831): **(a)**, with `--tae-dir` dropped in lockstep. Done in S3 (§22.11; its GPU check
+§22.12, all six arms).
 - *Measures*: for each of `h3-turbo`, `ltx-turbo` and `fastwan21-1.3b`, the CLI generation, then the same request
   through `EngineService` + `CudaBackend` (`fv-gpucheck engine --reference <the CLI frames> --cancel-after-step N`).
   The frames are byte-compared with the CLI's, and a second job is cancelled mid-run.
@@ -4240,7 +4243,10 @@ passed on `d53ea62` 2026-10-27).
   - `fv-gpucheck engine` defaults it to `<weights root>/auxiliary/tae` (`crates/fastvideo-gpucheck/src/main.rs:230`,
     `crates/fastvideo-engine-service/src/cuda/caps.rs:45-53`), and the gold engine cells omit it.
   - On the EU volume that default is the script's `$TAE`, since its marker is there; on an R2 run it is the merged
-    root's link. So the lockstep change runs the same files; it changes only the argv.
+    root's link. So the lockstep change runs the same files; it changes only the argv. *Corrected in S3 (§22.11)*:
+    `$TAE` is the default only while the marker is there (or on an R2 run); without it, it is `$SCRATCH/tae`, and
+    `FV_TAE_DIR` / `FV_AUX_DIR` can name another. The frames still do not change, for another reason: none of the
+    three recipes reads the TAE directory.
   - `FV_ENGINE_CELLS` becomes `--cells` by arm.
   - The frame deletion (rpm:1830) is disk only.
   - `fastwan21-1.3b` is R2-only, so the tier is `volume+r2`.
@@ -4449,7 +4455,7 @@ After S7 and S8, `runpod-matrix.sh` has no branch left and goes, and with it `ru
 
 #### 22.7 What this section does not change
 
-Nothing by itself: no script, cell, tier, golden, schema or test. Each slice above makes its own changes (S1's: §22.8; S2's: §22.9, §22.10).
+Nothing by itself: no script, cell, tier, golden, schema or test. Each slice above makes its own changes (S1's: §22.8; S2's: §22.9, §22.10; S3's: §22.11, §22.12).
 
 #### 22.8 S1 done: the nine retired with no tier
 
@@ -4665,3 +4671,196 @@ fv-lab 0.1.78's `report summary --kind hd` prints both byte for byte (`tests/rep
 fixtures frozen (§10's way); `hd5`, a sibling of the family, is frozen with it (out of `FV_LAB_SIBLINGS`, into
 `FV_LAB_RETIRED`, its fixtures kept as they are: the restored modes' way, §12, with the `prompt set:` line mapped as
 here), and `FV_HD_POST_*` stay refused.
+
+#### 22.11 S3: `serve-engine` as a tier (done, CPU-side)
+
+Built on `claude/d1-s3-serve-engine` from `d53ea62e` (main with S2 merged; FVID-2026-10-27-d1-s3-serve-engine), as the `serve-engine` row of §22.3 and
+§22.6 item 2 decide. No schema change.
+
+- **The `serve-engine` tier**: three cells, one per group of the branch, each the CLI arm then the engine arm, in the
+  script's order: `serve-engine-h3-turbo` (`cli-h3-turbo`, `engine-h3-turbo`), `serve-engine-ltx-turbo`
+  (`cli-ltx-turbo`, `engine-ltx-turbo`), `serve-engine-fastwan21-1.3b` (`cli-wan-turbo`, `engine-wan-turbo`). Each
+  engine arm reads its CLI arm's frames as `--reference {runs}/cli-…/frames`, so it runs after it. `weights =
+  "volume+r2"` (`fastwan21-1.3b`, 29.21 GB, is R2-only since 2026-10-13: fetched before `cli-wan-turbo`, which reads
+  it first, and read again by `engine-wan-turbo`), `container_disk_gb = 150` (the tree and the 120 GB every volume
+  tier keeps, as `oracle-r2`), `cell_timeout_s = 3600` (the cap `runpod-http.sh` gives the script, so the idle limit
+  is `weights::r2_idle_min(3600)`, 85 min), otherwise the rtx6000 tier's pod (`tae = true`, the same preflight). Its
+  dry run, gates and pod body are the branch's (`fixtures/serve-engine-dry-run.txt`, `serve-engine-gates.tsv`,
+  `runpod-http-serve-engine.json`, from `fv-lab-goldens.sh`), line for line (`tests/dry_run.rs`,
+  `tests/payload_golden.rs`); `the_serve_engine_tier_is_the_serve_engine_family_without_tae_dir` adds that the run is
+  the six arms in the script's order and nothing else, with fv-lab's R2 plan (one fetch, before `cli-wan-turbo`).
+- **The lockstep change, in the same commit**: `--tae-dir "$TAE"` left the three engine arms of
+  `runpod-matrix.sh serve-engine` (rpm:1323, 1335, 1344 at `d53ea62e`; §22.1's 1805, 1817, 1826 at `05d14444`), as
+  the gold engine cells never pass it. What the engine then takes as its TAE directory:
+  - `crates/fastvideo-gpucheck/src/main.rs:230-232`: `--tae-dir` is an `Option<PathBuf>`, "default
+    `<root>/auxiliary/tae`" (and `--weights-root` defaults to `/workspace/weights`, 228-229);
+  - `crates/fastvideo-gpucheck/src/engine_stage.rs:73-76`: the layout is `WeightLayout::new(weights_root)`,
+    `with_tae_dir` only when the flag is given;
+  - `crates/fastvideo-engine-service/src/cuda/caps.rs:44-46, 50-56`: `WeightLayout::new` sets `tae_dir:
+    root.join("auxiliary").join("tae")` (line 53); the family files' `${tae}` is replaced by it
+    (`crates/fastvideo-engine-service/src/cuda/families.rs:149`).
+
+  The script's `$TAE` (`runpod-matrix.sh`, the `TAE=` block) is **not** always that directory:
+  - with the volume's `auxiliary/tae/.complete` marker (bz0ofkfx45, and the goldens): `$W/auxiliary/tae`, the
+    default;
+  - on an `FV_R2_TREES` run (§21.8): `/fvscratch/weights/auxiliary/tae`, the merged root's link to the volume's
+    (`auxiliary/tae` is a link root of `FV_EU_VOLUME_TREES`), the default again;
+  - without the marker: `$SCRATCH/tae` (the start command's fetched copy), not the default;
+  - with `FV_TAE_DIR` or `FV_AUX_DIR` set: whatever they name.
+
+  So the argv is not equivalent in every case (a dry run without the marker shows the base passing `--tae-dir
+  <scratch>/tae` and this branch nothing). **The frames do not change in any case, because none of the three recipes
+  reads the TAE directory**:
+  - `h3-turbo` is `fasth3-4step-vsa` (the tier alias, `caps.rs:886-895` `find`, the first `turbo` variant of the H3
+    family; the binding `every_tier_alias_is_bound`, `caps.rs:1323-1331`, holds): its variant, `families/h3.toml:89-161`, names no `taeh3`, so it
+    decodes with the conv VAE;
+  - `ltx-turbo` is `ltx25-distill-sol` (the same test): `families/ltx2.toml:81-144` names no `tae`;
+  - `fastwan21-1.3b` has `decoder = "full"` (`families/wan.toml:328`; its `tae_dir = "${tae}"`, 339, is only
+    passed on): `crates/fastvideo-engine-service/src/cuda/wan.rs:125-131` sets `FASTVIDEO_WAN_VAE=full` (and
+    `FASTVIDEO_TAE_DIR` to that directory unless already set), and `crates/fastvideo-cudarc/src/wan/pipeline.rs:600`
+    searches the TAEHV directories only when the VAE choice is not `Full` (`load_taehv`, 38-49, reads only
+    `FASTVIDEO_TAEHV_WEIGHTS`, which nothing here sets).
+
+  Without the marker the only observable change is two path strings nothing compares: the `tae_dir` of
+  `engine-wan-turbo`'s recorded model (`engine_stage.rs:99`, `report.set("model", &model)`: the serialized
+  `CudaModel` with its `WanRecipe::tae_dir`, `caps.rs:283`) in `gpucheck-out/engine.json`, and the exported
+  `FASTVIDEO_TAE_DIR` value. With the marker (every run on bz0ofkfx45, R2 runs included) nothing changes but the
+  argv. `wan`'s `engine-fw22` keeps its `--tae-dir "$TAE"` (rpm:873 at `d53ea62e`): it goes with `wan`'s slice, S6.
+- **Intended differences**, each named in the code (the cell headers, the branch's comments, `tests/dry_run.rs`):
+  1. *`--tae-dir`* gone from the engine arms: the only change to the script's dry run (below).
+  2. *The frame removal* after the family (`rm -rf "$RUNS"/cli-*/frames "$RUNS"/engine-*/out/*/frames`): not
+     copied. Disk only, as §15.5's `-dump-cond` and §22.9's prune; no dry run shows it. A CLI arm's frames are
+     recorded in its `frames.sha256.json`, written right after it, which the runs compare. An engine arm has none:
+     `frames_digest` (rpm:162-175 on this branch; fv-lab's `run.rs` `frames_digest`, 2857-2861) reads only `<arm>/frames`, and the
+     engine writes its frames under `<arm>/out/<job id>/frames`. Its frames' record is its `engine/frames` check,
+     `[PASS] engine/frames {"frames_sha256": …}` in its `stderr.log` and `gpucheck-out/engine.json` (written before
+     the removal).
+  3. *`FV_ENGINE_CELLS`* (`h3 ltx wan`, the branch's group picker) is `--cells` / `FV_CELLS` by arm. fv-lab refuses
+     it (`knobs::SCRIPT_KNOBS`, `run`'s environment and `pod up --extra-env`, "§22, S3"), as it refused
+     `FV_ATTN3_*` while `attn3`'s branch lived (§17.2); `runpod-http.sh`'s `FV_LAB_NOT_READ` gains it in S7, when
+     the branch goes, as `FV_ATTN3_*` did (§17.6).
+- **Test support**: `common::merged_root` reads the volume's root as the merged root also as a whole word (the
+  engine arms' `--weights-root /workspace/weights `), not only as a path prefix; a longer name that starts with it
+  is left alone (tested). `tests/payload_golden.rs` counts three `volume+r2` tiers (`gold`, `oracle-r2`,
+  `serve-engine`), holds the tier's body to 150 GB and 85 min, and the script side's GPU-check body
+  (`fixtures/runpod-http-serve-engine-r2.json`: `FV_FAMILY=serve-engine FV_R2_TREES=fastwan21-1.3b
+  FV_CONTAINER_DISK_GB=150 runpod-http.sh plan`, a new golden of `fv-lab-goldens.sh`) to fv-lab's R2 references, the
+  tier's disk and idle limit, the link roots and the pinned revision (`the_script_side_r2_pod_reads_its_trees_as_the_serve_engine_tier`,
+  §21.8's test on a helper shared with `oracle-r2`'s). `fv-lab-route.test.sh`: `serve-engine` runs on the script path,
+  its `FV_R2_TREES` form plans, and a disk under 150 GB is refused before the key.
+- **Mutations, each caught**: `--tae-dir "$TAE"` restored on one engine arm (`fv-lab-goldens.sh --check`); `--tae-dir
+  {tae}` in an engine cell (`Lab::load` refuses `{tae}` without a TAE gate, `plan.rs`'s check that §22.4 will relax; every `tests/dry_run.rs` test fails to load `lab/`); the cells reordered
+  (`tests/dry_run.rs`); `merged_root` without the whole-word root (`tests/dry_run.rs`); `FV_ENGINE_CELLS` out of
+  `SCRIPT_KNOBS` (`knobs::tests`); the tier `weights = "volume"` (`tests/payload_golden.rs`).
+- **Before and after** (§22.1's dry runs, the volume's `auxiliary/tae` marked complete, `FV_BASELINE_SHA` set, no
+  `FV_LAB_BIN`, no `FV_ORACLE_URL` unless named; on main `d53ea62e` and on this branch; output with time stamps, the
+  temporary directory and the repository path normalised, `FV_DRY_RUN_GATES` records and exit status): **byte-identical**
+  for `mmaudio` (5 lines, 2 records; exit 1 at the same `find`, §22.1), `sfwan` (96, 24), `sfstream` (4, 2), `wan`
+  (102, 65), `oracle` (26, 8), `hd` (10, 8), and the forms S1 and S2 checked: `oracle` with `FV_ORACLE_TARGETS=sfwan13`
+  (18, 4; also with `FV_GEN_TIMEOUT_S=5400`), its nine tensor-diff targets (43, 14) and ten clip-metric targets (145,
+  23) at `FV_GEN_TIMEOUT_S=5400`, `wan` (102, 65), `sfwan` (114, 28) and `oracle` (26, 8) with `FV_ORACLE_URL`, `hd`
+  with `FV_PROMPTS=…/prompts-hd5.json` (11, 8), and the twenty retired families' refusals (exit 2). `serve-engine`
+  (8 lines, 6 records), with `FV_ENGINE_CELLS=h3` (4, 2) and with `FV_CELLS="cli-wan-turbo engine-wan-turbo"` (8, 2):
+  the same records and exit, and each output equal to the base's with ` --tae-dir /workspace/weights/auxiliary/tae`
+  removed (three occurrences, one, one), nothing else.
+- **Lost**: nothing a run records. `FV_ENGINE_CELLS` by group is now six arm names.
+
+#### 22.12 S3: the GPU check
+
+§8's procedure, as §22.10's: one commit `SHA` for both sides (this PR's head or its merge, once
+`fastvideo-rs-runtime:sha-<7>` is published with its `lab/`, fv-lab and `runpod-matrix.sh`: the script side needs the
+branch without `--tae-dir`), both sides in parallel, then `fv-lab-compare-runs.sh`. One RTX PRO 6000 Blackwell Server
+Edition per side, EU-RO-1 on `bz0ofkfx45`, about $2.49/hr; pod boot and preflight about 5 min per side. `h3-base`, the
+FastH3 LoRA and `ltx25` are on the volume; `fastwan21-1.3b` (29.21 GB) is fetched from R2 on **both** sides: fv-lab's
+pod by the tier (`volume+r2`), the script's by `FV_R2_TREES=fastwan21-1.3b` (§21.8: the merged root
+`/fvscratch/weights`, so `$W` and every command line are fv-lab's word for word; without it the script side would skip
+the wan group, `weights incomplete`, and the two runs would differ) on the tier's 150 GB disk. The Runpod secrets
+`fv_r2_access_key_id` / `fv_r2_secret_access_key` must exist (they did for §21.7). The build pod is stopped first
+(§21.7).
+
+The arms (§22.3, §22.6): **all six**, each group's CLI arm first (the engine arm's reference). The compare exercised
+is the runners' (`fv-lab-compare-runs.sh` over the CLI arms' `frames.sha256.json`); the engine's own byte comparison
+with the CLI frames (`engine/identical_to_cli`) and its cancel (`engine/cancel`) are each engine arm's checks, in its
+`stderr.log` and `gpucheck-out/engine.json`, both fetched by both runners. Both sides fetch the run's **tree**, without
+PNG frames and caches: the script side's R2 records (`r2-stage.log`, `r2-fetch.json`, `r2-apt.log`) are in the run
+directory itself, which its plain fetch (`runpod-http.sh` `fetch_results`: the fixed run files, then each arm's
+summaries, logs and JSON) never takes; §21.7 had them only through `FV_FETCH_TREE=1`. fv-lab's side fetches its tree
+too, for symmetry and for its own `r2-apt.log` and `cli-wan-turbo/r2-fetch.log`.
+
+```sh
+SHA=<7>
+CELLS=cli-h3-turbo,engine-h3-turbo,cli-ltx-turbo,engine-ltx-turbo,cli-wan-turbo,engine-wan-turbo
+# serve-engine: h3-turbo, ltx-turbo and fastwan21-1.3b, each the CLI then the serve engine (frames against the CLI's, a cancel)
+SKIP='\.png$|\.cache$'
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family serve-engine --cells $CELLS --wall-cap-s 3600 \
+  --fetch-tree --fetch-skip "$SKIP" --yes --wait
+RUNPOD_API_KEY=… FV_FAMILY=serve-engine FV_CELLS="${CELLS//,/ }" FV_POD_CAP_S=3600 \
+  FV_R2_TREES=fastwan21-1.3b FV_CONTAINER_DISK_GB=150 FV_FETCH_TREE=1 FV_FETCH_SKIP="$SKIP" \
+  bash scripts/gpu/runpod-http.sh run $SHA
+L=artifacts/runpod/serve-engine/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/serve-engine/$SHA-<MMDDHHMM>
+bash scripts/gpu/fv-lab-compare-runs.sh $L $S
+grep -hE '^\[(PASS|FAIL)\] engine/(frames|identical_to_cli|cancel) ' $L/engine-*/stderr.log $S/engine-*/stderr.log
+grep -E '\] (weights /fvscratch/weights: |r2 cli-wan-turbo: )' $L/live.log; jq -r .state $L/cli-wan-turbo/r2-fetch.json
+cat $S/r2-stage.log; jq -r .state $S/r2-fetch.json
+find $L $S -name '*.png' | wc -l                                    # 0: no frame fetched
+grep -rlE 'X-Amz-Signature|X-Amz-Credential|FV_WEIGHTS_R2_[A-Z_]+[=":]+ *[^ "{$]+|R2_KEY_(ID|SECRET)=[^"$ ]' $L $S \
+  || echo "no key value or presigned URL in any fetched file"
+```
+
+(`FV_CELLS` names all six, the default; it is passed so both sides state the same selection. `FV_GEN_TIMEOUT_S` is
+`runpod-http.sh`'s default 3600, the tier's `cell_timeout_s`, so the script side's idle limit is the tier's 85 min.)
+
+**Pass**:
+- `fv-lab-compare-runs.sh` exits 0, and both pods end `matrix_exit=0`. No verdict step, so no `--expect-verdicts`.
+  Expected summary line:
+
+  "6 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same
+  compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics
+  report(s), 0 difference(s)".
+
+  - The three CLI arms ran with byte-identical frames: `cli-h3-turbo` 124 PNG frames, `cli-ltx-turbo` 121,
+    `cli-wan-turbo` 81 (each canvas's `--num-frames`).
+  - The three engine arms are "the same" with "no frames": `fv-gpucheck engine` writes its frames under
+    `<arm>/out/<job id>/frames`, not `<arm>/frames`, so neither runner writes a `frames.sha256.json` for them
+    (`frames_digest` in both), and they count as the same, not as "ran".
+  - No `compare/`, `gate/` or `metrics.txt` report on either side.
+- Each engine arm, on both sides (`$L/engine-*/stderr.log`, `$S/engine-*/stderr.log`): summary `exit` 0 and
+  `[PASS] engine/frames`, `[PASS] engine/identical_to_cli` and `[PASS] engine/cancel` (nine lines a side). The
+  compare reports the engine arms only as "no frames"; **their frames' identity across the runners follows from**
+  `identical_to_cli` passing on both sides (each engine clip byte-identical to its own side's CLI clip, frame by frame)
+  **and** the CLI frames being byte-identical across the runners (the compare's three "ran" arms). The
+  `engine/frames` lines' `frames_sha256` should then be equal across the sides too (a direct check). An engine that
+  failed its comparison on both sides alike would leave the compare passing with "1 failed in both"; that is a
+  finding about the engine (the CLI and the engine path differing on one GPU class), not about the runners: report
+  it and keep the branch.
+- R2, each file read from the side that fetched it:
+  - fv-lab (`$L`): `live.log` (fetched by every fetch) has `weights /fvscratch/weights: … 1 R2 trees (29.21 GB)
+    fetched before the arms that read them, at most 29.21 GB on the container disk at once` and `r2 cli-wan-turbo:
+    fetch fastwan21-1.3b@25e7ed7f… (29.21 GB) into /fvscratch/weights`, then `r2 cli-wan-turbo: weights ready: 1
+    tree(s), 29.21 GB fetched in …`; `cli-wan-turbo/r2-fetch.json` (a JSON in the arm's directory, fetched by every
+    fetch) `state` `done`; `r2-apt.log` and `cli-wan-turbo/r2-fetch.log` (tree fetch only) for the details.
+  - The script side (`$S`, tree fetch only): `r2-stage.log` with `r2_key=env`, `weights /fvscratch/weights: …
+    volume trees linked from /workspace/weights; 1 R2 trees (1 fetched): fastwan21-1.3b@25e7ed7f…` and `exit=0`;
+    `r2-fetch.json` `state` `done`.
+  - No key value or presigned URL in any fetched file of either side (the R2 plan stays in `/fvscratch/r2`, outside
+    the served run directory, on both).
+- Each preflight's `weights.log` ends `exit=1` (`h3-8step` incomplete), as on every run on this volume.
+- No PNG fetched (`find … -name '*.png'` 0): the skip drops the CLI arms' frames on fv-lab's side (the script side
+  removes its own at the end of the family) and the engine arms' `out/<job id>/frames` on both; `.cache` drops the
+  shared AdaLN cache. What the tree adds is logs, the JSON reports and the three engine MP4s (`out/<job id>/`).
+
+**Cost** ($2.49/hr, UNVERIFIED until run): per side, boot and preflight ~5 min; python3 and the 29.21 GB fetch ~2 min
+(§21.7 measured 28.93 GB in 27-41 s); the tree fetch at the end ~1-2 min (logs, JSONs and three short MP4s; the
+proxy lists the PNG directories but takes none); the six arms: the gold run at `7e580e5` took 27-44 s per engine arm of these
+variants (one request, `artifacts/runpod/gold/7e580e5-*/{fasth3-4step-vsa,ltx25-distill-sol,fastwan21-1.3b}/summary.json`),
+and `wan`'s `cli-fw22` / `engine-fw22` pair 139 s and 135 s (`artifacts/runpod/wan/9b2c963-09282019/`), so ~1-3 min
+an arm with the engine's second, cancelled job: ~8-15 min. In all **~16-27 min a side, ~$0.65-$1.15 a side,
+~$1.35-$2.25 both** (§22.5's $2.55 assumed 31 min a side). Bounded by the 1 h caps at the tier's $2.50 price cap:
+$2.50 a pod, $5.00 both. **Balance needed**: at least $10.25 before starting at the estimate ($8 floor + $2.25), and
+$13 to stay above the floor even if both pods ran to their caps (CLAUDE.md: stop before the balance would drop below
+$8).
+
+**Then (S7, not this slice)**: on a pass, `serve-engine` joins `FV_LAB_RETIRED`, its branch is deleted and its three
+fixtures frozen (§10's way; `runpod-http-serve-engine-r2.json` stops being written with it), and `FV_ENGINE_CELLS`
+moves from `SCRIPT_KNOBS` to `MODE_KNOBS` and `runpod-http.sh`'s `FV_LAB_NOT_READ`, refused with a pointer to
+`FV_CELLS` (as `FV_ATTN3_*`, §17.6). `docs/serve/design.md`'s GPU check then names only the tier.

@@ -124,10 +124,13 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         common::restored().len(),
         "every restored mode is a tier"
     );
-    // Only the gold and oracle-r2 tiers read R2 trees (ADR-0019 §16, §21);
-    // every other tier's pod is unchanged.
-    assert_eq!(r2_tiers, 2, "two volume+r2 tiers (gold, oracle-r2)");
-    for t in ["gold", "oracle-r2"] {
+    // Only the gold, oracle-r2 and serve-engine tiers read R2 trees
+    // (ADR-0019 §16, §21, §22 S3); every other tier's pod is unchanged.
+    assert_eq!(
+        r2_tiers, 3,
+        "three volume+r2 tiers (gold, oracle-r2, serve-engine)"
+    );
+    for t in ["gold", "oracle-r2", "serve-engine"] {
         assert_eq!(
             lab.tier(t).map(|t| t.weights),
             Some(TierWeights::VolumeR2),
@@ -147,6 +150,17 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         "the idle limit"
     );
     assert_eq!(fastvideo_lab::weights::r2_idle_min(5400), 115);
+    // serve-engine's pod (ADR-0019 §22, S3) is the rtx6000 tier's but for the
+    // disk (150 GB: fastwan21-1.3b's 29.21 GB and the 120 GB) and the idle
+    // limit (r2_idle_min of its 3600 s cell cap: 85 min).
+    let se = fixture("serve-engine");
+    assert_eq!(se["containerDiskInGb"], json!(150));
+    let cmd = se["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert!(
+        cmd.contains("lim=85; [ \"$used\" = 1 ] && lim=85"),
+        "the idle limit"
+    );
+    assert_eq!(fastvideo_lab::weights::r2_idle_min(3600), 85);
     // Only the gold tier asks for a host-RAM floor (its 14B arm's host load,
     // lab/tiers.toml); every other tier's pod has Runpod's default. 256 GB
     // since the 7e580e5 gold run measured that arm's peak (ADR-0019 §16.10).
@@ -154,47 +168,85 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     assert_eq!(lab.tier("gold").and_then(|t| t.min_ram_gb), Some(256));
 }
 
-/// The script runner's pod for the oracle-r2 GPU check (ADR-0019 §21.8:
-/// `FV_FAMILY=oracle FV_R2_TREES=sfwan21-1.3b runpod-http.sh plan`,
-/// `fixtures/runpod-http-oracle-sfwan13-r2.json`) reads its weights as
-/// fv-lab's `oracle-r2` pod does: the same Runpod secret references
-/// (`weights::r2_env_refs`), the tier's disk and idle limit, fv-lab's link
-/// roots (`TreeSources::link_roots`) and the pinned revision for
+/// The script runner's pod for a `volume+r2` tier's GPU check (ADR-0019
+/// §21.8): `FV_FAMILY=<family> FV_R2_TREES=<tree> runpod-http.sh plan` reads
+/// its weights as fv-lab's pod of the tier does: the same Runpod secret
+/// references (`weights::r2_env_refs`), the tier's disk and idle limit,
+/// fv-lab's link roots (`TreeSources::link_roots`) and the pinned revision for
 /// `r2-stage.sh`, and the matrix's `$W` the merged root. Without
-/// `FV_R2_TREES` the body is the `oracle` tier's golden (`fv-lab-goldens.sh`).
-#[test]
-fn the_script_side_r2_pod_reads_its_trees_as_the_oracle_r2_tier() {
+/// `FV_R2_TREES` the body has no `env` (`fv-lab-goldens.sh`). Two: the
+/// `oracle` family's `sfwan13` for `oracle-r2`
+/// (`fixtures/runpod-http-oracle-sfwan13-r2.json`, §21.7) and `serve-engine`'s
+/// wan group (`fixtures/runpod-http-serve-engine-r2.json`, §22.12), one
+/// test each.
+fn script_side_r2_pod(tier: &str, golden: &str, plain: &str, tree: &str) {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
-    let tier = lab.tier("oracle-r2").expect("oracle-r2");
-    let body = fixture("oracle-sfwan13-r2");
+    let sources = fastvideo_lab::weights::TreeSources::load(&repo_root()).expect("trees");
+    let t = lab.tier(tier).expect("tier");
+    let body = fixture(golden);
     let refs: serde_json::Map<String, Value> = r2_env_refs()
         .into_iter()
         .map(|(k, v)| (k, Value::String(v)))
         .collect();
-    assert_eq!(body["env"], Value::Object(refs));
+    assert_eq!(body["env"], Value::Object(refs), "{tier}");
     assert_eq!(
         body["containerDiskInGb"].as_u64(),
-        Some(u64::from(tier.container_disk_gb))
+        Some(u64::from(t.container_disk_gb)),
+        "{tier}"
     );
     let cmd = body["dockerStartCmd"][2].as_str().expect("a start command");
-    let idle = fastvideo_lab::weights::r2_idle_min(tier.cell_timeout_s);
-    assert!(cmd.contains(&format!("lim={idle}; [ \"$used\" = 1 ] && lim={idle}")));
-    assert!(cmd.starts_with("_fvr2_id=\"${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}\""));
-    let sources = fastvideo_lab::weights::TreeSources::load(&repo_root()).expect("trees");
+    let idle = fastvideo_lab::weights::r2_idle_min(t.cell_timeout_s);
+    assert!(
+        cmd.contains(&format!("lim={idle}; [ \"$used\" = 1 ] && lim={idle}")),
+        "{tier}"
+    );
+    assert!(
+        cmd.starts_with("_fvr2_id=\"${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}\""),
+        "{tier}"
+    );
     let rev = sources
         .r2
-        .get("sfwan21-1.3b")
+        .get(tree)
         .map(|t| t.rev.clone())
-        .expect("sfwan21-1.3b in weights-r2.tsv");
+        .unwrap_or_else(|| panic!("{tree} in weights-r2.tsv"));
     let want = format!(
-        "$SCRATCH/weights $SCRATCH/r2 \"$OUT\" {} /workspace/weights \"{}\" sfwan21-1.3b@{rev} ",
-        tier.cell_timeout_s,
+        "$SCRATCH/weights $SCRATCH/r2 \"$OUT\" {} /workspace/weights \"{}\" {tree}@{rev} ",
+        t.cell_timeout_s,
         sources.link_roots().join(" ")
     );
-    assert!(cmd.contains(&want), "{want}");
-    assert!(cmd.contains("env  FV_WORK=$SCRATCH FV_SCRATCH=$SCRATCH "));
-    // Its only differences from the oracle tier's script body.
-    let plain = fixture("oracle");
-    assert_eq!(plain["containerDiskInGb"].as_u64(), Some(120));
-    assert!(plain.get("env").is_none());
+    assert!(cmd.contains(&want), "{tier}: {want}");
+    assert!(
+        cmd.contains("env  FV_WORK=$SCRATCH FV_SCRATCH=$SCRATCH "),
+        "{tier}"
+    );
+    // Without FV_R2_TREES: no env, the volume's root.
+    let plain = fixture(plain);
+    assert!(plain.get("env").is_none(), "{tier}");
+    let pcmd = plain["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert!(
+        pcmd.contains("env  FV_WORK=/workspace FV_SCRATCH=$SCRATCH "),
+        "{tier}"
+    );
+}
+
+#[test]
+fn the_script_side_r2_pod_reads_its_trees_as_the_oracle_r2_tier() {
+    script_side_r2_pod("oracle-r2", "oracle-sfwan13-r2", "oracle", "sfwan21-1.3b");
+    // The oracle tier's 120 GB body plus the tree.
+    assert_eq!(fixture("oracle")["containerDiskInGb"].as_u64(), Some(120));
+}
+
+#[test]
+fn the_script_side_r2_pod_reads_its_trees_as_the_serve_engine_tier() {
+    script_side_r2_pod(
+        "serve-engine",
+        "serve-engine-r2",
+        "serve-engine",
+        "fastwan21-1.3b",
+    );
+    // The tier's own body already has its 150 GB.
+    assert_eq!(
+        fixture("serve-engine")["containerDiskInGb"].as_u64(),
+        Some(150)
+    );
 }

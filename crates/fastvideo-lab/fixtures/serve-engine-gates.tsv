@@ -1,0 +1,6 @@
+arm	cli-h3-turbo	fasth3-4step-vsa	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+arm	engine-h3-turbo	fasth3-4step-vsa	-	h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors
+arm	cli-ltx-turbo	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	engine-ltx-turbo	ltx25-two-stage	-	ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer
+arm	cli-wan-turbo	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+arm	engine-wan-turbo	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer

@@ -2161,3 +2161,19 @@ Project code: FVID
 - Verification: `tests/dry_run.rs` (the two tiers' dry runs and gates equal the script's), `tests/payload_golden.rs`, `tests/lab_files.rs`, `knobs::tests`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, every family's dry run before and after; GPU: §22.10 (the coordinator's; `turbo-768p turbo-1080p max-1080p`, ~$2.00)
 - Open: S7 (after §22.10 passes): `hd` into `FV_LAB_RETIRED`, its branch deleted, `hd5` frozen with it
 - Result (2026-10-27, coordinator): §22.10's GPU check passed on `d53ea62` (main after #223; fv-lab = script, both `matrix_exit=0`, compare exit 0 with the expected line: `turbo-768p`, `turbo-1080p`, `max-1080p` 372 frames each byte-identical; about $1.20 including an aborted first attempt; ADR-0019 §22.10 "Result", PR `claude/hd-check-d53ea62`); S2 is done GPU-side, S7 is next for `hd`
+
+### FVID · 2026-10-27 · FVID-2026-10-27-d1-s3-serve-engine
+- Trigger: the coordinator's slice S3 of FVID-2026-10-26-d1-remaining (ADR-0019 §22.6 item 2): `serve-engine` as an fv-lab tier, `--tae-dir` dropped from its engine arms in lockstep
+- Options:
+  - `FV_ENGINE_CELLS`: refused by fv-lab now (`SCRIPT_KNOBS`, as `FV_ATTN3_*` while `attn3`'s branch lived), or left unread until S7;
+  - the script side of the GPU check: `FV_R2_TREES=fastwan21-1.3b` (§21.8, the merged root), or the volume only (the wan group skipped on one side)
+- Decision: (agent, within the coordinator's decision)
+  - the tier: three cells (`serve-engine-h3-turbo`, `-ltx-turbo`, `-fastwan21-1.3b`), the branch's six arms in its order, `weights = "volume+r2"`, 150 GB, `cell_timeout_s = 3600`, goldens from the live branch; `--tae-dir "$TAE"` leaves the branch's three engine arms in the same commit (`wan`'s `engine-fw22` keeps it, S6); the frame removal after the family not copied (disk only);
+  - `FV_ENGINE_CELLS` refused by fv-lab with a pointer to `--cells`; `runpod-http.sh`'s `FV_LAB_NOT_READ` gains it in S7;
+  - the GPU check's script side with `FV_R2_TREES=fastwan21-1.3b FV_CONTAINER_DISK_GB=150`, its body a new golden (`runpod-http-serve-engine-r2.json`) held to the tier's references, disk and idle limit
+- Reason: `fv-gpucheck engine` defaults `--tae-dir` to `<weights root>/auxiliary/tae` (`crates/fastvideo-gpucheck/src/main.rs:230-232`, `engine_stage.rs:73-76`, `crates/fastvideo-engine-service/src/cuda/caps.rs:50-56`), which is the script's `$TAE` when the volume's TAE copy is complete (and the merged root's link to it on an R2 run) but not otherwise (`$SCRATCH/tae`, or `FV_TAE_DIR` / `FV_AUX_DIR`); the frames do not change in any case because none of the three recipes reads the TAE directory (`fasth3-4step-vsa` and `ltx25-distill-sol` name no tiny decoder, `fastwan21-1.3b` decodes with the full VAE, which never searches it), so only the argv and, without the marker, a recorded path change (ADR §22.11); a knob that would be silently ignored is refused (§9.4); without the R2 tree on the script side the two runners would not run the same arms
+- Reversibility: high (cells, fixtures, three argv words)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §22.11, §22.12
+- Verification: `tests/dry_run.rs` (the tier's dry run and gates equal the script's; `the_serve_engine_tier_is_the_serve_engine_family_without_tae_dir`), `tests/payload_golden.rs` (three `volume+r2` tiers; the script side's R2 body), `knobs::tests`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, every other family's dry run byte-identical before and after (`serve-engine`'s only without the three `--tae-dir`); mutations caught (ADR §22.11); GPU: §22.12 (the coordinator's; all six arms, both sides a tree fetch without PNGs for the R2 records, ~$1.35-$2.25)
+- Open: S7 (after §22.12 passes): `serve-engine` into `FV_LAB_RETIRED`, its branch deleted, its fixtures frozen, `FV_ENGINE_CELLS` into `FV_LAB_NOT_READ`

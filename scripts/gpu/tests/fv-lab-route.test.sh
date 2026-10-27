@@ -9,6 +9,8 @@
 #   - `gold`, the experiment tiers (h3-graphs, ADR-0019 §14) and the sibling
 #     tiers (oracle-r2, §21; hd5, §22) refused for run / all (their plan still
 #     the script's body);
+#   - serve-engine (§22, S3) on the script path, its GPU check's FV_R2_TREES
+#     form planned;
 #   - hd's dropped post-script hook (FV_HD_POST_URL, FV_HD_POST_TIMEOUT_S,
 #     ADR-0019 §22, S2) refused by runpod-http.sh (script path and fv-lab
 #     route) and runpod-matrix.sh;
@@ -235,6 +237,18 @@ for k in FV_HD_POST_URL FV_HD_POST_TIMEOUT_S; do
 done
 expect "hd: the script path without the hook is unchanged" 0 "a pod running runpod-matrix.sh hd" -- \
   FV_DRY_RUN=1 FV_FAMILY=hd FV_EXTRA_ENV="FASTVIDEO_X=1" bash "$HTTP" run abc1234
+
+# serve-engine (ADR-0019 §22, S3): a tier whose branch stays until its GPU
+# check, so runpod-http.sh runs it on the script path, never through fv-lab;
+# its GPU check's script side reads fastwan21-1.3b from R2 (FV_R2_TREES,
+# §21.8) on the tier's 150 GB disk, and a smaller disk is refused before the key.
+expect "serve-engine: run is the script path" 0 "a pod running runpod-matrix.sh serve-engine" -- \
+  FV_DRY_RUN=1 FV_FAMILY=serve-engine bash "$HTTP" run abc1234
+expect "serve-engine: the GPU check's script side plans" 0 '"name": "fv-lab-serve-engine-abc1234-t"' -- RUNPOD_API_KEY=x \
+  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=serve-engine FV_R2_TREES=fastwan21-1.3b \
+  FV_CONTAINER_DISK_GB=150 bash "$HTTP" plan abc1234 abc1234-t
+expect "serve-engine: FV_R2_TREES needs the tier's disk" 2 "FV_CONTAINER_DISK_GB=150 or more" -- \
+  FV_DRY_RUN=1 FV_FAMILY=serve-engine FV_R2_TREES=fastwan21-1.3b bash "$HTTP" run abc1234
 
 # b4a (ADR-0019 §11.6): fv-lab only, its GPU gate's cell selected by arm;
 # the script side's FV_B4A_CELLS in FV_EXTRA_ENV is refused with that answer.

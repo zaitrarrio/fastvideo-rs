@@ -1,0 +1,46 @@
+# runpod-matrix.sh `serve-engine`, its h3 group (docs/serve/design.md "GPU check"; docs/adr/0019-fv-lab.md §22, S3):
+# the serve engine's CUDA backend (WP-11) against the CLI. First the CLI generation of the served `h3-turbo` recipe
+# (FastH3 4-step VSA, `h3 gen`), then the same recipe, canvas, prompt and seed through EngineService + CudaBackend
+# (`fv-gpucheck engine --model h3-turbo`): an MP4 out, its frames byte-compared with the CLI's (`--reference`), then a
+# second job cancelled after step 2 (`--cancel-after-step`). No `--tae-dir`, as the gold engine cells: the script's
+# `--tae-dir "$TAE"` was dropped from its engine arms in the same commit as this tier (§22, S3, §22.11). The engine's
+# TAE directory is then `<weights root>/auxiliary/tae`, the script's `$TAE` when the volume's TAE copy is complete;
+# none of the three recipes reads it (h3-turbo, `fasth3-4step-vsa`, names no `taeh3`), so the frames do not change.
+# The script's removal of the PNG frames after the family is disk only and not copied: the CLI arm's frames are
+# recorded in its frames.sha256.json, written right after it; the engine arm's (under `<arm>/out/<job>/frames`, so no
+# frames.sha256.json) by its `engine/frames` check (`frames_sha256` in stderr.log and gpucheck-out/engine.json).
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "serve-engine-h3-turbo"
+description = "h3-turbo (FastH3 4-step VSA) at 832x480, 124 frames: the CLI generation, then the same request through the serve engine (frames byte-compared with the CLI's, a second job cancelled after step 2)"
+
+[workload]
+model = "h3 engine"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+frames = 124
+width = 832
+height = 480
+note = "runpod-matrix.sh's default PROMPT and SEED; the engine arm reads the CLI arm's frames as its reference, so it runs after it (FV_CELLS / --cells naming it alone compares with whatever frames are there, as the script's). Both arms share one AdaLN cache file ({runs}/h3-adaln.cache), as the script's: inert for this adapter recipe (ADR-0019 §22.2), kept for equality"
+
+[lists]
+geo = ["--height", "{height}", "--width", "{width}", "--num-frames", "{frames}", "--prompt", "{prompt}", "--seed", "{seed}",
+  "--adaln-cache", "{runs}/h3-adaln.cache"]
+
+[[arm]]
+name = "cli-h3-turbo"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["--mode", "fast", "--techniques", "h3/fasth3_4step_vsa", "h3", "gen", "--weights", "{weights}/h3-base",
+  "--h3-recipe", "4step-vsa", "{@geo}", "--text-encoder", "streamed", "--text-weights", "{weights}/h3-base",
+  "--no-text-cache", "--no-mp4", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "engine-h3-turbo"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+steps = 4
+argv = ["--keep-going", "--mode", "fast", "--techniques", "h3/fasth3_4step_vsa", "engine", "--model", "h3-turbo",
+  "--weights-root", "{weights}", "{@geo}", "--text-encoder", "streamed", "--reference", "{runs}/cli-h3-turbo/frames",
+  "--cancel-after-step", "2", "--clip-out", "{runs}/{arm}/out"]
