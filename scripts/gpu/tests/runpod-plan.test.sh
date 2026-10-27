@@ -10,7 +10,7 @@
 #   - a family retired to fv-lab (fv-lab-retired.sh, here ltx) runs the
 #     image's `fv-lab run <tier>` and never runpod-matrix.sh, which refuses it;
 #     so does wan since S6 (docs/adr/0019-fv-lab.md §22.17: a tier whose
-#     branch stays until S7), with FV_SCRATCH on the container disk and its
+#     branch stays until S8, §22.19), with FV_SCRATCH on the container disk and its
 #     runs in /workspace/runs/wan, as a volume+r2 tier needs; `matrix` gives
 #     both the tier's per-arm cap (no FV_GEN_TIMEOUT_S=300) and starts
 #     runpod-matrix.sh for neither;
@@ -21,6 +21,8 @@
 #     unknown name) stops `gpu` / `matrix` before the key is read or a pod is
 #     created, and no recorded command starts runpod-matrix.sh for any retired
 #     family; `runpod.sh b200` is refused (exit 2) without a key;
+#   - so do the families S7 retired (§22.19: hd, hd5, serve-engine, sfstream,
+#     mmaudio) when put in either list, the volume+r2 ones as wan;
 #   - the ltx command, as the pod's shell runs it, calls fv-lab as `run ltx`
 #     with FV_WORK=/workspace; without fv-lab it exits 2 naming fv-lab pod up;
 #     the wan command calls `run wan` with FV_WORK=/workspace,
@@ -162,6 +164,41 @@ if [[ "$rc" != 0 && "$(cat "$TMP/plan-bad/out")" == *"FATAL: nope is neither"* &
   ok "plan: an unknown family fails it (exit $rc), nothing printed for it"
 else
   bad "plan with an unknown family: exit $rc: $(cat "$TMP/plan-bad/out")"
+fi
+
+# 4b. The families retired to fv-lab in S7 (docs/adr/0019-fv-lab.md §22.19:
+#     hd, its sibling hd5, serve-engine, sfstream, mmaudio), put in either
+#     list, run their tier through the image's fv-lab and never
+#     runpod-matrix.sh; the volume+r2 ones (serve-engine, sfstream, mmaudio)
+#     with FV_SCRATCH on the container disk and their runs in
+#     /workspace/runs/<family>, as wan's. Named here, not read from the list.
+s7="hd hd5 serve-engine sfstream mmaudio"
+for mode in gpu matrix; do
+  v=RP_GPU_FAMILIES; [[ "$mode" == matrix ]] && v=RP_MATRIX_FAMILIES
+  rc=0; drive "s7-plan-$mode" "$v=($s7); cmd_plan $mode" || rc=$?
+  out="$(cat "$TMP/s7-plan-$mode/out")"
+  good=1
+  for fam in $s7; do
+    cmd="$(awk -F'\t' -v f="$fam" '$1 == f { print $2 }' <<<"$out")"
+    envs="FV_WORK=/workspace"
+    case "$fam" in serve-engine | sfstream | mmaudio) envs+=" FV_SCRATCH=/fvscratch FV_RUNS_DIR=/workspace/runs/$fam" ;; esac
+    if [[ "$cmd" == *"$fam is fv-lab only; fv-lab pod up --family $fam"*"exec env $envs \"\$lab\" run $fam'" && "$cmd" != *runpod-matrix.sh* ]]; then
+      :
+    else
+      good=0; bad "plan $mode: $fam runs: $cmd"
+    fi
+  done
+  [[ "$rc" == 0 && "$good" == 1 ]] && ok "plan $mode: $s7 through fv-lab run, never runpod-matrix.sh" \
+    || bad "plan $mode with the S7 families: exit $rc: $out"
+done
+rc=0; drive s7-matrix "RP_MATRIX_FAMILIES=($s7); cmd_matrix" || rc=$?
+hits=""
+for fam in $s7; do hits+="$(matrix_call "$TMP/s7-matrix/ssh.log" "$fam")$(matrix_call "$TMP/s7-matrix/local.log" "$fam")"; done
+n="$(grep -c "\"\$lab\" run " "$TMP/s7-matrix/ssh.log" || true)"
+if [[ "$rc" == 0 && -z "$hits" && "$n" == 5 ]] && ! grep -q 'FV_GEN_TIMEOUT_S=300' "$TMP/s7-matrix/ssh.log"; then
+  ok "matrix: the S7 families run fv-lab run each, the tier's per-arm cap, no runpod-matrix.sh"
+else
+  bad "matrix with the S7 families: exit $rc, fv-lab runs $n, runpod-matrix.sh: $hits, $(cat "$TMP/s7-matrix/out")"
 fi
 
 # 5. A family nothing can run stops gpu / matrix before the key and any pod,

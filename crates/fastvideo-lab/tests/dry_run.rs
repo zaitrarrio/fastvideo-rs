@@ -22,8 +22,9 @@
 //! reads the volume (`common::merged_root`), and its R2 plan lines (`dry-run
 //! weights …`, `dry-run r2 <arm>: …`, ADR-0019 §16.4) are its own, checked on
 //! their own (`the_oracle_r2_tier_dry_runs_as_the_oracle_family_with_sfwan13`).
-//! `serve-engine` (ADR-0019 §22, S3) is a `volume+r2` tier of its own live
-//! branch, read the same way (its engine arms' `--weights-root` is the root
+//! `serve-engine` (ADR-0019 §22, S3) is a `volume+r2` tier of its own
+//! branch (frozen since §22.19, with `hd`, `hd5`, `sfstream` and `mmaudio`),
+//! read the same way (its engine arms' `--weights-root` is the root
 //! itself; `the_serve_engine_tier_is_the_serve_engine_family_without_tae_dir`).
 //! `sfstream` (ADR-0019 §22, S4) too, its arms' `FASTVIDEO_TAE_DIR={tae}` the
 //! merged root's `auxiliary/tae` where the script's is the volume's
@@ -549,8 +550,39 @@ fn retired_families_are_frozen_tiers_without_a_branch() {
         "fuse",
         "attn3",
         "ltx",
+        // §22's S2-S5 families, after their GPU checks (§22.19, S7), and hd's
+        // sibling hd5, frozen with it.
+        "hd",
+        "hd5",
+        "serve-engine",
+        "sfstream",
+        "mmaudio",
     ] {
         assert!(retired.iter().any(|r| r == f), "{f} retired");
+    }
+    // A sibling frozen with its family (FV_LAB_RETIRED_SIBLINGS, §22.19): both
+    // retired, neither with a branch, and no longer a live sibling.
+    let frozen = common::retired_siblings();
+    assert_eq!(
+        frozen
+            .iter()
+            .map(|s| (s.tier.as_str(), s.family.as_str()))
+            .collect::<Vec<_>>(),
+        [("hd5", "hd")]
+    );
+    for s in &frozen {
+        assert!(retired.contains(&s.tier), "{}: in FV_LAB_RETIRED", s.tier);
+        assert!(retired.contains(&s.family), "{}: retired", s.family);
+        assert!(
+            !branch(&s.tier) && !branch(&s.family),
+            "{}: no branch",
+            s.tier
+        );
+        assert!(
+            common::siblings().iter().all(|l| l.tier != s.tier),
+            "{}: not a live sibling",
+            s.tier
+        );
     }
     // A restored mode (§12) is a mode of a retired family, frozen from the
     // start: its family's branch is gone too, and it never had one of its own.
@@ -732,6 +764,9 @@ fn the_hd_tiers_are_the_hd_family_without_its_derived_step() {
         common::sibling_tier("hd5").map(|s| s.family),
         Some("hd".to_owned())
     );
+    // Frozen with hd since §22.19: a retired sibling, no longer a live one.
+    assert!(common::retired_siblings().iter().any(|s| s.tier == "hd5"));
+    assert!(common::siblings().iter().all(|s| s.tier != "hd5"));
     assert!(common::sibling_tier("hd").is_none());
     for (tier, set) in [("hd", "prompts-hd.json"), ("hd5", "prompts-hd5.json")] {
         let cfg = config(tier);

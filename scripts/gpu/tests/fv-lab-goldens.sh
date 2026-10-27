@@ -17,6 +17,11 @@
 # The restored modes (FV_LAB_RESTORED, ADR-0019 §12: precision-nvfp4,
 # ltxvae-gen) are in that list from the start: their fixtures are the script's
 # in that mode at 5987e6a4 (fv-lab-restored-goldens.sh reproduces them).
+# A sibling tier frozen with its family (FV_LAB_RETIRED_SIBLINGS, ADR-0019
+# §22.19: hd5 with hd) is in it too; so are the script-side GPU-check bodies of
+# the volume+r2 families retired here (runpod-http-<f>-r2.json of
+# serve-engine, sfstream and mmaudio, §22.19), which runpod-http.sh plan can no
+# longer write (it routes those families to fv-lab).
 #
 # Fixtures, per family <f> (every [[tier]] name of lab/tiers.toml but the
 # frozen ones; for the `gold` tier, generated from lab/gold/ and no script
@@ -47,13 +52,12 @@
 # and its extra cells (ADR-0019 §20.3, the ten clip-metric targets) are the
 # family with FV_ORACLE_TARGETS naming those: oracle-extra-dry-run.txt and
 # oracle-extra-gates.tsv (the pod body is the tier's, one fixture). A sibling
-# tier (fv-lab-retired.sh FV_LAB_SIBLINGS, ADR-0019 §21, §22) has no branch of
+# tier (fv-lab-retired.sh FV_LAB_SIBLINGS, ADR-0019 §21) has no branch of
 # its own: its dry run and gates are its family's under its settings
-# (`oracle-r2`: the oracle family with FV_ORACLE_TARGETS=sfwan13; `hd5`: the
-# hd family with FV_PROMPTS=…/prompts-hd5.json, for the dry run only), its pod
+# (`oracle-r2`: the oracle family with FV_ORACLE_TARGETS=sfwan13), its pod
 # body runpod-http.sh plan's for the tier. A `weights = "volume+r2"` tier's
-# body (gold, oracle-r2, serve-engine, sfstream, mmaudio, wan) carries its
-# container disk, idle limit and RAM floor.
+# body (gold, oracle-r2, wan; serve-engine, sfstream and mmaudio, frozen)
+# carries its container disk, idle limit and RAM floor.
 #
 # No network, no GPU, no weights: the dry run logs instead of running, and the
 # plan takes the volume's datacentre from FV_PLAN_VOLUME. Needs bash and jq.
@@ -96,6 +100,17 @@ for e in $FV_LAB_SIBLINGS; do
   ! has_branch "$t" || { echo "fv-lab-goldens: sibling tier $t has a runpod-matrix.sh branch of its own" >&2; exit 2; }
   ! fv_lab_retired "$t" && ! fv_lab_experiment "$t" || { echo "fv-lab-goldens: sibling tier $t is in another list of fv-lab-retired.sh" >&2; exit 2; }
 done
+# A sibling frozen with its family (FV_LAB_RETIRED_SIBLINGS, ADR-0019 §22.19):
+# a tier, both it and its family retired to fv-lab, neither with a branch, no
+# live sibling, and a <K=V> mode (the setting refusals answer with the tier).
+for e in $FV_LAB_RETIRED_SIBLINGS; do
+  IFS=: read -r t f m <<<"$e"
+  [[ "$m" == ?*=?* ]] || { echo "fv-lab-goldens: retired sibling $e has no <tier>:<family>:<K=V> mode" >&2; exit 2; }
+  grep -qx "$t" <<<"$FAMILIES" || { echo "fv-lab-goldens: retired sibling tier $t is no tier of lab/tiers.toml" >&2; exit 2; }
+  fv_lab_retired "$t" && fv_lab_retired "$f" || { echo "fv-lab-goldens: retired sibling $t or its family $f is not in FV_LAB_RETIRED" >&2; exit 2; }
+  ! has_branch "$t" && ! has_branch "$f" || { echo "fv-lab-goldens: retired sibling $t or its family $f has a runpod-matrix.sh branch" >&2; exit 2; }
+  ! fv_lab_sibling "$t" >/dev/null || { echo "fv-lab-goldens: $t is both a live and a retired sibling (FV_LAB_SIBLINGS)" >&2; exit 2; }
+done
 for f in $FV_LAB_EXPERIMENTS; do
   grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: experiment tier $f is no tier of lab/tiers.toml" >&2; exit 2; }
   fv_lab_retired "$f" && { echo "fv-lab-goldens: $f is both an experiment tier and retired (fv-lab-retired.sh)" >&2; exit 2; }
@@ -137,8 +152,8 @@ for FAMILY in $FAMILIES; do
   # the GPU's first use), and so is its host-RAM floor (min_ram_gb, passed as
   # FV_MIN_RAM_GB); its env (the R2 key as Runpod secret references) is
   # the one difference tests/payload_golden.rs allows.
-  # A volume+r2 tier's pod (gold, oracle-r2, serve-engine, sfstream, mmaudio, wan): its container disk, idle limit
-  # and host-RAM floor as the script's settings.
+  # A volume+r2 tier's pod (gold, oracle-r2, wan; serve-engine, sfstream and mmaudio frozen): its container
+  # disk, idle limit and host-RAM floor as the script's settings.
   tv() { awk -v k="$1" -v n="name = \"$FAMILY\"" '/^\[\[tier\]\]/ { t = 0 } $0 == n { t = 1 } t && $1 == k && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' "$ROOT/lab/tiers.toml"; }
   r2_body=()
   if [[ "$(tv weights)" == volume+r2 ]]; then
@@ -181,7 +196,7 @@ for FAMILY in $FAMILIES; do
   # The settings a tier is the script under (ADR-0019 §15), else none; and
   # those its extra cells are (ADR-0019 §20.3: lab/tiers.toml extra_cells,
   # run on request only, so a golden of their own, <f>-extra-*).
-  fam_env=() extra_env=() dry_env=()
+  fam_env=() extra_env=()
   case "$FAMILY" in
     oracle)
       fam_env=("FV_ORACLE_TARGETS=fasth3-8step fasth3-8step-vsa0 fasth3-4step-vsa fasth3-4step-dense h3-ref2va-4step ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense"
@@ -191,11 +206,6 @@ for FAMILY in $FAMILIES; do
     # The oracle family's SF-Wan target, on its volume+r2 tier (ADR-0019 §21).
     oracle-r2)
       fam_env=(FV_ORACLE_TARGETS=sfwan13 FV_GEN_TIMEOUT_S=5400) ;;
-    # The hd family's prompts-hd5.json mode (ADR-0019 §22, S2), for the dry run
-    # only: runpod-http.sh plan would forward FV_PROMPTS into the start command,
-    # which fv-lab's hd5 pod does not carry (its prompt set is its cells').
-    hd5)
-      read -r -a dry_env <<<"$(fv_lab_sibling_mode hd5)" ;;
   esac
   # 1. and 2.: <name>-dry-run.txt and <name>-gates.tsv of the family under <env>.
   dry_golden() { # <name> [K=V …]
@@ -231,7 +241,7 @@ for FAMILY in $FAMILIES; do
       esac
     done <"$TMP/pairs.txt" | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" >"$TMP/new/$name-gates.tsv"
   }
-  dry_golden "$FAMILY" ${fam_env[@]+"${fam_env[@]}"} ${dry_env[@]+"${dry_env[@]}"}
+  dry_golden "$FAMILY" ${fam_env[@]+"${fam_env[@]}"}
   if (( ${#extra_env[@]} )); then
     dry_golden "$FAMILY-extra" "${extra_env[@]}"
     FIXTURES+=("$FAMILY-extra-dry-run.txt" "$FAMILY-extra-gates.tsv")
@@ -254,36 +264,13 @@ clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAM
   FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 FV_GEN_TIMEOUT_S=5400 \
   bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-oracle-sfwan13-r2.json"
 FIXTURES+=("runpod-http-oracle-sfwan13-r2.json")
-# The same for the serve-engine GPU check (ADR-0019 §22, S3, §22.12): the
-# script side's FV_FAMILY=serve-engine with FV_R2_TREES=fastwan21-1.3b (its
-# wan group's R2-only tree), the serve-engine tier's disk and its cell cap
-# (runpod-http.sh's default FV_GEN_TIMEOUT_S, 3600). The tier's own body
-# (above) is the same family without FV_R2_TREES.
-clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY=serve-engine \
-  FV_R2_TREES=fastwan21-1.3b FV_CONTAINER_DISK_GB=150 \
-  bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-serve-engine-r2.json"
-FIXTURES+=("runpod-http-serve-engine-r2.json")
-# The same for the sfstream GPU check (ADR-0019 §22, S4, §22.14): the script
-# side's FV_FAMILY=sfstream with FV_R2_TREES=sfwan21-1.3b (its one tree,
-# R2-only), the sfstream tier's disk and its cell cap (runpod-http.sh's
-# default FV_GEN_TIMEOUT_S, 3600). The tier's own body (above) is the same
-# family without FV_R2_TREES.
-clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY=sfstream \
-  FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 \
-  bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-sfstream-r2.json"
-FIXTURES+=("runpod-http-sfstream-r2.json")
-# The same for the mmaudio GPU check (ADR-0019 §22, S5, §22.16): the script
-# side's FV_FAMILY=mmaudio with FV_R2_TREES naming the two trees its arms
-# wan13-audio and ours-v2a read (fastwan21-1.3b, mmaudio-44k-v2, both
-# R2-only; the script stages every listed tree before the matrix, 50.68 GB),
-# the mmaudio tier's disk (180 GB; a whole-family script run with
-# sfwan21-1.3b too would need 200) and its cell cap (runpod-http.sh's default
-# FV_GEN_TIMEOUT_S, 3600). The tier's own body (above) is the same family
-# without FV_R2_TREES.
-clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY=mmaudio \
-  "FV_R2_TREES=fastwan21-1.3b mmaudio-44k-v2" FV_CONTAINER_DISK_GB=180 \
-  bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-mmaudio-r2.json"
-FIXTURES+=("runpod-http-mmaudio-r2.json")
+# The script sides of the serve-engine, sfstream and mmaudio GPU checks
+# (ADR-0019 §22.12, §22.14, §22.16: FV_FAMILY=<f> with FV_R2_TREES and the
+# tier's disk) were written here until their branches went (§22.19):
+# runpod-http.sh plan routes those families to fv-lab now, so the bodies are
+# frozen as the script last wrote them (tests/payload_golden.rs still holds
+# fv-lab's R2 references, disk and idle limit to them).
+FROZEN+=("runpod-http-serve-engine-r2.json" "runpod-http-sfstream-r2.json" "runpod-http-mmaudio-r2.json")
 # The same for the wan GPU check (ADR-0019 §22, S6, §22.18): the script side's
 # FV_FAMILY=wan with FV_R2_TREES naming the two trees its checked arms read
 # (fastwan21-1.3b: wan13-dmd, wan13-dmd-dense; fastwan22-ti2v-5b: cli-fw22,

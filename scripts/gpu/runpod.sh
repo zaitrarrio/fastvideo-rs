@@ -12,8 +12,8 @@
 #   runpod.sh plan gpu|matrix   what `gpu` / `matrix` start on each pod, one
 #                       line per family (no key, no pod): a family retired to
 #                       fv-lab (fv-lab-retired.sh, e.g. ltx) and wan (a tier
-#                       whose branch stays until S7, docs/adr/0019-fv-lab.md
-#                       §22.17) run `fv-lab run` from the image, the others
+#                       whose branch stays until S8, docs/adr/0019-fv-lab.md
+#                       §22.17, §22.19) run `fv-lab run` from the image, the others
 #                       runpod-matrix.sh; h3 and
 #                       hunyuan are retired with no tier (FV_SCRIPT_RETIRED,
 #                       docs/adr/0019-fv-lab.md §18) and left the lists
@@ -599,8 +599,9 @@ RP_GPU_FAMILIES=(ltx)
 RP_MATRIX_FAMILIES=(ltx wan)
 # The families these drivers run as their fv-lab tier although their
 # runpod-matrix.sh branch is still there (docs/adr/0019-fv-lab.md §22, S6:
-# wan, whose branch stays until its GPU check; S7 moves it to FV_LAB_RETIRED
-# and out of this list), as a retired family runs (§17.6).
+# wan, whose branch sfwan still runs; S8 moves it to FV_LAB_RETIRED and out of
+# this list with sfwan, §22.18 "Then", §22.19), as a retired family runs
+# (§17.6).
 RP_FV_LAB_TIERS=(wan)
 
 # rp_fv_lab_family <family>: the pod runs the family's tier with the image's

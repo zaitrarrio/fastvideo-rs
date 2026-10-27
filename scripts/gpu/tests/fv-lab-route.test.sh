@@ -7,15 +7,19 @@
 #     naming their tier, ADR-0019 §12), lists split without globbing, and a
 #     fake FV_LAB_BIN receiving exactly the command;
 #   - `gold`, the experiment tiers (h3-graphs, ADR-0019 §14) and the sibling
-#     tiers (oracle-r2, §21; hd5, §22) refused for run / all (their plan still
-#     the script's body);
-#   - serve-engine (§22, S3), sfstream (§22, S4), mmaudio (§22, S5) and wan
-#     (§22, S6) on the script path, their GPU checks' FV_R2_TREES forms
-#     planned; wan's dry run with each gated arm's FASTVIDEO_TAE_DIR, no
+#     tier (oracle-r2, §21) refused for run / all (their plan still the
+#     script's body);
+#   - hd (with its sibling hd5), serve-engine, sfstream and mmaudio, retired
+#     to fv-lab after their GPU checks (§22.19, S7): routed, `all` refused,
+#     fv-lab's plan, refused by runpod-matrix.sh; their knobs
+#     (FV_ENGINE_CELLS, FV_SFSTREAM_RUNS, FV_SF_PROMPT, FV_SF_SWITCH,
+#     FV_MMAUDIO_PROMPT) and the script side's FV_R2_TREES refused;
+#   - wan (§22, S6) on the script path, its GPU check's FV_R2_TREES form
+#     planned; its dry run with each gated arm's FASTVIDEO_TAE_DIR, no
 #     --tae-dir, no TAE fetch, and sfwan's (its SF-Wan arms) the same;
 #   - hd's dropped post-script hook (FV_HD_POST_URL, FV_HD_POST_TIMEOUT_S,
 #     ADR-0019 §22, S2) refused by runpod-http.sh (script path and fv-lab
-#     route) and runpod-matrix.sh;
+#     route);
 #   - the families retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
 #     ADR-0019 §18 and §22's S1, `headline` among them) refused by
 #     runpod-http.sh run / all / plan (dry run or not, before the key) and by
@@ -113,7 +117,8 @@ dry "refused: FV_POD_CAP_S not a number" 1 "never raised" FV_FAMILY=trace FV_POD
 # 2. The dropped modes' knobs (ADR-0019 §9.4) in FV_EXTRA_ENV.
 for k in FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_TRACE FV_VAE_UNTRACED FV_VAE_WORKLOADS \
   FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_DET_REPEATS FV_DET_PROMPT FV_DET_T2V_PROMPT \
-  FV_DET_I2V_PROMPT FV_ATTN3_ARMS FV_ATTN3_VSA FV_PROMPTS FV_GEN_TIMEOUT_S FV_CELLS; do
+  FV_DET_I2V_PROMPT FV_ATTN3_ARMS FV_ATTN3_VSA FV_ENGINE_CELLS FV_SFSTREAM_RUNS FV_SF_PROMPT FV_SF_SWITCH \
+  FV_MMAUDIO_PROMPT FV_PROMPTS FV_GEN_TIMEOUT_S FV_CELLS; do
   dry "refused in FV_EXTRA_ENV: $k" 1 "reads no $k from FV_EXTRA_ENV" FV_FAMILY=precision FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1"
 done
 # The two modes restored as tiers (ADR-0019 §12): refused, naming the tier, on
@@ -165,13 +170,10 @@ mx "matrix: precision-nvfp4 was never a script family" \
   "FATAL: precision-nvfp4 is an fv-lab tier (the precision family's FV_PRECISION_ARM=ltx-nvfp4 mode), never a runpod-matrix.sh family: fv-lab run precision-nvfp4" \
   precision-nvfp4
 mx "matrix: ltxvae-gen was never a script family" "ltxvae-gen is an fv-lab tier (the ltxvae family's FV_VAE_GEN=1 mode)" ltxvae-gen
-mx "matrix: hd refuses FV_HD_POST_URL" \
-  "FATAL: FV_HD_POST_URL: the hd family's post-script hook was dropped with its derived step" \
+# hd's branch, which refused FV_HD_POST_* itself, is gone (§22.19): hd is
+# refused before anything reads the hook.
+mx "matrix: hd with FV_HD_POST_URL is refused as retired" "FATAL: hd is retired to fv-lab (fv-lab-retired.sh): fv-lab run hd " \
   FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh hd
-mx "matrix: hd refuses FV_HD_POST_TIMEOUT_S" \
-  "FATAL: FV_HD_POST_TIMEOUT_S: the hd family's post-script hook was dropped with its derived step" \
-  FV_HD_POST_TIMEOUT_S=5400 hd
-mx "matrix: hd5 is no script family" "FATAL: unknown family hd5" hd5
 mx "matrix: precision alone is the retired family" "FATAL: precision is retired to fv-lab (fv-lab-retired.sh): fv-lab run precision " \
   FV_PRECISION_ARM=all precision
 # The restored tiers themselves are fv-lab only.
@@ -202,8 +204,9 @@ expect "h3-graphs: plan is runpod-http.sh's body" 0 '"name": "fv-lab-h3-graphs-a
   FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=h3-graphs bash "$HTTP" plan abc1234 abc1234-t
 
 # A sibling tier (fv-lab-retired.sh FV_LAB_SIBLINGS, ADR-0019 §21: oracle-r2,
-# the oracle family's sfwan13 on a volume+r2 pod): like gold, never the script
-# path (its targets run there as FV_FAMILY=oracle); its plan the script's body.
+# the oracle family's sfwan13 on a volume+r2 pod; hd5 was one until hd's branch
+# went, §22.19): like gold, never the script path (its targets run there as
+# FV_FAMILY=oracle); its plan the script's body.
 # FV_DRY_RUN=1: a refusal that broke would print the script path's dry run,
 # never reach the API.
 for mode in run all; do
@@ -212,98 +215,114 @@ for mode in run all; do
 done
 expect "oracle-r2: plan is runpod-http.sh's body" 0 '"name": "fv-lab-oracle-r2-abc1234-t"' -- RUNPOD_API_KEY=x \
   FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=oracle-r2 bash "$HTTP" plan abc1234 abc1234-t
-# hd5 (ADR-0019 §22, S2): the hd family with FV_PROMPTS=prompts-hd5.json, a
-# sibling tier whose cells its family's tier cannot run (another prompt set):
-# never the script path; the refusal names fv-lab's command and the script's
-# form of the same run; its plan the script's body.
-for mode in run all; do
-  expect "hd5: $mode refused" 1 "fv-lab pod up --sha abc1234 --family hd5" -- FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=hd5 bash "$HTTP" "$mode" abc1234
-  expect "hd5: $mode names the script's form" 1 \
-    "the script runs it as FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json" -- \
-    FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=hd5 bash "$HTTP" "$mode" abc1234
-done
-expect "hd5: plan is runpod-http.sh's body" 0 '"name": "fv-lab-hd5-abc1234-t"' -- RUNPOD_API_KEY=x \
-  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=hd5 bash "$HTTP" plan abc1234 abc1234-t
-
 # hd's post-script hook (FV_HD_POST_URL, its cap FV_HD_POST_TIMEOUT_S) was
 # dropped with the family's derived step (ADR-0019 §22, S2): refused in
-# FV_EXTRA_ENV on the script path (hd, before any pod or key), on the fv-lab
-# route, and by runpod-matrix.sh itself (exit 2, before any arm).
+# FV_EXTRA_ENV on the script path (refuse_dropped: wan here, before any pod or
+# key, since hd's own branch went, §22.19) and on the fv-lab route (hd's own
+# included, run and plan).
 for k in FV_HD_POST_URL FV_HD_POST_TIMEOUT_S; do
   for mode in run all plan; do
-    expect "hd: $k refused ($mode)" 1 "$k: the hd family's post-script hook was dropped with its derived step" -- \
-      FV_DRY_RUN=1 FV_FAMILY=hd FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1" bash "$HTTP" "$mode" abc1234
+    expect "script path: $k refused ($mode)" 1 "$k: the hd family's post-script hook was dropped with its derived step" -- \
+      FV_DRY_RUN=1 FV_FAMILY=wan FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1" bash "$HTTP" "$mode" abc1234
   done
-  dry "fv-lab route: $k refused" 1 "reads no $k from FV_EXTRA_ENV ($k: the hd family's post-script hook was dropped" \
-    FV_FAMILY=precision FV_EXTRA_ENV="$k=1"
+  for fam in precision hd; do
+    dry "fv-lab route: $k refused ($fam)" 1 "reads no $k from FV_EXTRA_ENV ($k: the hd family's post-script hook was dropped" \
+      FV_FAMILY="$fam" FV_EXTRA_ENV="$k=1"
+  done
+  expect "plan: $k refused (hd)" 1 "reads no $k from FV_EXTRA_ENV ($k: the hd family's post-script hook was dropped" -- \
+    FV_DRY_RUN=1 FV_FAMILY=hd FV_EXTRA_ENV="$k=1" bash "$HTTP" plan abc1234
 done
-expect "hd: the script path without the hook is unchanged" 0 "a pod running runpod-matrix.sh hd" -- \
-  FV_DRY_RUN=1 FV_FAMILY=hd FV_EXTRA_ENV="FASTVIDEO_X=1" bash "$HTTP" run abc1234
+expect "wan: the script path without the hook is unchanged" 0 "a pod running runpod-matrix.sh wan" -- \
+  FV_DRY_RUN=1 FV_FAMILY=wan FV_EXTRA_ENV="FASTVIDEO_X=1" bash "$HTTP" run abc1234
 
-# serve-engine (ADR-0019 §22, S3): a tier whose branch stays until its GPU
-# check, so runpod-http.sh runs it on the script path, never through fv-lab;
-# its GPU check's script side reads fastwan21-1.3b from R2 (FV_R2_TREES,
-# §21.8) on the tier's 150 GB disk, and a smaller disk is refused before the key.
-expect "serve-engine: run is the script path" 0 "a pod running runpod-matrix.sh serve-engine" -- \
-  FV_DRY_RUN=1 FV_FAMILY=serve-engine bash "$HTTP" run abc1234
-expect "serve-engine: the GPU check's script side plans" 0 '"name": "fv-lab-serve-engine-abc1234-t"' -- RUNPOD_API_KEY=x \
-  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=serve-engine FV_R2_TREES=fastwan21-1.3b \
-  FV_CONTAINER_DISK_GB=150 bash "$HTTP" plan abc1234 abc1234-t
-expect "serve-engine: FV_R2_TREES needs the tier's disk" 2 "FV_CONTAINER_DISK_GB=150 or more" -- \
-  FV_DRY_RUN=1 FV_FAMILY=serve-engine FV_R2_TREES=fastwan21-1.3b bash "$HTTP" run abc1234
+# hd (with its sibling hd5), serve-engine, sfstream and mmaudio (ADR-0019
+# §22.19, S7): retired to fv-lab after their GPU checks (§22.10, §22.12,
+# §22.14, §22.16). runpod-http.sh run routes each to fv-lab pod up (never the
+# script path), `all` is refused, `plan` is fv-lab's plan; runpod-matrix.sh
+# refuses each (exit 2) naming fv-lab's commands. The families are named here,
+# not read from the list, so one dropped from FV_LAB_RETIRED fails.
+# shellcheck source=scripts/gpu/fv-lab-retired.sh
+. "$ROOT/scripts/gpu/fv-lab-retired.sh"
+for fam in hd hd5 serve-engine sfstream mmaudio; do
+  if fv_lab_retired "$fam" && ! fv_lab_sibling "$fam" >/dev/null && ! fv_script_retired "$fam"; then
+    ok "$fam: in FV_LAB_RETIRED only"
+  else
+    bad "$fam: not retired to fv-lab (FV_LAB_RETIRED: $FV_LAB_RETIRED)"
+  fi
+  dry "$fam: run is fv-lab only" 0 "fv-lab pod up --sha abc1234 --family $fam --root $ROOT --yes --wait" FV_FAMILY="$fam"
+  dry "$fam: never the script path" 0 "$fam is fv-lab only (fv-lab-retired.sh); nothing created" FV_FAMILY="$fam"
+  expect "all: refused for $fam" 1 "run \`kernels\`, then \`run\`" -- RUNPOD_API_KEY=x FV_FAMILY="$fam" bash "$HTTP" all abc1234
+  expect "plan: fv-lab's plan for $fam" 0 "--family $fam --root $ROOT --tag abc1234-1025120000-abcd" -- \
+    FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
+  mx "matrix: $fam is retired" "FATAL: $fam is retired to fv-lab (fv-lab-retired.sh): fv-lab run $fam on the box, runpod-http.sh run or fv-lab pod up --family $fam from a host" "$fam"
+done
+# hd5 is frozen with hd (FV_LAB_RETIRED_SIBLINGS, with its mode): no longer a
+# live sibling, so run reaches fv-lab rather than the sibling refusal.
+hd5_mode=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
+[[ " $FV_LAB_RETIRED_SIBLINGS " == *" hd5:hd:FV_PROMPTS=$hd5_mode "* && " $FV_LAB_SIBLINGS " != *" hd5:"* ]] \
+  && ok "hd5: a retired sibling of hd with its FV_PROMPTS mode, not a live one" || bad "hd5: FV_LAB_SIBLINGS=$FV_LAB_SIBLINGS FV_LAB_RETIRED_SIBLINGS=$FV_LAB_RETIRED_SIBLINGS"
+dry "hd5: the 1080P gate by arm through fv-lab" 0 \
+  "fv-lab pod up --sha abc1234 --family hd5 --root $ROOT --cells turbo-768p turbo-1080p max-768p max-1080p turbo-1080p-10s max-1080p-10s --yes --wait" \
+  FV_FAMILY=hd5 FV_CELLS="turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s"
+# The hd family's prompts-hd5.json mode is the hd5 tier: the script's form of
+# the 1080P gate (docs/serve/h3-1080p-and-upscaler.md's run tables) is refused
+# naming hd5, in every mode, from the host environment or FV_EXTRA_ENV, for any
+# path to the file; refusing FV_PROMPTS alone would send it to hd's own
+# prompt set under the same arm names. hd5 with its own setting: drop it.
+# Another prompt set on hd: the generic refusal.
+hd5_why="with FV_FAMILY=hd is the fv-lab tier hd5 now (hd's FV_PROMPTS mode, frozen with it: fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS, docs/adr/0019-fv-lab.md §22.19): use FV_FAMILY=hd5 without FV_PROMPTS (fv-lab pod up --family hd5); without FV_PROMPTS the run would be hd's own"
+for v in "$hd5_mode" scripts/gpu/prompts-hd5.json; do
+  for mode in run all plan; do
+    expect "hd + FV_PROMPTS=$v names hd5 ($mode)" 1 "FV_PROMPTS=$v $hd5_why" -- \
+      FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=hd FV_PROMPTS="$v" FV_CELLS="turbo-768p turbo-1080p" bash "$HTTP" "$mode" abc1234
+    expect "hd + FV_EXTRA_ENV FV_PROMPTS=$v names hd5 ($mode)" 1 "FV_PROMPTS=$v $hd5_why" -- \
+      FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=hd FV_EXTRA_ENV="FASTVIDEO_X=1 FV_PROMPTS=$v" FV_AVOID_MACHINES=m1 bash "$HTTP" "$mode" abc1234
+  done
+done
+dry "hd5 with its own FV_PROMPTS: drop it" 1 "FV_FAMILY=hd5 is the hd family's FV_PROMPTS=$hd5_mode mode already: drop FV_PROMPTS" \
+  FV_FAMILY=hd5 FV_PROMPTS="$hd5_mode"
+dry "hd: another FV_PROMPTS refused, no hd5 in the answer" 1 "which has no FV_PROMPTS; unset it" \
+  FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json
+dry "hd: FV_PROMPTS in FV_EXTRA_ENV refused (another prompt set)" 1 "reads no FV_PROMPTS from FV_EXTRA_ENV" \
+  FV_FAMILY=hd FV_EXTRA_ENV=FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json
+out="$(cd "$TMP" && clean FV_DRY_RUN=1 FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json bash "$HTTP" run abc1234 2>&1 || true)"
+[[ "$out" != *hd5* ]] && ok "hd: another prompt set's refusal does not name hd5" || bad "hd: $out"
+dry "wan: prompts-hd5.json is not hd5's mode for another family" 0 "on the script path, nothing created" \
+  FV_FAMILY=wan FV_PROMPTS="$hd5_mode"
+for v in "$hd5_mode" scripts/gpu/prompts-hd5.json; do
+  mx "matrix: hd + FV_PROMPTS=$v names hd5" \
+    "FATAL: FV_PROMPTS=$v with hd is the fv-lab tier hd5 now (hd's FV_PROMPTS mode, frozen with it: fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS, ADR-0019 §22.19; without it the run would be hd's own): fv-lab run hd5 on the box, FV_FAMILY=hd5 runpod-http.sh run or fv-lab pod up --family hd5 from a host" \
+    FV_PROMPTS="$v" hd
+done
+mx "matrix: hd + another FV_PROMPTS is the retired family" "FATAL: hd is retired to fv-lab (fv-lab-retired.sh): fv-lab run hd " \
+  FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json hd
+# The volume+r2 tiers' GPU-check form (FV_R2_TREES, §21.8) was the script
+# side's; fv-lab fetches the tier's trees itself, so it is refused.
+for kv in "serve-engine fastwan21-1.3b 150" "sfstream sfwan21-1.3b 150" "mmaudio fastwan21-1.3b 180"; do
+  read -r fam tree disk <<<"$kv"
+  dry "$fam: FV_R2_TREES refused (fv-lab fetches the tier's trees)" 1 "which has no FV_R2_TREES" \
+    FV_FAMILY="$fam" FV_R2_TREES="$tree" FV_CONTAINER_DISK_GB="$disk"
+  dry "$fam: the tier's disk passes" 0 "--family $fam --root $ROOT --yes --wait" FV_FAMILY="$fam" FV_CONTAINER_DISK_GB="$disk"
+done
+# Their knobs (§22.19, out of knobs::SCRIPT_KNOBS into MODE_KNOBS and
+# FV_LAB_NOT_READ): refused in FV_EXTRA_ENV with the tier's answer, on any
+# retired family, all in one message; serve-engine's group picker in the
+# host environment too.
+dry "serve-engine: FV_ENGINE_CELLS refused, FV_CELLS named" 1 \
+  "reads no FV_ENGINE_CELLS from FV_EXTRA_ENV (FV_ENGINE_CELLS: serve-engine selects by arm, as every tier (FV_ENGINE_CELLS picked runpod-matrix.sh serve-engine's groups h3 / ltx / wan): FV_CELLS" \
+  FV_FAMILY=serve-engine FV_EXTRA_ENV="FV_ENGINE_CELLS=h3"
+dry "host env refused: FV_ENGINE_CELLS (serve-engine)" 1 "which has no FV_ENGINE_CELLS: it selects by arm, FV_CELLS" \
+  FV_FAMILY=serve-engine FV_ENGINE_CELLS=h3
+dry "sfstream: its run list and prompts refused in one message" 1 \
+  "reads no FV_SFSTREAM_RUNS, FV_SF_PROMPT, FV_SF_SWITCH from FV_EXTRA_ENV (FV_SFSTREAM_RUNS: the sfstream tier's cell (lab/cells/sfstream-rollout.toml)" \
+  FV_FAMILY=sfstream FV_EXTRA_ENV="FV_SFSTREAM_RUNS=--run FV_SF_PROMPT=x FASTVIDEO_X=1 FV_SF_SWITCH=y"
+dry "mmaudio: FV_MMAUDIO_PROMPT refused, the cell named" 1 \
+  "reads no FV_MMAUDIO_PROMPT from FV_EXTRA_ENV (FV_MMAUDIO_PROMPT: the mmaudio tier's cell (lab/cells/mmaudio-sidecar.toml)" \
+  FV_FAMILY=mmaudio FV_EXTRA_ENV="FV_MMAUDIO_PROMPT=a"
+dry "FV_MMAUDIO_PROMPT in another tier's FV_EXTRA_ENV: refused" 1 "reads no FV_MMAUDIO_PROMPT from FV_EXTRA_ENV" \
+  FV_FAMILY=hd FV_EXTRA_ENV="FV_MMAUDIO_PROMPT=a"
 
-# sfstream (ADR-0019 §22, S4): the same, its one tree sfwan21-1.3b from R2;
-# its dry run shows each arm's FASTVIDEO_TAE_DIR (the lockstep env entry).
-expect "sfstream: run is the script path" 0 "a pod running runpod-matrix.sh sfstream" -- \
-  FV_DRY_RUN=1 FV_FAMILY=sfstream bash "$HTTP" run abc1234
-expect "sfstream: the GPU check's script side plans" 0 '"name": "fv-lab-sfstream-abc1234-t"' -- RUNPOD_API_KEY=x \
-  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=sfstream FV_R2_TREES=sfwan21-1.3b \
-  FV_CONTAINER_DISK_GB=150 bash "$HTTP" plan abc1234 abc1234-t
-expect "sfstream: FV_R2_TREES needs a disk for the tree" 2 "(28.93 GB) and 120 GB: FV_CONTAINER_DISK_GB=149 or more" -- \
-  FV_DRY_RUN=1 FV_FAMILY=sfstream FV_R2_TREES=sfwan21-1.3b bash "$HTTP" run abc1234
-mkdir -p "$TMP/sfw/weights/auxiliary/tae" "$TMP/sfs"
-: >"$TMP/sfw/weights/auxiliary/tae/.complete"
-expect "sfstream: each arm's own FASTVIDEO_TAE_DIR, no fetch in a dry run" 0 \
-  "dry-run sfstream-main: env FASTVIDEO_TAE_DIR=$TMP/sfw/weights/auxiliary/tae " -- \
-  FV_DRY_RUN=1 FV_WORK="$TMP/sfw" FV_SCRATCH="$TMP/sfs" bash "$MATRIX" sfstream
-if [[ -e "$TMP/sfw/weights/auxiliary/tae/taew2_1.safetensors" || -e "$TMP/sfs/runs/sfstream/tae-fetch.log" ]]; then
-  bad "sfstream: a dry run fetched taew2_1"
-else
-  ok "sfstream: a dry run fetched nothing"
-fi
-
-# mmaudio (ADR-0019 §22, S5): the same, its GPU check's two trees
-# (fastwan21-1.3b, mmaudio-44k-v2) from R2; its branch cut to the tier's
-# three arms: the dry run exits 0 (the `find` fallback that ended it at exit
-# 1 is gone), shows each Wan arm's own FASTVIDEO_MMAUDIO_WEIGHTS and
-# FASTVIDEO_TAE_DIR, runs no upstream / inject / waveform arm and fetches
-# nothing.
-expect "mmaudio: run is the script path" 0 "a pod running runpod-matrix.sh mmaudio" -- \
-  FV_DRY_RUN=1 FV_FAMILY=mmaudio bash "$HTTP" run abc1234
-expect "mmaudio: the GPU check's script side plans" 0 '"name": "fv-lab-mmaudio-abc1234-t"' -- RUNPOD_API_KEY=x \
-  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=mmaudio "FV_R2_TREES=fastwan21-1.3b mmaudio-44k-v2" \
-  FV_CONTAINER_DISK_GB=180 bash "$HTTP" plan abc1234 abc1234-t
-expect "mmaudio: FV_R2_TREES needs a disk for both trees" 2 "(50.68 GB) and 120 GB: FV_CONTAINER_DISK_GB=171 or more" -- \
-  FV_DRY_RUN=1 FV_FAMILY=mmaudio "FV_R2_TREES=fastwan21-1.3b mmaudio-44k-v2" FV_CONTAINER_DISK_GB=170 bash "$HTTP" run abc1234
-mkdir -p "$TMP/mmw/weights/auxiliary/tae" "$TMP/mms"
-: >"$TMP/mmw/weights/auxiliary/tae/.complete"
-expect "mmaudio: each Wan arm's own env, no fetch in a dry run" 0 \
-  "dry-run wan13-audio: env FASTVIDEO_MMAUDIO_WEIGHTS=$TMP/mmw/weights/mmaudio-44k-v2 FASTVIDEO_TAE_DIR=$TMP/mmw/weights/auxiliary/tae " -- \
-  FV_DRY_RUN=1 FV_WORK="$TMP/mmw" FV_SCRATCH="$TMP/mms" bash "$MATRIX" mmaudio
-if [[ -e "$TMP/mmw/weights/auxiliary/tae/taew2_1.safetensors" || -e "$TMP/mms/runs/mmaudio/tae-fetch.log" ]]; then
-  bad "mmaudio: a dry run fetched taew2_1"
-else
-  ok "mmaudio: a dry run fetched nothing"
-fi
-mm_out="$(clean FV_DRY_RUN=1 FV_WORK="$TMP/mmw" FV_SCRATCH="$TMP/mms" bash "$MATRIX" mmaudio 2>&1)"
-mm_arms="$(grep -oE '\] dry-run [a-z0-9-]+:' <<<"$mm_out" | sed -E 's/^\] dry-run //; s/:$//' | tr '\n' ' ')"
-if [[ "$mm_arms" == "wan13-audio sfwan13-audio ours-v2a " ]] && ! grep -qE 'up-env|up-sidecar|mm-(pixels|features|e2e)|diff-|wave-|V2A clip|WARN' <<<"$mm_out"; then
-  ok "mmaudio: the cut branch runs exactly the tier's three arms"
-else
-  bad "mmaudio: the dry run's arms are '$mm_arms'"
-fi
-
-# wan (ADR-0019 §22, S6): the same, its GPU check's two trees from R2 (the
+# wan (ADR-0019 §22, S6): on the script path until S8, its GPU check's two trees from R2 (the
 # script side stages both at once: 53.41 GB and the 120 GB); its dry run shows
 # each gated arm's FASTVIDEO_TAE_DIR and fetches no TAE file; sfwan, which runs
 # the branch's SF-Wan arms, inherits both.
@@ -448,6 +467,15 @@ for fam in $retired_18 $retired_22; do
   expect "$fam: all refused" 2 "$msg" -- FV_FAMILY="$fam" bash "$HTTP" all abc1234
   expect "$fam: plan refused" 2 "$msg" -- FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
   mx "matrix: $fam is retired with no tier" "FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED): $why" "$fam"
+done
+
+# Two pointers name a tier S7 retired from the script (ADR-0019 §22.19): the
+# check they point at is the tier's, no script family's.
+for kv in "sfquality sfstream" "speechtest mmaudio"; do
+  read -r fam tier <<<"$kv"
+  why="$(fv_script_retired_why "$fam")"
+  [[ "$why" == *"he $tier tier (fv-lab run $tier) keeps"* && "$why" != *"$tier family"* ]] \
+    && ok "$fam: its pointer names the $tier tier" || bad "$fam: $why"
 done
 
 # A script family's dry run creates nothing.

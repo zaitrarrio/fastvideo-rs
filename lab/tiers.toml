@@ -581,11 +581,12 @@ cells = ["ltx-versions"]
 # ---- D1, slice S2 (docs/adr/0019-fv-lab.md §22, S2): the `hd` family as a tier, its
 # derived step (the Lanczos upscale and its compares, the FV_HD_POST_URL post
 # script, the keyframe prune) dropped from the script in the same PR, so the
-# script's dry run is the tier's (fv-lab-goldens.sh). The branch stays until the
-# GPU check through both runners (§22.10); S7 then retires it.
+# script's dry run was the tier's (fv-lab-goldens.sh). Its GPU check through
+# both runners passed (§22.10, d53ea62) and S7 retired the branch (§22.19:
+# goldens frozen, hd5 frozen with it).
 # The rtx6000 tier's pod, as runpod-http.sh gives every FV_FAMILY.
 
-# runpod-matrix.sh `hd`: H3 at the served 1080P canvas, h3-turbo and h3-max at
+# Was runpod-matrix.sh `hd`: H3 at the served 1080P canvas, h3-turbo and h3-max at
 # 768p and 1920x1088 / 1088x1920 over prompts-hd.json, then both at 1920x1088
 # for 10 s (one prompt).
 [[tier]]
@@ -606,12 +607,12 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["hd-canvases", "hd-10s"]
 
-# runpod-matrix.sh `hd` with FV_PROMPTS=scripts/gpu/prompts-hd5.json: the 1080P
+# Was runpod-matrix.sh `hd` with FV_PROMPTS=scripts/gpu/prompts-hd5.json: the 1080P
 # serve gate's five prompts (docs/serve/h3-1080p-and-upscaler.md "Gate run"),
 # which fv-lab takes from a cell (fv-lab run ignores FV_PROMPTS with a warning,
 # pod up --extra-env refuses it, §7, §9.4). A sibling tier of
-# the hd family (fv-lab-retired.sh FV_LAB_SIBLINGS): its goldens are the
-# script's dry run with that FV_PROMPTS. The arms keep the script's names, which
+# the hd family, frozen with it (fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS,
+# §22.19): its goldens are the script's dry run with that FV_PROMPTS. The arms keep the script's names, which
 # the hd reports read, so it is a tier, not extra cells of hd. Its 10 s arms
 # are hd's cell (FV_PROMPTS does not reach them). The gate's six arms:
 #   fv-lab run hd5 --cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s
@@ -638,14 +639,14 @@ cells = ["hd5-canvases", "hd-10s"]
 # in the same commit (fv-gpucheck engine then takes <weights
 # root>/auxiliary/tae; none of the three recipes reads a tiny decoder, so the
 # frames do not change, §22.11), so the script's dry run is the tier's
-# (fv-lab-goldens.sh). The branch stays
-# until the GPU check through both runners (§22.12); S7 then retires it.
-# runpod-matrix.sh `serve-engine`: for h3-turbo, ltx-turbo and fastwan21-1.3b,
+# (fv-lab-goldens.sh). Its GPU check through both runners passed (§22.12,
+# 3bc6d03) and S7 retired the branch (§22.19: goldens frozen).
+# Was runpod-matrix.sh `serve-engine`: for h3-turbo, ltx-turbo and fastwan21-1.3b,
 # the CLI generation, then the same request through the serve engine's CUDA
 # backend (frames byte-compared with the CLI's, a second job cancelled
 # mid-run): docs/serve/design.md's GPU check of the engine. The script's
-# FV_ENGINE_CELLS (families h3 / ltx / wan) is --cells by arm (fv-lab refuses
-# it: knobs::SCRIPT_KNOBS). The rtx6000 tier's pod, with weights "volume+r2":
+# FV_ENGINE_CELLS (families h3 / ltx / wan) is --cells by arm (fv-lab and
+# runpod-http.sh refuse it: knobs::MODE_KNOBS). The rtx6000 tier's pod, with weights "volume+r2":
 # fastwan21-1.3b (29.21 GB) is R2-only since 2026-10-13, fetched onto the
 # container disk before the first arm that reads it (150 GB: the tree and the
 # 120 GB every volume tier keeps, as oracle-r2's); the other two groups read
@@ -674,13 +675,13 @@ cells = ["serve-engine-h3-turbo", "serve-engine-ltx-turbo", "serve-engine-fastwa
 # `tae = true`, which this one is). In lockstep, the script's `export
 # FASTVIDEO_TAE_DIR="$TAE"` became each arm's env entry (and its taew2_1 fetch
 # is skipped in a dry run), so the script's dry run is the tier's
-# (fv-lab-goldens.sh). The branch stays until the GPU check through both
-# runners (§22.14); S7 then retires it.
-# runpod-matrix.sh `sfstream`: SF-Wan 1.3B's open-ended causal rollout (`wan
+# (fv-lab-goldens.sh). Its GPU check through both runners passed (§22.14,
+# b7ddf5f) and S7 retired the branch (§22.19: goldens frozen).
+# Was runpod-matrix.sh `sfstream`: SF-Wan 1.3B's open-ended causal rollout (`wan
 # stream`): parity with the bounded path, long runs, prompt switches, a
 # 10-minute memory-growth run. The script's FV_SFSTREAM_RUNS, FV_SF_PROMPT and
-# FV_SF_SWITCH are the cell's defaults (fv-lab refuses them:
-# knobs::SCRIPT_KNOBS); select an arm with --cells. The rtx6000 tier's pod,
+# FV_SF_SWITCH are the cell's defaults (fv-lab and runpod-http.sh refuse them:
+# knobs::MODE_KNOBS); select an arm with --cells. The rtx6000 tier's pod,
 # with weights "volume+r2": sfwan21-1.3b (28.93 GB) is R2-only since
 # 2026-10-13, fetched onto the container disk before the first arm (150 GB:
 # the tree and the 120 GB every volume tier keeps, as oracle-r2's); `tae =
@@ -711,14 +712,15 @@ cells = ["sfstream-rollout"]
 # `FASTVIDEO_TAE_DIR` became each Wan arm's env entries, the Wan arms gate on
 # composite verify-weights.sh cells (their tree and mmaudio-44k-v2), ours-v2a
 # on mmaudio-44k-v2, and its taew2_1 fetch is skipped in a dry run, so the
-# script's dry run is the tier's (fv-lab-goldens.sh). The branch stays until
-# the GPU check through both runners (§22.16); S7 then retires it.
-# runpod-matrix.sh `mmaudio`: the MMAudio V2A sidecar (`wan gen --audio
+# script's dry run is the tier's (fv-lab-goldens.sh). Its GPU check through
+# both runners passed (§22.16, 9e6d09a) and S7 retired the branch (§22.19:
+# goldens frozen).
+# Was runpod-matrix.sh `mmaudio`: the MMAudio V2A sidecar (`wan gen --audio
 # mmaudio`) on FastWan 1.3B DMD and SF-Wan 1.3B, then our port alone on the
 # FastWan clip, timed. The script's FV_MMAUDIO_PROMPT is the cell's prompt
-# (fv-lab refuses it: knobs::SCRIPT_KNOBS); select an arm with --cells. The
-# rtx6000 tier's pod, with weights "volume+r2": fastwan21-1.3b (29.21 GB),
-# sfwan21-1.3b (28.93 GB) and mmaudio-44k-v2 (21.46 GB, CC-BY-NC 4.0, read
+# (fv-lab and runpod-http.sh refuse it: knobs::MODE_KNOBS); select an arm
+# with --cells. The rtx6000 tier's pod, with weights "volume+r2":
+# fastwan21-1.3b (29.21 GB), sfwan21-1.3b (28.93 GB) and mmaudio-44k-v2 (21.46 GB, CC-BY-NC 4.0, read
 # from the owner's R2 copy, never redistributed) are R2-only since
 # 2026-10-13, each fetched before the first arm that reads it and a tree no
 # later arm reads dropped first (at most 50.68 GB at once, so 180 GB: that
@@ -748,9 +750,10 @@ cells = ["mmaudio-sidecar"]
 # gated arm's env entry (Addition 16, §22.4: its arms read `{tae}` without a
 # `tae` file), engine-fw22's `--tae-dir "$TAE"` went (as serve-engine's in S3)
 # and its TAE fetch is skipped in a dry run, so the script's dry run is the
-# tier's (fv-lab-goldens.sh). The branch stays until the GPU check through both
-# runners (§22.18); S7 then retires it. `sfwan` still runs the branch's
-# SF-Wan arms (its FV_SFWAN_CELLS; fv-lab: --cells on this tier) until S8.
+# tier's (fv-lab-goldens.sh). The branch stays after the GPU check through both
+# runners (§22.18): `sfwan` still runs its SF-Wan arms (its FV_SFWAN_CELLS;
+# fv-lab: --cells on this tier), so S8 retires it with `sfwan` (S7, §22.19,
+# retired the other four §22 families without it).
 # runpod-matrix.sh `wan`: FastWan2.1 1.3B's kernel, decoder, cache and
 # attention arms with their lossy and exact gates, SF-Wan 1.3B at 81 frames,
 # the TI2V-5B and T2V-14B kernel A/B, T2V-14B's caches and Sol at 50 steps,

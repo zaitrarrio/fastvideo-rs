@@ -136,8 +136,9 @@ needs() {
       local m=mmaudio-44k-v2/safetensors
       echo ":$m/mmaudio_large_44k_v2.safetensors :$m/vae_44k.safetensors :$m/synchformer.safetensors :$m/bigvgan_v2_44k.safetensors :$m/clip_dfn5b_h14_384.safetensors mmaudio-44k-v2:weights mmaudio-44k-v2:ext_weights mmaudio-44k-v2:bigvgan_v2_44khz_128band_512x mmaudio-44k-v2:DFN5B-CLIP-ViT-H-14-384" ;;
     # A Wan generation with the MMAudio V2A sidecar (`wan gen --audio mmaudio`,
-    # runpod-matrix.sh mmaudio and the fv-lab tier `mmaudio`; docs/adr/0019-fv-lab.md
-    # §22.15): the Wan tree and mmaudio-44k-v2, which the sidecar loads.
+    # the fv-lab tier `mmaudio`, runpod-matrix.sh mmaudio's arms until its branch
+    # went; docs/adr/0019-fv-lab.md §22.15, §22.19): the Wan tree and
+    # mmaudio-44k-v2, which the sidecar loads.
     fastwan21-1.3b-mmaudio | sfwan21-1.3b-mmaudio)
       echo "$(needs "${1%-mmaudio}") $(needs mmaudio-44k-v2)" ;;
     # SANA-Video 2B 480p Diffusers tree (weights-manifest.tsv sana-video-2b-480p;

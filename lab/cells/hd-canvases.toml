@@ -1,4 +1,5 @@
-# runpod-matrix.sh `hd` (docs/serve/h3-1080p-and-upscaler.md; docs/adr/0019-fv-lab.md §22, S2): H3 at the
+# Was runpod-matrix.sh `hd` (retired after its GPU check, docs/adr/0019-fv-lab.md §22.19;
+# docs/serve/h3-1080p-and-upscaler.md; §22, S2): H3 at the
 # served 1080P canvas (families/h3.toml hd_1080p for sol-h3 and fasth3-4step-vsa). h3-turbo (FastH3 4-step VSA,
 # its technique profile) and h3-max (Sol-H3, the tau ladder) at the trained 768p canvas and at 1920x1088 /
 # 1088x1920 (`h3 gen --oversize-canvas`, the test path: 2.02x the trained pixel cap), the prompts of

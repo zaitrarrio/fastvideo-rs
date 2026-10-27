@@ -1,8 +1,9 @@
-# runpod-matrix.sh `hd` with FV_PROMPTS=scripts/gpu/prompts-hd5.json: the 1080P serve gate's prompt set
+# Was runpod-matrix.sh `hd` with FV_PROMPTS=scripts/gpu/prompts-hd5.json (frozen with hd when its branch went,
+# docs/adr/0019-fv-lab.md §22.19): the 1080P serve gate's prompt set
 # (docs/serve/h3-1080p-and-upscaler.md "Gate run": talking-head, spark-mountain-lake, ltx-frogyoga,
 # ltx-newsbroadcast, h3-demo). The hd-canvases arms, word for word, with that prompt set: the hd5 tier
-# (docs/adr/0019-fv-lab.md §22, S2), a sibling of the hd family (fv-lab-retired.sh FV_LAB_SIBLINGS) whose
-# goldens are the script's dry run with that FV_PROMPTS. The arm names are the script's (the gate's run
+# (docs/adr/0019-fv-lab.md §22, S2), a sibling of the hd family (fv-lab-retired.sh FV_LAB_SIBLINGS until hd's
+# branch went, FV_LAB_RETIRED_SIBLINGS since, §22.19) whose goldens are the script's dry run with that FV_PROMPTS. The arm names are the script's (the gate's run
 # directories, which hd_report.py and `fv-lab report summary --kind hd` read by name), so this is a tier of
 # its own, not extra cells of hd (a tier's arm names are unique). The gate's six arms:
 #   fv-lab run hd5 --cells turbo-768p,turbo-1080p,max-768p,max-1080p,turbo-1080p-10s,max-1080p-10s

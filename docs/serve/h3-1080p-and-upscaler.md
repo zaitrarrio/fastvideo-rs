@@ -829,12 +829,15 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha <sha> --family hd5 \
 # or: python3 scripts/gpu/hd_report.py <run dir> (numpy, Pillow)
 ```
 
-Until the `hd` branch is deleted (ADR-0019 §22.6, S7) the script runs the same arms: `FV_FAMILY=hd
-scripts/gpu/runpod-http.sh run <sha>`, and for the gate `FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json
-FV_CELLS="turbo-768p turbo-1080p max-768p max-1080p turbo-1080p-10s max-1080p-10s"` with it (and
-`FV_FETCH_TREE=1 FV_FETCH_SKIP='\.png$|\.cache$'`). With no prune on the pod any more, the commands skip the PNG
-frames (about 1-1.5 GB per 1080p arm) and keep the MP4s, `benchmark.json`, `frames.sha256.json` and the logs; drop
-`\.png$|` from the skip to fetch the frames as well.
+The `hd` branch of `runpod-matrix.sh` is gone since its GPU check passed (ADR-0019 §22.10 on `d53ea62`; deleted
+in §22.19, S7), and `hd5` is frozen with it: `runpod-matrix.sh hd` and `hd5` refuse (exit 2) and name the tier,
+and `FV_FAMILY=hd scripts/gpu/runpod-http.sh run <sha>` (or `FV_FAMILY=hd5`, with `FV_CELLS` for the gate's arms)
+runs the same `fv-lab pod up` as above. The script's form of the gate, `FV_FAMILY=hd
+FV_PROMPTS=…/prompts-hd5.json`, is refused there (`FV_PROMPTS` is no setting fv-lab reads): use `FV_FAMILY=hd5`. The
+`Command` rows of the runs above are the script runs of their day; the commands at those commits are in `git show
+<sha>:scripts/gpu/runpod-matrix.sh`. With no prune on the pod any more, the commands skip the PNG frames (about
+1-1.5 GB per 1080p arm) and keep the MP4s, `benchmark.json`, `frames.sha256.json` and the logs; drop `\.png$|` from
+the skip to fetch the frames as well.
 
 The run behind this page used `FV_FETCH_SKIP='frames/[^/]+/frame-[0-9]+\.png$|\.cache$'`.
 That pattern also matched `keyframes/`, so the PNG keyframes were not

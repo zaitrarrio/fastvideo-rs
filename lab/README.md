@@ -177,10 +177,12 @@ carries a measurement-looking number (seconds, ms, dB, GiB, %, `1.5x`,
 source, cells) and `lab/cells/<cell>.toml` (one workload and its arms, compares and gates) are what `fv-lab run`
 executes and `fv-lab pod` provisions: [ADR-0019](../docs/adr/0019-fv-lab.md), usage
 [docs/dev/fv-lab.md](../docs/dev/fv-lab.md), schemas `crates/fastvideo-lab/schemas/{tiers,cell}.v1.json`. Today:
-21 tiers. Seventeen are `runpod-matrix.sh` families ported value for value and held equal by their dry-run
+28 tiers. Twenty-two are `runpod-matrix.sh` families ported value for value and held equal by their dry-run
 goldens: `rtx6000` (D1a); `techniques`, `b6`, `rtx5090`, `fastvideo`, `h3arms`, `trace`, `ltxfps`, `ltxvae`,
 `precision` (D1b, ADR-0019 §9); `b4a` (D1d, §11); `det-short`, `determinism`, `oracle` (D1d, §15); `fuse`, `attn3`,
-`ltx` (D1f, §17). All but `oracle` are retired from the script (`scripts/gpu/fv-lab-retired.sh`: branches deleted,
-goldens frozen); `oracle`'s branch stays whole (§15.10). Two are script modes restored as tiers, `precision-nvfp4` and
-`ltxvae-gen` (ADR-0019 §12); one is a port one-off, `h3-graphs` (ADR-0019 §14); and `gold` is generated from the gold
-files (ADR-0023).
+`ltx` (D1f, §17); `hd`, `serve-engine`, `sfstream`, `mmaudio`, `wan` (D1, §22). All but `oracle` and `wan` are
+retired from the script (`scripts/gpu/fv-lab-retired.sh`: branches deleted, goldens frozen; §22's four in S7,
+§22.19); `oracle`'s branch stays whole (§15.10) and `wan`'s until `sfwan` goes with `oracle` (§22.18). Two are
+siblings of a family: `oracle-r2` (§21; `oracle`'s `sfwan13` from R2) and `hd5` (§22, S2; `hd` over the 1080P gate's
+prompts, frozen with `hd`). Two are script modes restored as tiers, `precision-nvfp4` and `ltxvae-gen` (ADR-0019
+§12); one is a port one-off, `h3-graphs` (ADR-0019 §14); and `gold` is generated from the gold files (ADR-0023).

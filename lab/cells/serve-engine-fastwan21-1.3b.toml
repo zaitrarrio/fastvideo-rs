@@ -1,4 +1,5 @@
-# runpod-matrix.sh `serve-engine`, its wan group (docs/serve/design.md "GPU check"; docs/adr/0019-fv-lab.md §22, S3):
+# Was runpod-matrix.sh `serve-engine`, its wan group (retired after its GPU check, docs/adr/0019-fv-lab.md §22.19;
+# docs/serve/design.md "GPU check"; §22, S3):
 # the CLI generation of FastWan2.1 1.3B (DMD, VSA, the full Wan VAE: `wan gen`), then the served variant
 # `fastwan21-1.3b` through EngineService + CudaBackend (`fv-gpucheck engine`): its frames byte-compared with the CLI's,
 # then a second job cancelled after step 1. No `--tae-dir` (dropped from the script's engine arms in the same commit

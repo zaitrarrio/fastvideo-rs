@@ -40,6 +40,27 @@ pub const RESTORED_MODES: [RestoredMode; 2] = [
     },
 ];
 
+/// `FV_LAB_RETIRED_SIBLINGS` of `scripts/gpu/fv-lab-retired.sh`, in its
+/// order (ADR-0019 §22.19): a sibling tier frozen with its family, and the
+/// setting that made the family's run the tier's. `hd5` is `hd` with
+/// `FV_PROMPTS=…/prompts-hd5.json`; refusing that setting alone would send the
+/// caller to `hd`'s own prompt set under the same arm names, so it names the
+/// tier ([`retired_sibling_mode`]). A path value matches by its file name.
+pub const RETIRED_SIBLING_MODES: [RestoredMode; 1] = [RestoredMode {
+    tier: "hd5",
+    family: "hd",
+    key: "FV_PROMPTS",
+    value: "/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json",
+}];
+
+/// The frozen sibling whose mode `key=value` is (by file name for a path).
+pub fn retired_sibling_mode(key: &str, value: &str) -> Option<&'static RestoredMode> {
+    let name = |v: &str| v.rsplit('/').next().unwrap_or(v).to_owned();
+    RETIRED_SIBLING_MODES
+        .iter()
+        .find(|m| m.key == key && !value.is_empty() && name(value) == name(m.value))
+}
+
 /// The retired families' knobs that changed their arms (ADR-0019 §9.4) or
 /// picked their pairs or groups (`FV_TECH_CELLS`, `FV_B6_CELLS`,
 /// `FV_B4A_CELLS`, `FV_DET_CELLS`): no tier reads them. `FV_B4A_CELLS` joined
@@ -48,8 +69,12 @@ pub const RESTORED_MODES: [RestoredMode; 2] = [
 /// `det-short` and `determinism` retired (§15.10): their tiers are the
 /// script's defaults. `FV_ATTN3_ARMS` and `FV_ATTN3_VSA` (attn3's arm
 /// pickers) joined when `attn3` retired (§17.6): the tier is their defaults
-/// (`v2 cudnn`, `0 1`), selected by arm.
-pub const MODE_KNOBS: [&str; 18] = [
+/// (`v2 cudnn`, `0 1`), selected by arm. Five joined when their branches went
+/// in §22's S7 (§22.19): `serve-engine`'s group picker `FV_ENGINE_CELLS` (the
+/// tier selects by arm), `sfstream`'s `FV_SFSTREAM_RUNS`, `FV_SF_PROMPT` and
+/// `FV_SF_SWITCH`, and `mmaudio`'s `FV_MMAUDIO_PROMPT` (each tier's cell is
+/// their defaults).
+pub const MODE_KNOBS: [&str; 23] = [
     "FV_PRECISION_ARM",
     "FV_NVFP4_WORKLOADS",
     "FV_VAE_GEN",
@@ -68,13 +93,19 @@ pub const MODE_KNOBS: [&str; 18] = [
     "FV_DET_I2V_PROMPT",
     "FV_ATTN3_ARMS",
     "FV_ATTN3_VSA",
+    "FV_ENGINE_CELLS",
+    "FV_SFSTREAM_RUNS",
+    "FV_SF_PROMPT",
+    "FV_SF_SWITCH",
+    "FV_MMAUDIO_PROMPT",
 ];
 
 /// The knobs of the tiers whose `runpod-matrix.sh` branch is still there:
 /// the script reads them, no tier does. fv-lab refuses them; `runpod-http.sh`'s
 /// `FV_LAB_NOT_READ` gains them in the PR that retires the branch (as the
-/// `FV_DET_*` knobs did with `det-short` and `determinism`, §15.10, and
-/// `FV_ATTN3_*` with `attn3`, §17.6).
+/// `FV_DET_*` knobs did with `det-short` and `determinism`, §15.10,
+/// `FV_ATTN3_*` with `attn3`, §17.6, and the knobs of `serve-engine`,
+/// `sfstream` and `mmaudio` with theirs, §22.19).
 ///
 /// `oracle` (ADR-0019 §15), whose branch stays whole (§15.10: its
 /// clip-metric targets, `sfwan13` and `scripts/gpu/oracle.sh`'s runtime side
@@ -83,25 +114,12 @@ pub const MODE_KNOBS: [&str; 18] = [
 /// `FV_LTX_REF_PROMPT`, `FV_LTX_A2V_PROMPT`, `FV_LTX_A2V_I2V_PROMPT`,
 /// `FV_LTX_RETAKE_PROMPT`, `FV_LTX_EXTEND_PROMPT`.
 ///
-/// `serve-engine` (ADR-0019 §22, S3), whose branch stays until its GPU check:
-/// `FV_ENGINE_CELLS`, its family picker (`h3 ltx wan`); the tier's cells are
-/// its default, selected by arm (`--cells`).
-///
-/// `sfstream` (ADR-0019 §22, S4), whose branch stays until its GPU check:
-/// `FV_SFSTREAM_RUNS` (`sfstream-main`'s run list), `FV_SF_PROMPT` and
-/// `FV_SF_SWITCH` (the stream's prompt and switch prompt); the tier's cell
-/// is their defaults.
-///
-/// `mmaudio` (ADR-0019 §22, S5), whose branch stays until its GPU check:
-/// `FV_MMAUDIO_PROMPT` (the sidecar arms' prompt); the tier's cell is its
-/// default.
-///
-/// `wan` (ADR-0019 §22, S6), whose branch stays until its GPU check: its
+/// `wan` (ADR-0019 §22, S6), whose branch stays until S8 (§22.18 "Then"): its
 /// branch reads no knob of its own (`FV_CELLS` selects its arms, as fv-lab's
 /// `--cells` does); `FV_SFWAN_CELLS` is `sfwan`'s pick of `wan`'s arms
 /// (`runpod-matrix.sh sfwan`, which runs the branch with it as `FV_CELLS`),
 /// which on the `wan` tier is `--cells` itself.
-pub const SCRIPT_KNOBS: [&str; 16] = [
+pub const SCRIPT_KNOBS: [&str; 11] = [
     "FV_ORACLE_TARGETS",
     "FV_ORACLE_F32",
     "FV_ORACLE_OWN_TEXT",
@@ -112,19 +130,14 @@ pub const SCRIPT_KNOBS: [&str; 16] = [
     "FV_LTX_A2V_I2V_PROMPT",
     "FV_LTX_RETAKE_PROMPT",
     "FV_LTX_EXTEND_PROMPT",
-    "FV_ENGINE_CELLS",
-    "FV_SFSTREAM_RUNS",
-    "FV_SF_PROMPT",
-    "FV_SF_SWITCH",
-    "FV_MMAUDIO_PROMPT",
     "FV_SFWAN_CELLS",
 ];
 
-/// The knobs of a step dropped from a live family's branch, which neither
-/// the branch nor any tier reads any more: `hd`'s post-script hook
-/// (`FV_HD_POST_URL`, a script fetched and run on the pod, and its cap
-/// `FV_HD_POST_TIMEOUT_S`), dropped with the family's derived step when `hd`
-/// became a tier (ADR-0019 §22, S2). Refused everywhere, as runpod-http.sh's
+/// The knobs of a step dropped from a family's branch while it lived, which
+/// no tier reads: `hd`'s post-script hook (`FV_HD_POST_URL`, a script fetched
+/// and run on the pod, and its cap `FV_HD_POST_TIMEOUT_S`), dropped with the
+/// family's derived step when `hd` became a tier (ADR-0019 §22, S2), before
+/// the branch itself went (§22.19). Refused everywhere, as runpod-http.sh's
 /// `FV_LAB_NOT_READ` (and its script path) refuses them.
 pub const DROPPED_KNOBS: [&str; 2] = ["FV_HD_POST_URL", "FV_HD_POST_TIMEOUT_S"];
 
@@ -181,6 +194,20 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
             )
         });
     }
+    if let Some(m) = retired_sibling_mode(key, value) {
+        if tier == Some(m.family) {
+            return Some(format!(
+                "{key}={value}: with the {} family it is the fv-lab tier {} now ({}'s {key} mode, frozen with it); run {} (fv-lab run {} / pod up --family {}) without {key}: without it the run would be {}'s own (ADR-0019 §22.19)",
+                m.family, m.tier, m.family, m.tier, m.tier, m.tier, m.family
+            ));
+        }
+        if tier == Some(m.tier) {
+            return Some(format!(
+                "{key}={value}: the tier {} is the {} family's {key} mode already; drop the setting (ADR-0019 §22.19)",
+                m.tier, m.family
+            ));
+        }
+    }
     if key == "FV_B4A_CELLS" {
         return Some(
             "FV_B4A_CELLS: fv-lab selects by arm: pass --cells <cell>-base <cell>-pr (FV_CELLS), not FV_B4A_CELLS"
@@ -205,18 +232,18 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
     }
     if key == "FV_ENGINE_CELLS" {
         return Some(
-            "FV_ENGINE_CELLS: no tier reads it (it picked runpod-matrix.sh serve-engine's groups h3 / ltx / wan); select arms with --cells (FV_CELLS); serve-engine's arms are cli-h3-turbo, engine-h3-turbo, cli-ltx-turbo, engine-ltx-turbo, cli-wan-turbo, engine-wan-turbo (ADR-0019 §22, S3)"
+            "FV_ENGINE_CELLS: no tier reads it (it picked runpod-matrix.sh serve-engine's groups h3 / ltx / wan); select arms with --cells (FV_CELLS); serve-engine's arms are cli-h3-turbo, engine-h3-turbo, cli-ltx-turbo, engine-ltx-turbo, cli-wan-turbo, engine-wan-turbo (ADR-0019 §22, S3, §22.19)"
                 .to_owned(),
         );
     }
     if matches!(key, "FV_SFSTREAM_RUNS" | "FV_SF_PROMPT" | "FV_SF_SWITCH") {
         return Some(format!(
-            "{key}: no tier reads it (it changed runpod-matrix.sh sfstream's runs or prompts); the sfstream tier's cell (lab/cells/sfstream-rollout.toml) is the script's defaults, its arms sfstream-main and sfstream-10min, selected with --cells (FV_CELLS); another run list or prompt is another cell (ADR-0019 §22, S4)"
+            "{key}: no tier reads it (it changed runpod-matrix.sh sfstream's runs or prompts); the sfstream tier's cell (lab/cells/sfstream-rollout.toml) is the script's defaults, its arms sfstream-main and sfstream-10min, selected with --cells (FV_CELLS); another run list or prompt is another cell (ADR-0019 §22, S4, §22.19)"
         ));
     }
     if key == "FV_MMAUDIO_PROMPT" {
         return Some(
-            "FV_MMAUDIO_PROMPT: no tier reads it (it changed runpod-matrix.sh mmaudio's prompt); the mmaudio tier's cell (lab/cells/mmaudio-sidecar.toml) is the script's default, its arms wan13-audio, sfwan13-audio and ours-v2a, selected with --cells (FV_CELLS); another prompt is another cell (ADR-0019 §22, S5)"
+            "FV_MMAUDIO_PROMPT: no tier reads it (it changed runpod-matrix.sh mmaudio's prompt); the mmaudio tier's cell (lab/cells/mmaudio-sidecar.toml) is the script's default, its arms wan13-audio, sfwan13-audio and ours-v2a, selected with --cells (FV_CELLS); another prompt is another cell (ADR-0019 §22, S5, §22.19)"
                 .to_owned(),
         );
     }
@@ -291,15 +318,21 @@ pub fn check_extra_env(tier: &str, entries: &[String]) -> Result<(), String> {
         .flat_map(|e| e.split_whitespace())
         .filter_map(|e| {
             let (k, v) = e.split_once('=').unwrap_or((e, ""));
-            why(Some(tier), k, v, true)
-                .map(|w| (restored_mode(k, v).is_some(), format!("--extra-env {w}")))
+            why(Some(tier), k, v, true).map(|w| {
+                (
+                    restored_mode(k, v).is_some() || retired_sibling_mode(k, v).is_some(),
+                    format!("--extra-env {w}"),
+                )
+            })
         })
         .collect();
     message(found)
 }
 
 /// `fv-lab run`: the [`MODE_KNOBS`], [`SCRIPT_KNOBS`] and [`DROPPED_KNOBS`] set (non-empty) in
-/// its environment, the oracle's `FASTVIDEO_DUMP_OPS`, and `FV_ORACLE_URL`
+/// its environment, a frozen sibling's mode for its family or tier
+/// ([`RETIRED_SIBLING_MODES`]: `hd` or `hd5` with `FV_PROMPTS=…/prompts-hd5.json`;
+/// any other `FV_PROMPTS` only warns), the oracle's `FASTVIDEO_DUMP_OPS`, and `FV_ORACLE_URL`
 /// for `determinism` (which the script's branch read to run the oracle
 /// first; the tier does not, ADR-0019 §15.10). `get` reads one variable (the
 /// process environment in the binary).
@@ -308,10 +341,16 @@ pub fn check_run_env(tier: &str, get: impl Fn(&str) -> Option<String>) -> Result
         .iter()
         .chain(&SCRIPT_KNOBS)
         .chain(&DROPPED_KNOBS)
+        .chain(RETIRED_SIBLING_MODES.iter().map(|m| &m.key))
         .chain(&["FASTVIDEO_DUMP_OPS", "FV_ORACLE_URL"])
         .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (*k, v)))
         .filter_map(|(k, v)| {
-            why(Some(tier), k, &v, false).map(|w| (restored_mode(k, &v).is_some(), w))
+            why(Some(tier), k, &v, false).map(|w| {
+                (
+                    restored_mode(k, &v).is_some() || retired_sibling_mode(k, &v).is_some(),
+                    w,
+                )
+            })
         })
         .collect();
     message(found)
@@ -481,12 +520,13 @@ mod tests {
     }
 
     #[test]
-    fn the_serve_engine_family_picker_is_refused_by_fv_lab_only() {
+    fn the_retired_serve_engine_family_picker_is_not_read() {
         // serve-engine's FV_ENGINE_CELLS (ADR-0019 §22, S3): refused by fv-lab
         // with a pointer to selecting by arm, in --extra-env and in fv-lab
-        // run's environment; the script's branch still reads it, so
-        // runpod-http.sh's FV_LAB_NOT_READ gains it when the branch goes (S7).
-        // The message fits any tier it is set for.
+        // run's environment. Retired with the branch (§22.19): out of
+        // SCRIPT_KNOBS, into MODE_KNOBS, so runpod-http.sh's FV_LAB_NOT_READ
+        // refuses it too (tests/knobs.rs holds them equal). The message fits
+        // any tier it is set for.
         for tier in ["serve-engine", "rtx6000"] {
             let e = check_extra_env(tier, &["FV_ENGINE_CELLS=h3".into()]).unwrap_err();
             assert!(
@@ -502,18 +542,18 @@ mod tests {
         let env = |k: &str| (k == "FV_ENGINE_CELLS").then(|| "wan".to_owned());
         let e = check_run_env("serve-engine", env).unwrap_err();
         assert!(e.contains("FV_ENGINE_CELLS: no tier reads it"), "{e}");
-        assert!(e.contains("ADR-0019 §22, S3"), "{e}");
-        assert!(SCRIPT_KNOBS.contains(&"FV_ENGINE_CELLS"));
-        assert!(!MODE_KNOBS.contains(&"FV_ENGINE_CELLS"));
-        assert!(!not_read().any(|k| k == "FV_ENGINE_CELLS"));
+        assert!(e.contains("ADR-0019 §22, S3, §22.19"), "{e}");
+        assert!(!SCRIPT_KNOBS.contains(&"FV_ENGINE_CELLS"));
+        assert!(MODE_KNOBS.contains(&"FV_ENGINE_CELLS"));
+        assert!(not_read().any(|k| k == "FV_ENGINE_CELLS"));
     }
 
     #[test]
-    fn the_sfstream_knobs_are_refused_by_fv_lab_only() {
+    fn the_retired_sfstream_knobs_are_not_read() {
         // sfstream's run list and prompts (ADR-0019 §22, S4): refused by
         // fv-lab with a pointer to the tier's cell, in --extra-env and in
-        // fv-lab run's environment; the script's branch still reads them, so
-        // runpod-http.sh's FV_LAB_NOT_READ gains them when the branch goes (S7).
+        // fv-lab run's environment. Retired with the branch (§22.19): in
+        // MODE_KNOBS, so runpod-http.sh's FV_LAB_NOT_READ refuses them too.
         for key in ["FV_SFSTREAM_RUNS", "FV_SF_PROMPT", "FV_SF_SWITCH"] {
             for tier in ["sfstream", "rtx6000"] {
                 let e = check_extra_env(tier, &[format!("{key}=x")]).unwrap_err();
@@ -527,19 +567,19 @@ mod tests {
             let env = |k: &str| (k == key).then(|| "--run a,seconds=5".to_owned());
             let e = check_run_env("sfstream", env).unwrap_err();
             assert!(e.contains(&format!("{key}: no tier reads it")), "{e}");
-            assert!(e.contains("ADR-0019 §22, S4"), "{e}");
-            assert!(SCRIPT_KNOBS.contains(&key));
-            assert!(!MODE_KNOBS.contains(&key));
-            assert!(!not_read().any(|k| k == key));
+            assert!(e.contains("ADR-0019 §22, S4, §22.19"), "{e}");
+            assert!(!SCRIPT_KNOBS.contains(&key));
+            assert!(MODE_KNOBS.contains(&key));
+            assert!(not_read().any(|k| k == key));
         }
     }
 
     #[test]
-    fn the_mmaudio_prompt_is_refused_by_fv_lab_only() {
+    fn the_retired_mmaudio_prompt_is_not_read() {
         // mmaudio's prompt (ADR-0019 §22, S5): refused by fv-lab with a
         // pointer to the tier's cell, in --extra-env and in fv-lab run's
-        // environment, for any tier; the script's branch still reads it, so
-        // runpod-http.sh's FV_LAB_NOT_READ gains it when the branch goes (S7).
+        // environment, for any tier. Retired with the branch (§22.19): in
+        // MODE_KNOBS, so runpod-http.sh's FV_LAB_NOT_READ refuses it too.
         let key = "FV_MMAUDIO_PROMPT";
         for tier in ["mmaudio", "sfstream", "rtx6000"] {
             let e = check_extra_env(tier, &[format!("{key}=a fox")]).unwrap_err();
@@ -552,12 +592,12 @@ mod tests {
             let env = |k: &str| (k == key).then(|| "a fox".to_owned());
             let e = check_run_env(tier, env).unwrap_err();
             assert!(e.contains(&format!("{key}: no tier reads it")), "{e}");
-            assert!(e.contains("ADR-0019 §22, S5"), "{e}");
+            assert!(e.contains("ADR-0019 §22, S5, §22.19"), "{e}");
         }
-        assert!(SCRIPT_KNOBS.contains(&key));
-        assert!(!MODE_KNOBS.contains(&key));
+        assert!(!SCRIPT_KNOBS.contains(&key));
+        assert!(MODE_KNOBS.contains(&key));
         assert!(!DROPPED_KNOBS.contains(&key));
-        assert!(!not_read().any(|k| k == key));
+        assert!(not_read().any(|k| k == key));
         // Unset or empty, nothing is refused.
         assert!(check_run_env("mmaudio", |_| None).is_ok());
         assert!(check_run_env("mmaudio", |k| (k == key).then(String::new)).is_ok());
@@ -625,6 +665,37 @@ mod tests {
                 "{k}"
             );
         }
+    }
+
+    #[test]
+    fn the_hd5_prompts_with_hd_name_the_hd5_tier() {
+        // hd with prompts-hd5.json is the frozen hd5 tier (ADR-0019 §22.19):
+        // named in --extra-env and in fv-lab run's environment, for any path
+        // to the file; the tier with its own setting drops it; another
+        // prompt set, or another tier, is not this refusal.
+        for v in [
+            "/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json",
+            "scripts/gpu/prompts-hd5.json",
+        ] {
+            let e = check_extra_env("hd", &[format!("FV_PROMPTS={v}")]).unwrap_err();
+            assert!(e.contains("it is the fv-lab tier hd5 now"), "{e}");
+            assert!(e.contains("pod up --family hd5) without FV_PROMPTS"), "{e}");
+            let env = |k: &str| (k == "FV_PROMPTS").then(|| v.to_owned());
+            let e = check_run_env("hd", env).unwrap_err();
+            assert!(e.contains("fv-lab run hd5"), "{e}");
+            let e = check_run_env("hd5", env).unwrap_err();
+            assert!(
+                e.contains("the tier hd5 is the hd family's FV_PROMPTS mode already"),
+                "{e}"
+            );
+        }
+        let other = |k: &str| (k == "FV_PROMPTS").then(|| "scripts/gpu/prompts-hd.json".to_owned());
+        assert!(check_run_env("hd", other).is_ok());
+        let hd5 = |k: &str| (k == "FV_PROMPTS").then(|| "scripts/gpu/prompts-hd5.json".to_owned());
+        assert!(check_run_env("rtx6000", hd5).is_ok());
+        let e =
+            check_extra_env("hd", &["FV_PROMPTS=scripts/gpu/prompts-hd.json".into()]).unwrap_err();
+        assert!(!e.contains("hd5"), "{e}");
     }
 
     #[test]

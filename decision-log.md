@@ -2256,3 +2256,23 @@ Project code: FVID
 - ADR: docs/adr/0019-fv-lab.md §22.18 ("First attempt")
 - Verification: `tests/fv_lab_bin.rs` `a_wan_pod_needs_references_only_for_the_oracle_arms_it_selects` (failed before the fix with the GPU check's error, passes after)
 - Open: the GPU check §22.18 re-run with fv-lab built from this fix
+
+### FVID · 2026-10-27 · FVID-2026-10-27-d1-s7-retire-four
+- Trigger: the coordinator's slice S7 of FVID-2026-10-26-d1-remaining (ADR-0019 §22.6): retire `hd` (with its sibling `hd5`), `serve-engine`, `sfstream` and `mmaudio` from `runpod-matrix.sh` after their GPU checks passed (§22.10, §22.12, §22.14, §22.16, evidence merged); `wan` and `sfwan` (S8) and `oracle` out of scope
+- Options:
+  - `hd5`'s frozen fixtures (the `hd` family's dry run under `FV_PROMPTS=…/prompts-hd5.json`): kept in `FV_LAB_SIBLINGS` (which requires a live family branch), recorded as a restored mode (`FV_LAB_RESTORED`, whose entries `fv-lab-restored-goldens.sh` reproduces from `5987e6a4`, where `hd5` did not exist), regenerated as fv-lab's own, or a list of siblings frozen with their family;
+  - the helpers: delete the shared ones the four used, or only what no remaining branch calls
+- Decision: (agent, within the coordinator's decision)
+  - §17.6's mechanism: `FV_LAB_RETIRED` gains `hd hd5 serve-engine sfstream mmaudio`; the four branches deleted (215 lines), with their branch-local helpers only (`hd_cell`, `hd_long`, `sf_stream`, `want`); every top-level helper kept (each has callers in `wan` / `sfwan` / `oracle`);
+  - `hd5` frozen with `hd` in a new `FV_LAB_RETIRED_SIBLINGS="hd5:hd"`, its fixtures kept as the script wrote them and read with the tier's name as while it was live;
+  - the 15 fixtures and the three script-side R2 bodies (`runpod-http-{serve-engine,sfstream,mmaudio}-r2.json`) frozen;
+  - `FV_ENGINE_CELLS`, `FV_SFSTREAM_RUNS`, `FV_SF_PROMPT`, `FV_SF_SWITCH`, `FV_MMAUDIO_PROMPT` from `SCRIPT_KNOBS` to `MODE_KNOBS` and `runpod-http.sh`'s `FV_LAB_NOT_READ`, each with its own answer; `FV_ENGINE_CELLS` refused in the host environment too;
+  - (after the coordinator's review) `hd5`'s mode in that list (`hd5:hd:FV_PROMPTS=…/prompts-hd5.json`), so `hd` with that setting is refused naming `hd5` everywhere (`runpod-matrix.sh`, `runpod-http.sh run` / `all` / `plan`, fv-lab's `--extra-env` and `run` via `knobs::RETIRED_SIBLING_MODES`): refusing `FV_PROMPTS` alone would send it to `hd`'s own prompt set under the same arm names;
+  - `sfquality`'s and `speechtest`'s pointers name the tier ("the sfstream tier (fv-lab run sfstream) keeps …"), one named difference in the dry-run comparison;
+  - the pod start command's `FV_HD_POST_URL` example comment kept: it is in all 34 pod goldens and fv-lab's `pod-start.sh.in` (§22.9 item 1)
+- Reason: the tiers passed their runner-equality checks; the restored-mode list is rebuilt from `5987e6a4` (whose `hd` branch still had the derived step, and no `hd5` tier), and a live-sibling entry needs a live branch
+- Reversibility: high (the branches at `0ebddb0d` in git; lists, fixtures, knobs)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §22.19
+- Verification: dry runs before (`0ebddb0d`) and after: 55 forms byte-identical (`wan`, `sfwan`, `oracle` in every form, 42 existing refusals), `sfquality` / `speechtest` with the named pointer change only, the four families' 10 forms now refused (exit 2, a pointer; `hd` with the hd5 prompts naming `hd5`); `fv-lab-goldens.sh --check` and the other three goldens scripts; `fv-lab-route.test.sh`, `runpod-plan.test.sh`; `cargo test -p fastvideo-lab --features cli` on the build pod; shell and Rust mutations each caught (§22.19)
+- Open: S8: `wan`'s branch with `sfwan` in `oracle`'s retirement PR, after §20.7's re-run (blocked on the owner's `fv_hf_token`)
