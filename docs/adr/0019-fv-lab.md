@@ -6657,7 +6657,8 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
 - **Dry runs compared** (§22.1's settings: `FV_DRY_RUN=1`, the volume's `auxiliary/tae` marked complete,
   `FV_BASELINE_SHA` set, no `FV_LAB_BIN`). Output had its time stamps, temporary directory and root normalised; the
   `FV_DRY_RUN_GATES` records, stderr, exit status and any file fetched into a TAE directory were compared too. Base:
-  `scripts/gpu` at `0ebddb0d`; after: this branch.
+  `scripts/gpu` at `0ebddb0d`, and again at `07cf2928` (main with #233, the same scripts) after merging it; after:
+  this branch.
   - **Byte-identical, 55 forms**:
     - `wan` (102 lines, 65 records), with `FV_ORACLE_URL` (102, 65), with the GPU check's
       `FV_CELLS="wan13-dmd wan13-dmd-dense kernels-wan cli-fw22 engine-fw22"` (94, 24) and with `FV_TAE_DIR` (102,
