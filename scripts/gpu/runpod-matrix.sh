@@ -551,16 +551,26 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # Open-ended causal SF-Wan (wan::stream, serve E6): parity with the
     # bounded 81-frame path, long runs (drift, fps, TTFF), prompt switches,
     # and a 10-minute memory-growth run. TAEHV decodes every block.
+    # The fv-lab tier `sfstream` is these two arms (lab/cells/sfstream.toml;
+    # docs/adr/0019-fv-lab.md §22, S4), held to this branch's dry run by
+    # fv-lab-goldens.sh; it refuses FV_SFSTREAM_RUNS, FV_SF_PROMPT and
+    # FV_SF_SWITCH (its cell is their defaults; knobs::SCRIPT_KNOBS). Since S4,
+    # in lockstep with the tier (§22.4, Addition 16: `{tae}` without a TAE
+    # gate): FASTVIDEO_TAE_DIR="$TAE" is each arm's own env entry, not an
+    # `export` before them, so the dry run shows it (the same value reaches
+    # the same two commands; nothing else here reads it). And a dry run
+    # fetches nothing, as the header says: the taew2_1 fetch below is skipped
+    # in a dry run (a real run is unchanged; fv-lab's tier gets the file from
+    # its pod's fetch-tae.sh, `tae = true`, when the volume lacks it).
     TAE_W="$TAE/taew2_1.safetensors"
-    [[ -f "$TAE_W" ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
+    [[ -f "$TAE_W" || "$DRY_RUN" == 1 ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
       || log "WARN: taew2_1 fetch failed (tae-fetch.log)"
-    export FASTVIDEO_TAE_DIR="$TAE"
     SF_PROMPT="${FV_SF_PROMPT:-A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed}"
     SF_SWITCH="${FV_SF_SWITCH:-A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed}"
     sf_stream() {
       local name="$1"; shift
-      gated_cell "$name" sfwan21-1.3b "$BIN" --keep-going --mode fast wan stream --weights "$W/sfwan21-1.3b" \
-        --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
+      gated_cell "$name" sfwan21-1.3b env FASTVIDEO_TAE_DIR="$TAE" "$BIN" --keep-going --mode fast wan stream \
+        --weights "$W/sfwan21-1.3b" --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
     }
     # shellcheck disable=SC2086
     sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run reb-sink15-120s,seconds=120,rope=rebased,sink=15 \

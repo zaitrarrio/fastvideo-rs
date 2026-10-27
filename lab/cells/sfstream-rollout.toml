@@ -1,0 +1,45 @@
+# runpod-matrix.sh `sfstream` (docs/ports/wan.md "Open-ended streaming"; docs/adr/0019-fv-lab.md §22, S4): the
+# open-ended causal SF-Wan 1.3B rollout (`fv-gpucheck wan stream`, wan::stream::CausalRollout, the rollout the served
+# sfwan21-1.3b causal sessions run). `sfstream-main`: `--parity` (the streamed clip against the bounded 81-frame
+# path), a 120 s rebased sink-15 run, and prompt switches with `keep` (at 15 s of 30) and `reset` (at 10 s of 20);
+# `sfstream-10min`: a 600 s rebased sink-15 run in 30 s windows (memory growth). The script's defaults: its
+# FV_SFSTREAM_RUNS, FV_SF_PROMPT and FV_SF_SWITCH are this cell's argv and workload (fv-lab refuses them,
+# knobs::SCRIPT_KNOBS); select an arm with --cells.
+# TAEHV (taew2_1) decodes every block, found through FASTVIDEO_TAE_DIR={tae}: the script's `$TAE` (the volume's
+# auxiliary/tae when complete, else the container disk's copy). The arms read `{tae}` without a `tae` file
+# (ADR-0019 §22.4, Addition 16): they are not TAE-gated (no fetch-tae.sh, no `tae weights missing` skip) and gate on
+# their tree only, as the script's gated_cell does; the tier has `tae = true`, so its pod's fetch-tae.sh fetches
+# taew2_1 when the volume lacks it (the script's branch runs fetch_taehv.sh then). FASTVIDEO_TAE_DIR is each arm's
+# env entry, not an `export` before them: moved so in the script's branch in the same commit as this tier (S4), so
+# the dry run shows it. sfwan21-1.3b (28.93 GB) is R2-only since 2026-10-13, so the tier is `weights = "volume+r2"`:
+# fetched onto the container disk before `sfstream-main`, which reads it first, and read again by `sfstream-10min`.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "sfstream-rollout"
+description = "SF-Wan 1.3B open-ended causal rollout (wan stream, TAEHV per block): parity with the bounded 81-frame path, a 120 s rebased sink-15 run, keep / reset prompt switches, and a 10-minute memory-growth run"
+
+[workload]
+model = "wan stream"
+prompt = "A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed"
+seed = 1024
+note = "runpod-matrix.sh sfstream's default SF_PROMPT (FV_SF_PROMPT) and the script's default SEED; the switch prompt is its default SF_SWITCH (FV_SF_SWITCH), in each arm's argv"
+
+[lists]
+stream = ["--keep-going", "--mode", "fast", "wan", "stream", "--weights", "{weights}/sfwan21-1.3b", "--prompt", "{prompt}",
+  "--switch-prompt", "A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed",
+  "--seed", "{seed}"]
+
+[[arm]]
+name = "sfstream-main"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--parity", "--run", "reb-sink15-120s,seconds=120,rope=rebased,sink=15", "--run",
+  "switch-keep-30s,seconds=30,switch_at=15,switch=keep", "--run", "switch-reset-20s,seconds=20,switch_at=10,switch=reset"]
+
+[[arm]]
+name = "sfstream-10min"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--run", "reb-sink15-600s,seconds=600,rope=rebased,sink=15", "--window-s", "30"]

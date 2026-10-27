@@ -41,7 +41,9 @@
   `hd5` as tiers, the script's derived step dropped in lockstep) is done, CPU-side and GPU-side: its GPU check
   §22.10 passed on `d53ea62` (2026-10-27, §22.10 "Result"); S7 retires `hd` from the script. S3 (§22.11:
   `serve-engine` as a `volume+r2` tier, `--tae-dir` dropped from its engine arms in lockstep) is done CPU-side; its
-  GPU check is §22.12, the coordinator's
+  GPU check is §22.12, the coordinator's. S4 (§22.13: §22.4's Addition 16, `{tae}` without a TAE gate, implemented;
+  `sfstream` as a `volume+r2` tier, its `export FASTVIDEO_TAE_DIR` moved into each arm's `env` in lockstep) is done
+  CPU-side; its GPU check is §22.14, the coordinator's
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -432,7 +434,8 @@ test (`tests/schema.rs`) also names the new keys.
    volume's `auxiliary/tae` when its `.complete` marker exists; else `<scratch>/tae`, where the pod's start command
    fetches the files. An arm with `tae` is `tae_gated_cell`: `fetch-tae.sh` runs once per run if the file is missing,
    and if the file is still missing the arm is recorded as skipped (`tae weights missing`). Then the weight gate runs.
-   Validation: such an arm must read `{tae}/<file>`, and `{tae}` may not appear in an arm without `tae`. Every `tae`
+   Validation: such an arm must read `{tae}/<file>`, and `{tae}` may not appear in an arm without `tae` (relaxed by
+   Addition 16, §22.4, in S4: a gated arm may read `{tae}` without `tae`, not TAE-gated, in a `tae = true` tier). Every `tae`
    file is one that `fetch-tae.sh` fetches, and every tier with TAE arms has `tae = true`
    (`tests/lab_files.rs`). Why: the TAE-decoded twins of `rtx5090`, `fastvideo` and `h3arms`.
 4. **`[[compare]] gate = { kind, off }`** (`PairedGate`). The gate of the compare's own pair runs right after that
@@ -3940,7 +3943,7 @@ passes (§21.9), so this section leaves it out. For each family it gives:
 | reference fetches, `compare-dumps`, dump clean-up (`wan`'s two oracle cells) | **gone**: `[reference]`, `requires`, `fresh`, `echo`; without `FV_ORACLE_URL` the cell skips as the script's does | §15.2 items 7, 8; `run.rs:2669-2671` |
 | derived clips | **partly**: `[[metric]]` passes over clip *files* (§20.2); `decode` of a clip into frames, directory compares, `after` anchors (§21.4). Nothing reads a *frame sequence* or applies a scale filter (`hd`'s Lanczos step) | §20.2, §21.4 |
 | per-arm timeouts (`solbench`'s 1800 / 5400 / 2400 s) | **open**: one `cell_timeout_s` per tier | `plan.rs:179-180` |
-| `{tae}` in an arm that is not TAE-gated (`--taehv`, `FASTVIDEO_TAE_DIR`) | **open**: refused; §22.4 adds it | `plan.rs:1201-1207` |
+| `{tae}` in an arm that is not TAE-gated (`--taehv`, `FASTVIDEO_TAE_DIR`) | **open**: refused; §22.4 adds it (**gone** since S4, §22.13) | `plan.rs:1201-1207` |
 | an `export` before the arms (`FASTVIDEO_TAE_DIR`, `FASTVIDEO_MMAUDIO_WEIGHTS`, `solbench`'s Wan settings) | **open**: an arm's `env` only. The runner sets `PATH`, `LD_LIBRARY_PATH` and `FV_AUX_DIR` on every child, but nothing a cell names. §22.4 moves the exports into per-arm `env` in lockstep | `run.rs:743`, `run.rs:952` |
 | `env -u NAME` (`cold`, `ltxoffload`) | **open**: `env` entries must be `K=V` | `plan.rs:1153` |
 | a page-cache drop before an arm (`cold`) | **open** as a cell step. `fv-gpucheck evict-cache <paths>` already exists and could be an ungated arm before each. The script's `echo 3 >/proc/sys/vm/drop_caches` probably fails without privileges in a Runpod container (UNVERIFIED; the branch logs "NOT dropped" then, rpm:743-747) | `crates/fastvideo-gpucheck/src/main.rs:574-578` |
@@ -4043,7 +4046,7 @@ cache file, and the tiers keep the paths for equality.
     `FV_ORACLE_FAMILY=sfwan` and points to the two commands.
 - *Depends*: `oracle` (the recursion at rpm:627) and `wan` (rpm:629).
 
-**`sfstream`** (rpm:632-651): **(b)**, after §22.4.
+**`sfstream`** (rpm:632-651): **(b)**, after §22.4. Done in S4 with §22.4 (§22.13; its GPU check §22.14).
 - *Measures*: the open-ended causal SF-Wan rollout (`fv-gpucheck wan stream`):
   - `--parity` (streamed against the bounded 81-frame path);
   - a 120 s rebased sink-15 run;
@@ -4365,7 +4368,8 @@ passed on `d53ea62` 2026-10-27).
 
 #### 22.4 The one schema addition: `{tae}` without a TAE gate (cell v1, additive)
 
-**Addition 16 (accepted).** An arm may read `{tae}` (the directory, or a file under it) without setting `tae`.
+**Addition 16 (accepted; implemented in S4, §22.13).** An arm may read `{tae}` (the directory, or a file under it)
+without setting `tae`.
 - Such an arm is not TAE-gated: no `fetch-tae.sh` and no `tae weights missing` skip. It gates on its trees only, as
   the script's `gated_cell` / `run_cell` arms that pass `$TAE` do.
 - `tae = "<file>"` keeps its meaning (§9.2 item 3: gate on that file).
@@ -4381,6 +4385,24 @@ becomes `FASTVIDEO_TAE_DIR="$TAE"` in each generation arm's `env`, in `wan` (rpm
 **Users**: `wan` (`--taehv {tae}/taew2_2.safetensors`, `FASTVIDEO_TAE_DIR`), `sfstream` and `mmaudio`
 (`FASTVIDEO_TAE_DIR`). `serve-engine` and `wan`'s `engine-fw22` do not need it: their `--tae-dir` goes (§22.3). It
 ships with its first user, `sfstream` (S4).
+
+**Implemented** (S4, `claude/d1-s4-sfstream`, §22.13): `crates/fastvideo-lab/src/plan.rs`:
+- `CellFile::validate` no longer refuses `{tae}` without `tae`; it refuses `{tae}` in an *ungated* arm instead (an
+  ungated arm reads no weights, §15.2 item 6), at `arm[i].gate`;
+- `CellFile::tae_dir_arms` names the arms that read `{tae}` (in `env` or the spliced `argv`) without a `tae` file;
+- `tae_dir_tier` refuses such a cell in a tier with `tae = false` (`tier \`<t>\`.tae`), called from `Lab::validate` for
+  every tier's `cells` and `extra_cells`, and from `Lab::resolve_selected` when a cell is run on its own into another
+  tier (`--family`);
+- the step is unchanged: such an arm's `Step::Arm` has `tae: None`, so the runner runs it as `gated_cell` (no
+  `fetch-tae.sh`, no `tae weights missing` skip).
+
+`schemas/cell.v1.json` (`Arm::tae`) and `schemas/tiers.v1.json` (`Tier::tae`) carry the new text; no key is added or
+removed, so cell v1 and tiers v1 stay v1, and every existing cell, tier and golden is unchanged (`fv-lab-goldens.sh
+--check`, `tests/schema.rs`). Tests: `plan::tests::tae_without_a_tae_gate_needs_a_tae_tier` (allowed in a gated arm,
+the step not TAE-gated, an ungated reader refused, a `tae = false` tier refused, a `tae = true` tier accepted, the
+`--family` path), `tests/runner.rs` `a_tae_dir_arm_gates_on_its_trees_only` (the run: no fetch, no TAE skip with the
+directory empty, the trees' gate still skips), `tests/lab_files.rs` `every_tae_file_is_one_fetch_tae_sh_fetches` (the
+readers are `sfstream`'s two arms, in a `tae = true` tier, and `fetch-tae.sh` fetches their `taew2_1`).
 
 **Not chosen**:
 1. A cell-level `export` that the runner sets on every child, as it sets `FV_AUX_DIR`: the dry run would not show
@@ -4455,7 +4477,7 @@ After S7 and S8, `runpod-matrix.sh` has no branch left and goes, and with it `ru
 
 #### 22.7 What this section does not change
 
-Nothing by itself: no script, cell, tier, golden, schema or test. Each slice above makes its own changes (S1's: §22.8; S2's: §22.9, §22.10; S3's: §22.11, §22.12).
+Nothing by itself: no script, cell, tier, golden, schema or test. Each slice above makes its own changes (S1's: §22.8; S2's: §22.9, §22.10; S3's: §22.11, §22.12; S4's: §22.13, §22.14).
 
 #### 22.8 S1 done: the nine retired with no tier
 
@@ -4864,3 +4886,191 @@ $8).
 fixtures frozen (§10's way; `runpod-http-serve-engine-r2.json` stops being written with it), and `FV_ENGINE_CELLS`
 moves from `SCRIPT_KNOBS` to `MODE_KNOBS` and `runpod-http.sh`'s `FV_LAB_NOT_READ`, refused with a pointer to
 `FV_CELLS` (as `FV_ATTN3_*`, §17.6). `docs/serve/design.md`'s GPU check then names only the tier.
+
+#### 22.13 S4: §22.4 and `sfstream` as a tier (done, CPU-side)
+
+Built on `claude/d1-s4-sfstream` from `3bc6d033` (main with S3 merged; FVID-2026-10-27-d1-s4-sfstream), as §22.4,
+the `sfstream` entry of §22.3 and §22.6 item 3 decide.
+
+- **Addition 16** (§22.4, "Implemented"): the refusal of `{tae}` without `tae` in `CellFile::validate` became the tier
+  check `tae_dir_tier` (`Lab::validate`, `Lab::resolve_selected`); an ungated arm still may not read `{tae}`. Cell v1
+  and tiers v1 are unchanged but for the two fields' text; every existing cell, tier and golden is unchanged.
+- **The `sfstream` tier**: one cell, `lab/cells/sfstream-rollout.toml`, the branch's two arms in its order:
+  `sfstream-main` (`--parity`, `reb-sink15-120s`, `switch-keep-30s`, `switch-reset-20s`) and `sfstream-10min`
+  (`reb-sink15-600s`, `--window-s 30`), each `gate = "sfwan21-1.3b"`, `trees = ["sfwan21-1.3b"]`, `env =
+  ["FASTVIDEO_TAE_DIR={tae}"]` and no `tae` file (Addition 16's first user). The prompt is the workload's (the
+  branch's `SF_PROMPT` default), the switch prompt a literal of the shared `stream` list (its `SF_SWITCH` default),
+  the seed the script's 1024. `weights = "volume+r2"`: `sfwan21-1.3b` (28.93 GB) is R2-only since 2026-10-13, fetched
+  before `sfstream-main` and read again by `sfstream-10min`; `container_disk_gb = 150` (the tree and the 120 GB, as
+  `oracle-r2`; `runpod-http.sh` asks 149 or more for this tree), `cell_timeout_s = 3600` (`runpod-http.sh`'s default
+  cap, so the idle limit is `weights::r2_idle_min(3600)`, 85 min), `tae = true` (required by Addition 16: the pod's
+  `fetch-tae.sh` fetches `taew2_1` into `<scratch>/tae` when the volume lacks it); otherwise the rtx6000 tier's pod.
+  Its dry run, gates and pod body are the branch's (`fixtures/sfstream-dry-run.txt`, `sfstream-gates.tsv`,
+  `runpod-http-sfstream.json`, from `fv-lab-goldens.sh`), line for line (`tests/dry_run.rs`, `tests/payload_golden.rs`);
+  `the_sfstream_tier_is_the_sfstream_family_with_tae_dir_per_arm` adds that the run is the two arms in the script's
+  order and nothing else, neither TAE-gated (`-` in the gates' TAE column), with fv-lab's R2 plan (one fetch, before
+  `sfstream-main`) and `{tae}` the merged root's `auxiliary/tae` (the script's `/workspace/weights/auxiliary/tae`
+  read by `common::merged_root`; `RunConfig::tae` on a `volume+r2` run reads the marker on the volume and answers
+  `<merged root>/auxiliary/tae`, as the script's `$TAE` is on an `FV_R2_TREES` run).
+- **Intended differences**, each named in the code (the branch's comment, the cell's header, `lab/tiers.toml`,
+  `tests/dry_run.rs`):
+  1. *The lockstep line* (§22.4): `export FASTVIDEO_TAE_DIR="$TAE"` before the arms became `env
+     FASTVIDEO_TAE_DIR="$TAE"` at the head of each arm's command (`sf_stream`, rpm:572 on this branch; rpm:557 at
+     `3bc6d033`, §22.1's 639 at `05d14444`). The dry run gains `env FASTVIDEO_TAE_DIR=<$TAE> ` before the binary on
+     each arm's line: the only change to the branch's output. A no-op for the runs: the same value reaches the same
+     two commands, and nothing else in the branch reads the variable (`verify-weights.sh` does not; `fetch_taehv.sh`
+     takes its directory as an argument).
+  2. *No fetch in a dry run*: the branch's `[[ -f "$TAE_W" ]] || bash fetch_taehv.sh "$TAE"` is skipped when
+     `FV_DRY_RUN=1`, as the script's header says a dry run fetches nothing. Before, a dry run without `taew2_1` in
+     `$TAE` (the goldens' fake volume has only the `.complete` marker) downloaded `taew2_1` and `taew2_2` (45 MB)
+     from GitHub into it, and logged `WARN: taew2_1 fetch failed` when offline, which would have made the golden
+     depend on the network. Output unchanged when the fetch succeeds; a real run unchanged. (`mmaudio`'s fetch,
+     rpm:486-489, still does this; S5's.)
+  3. *`FV_SFSTREAM_RUNS`, `FV_SF_PROMPT`, `FV_SF_SWITCH`* (the branch's run list and prompts) are the cell's defaults.
+     fv-lab refuses them (`knobs::SCRIPT_KNOBS`, `fv-lab run`'s environment and `pod up --extra-env`, "§22, S4"), as
+     it refused `FV_ENGINE_CELLS` in S3; `runpod-http.sh`'s `FV_LAB_NOT_READ` gains them in S7, when the branch goes.
+  4. *The TAE fetch*: the branch fetches `taew2_1` (and `taew2_2`) with `fetch_taehv.sh` into `$TAE` when it is
+     missing; the tier's pod fetches `taeh3`, `taeltx2_3_wide` and `taew2_1` with `fetch-tae.sh` into `<scratch>/tae`
+     at start (`tae = true`), which is `{tae}` exactly when the volume's copy is incomplete. On `bz0ofkfx45` the copy is
+     complete, so neither fetch runs and both read `/workspace/weights/auxiliary/tae` (on an R2 run, the merged root's
+     link to it).
+- **Test support**: `tests/dry_run.rs` `config` gives a `volume+r2` tier the `$TAE` of its merged root;
+  `tests/payload_golden.rs` counts four `volume+r2` tiers (`gold`, `oracle-r2`, `serve-engine`, `sfstream`), holds the
+  tier's body to 150 GB, 85 min and the TAE fetch, and the script side's GPU-check body
+  (`fixtures/runpod-http-sfstream-r2.json`: `FV_FAMILY=sfstream FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150
+  runpod-http.sh plan`, a new golden of `fv-lab-goldens.sh`) to fv-lab's R2 references, the tier's disk and idle
+  limit, the link roots and the pinned revision (`the_script_side_r2_pod_reads_its_trees_as_the_sfstream_tier`, S3's
+  shared helper). `fv-lab-route.test.sh`: `sfstream` runs on the script path, its `FV_R2_TREES` form plans, a disk
+  under 149 GB is refused before the key, its dry run shows each arm's `FASTVIDEO_TAE_DIR`, and a dry run fetches
+  nothing. `knobs::tests::the_sfstream_knobs_are_refused_by_fv_lab_only`.
+- **Mutations, each caught**: the `export` restored and the env word dropped (`fv-lab-goldens.sh --check`: the dry run
+  differs); the dry-run fetch skip removed (`fv-lab-route.test.sh`: "a dry run fetched taew2_1"); the tier's `tae =
+  false` (`Lab::load` refuses it; 7 of 8 `tests/lab_files.rs` tests fail to load `lab/`); `tae_dir_tier` not called
+  from `Lab::validate` and the ungated-reader refusal disabled (each fails
+  `plan::tests::tae_without_a_tae_gate_needs_a_tae_tier`); the old refusal restored (10 of 11 `tests/dry_run.rs`
+  tests fail to load `lab/`); an arm renamed (`tests/dry_run.rs`, three tests); `FV_SF_PROMPT` out of `SCRIPT_KNOBS`
+  (`knobs::tests`); the tier `weights = "volume"` (`tests/payload_golden.rs`); `config`'s merged-root `$TAE` dropped
+  (`tests/dry_run.rs`, two tests).
+- **Before and after** (§22.1's dry runs: the volume's `auxiliary/tae` marked complete, `FV_BASELINE_SHA` set, no
+  `FV_LAB_BIN`, no `FV_ORACLE_URL` unless named; `scripts/gpu` at `3bc6d033` and on this branch; output with time
+  stamps, the temporary directory and the repository path normalised, `FV_DRY_RUN_GATES` records, stderr and exit
+  status): **byte-identical** for `mmaudio` (4 lines, 2 records; exit 1 at the same `find`, §22.1; S3 recorded 5, presumably
+  with its own `taew2_1` fetch's `WARN` line when that fetch failed, UNVERIFIED), `sfwan` (96, 24), `wan` (102, 65), `oracle` (26, 8), `hd` (10, 8),
+  `serve-engine` (8, 6), with `FV_ENGINE_CELLS=h3` (4, 2) and `FV_CELLS="cli-wan-turbo engine-wan-turbo"` (8, 2), and
+  the forms S1-S3 checked: `oracle` with `FV_ORACLE_TARGETS=sfwan13` (18, 4; also with `FV_GEN_TIMEOUT_S=5400`), its
+  nine tensor-diff targets (43, 14) and ten clip-metric targets (145, 23) at `FV_GEN_TIMEOUT_S=5400`, `wan` (102, 65),
+  `sfwan` (114, 28) and `oracle` (26, 8) with `FV_ORACLE_URL`, `hd` with `FV_PROMPTS=…/prompts-hd5.json` (11, 8), and
+  the twenty retired families' refusals (2 lines, exit 2). `sfstream` (4 lines, 2 records), with `FV_CELLS=sfstream-main`
+  (4, 1), with `FV_SFSTREAM_RUNS` set (4, 2) and with `FV_TAE_DIR` set (4, 2): the same records, stderr and exit, and
+  each output equal to the base's with `env FASTVIDEO_TAE_DIR=<$TAE> ` inserted before the binary on each arm line
+  (two, one, two, two; `<$TAE>` the volume's directory, or `FV_TAE_DIR`'s), nothing else; the base's dry runs had
+  also downloaded `taew2_1` and `taew2_2` into `$TAE` (intended difference 2), this branch's fetched nothing.
+- **Lost**: nothing a run records. Another run list or prompt is another cell, not an environment setting.
+
+#### 22.14 S4: the GPU check
+
+§8's procedure, as §22.12's: one commit `SHA` for both sides (this PR's head or its merge, once
+`fastvideo-rs-runtime:sha-<7>` is published with its `lab/`, fv-lab and `runpod-matrix.sh`: the script side needs the
+branch with the per-arm `FASTVIDEO_TAE_DIR`), both sides in parallel, then `fv-lab-compare-runs.sh`. One RTX PRO 6000
+Blackwell Server Edition per side, EU-RO-1 on `bz0ofkfx45`, about $2.49/hr; pod boot and preflight about 5 min per
+side. `sfwan21-1.3b` (28.93 GB) is fetched from R2 on **both** sides: fv-lab's pod by the tier (`volume+r2`), the
+script's by `FV_R2_TREES=sfwan21-1.3b` (§21.8: the merged root `/fvscratch/weights`, so `$W`, `$TAE` and every
+command line are fv-lab's word for word; without it the script side would skip the arm, `weights incomplete`) on the
+tier's 150 GB disk. `taew2_1` is on the volume (`auxiliary/tae`, complete), read through the merged root's link on
+both sides. The Runpod secrets `fv_r2_access_key_id` / `fv_r2_secret_access_key` must exist (they did for §21.7). The
+build pod is stopped first (§21.7).
+
+The arm (§22.3, §22.5): **`sfstream-main`** only (`sfstream-10min` is 600 s of video, the memory-growth run, not what
+S4 changes). Both sides fetch the run's **tree**, without PNG frames and caches: the script side's R2 records
+(`r2-stage.log`, `r2-fetch.json`) are in the run directory, which its plain fetch never takes (§22.12), and the arm's
+report `sfstream-main/gpucheck-out/wan.json` (the per-window latent hashes below) is read on both sides.
+
+```sh
+SHA=<7>
+SKIP='\.png$|\.cache$'
+# sfstream: SF-Wan 1.3B open-ended causal rollout, the parity arm (graph = eager, stream = bounded path), 120 s, switches
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family sfstream --cells sfstream-main --wall-cap-s 3600 \
+  --fetch-tree --fetch-skip "$SKIP" --yes --wait
+RUNPOD_API_KEY=… FV_FAMILY=sfstream FV_CELLS=sfstream-main FV_POD_CAP_S=3600 \
+  FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 FV_FETCH_TREE=1 FV_FETCH_SKIP="$SKIP" \
+  bash scripts/gpu/runpod-http.sh run $SHA
+L=artifacts/runpod/sfstream/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/sfstream/$SHA-<MMDDHHMM>
+bash scripts/gpu/fv-lab-compare-runs.sh $L $S                      # exit 1 by construction: no arm writes frames (below)
+grep -hE '^\[(PASS|FAIL)\] wan/' $L/sfstream-main/stderr.log | sed -E 's/ \{.*//' | sort >/tmp/l.checks
+grep -hE '^\[(PASS|FAIL)\] wan/' $S/sfstream-main/stderr.log | sed -E 's/ \{.*//' | sort >/tmp/s.checks
+diff /tmp/l.checks /tmp/s.checks && ! grep -q FAIL /tmp/l.checks && echo "the same checks, all PASS"
+h() { jq -c '[.checks[] | select(.name | test("^run/[^/]+$")) | {name, h: [.values.windows[].latent_hash]}]' "$1"; }
+[ "$(h $L/sfstream-main/gpucheck-out/wan.json)" = "$(h $S/sfstream-main/gpucheck-out/wan.json)" ] \
+  && echo "latent hashes per window equal"
+jq -r '.checks[] | select(.name | startswith("parity")) | .name' $L/sfstream-main/gpucheck-out/wan.json
+grep -E '\] (weights /fvscratch/weights: |r2 sfstream-main: )' $L/live.log; jq -r .state $L/sfstream-main/r2-fetch.json
+cat $S/r2-stage.log; jq -r .state $S/r2-fetch.json
+find $L $S -name '*.png' | wc -l                                    # 0
+grep -rlE 'X-Amz-Signature|X-Amz-Credential|FV_WEIGHTS_R2_[A-Z_]+[=":]+ *[^ "{$]+|R2_KEY_(ID|SECRET)=[^"$ ]' $L $S \
+  || echo "no key value or presigned URL in any fetched file"
+```
+
+(`FV_CELLS` and `--cells` name the one arm on both sides. `FV_GEN_TIMEOUT_S` is `runpod-http.sh`'s default 3600, the
+tier's `cell_timeout_s`, so the script side's idle limit is the tier's 85 min.)
+
+**The compare exits 1 here, by construction.** `fv-lab-compare-runs.sh` passes only when at least one arm "ran with
+byte-identical frames": an arm with exit 0 and a `frames.sha256.json` of more than 0 frames (its `ran` count; "no
+arm ran with frames in both runs: nothing was compared", exit 1). Both runners write that file from `<arm>/frames`
+only (`frames_digest` in `runpod-matrix.sh` and fv-lab's `run.rs`), and `fv-gpucheck wan stream` writes no frames
+there: its report is `gpucheck-out/wan.json`, its window sheets `gpucheck-out/sheets/*.jpg`, and frames only with a
+run's `dump=1` (`gpucheck-out/frames/<run>/`, `crates/fastvideo-gpucheck/src/wan_stream.rs` header), which neither
+side passes. So with both sides alike the compare prints, verbatim:
+
+  "1 arm(s) the same (0 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same
+  compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics
+  report(s), 0 difference(s)"
+
+  then "no arm ran with frames in both runs: nothing was compared", and exits 1. What the compare does establish:
+  the arm exists in both runs with the same `summary.json` `exit` / `skipped`, `benchmark.json` in both or neither (the stream path
+  writes none), no frames record in either, and no other report on either side. The byte-identity across the runners comes from the
+  arm's own report instead (next items). Whether that is enough, or the compare should learn a frame-less record (a
+  flag, or `wan stream` writing a `frames.sha256.json`-like record of its latent hashes), is the coordinator's call;
+  this slice changes neither.
+
+**Pass**:
+- Both pods end `matrix_exit=0`; the compare prints exactly the two lines above (`1 arm(s) the same`, `0
+  difference(s)`, then the "nothing was compared" line) with summary `{"exit":0,"skipped":null}` on both sides (`same
+  sfstream-main: {"exit":0,"skipped":null}, no frames`). An arm that failed alike on both sides ("1 failed in both") is
+  a finding about the rollout on this GPU class, not about the runners: report it and keep the branch.
+- The arm's checks, on both sides (`$X/sfstream-main/stderr.log`): the same `[PASS]` / `[FAIL]` names, all `PASS`:
+  `wan/parity/graph_bitwise_equals_eager/{rebased,relativistic,absolute}`, `wan/parity/absolute_stream_is_the_bounded_path`,
+  `wan/parity/absolute_per_block_decode`, each `wan/run/<run>/frames` of the three runs (and a
+  `no_device_memory_growth` where a run has 48 or more blocks). The parity checks are the rollout's own byte-level
+  checks (graph against eager bitwise; the absolute stream against the bounded 81-frame path).
+- **The runners' identity**: each run's per-window `latent_hash` list (`wan.json`, the `run/<run>` notes) equal across
+  the sides (`h` above): the hash of the DiT latents of every window, so the same latents block for block. Expected
+  equal on one GPU class (docs/perf/determinism.md; the parity checks show the rollout bitwise reproducible within a
+  process), UNVERIFIED across processes until run; a difference is a finding to report, not a pass.
+- R2, each file read from the side that fetched it:
+  - fv-lab (`$L`): `live.log` (fetched by every fetch) has `weights /fvscratch/weights: … 1 R2 trees (28.93 GB)
+    fetched before the arms that read them, at most 28.93 GB on the container disk at once` and `r2 sfstream-main:
+    fetch sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004 (28.93 GB) into /fvscratch/weights`, then `r2
+    sfstream-main: weights ready: 1 tree(s), 28.93 GB fetched in …`; `sfstream-main/r2-fetch.json` `state` `done`;
+    `r2-apt.log` and `sfstream-main/r2-fetch.log` (tree fetch only) for the details.
+  - The script side (`$S`, tree fetch only): `r2-stage.log` with `r2_key=env`, `weights /fvscratch/weights: … volume
+    trees linked from /workspace/weights; 1 R2 trees (1 fetched): sfwan21-1.3b@4b443566…` and `exit=0`;
+    `r2-fetch.json` `state` `done`.
+  - No key value or presigned URL in any fetched file of either side.
+- Each preflight's `weights.log` ends `exit=1` (`h3-8step` incomplete), as on every run on this volume.
+- No PNG fetched (`find … -name '*.png'` 0; `wan stream` writes none without `dump=1`). What the tree adds is logs,
+  the JSON reports and the window sheets (`gpucheck-out/sheets/*.jpg`).
+
+**Cost** ($2.49/hr, UNVERIFIED until run): per side, boot and preflight ~5 min; python3 and the 28.93 GB fetch ~2 min
+(§21.7 measured it in 27-41 s); the tree fetch at the end ~1-2 min; the arm: on an H100 the rollout ran at 16.8-20
+frames/s with a 0.3-1.4 s first block (`docs/ports/wan.md` "Throughput and memory"), so the three runs' 170 s of video
+(2,720 frames at 16 fps) take ~2.5 min, the graph parity (three policies, 29 + 20 + 20 blocks, each graph and eager)
+~1.5 min and the bounded and roll parities under 1 min, plus the model load: ~5-10 min on the RTX PRO 6000 (its speed
+on this rollout is unmeasured). In all **~13-19 min a side, ~$0.55-$0.80 a side, ~$1.10-$1.60 both** (§22.5's $1.66
+assumed 20 min a side). Bounded by the 1 h caps at the tier's $2.50 price cap: $2.50 a pod, $5.00 both. **Balance
+needed**: at least $9.60 before starting at the estimate ($8 floor + $1.60), and $13 to stay above the floor even if
+both pods ran to their caps (CLAUDE.md: stop before the balance would drop below $8).
+
+**Then (S7, not this slice)**: on a pass, `sfstream` joins `FV_LAB_RETIRED`, its branch is deleted and its three
+fixtures frozen (§10's way; `runpod-http-sfstream-r2.json` stops being written with it), and `FV_SFSTREAM_RUNS`,
+`FV_SF_PROMPT` and `FV_SF_SWITCH` move from `SCRIPT_KNOBS` to `MODE_KNOBS` and `runpod-http.sh`'s `FV_LAB_NOT_READ`.
+`docs/ports/wan.md`'s streaming section then names the tier.

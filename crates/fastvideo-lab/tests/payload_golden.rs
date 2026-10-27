@@ -124,13 +124,13 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         common::restored().len(),
         "every restored mode is a tier"
     );
-    // Only the gold, oracle-r2 and serve-engine tiers read R2 trees
-    // (ADR-0019 §16, §21, §22 S3); every other tier's pod is unchanged.
+    // Only the gold, oracle-r2, serve-engine and sfstream tiers read R2 trees
+    // (ADR-0019 §16, §21, §22 S3, S4); every other tier's pod is unchanged.
     assert_eq!(
-        r2_tiers, 3,
-        "three volume+r2 tiers (gold, oracle-r2, serve-engine)"
+        r2_tiers, 4,
+        "four volume+r2 tiers (gold, oracle-r2, serve-engine, sfstream)"
     );
-    for t in ["gold", "oracle-r2", "serve-engine"] {
+    for t in ["gold", "oracle-r2", "serve-engine", "sfstream"] {
         assert_eq!(
             lab.tier(t).map(|t| t.weights),
             Some(TierWeights::VolumeR2),
@@ -161,6 +161,17 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         "the idle limit"
     );
     assert_eq!(fastvideo_lab::weights::r2_idle_min(3600), 85);
+    // sfstream's (ADR-0019 §22, S4) likewise: 150 GB (sfwan21-1.3b's
+    // 28.93 GB and the 120 GB), 85 min, and the TAE fetch at start (`tae =
+    // true`: its arms read `{tae}` without a TAE gate, Addition 16).
+    let sf = fixture("sfstream");
+    assert_eq!(sf["containerDiskInGb"], json!(150));
+    let cmd = sf["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert!(
+        cmd.contains("lim=85; [ \"$used\" = 1 ] && lim=85"),
+        "the idle limit"
+    );
+    assert!(cmd.contains("scripts/gpu/fetch-tae.sh"), "the TAE fetch");
     // Only the gold tier asks for a host-RAM floor (its 14B arm's host load,
     // lab/tiers.toml); every other tier's pod has Runpod's default. 256 GB
     // since the 7e580e5 gold run measured that arm's peak (ADR-0019 §16.10).
@@ -249,4 +260,10 @@ fn the_script_side_r2_pod_reads_its_trees_as_the_serve_engine_tier() {
         fixture("serve-engine")["containerDiskInGb"].as_u64(),
         Some(150)
     );
+}
+
+#[test]
+fn the_script_side_r2_pod_reads_its_trees_as_the_sfstream_tier() {
+    script_side_r2_pod("sfstream", "sfstream-r2", "sfstream", "sfwan21-1.3b");
+    assert_eq!(fixture("sfstream")["containerDiskInGb"].as_u64(), Some(150));
 }

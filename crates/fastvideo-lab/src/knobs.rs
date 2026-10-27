@@ -86,7 +86,12 @@ pub const MODE_KNOBS: [&str; 18] = [
 /// `serve-engine` (ADR-0019 §22, S3), whose branch stays until its GPU check:
 /// `FV_ENGINE_CELLS`, its family picker (`h3 ltx wan`); the tier's cells are
 /// its default, selected by arm (`--cells`).
-pub const SCRIPT_KNOBS: [&str; 11] = [
+///
+/// `sfstream` (ADR-0019 §22, S4), whose branch stays until its GPU check:
+/// `FV_SFSTREAM_RUNS` (`sfstream-main`'s run list), `FV_SF_PROMPT` and
+/// `FV_SF_SWITCH` (the stream's prompt and switch prompt); the tier's cell
+/// is their defaults.
+pub const SCRIPT_KNOBS: [&str; 14] = [
     "FV_ORACLE_TARGETS",
     "FV_ORACLE_F32",
     "FV_ORACLE_OWN_TEXT",
@@ -98,6 +103,9 @@ pub const SCRIPT_KNOBS: [&str; 11] = [
     "FV_LTX_RETAKE_PROMPT",
     "FV_LTX_EXTEND_PROMPT",
     "FV_ENGINE_CELLS",
+    "FV_SFSTREAM_RUNS",
+    "FV_SF_PROMPT",
+    "FV_SF_SWITCH",
 ];
 
 /// The knobs of a step dropped from a live family's branch, which neither
@@ -188,6 +196,11 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
             "FV_ENGINE_CELLS: no tier reads it (it picked runpod-matrix.sh serve-engine's groups h3 / ltx / wan); select arms with --cells (FV_CELLS); serve-engine's arms are cli-h3-turbo, engine-h3-turbo, cli-ltx-turbo, engine-ltx-turbo, cli-wan-turbo, engine-wan-turbo (ADR-0019 §22, S3)"
                 .to_owned(),
         );
+    }
+    if matches!(key, "FV_SFSTREAM_RUNS" | "FV_SF_PROMPT" | "FV_SF_SWITCH") {
+        return Some(format!(
+            "{key}: no tier reads it (it changed runpod-matrix.sh sfstream's runs or prompts); the sfstream tier's cell (lab/cells/sfstream-rollout.toml) is the script's defaults, its arms sfstream-main and sfstream-10min, selected with --cells (FV_CELLS); another run list or prompt is another cell (ADR-0019 §22, S4)"
+        ));
     }
     if DROPPED_KNOBS.contains(&key) {
         return Some(format!(
@@ -469,6 +482,32 @@ mod tests {
         assert!(SCRIPT_KNOBS.contains(&"FV_ENGINE_CELLS"));
         assert!(!MODE_KNOBS.contains(&"FV_ENGINE_CELLS"));
         assert!(!not_read().any(|k| k == "FV_ENGINE_CELLS"));
+    }
+
+    #[test]
+    fn the_sfstream_knobs_are_refused_by_fv_lab_only() {
+        // sfstream's run list and prompts (ADR-0019 §22, S4): refused by
+        // fv-lab with a pointer to the tier's cell, in --extra-env and in
+        // fv-lab run's environment; the script's branch still reads them, so
+        // runpod-http.sh's FV_LAB_NOT_READ gains them when the branch goes (S7).
+        for key in ["FV_SFSTREAM_RUNS", "FV_SF_PROMPT", "FV_SF_SWITCH"] {
+            for tier in ["sfstream", "rtx6000"] {
+                let e = check_extra_env(tier, &[format!("{key}=x")]).unwrap_err();
+                assert!(
+                    e.contains(&format!("--extra-env {key}: no tier reads it")),
+                    "{e}"
+                );
+                assert!(e.contains("lab/cells/sfstream-rollout.toml"), "{e}");
+                assert!(e.contains("sfstream-main and sfstream-10min"), "{e}");
+            }
+            let env = |k: &str| (k == key).then(|| "--run a,seconds=5".to_owned());
+            let e = check_run_env("sfstream", env).unwrap_err();
+            assert!(e.contains(&format!("{key}: no tier reads it")), "{e}");
+            assert!(e.contains("ADR-0019 §22, S4"), "{e}");
+            assert!(SCRIPT_KNOBS.contains(&key));
+            assert!(!MODE_KNOBS.contains(&key));
+            assert!(!not_read().any(|k| k == key));
+        }
     }
 
     #[test]

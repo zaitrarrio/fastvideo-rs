@@ -225,6 +225,30 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
     for t in tiers_with_tae_arms {
         assert!(t.tae, "tier {} has TAE arms: tae = true", t.name);
     }
+    // Addition 16 (ADR-0019 §22.4): the arms that read `{tae}` without a
+    // `tae` file are sfstream's two (`FASTVIDEO_TAE_DIR={tae}`), in a `tae =
+    // true` tier (`Lab::load` refuses any other), and the file they need,
+    // taew2_1, is one fetch-tae.sh fetches.
+    let readers: Vec<(&str, &str)> = lab
+        .tiers
+        .tiers
+        .iter()
+        .flat_map(|t| {
+            t.all_cells()
+                .filter_map(|c| lab.cells.get(c))
+                .flat_map(|c| c.tae_dir_arms())
+                .map(move |a| (t.name.as_str(), a))
+        })
+        .collect();
+    assert_eq!(
+        readers,
+        [
+            ("sfstream", "sfstream-main"),
+            ("sfstream", "sfstream-10min")
+        ]
+    );
+    assert!(lab.tier("sfstream").is_some_and(|t| t.tae));
+    assert!(fetch.contains("\nfetch taew2_1.safetensors "));
 }
 
 #[test]
