@@ -1,0 +1,56 @@
+# runpod-matrix.sh `mmaudio` (docs/ports/mmaudio.md; docs/adr/0019-fv-lab.md §22, S5): the MMAudio large-44k-v2 V2A
+# sidecar on the video-only Wan family, without upstream parity. `wan13-audio` and `sfwan13-audio`: FastWan 1.3B DMD
+# (VSA) and SF-Wan 1.3B (4 steps, shift 5) at 480x832, 81 frames, warm, with `--audio mmaudio` (the soundtrack generated
+# on the finished clip, written as frames/output.wav and muxed into frames/output.mp4; benchmark.json's `audio` holds
+# the video / audio / end-to-end split and the audio real-time factor). `ours-v2a`: our port alone (`fv-gpucheck
+# mmaudio v2a`) on wan13-audio's clip, three timed runs, seed 1000 (mmaudio.json, mmaudio.wav, mmaudio.f32,
+# sidecar.mp4 in its directory).
+# The script's FV_MMAUDIO_PROMPT is the workload's prompt (fv-lab refuses it, knobs::SCRIPT_KNOBS); select an arm with
+# --cells. Not here, and gone from the script's branch in the same commit (S5, a real-run change): the upstream
+# MMAudio venv and clone, its timed sidecar and dump, the three inject arms with compare-dumps and the five waveform
+# comparisons; their results stand at 778c65e (docs/ports/mmaudio.md "Results").
+# The Wan arms read `{tae}` without a `tae` file (ADR-0019 §22.4, Addition 16): TAEHV (taew2_1) decodes their clips,
+# found through FASTVIDEO_TAE_DIR={tae}; they are not TAE-gated and gate on their trees only, in a `tae = true` tier.
+# FASTVIDEO_MMAUDIO_WEIGHTS and FASTVIDEO_TAE_DIR are each Wan arm's env entries, moved so from the script's `export`s in
+# the same commit; `ours-v2a` reads neither (it takes --weights; it reads the mp4's frames with ffmpeg and decodes no
+# latents, so no TAE). Each arm gates on a verify-weights.sh cell whose trees are exactly the arm's:
+# `fastwan21-1.3b-mmaudio` and `sfwan21-1.3b-mmaudio` (the Wan tree and mmaudio-44k-v2, composite cells added in
+# lockstep), `mmaudio-44k-v2`. All three trees are R2-only since
+# 2026-10-13, so the tier is `weights = "volume+r2"`: each fetched before the first arm that reads it, a tree no later
+# arm reads dropped first (at most fastwan21-1.3b and mmaudio-44k-v2, 50.68 GB, on the disk at once).
+# Licence: the MMAudio checkpoints are CC-BY-NC 4.0; the tier only reads the copy already in the owner's R2 store.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "mmaudio-sidecar"
+description = "The MMAudio V2A sidecar on FastWan 1.3B DMD and SF-Wan 1.3B (wan gen --audio mmaudio, 480x832x81, warm), then our MMAudio port alone on the FastWan clip, timed"
+
+[workload]
+model = "wan mmaudio"
+prompt = "A red fox running through tall grass at dusk. A narrator says <S>The fox cuts through the meadow at dusk.<E>\nAudio: male narration, grass rustle, wind, distant strings, cricket night"
+seed = 1024
+frames = 81
+note = "runpod-matrix.sh mmaudio's default MM_PROMPT (FV_MMAUDIO_PROMPT) and the script's default SEED; frames is sfwan13-audio's --num-frames (wan13-audio passes none and takes wan gen's command-line default --num-frames 81, wan_stage.rs, at its default 480x832); ours-v2a's seed is the branch's literal 1000; ours-v2a reads wan13-audio's clip, so it runs after it"
+
+[[arm]]
+name = "wan13-audio"
+gate = "fastwan21-1.3b-mmaudio"
+trees = ["fastwan21-1.3b", "mmaudio-44k-v2"]
+env = ["FASTVIDEO_MMAUDIO_WEIGHTS={weights}/mmaudio-44k-v2", "FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "--weights", "{weights}/fastwan21-1.3b", "--prompt", "{prompt}", "--seed",
+  "{seed}", "--warm", "--audio", "mmaudio", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "sfwan13-audio"
+gate = "sfwan21-1.3b-mmaudio"
+trees = ["sfwan21-1.3b", "mmaudio-44k-v2"]
+env = ["FASTVIDEO_MMAUDIO_WEIGHTS={weights}/mmaudio-44k-v2", "FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "wan", "gen", "--weights", "{weights}/sfwan21-1.3b", "--preset", "sf_wan_t2v_1_3b", "--steps", "4",
+  "--flow-shift", "5", "--num-frames", "{frames}", "--prompt", "{prompt}", "--seed", "{seed}", "--warm", "--audio",
+  "mmaudio", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "ours-v2a"
+gate = "mmaudio-44k-v2"
+trees = ["mmaudio-44k-v2"]
+argv = ["--mode", "fast", "mmaudio", "v2a", "--weights", "{weights}/mmaudio-44k-v2", "--video",
+  "{runs}/wan13-audio/frames/output.mp4", "--prompt", "{prompt}", "--seed", "1000", "--runs", "3", "--out", "{runs}/{arm}"]

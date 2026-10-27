@@ -52,8 +52,8 @@
 # (`oracle-r2`: the oracle family with FV_ORACLE_TARGETS=sfwan13; `hd5`: the
 # hd family with FV_PROMPTS=…/prompts-hd5.json, for the dry run only), its pod
 # body runpod-http.sh plan's for the tier. A `weights = "volume+r2"` tier's
-# body (gold, oracle-r2, serve-engine, sfstream) carries its container disk,
-# idle limit and RAM floor.
+# body (gold, oracle-r2, serve-engine, sfstream, mmaudio) carries its
+# container disk, idle limit and RAM floor.
 #
 # No network, no GPU, no weights: the dry run logs instead of running, and the
 # plan takes the volume's datacentre from FV_PLAN_VOLUME. Needs bash and jq.
@@ -137,7 +137,7 @@ for FAMILY in $FAMILIES; do
   # the GPU's first use), and so is its host-RAM floor (min_ram_gb, passed as
   # FV_MIN_RAM_GB); its env (the R2 key as Runpod secret references) is
   # the one difference tests/payload_golden.rs allows.
-  # A volume+r2 tier's pod (gold, oracle-r2, serve-engine, sfstream): its container disk, idle limit
+  # A volume+r2 tier's pod (gold, oracle-r2, serve-engine, sfstream, mmaudio): its container disk, idle limit
   # and host-RAM floor as the script's settings.
   tv() { awk -v k="$1" -v n="name = \"$FAMILY\"" '/^\[\[tier\]\]/ { t = 0 } $0 == n { t = 1 } t && $1 == k && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' "$ROOT/lab/tiers.toml"; }
   r2_body=()
@@ -272,6 +272,18 @@ clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAM
   FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 \
   bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-sfstream-r2.json"
 FIXTURES+=("runpod-http-sfstream-r2.json")
+# The same for the mmaudio GPU check (ADR-0019 §22, S5, §22.16): the script
+# side's FV_FAMILY=mmaudio with FV_R2_TREES naming the two trees its arms
+# wan13-audio and ours-v2a read (fastwan21-1.3b, mmaudio-44k-v2, both
+# R2-only; the script stages every listed tree before the matrix, 50.68 GB),
+# the mmaudio tier's disk (180 GB; a whole-family script run with
+# sfwan21-1.3b too would need 200) and its cell cap (runpod-http.sh's default
+# FV_GEN_TIMEOUT_S, 3600). The tier's own body (above) is the same family
+# without FV_R2_TREES.
+clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY=mmaudio \
+  "FV_R2_TREES=fastwan21-1.3b mmaudio-44k-v2" FV_CONTAINER_DISK_GB=180 \
+  bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-mmaudio-r2.json"
+FIXTURES+=("runpod-http-mmaudio-r2.json")
 
 # 3b. The upstream pods of `fv-lab oracle` (ADR-0019 §19): runpod-http.sh
 #     plan-upstream with the settings scripts/gpu/oracle.sh's start_up passes

@@ -45,7 +45,10 @@
   the script. S4 (§22.13: §22.4's Addition 16, `{tae}` without a TAE gate, implemented; `sfstream` as a `volume+r2`
   tier, its `export FASTVIDEO_TAE_DIR` moved into each arm's `env` in lockstep) is done, CPU-side and GPU-side: its
   GPU check §22.14 passed on `b7ddf5f` (2026-10-27, §22.14 "Result", with item 3's window floor for the reset run
-  corrected from 2 to 1); S7 retires `sfstream` from the script
+  corrected from 2 to 1); S7 retires `sfstream` from the script. S5 (§22.15: `mmaudio` as a small `volume+r2` tier,
+  its `wan13-audio`, `sfwan13-audio` and `ours-v2a`; the branch cut to those arms in lockstep, the upstream, inject
+  and waveform arms gone, its two `export`s moved into each Wan arm's `env`, the arms gated on composite
+  `verify-weights.sh` cells) is done CPU-side; its GPU check is §22.16, the coordinator's
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -3890,8 +3893,8 @@ Decision-id FVID-2026-10-26-d1-remaining. It was proposed in #221 (draft PR from
 only). The review's corrections are folded in below, and the coordinator's decisions are in §22.6. Each
 family moves or retires in its own slice (§22.6; S1 is done, §22.8; S2 is done, its GPU check passed on `d53ea62`
 2026-10-27, §22.9-§22.10; S3 is done, its GPU check passed on `3bc6d03` 2026-10-27, §22.11-§22.12; S4 is done,
-its GPU check passed on `b7ddf5f` 2026-10-27, §22.13-§22.14), and a tier's branch leaves the script only after that
-tier's own check through both runners (§8).
+its GPU check passed on `b7ddf5f` 2026-10-27, §22.13-§22.14; S5 is done CPU-side, §22.15, its GPU check §22.16), and a
+tier's branch leaves the script only after that tier's own check through both runners (§8).
 
 Fifteen `runpod-matrix.sh` families are left besides `oracle` (§18.3). `oracle` retires on its own once §20.7's re-run
 passes (§21.9), so this section leaves it out. For each family it gives:
@@ -4264,7 +4267,8 @@ passed on `d53ea62` 2026-10-27).
 - *Size*: small: three cells, six arms, goldens, the lockstep argv change.
 - *GPU check*: all six arms, about 31 min a side: **about $2.55**.
 
-**`mmaudio`** (rpm:468-539): **(b)**, a small tier after §22.4, with no upstream parity.
+**`mmaudio`** (rpm:468-539): **(b)**, a small tier after §22.4, with no upstream parity. Done in S5 (§22.15; its
+GPU check §22.16, `wan13-audio ours-v2a`).
 - *Measures*:
   - The MMAudio V2A sidecar on FastWan and SF-Wan (`wan gen --audio mmaudio`).
   - Upstream MMAudio, timed and dumped: a Python venv, `pip install torch …`, `git clone` at `974010a`.
@@ -4293,7 +4297,13 @@ passed on `d53ea62` 2026-10-27).
     (rpm:486) and `FASTVIDEO_TAE_DIR={tae}` (rpm:490).
   - Weights come from `volume+r2`. The arms gate on their Wan trees; whether an arm's `trees` may also name
     `mmaudio-44k-v2`, beyond its gate cell's trees, under `tests/lab_files.rs` is UNVERIFIED. If it may not, the arms
-    gate on a composite `verify-weights.sh` cell in lockstep.
+    gate on a composite `verify-weights.sh` cell in lockstep. *Resolved in S5 (§22.15)*: it may not.
+    `tests/lab_files.rs` alone would allow it (`trees_and_gates_exist` skips the `volume+r2` tiers' cells and checks
+    only that a tree is a manifest tree), but `tests/dry_run.rs`
+    `arms_and_gates_are_the_scripts_and_arms_name_their_trees` holds every script tier's arm to `trees` == the roots
+    of its gate cell's `verify-weights.sh` needs, and fv-lab's R2 plan fetches only an arm's `trees`, so the tree must
+    be listed. The Wan arms gate on the composite cells `fastwan21-1.3b-mmaudio` and `sfwan21-1.3b-mmaudio`, added in
+    lockstep.
 - *Lost*:
   - re-running parity against upstream MMAudio (the inject arms, `compare-dumps`, the waveform metrics);
   - the timed upstream sidecar.
@@ -4301,7 +4311,8 @@ passed on `d53ea62` 2026-10-27).
   The results stand at `778c65e`.
 - *Weights*: all R2-only (`weights-r2.tsv:60, 25, 62`).
   - `mmaudio-44k-v2` 21.46 GB, `fastwan21-1.3b` 29.21 GB, `sfwan21-1.3b` 28.93 GB.
-  - At most 50.67 GB on the disk, so `container_disk_gb = 180`.
+  - At most 50.67 GB on the disk, so `container_disk_gb = 180` (50.68 GB as fv-lab rounds 50,676,290,876 bytes,
+    §22.15).
   - About 79.6 GB fetched per run.
 - *Size*: small: one cell, two or three arms, goldens, the cut branch.
 - *GPU check*: all arms, about 20 min a side: **about $1.66** (UNVERIFIED estimate).
@@ -4489,13 +4500,15 @@ After S7 and S8, `runpod-matrix.sh` has no branch left and goes, and with it `ru
 
 **Owner questions, left open**:
 1. Whether the `mmaudio` knob stays offered: the `FASTVIDEO_WAN_AUDIO` catalog entry, the CLI's `--audio mmaudio`,
-   and GCP staging. Meanwhile `mmaudio`'s tier keeps it checked.
+   and GCP staging. The MMAudio checkpoints are CC-BY-NC 4.0 (non-commercial; `docs/serve/research-8gb-av.md:196`),
+   which is why it matters: a user-facing knob runs non-commercial weights inside a served pipeline. Meanwhile
+   `mmaudio`'s tier keeps it checked (S5, §22.15: it only reads the owner's R2 copy, nothing is redistributed).
 2. Whether `sol-bench-pod.sh` moves to an fv-lab experiment tier, as `h3-graphs` did (§14.3).
 3. The total GPU spend, about $10-13 (§22.5). It is within the standing "provision as needed" permission.
 
 #### 22.7 What this section does not change
 
-Nothing by itself: no script, cell, tier, golden, schema or test. Each slice above makes its own changes (S1's: §22.8; S2's: §22.9, §22.10; S3's: §22.11, §22.12; S4's: §22.13, §22.14).
+Nothing by itself: no script, cell, tier, golden, schema or test. Each slice above makes its own changes (S1's: §22.8; S2's: §22.9, §22.10; S3's: §22.11, §22.12; S4's: §22.13, §22.14; S5's: §22.15, §22.16).
 
 #### 22.8 S1 done: the nine retired with no tier
 
@@ -5369,3 +5382,335 @@ run directories under `artifacts/runpod/hd/`, `sol-bench/` and its fixed lists (
 fixtures frozen (§10's way; `runpod-http-sfstream-r2.json` stops being written with it), and `FV_SFSTREAM_RUNS`,
 `FV_SF_PROMPT` and `FV_SF_SWITCH` move from `SCRIPT_KNOBS` to `MODE_KNOBS` and `runpod-http.sh`'s `FV_LAB_NOT_READ`.
 `docs/ports/wan.md`'s streaming section then names the tier.
+
+#### 22.15 S5: `mmaudio` as a tier (done, CPU-side)
+
+Built on `claude/d1-s5-mmaudio` from `b7ddf5fa` (main with S4 merged; FVID-2026-10-27-d1-s5-mmaudio), as the
+`mmaudio` entry of §22.3 and §22.6 item 3 decide: the small tier, without upstream parity.
+
+- **The `mmaudio` tier**: one cell, `lab/cells/mmaudio-sidecar.toml`, the cut branch's three arms in its order:
+  - `wan13-audio`: FastWan 1.3B DMD with VSA, 480x832, 81 frames, `--warm --audio mmaudio`;
+  - `sfwan13-audio`: SF-Wan 1.3B (`sf_wan_t2v_1_3b`, 4 steps, shift 5), the same;
+  - `ours-v2a`: our port alone (`fv-gpucheck mmaudio v2a`) on wan13-audio's clip, `--seed 1000 --runs 3`.
+
+  The prompt is the workload's (the branch's `MM_PROMPT` default, two lines, which both runners print ANSI-C
+  quoted), the Wan seed the script's 1024. `weights = "volume+r2"`: `fastwan21-1.3b` (29.21 GB), `sfwan21-1.3b`
+  (28.93 GB) and `mmaudio-44k-v2` (21.46 GB) are R2-only since 2026-10-13. fv-lab's plan fetches `fastwan21-1.3b` and
+  `mmaudio-44k-v2` before `wan13-audio`, drops `fastwan21-1.3b` and fetches `sfwan21-1.3b` before `sfwan13-audio`,
+  and has nothing to do before `ours-v2a` (a tree is dropped only to make room for a fetch): 79.61 GB fetched, at most
+  50.68 GB on the disk (§22.3's 50.67 truncated 50,676,290,876 bytes; fv-lab rounds). `container_disk_gb = 180`,
+  `cell_timeout_s = 3600` (`runpod-http.sh`'s default cap, so the idle limit is `weights::r2_idle_min(3600)`, 85
+  min), `tae = true` (required by Addition 16: the Wan arms read `{tae}`); otherwise the rtx6000 tier's pod. Its dry
+  run, gates and pod body are the branch's (`fixtures/mmaudio-dry-run.txt`, `mmaudio-gates.tsv`,
+  `runpod-http-mmaudio.json`, from `fv-lab-goldens.sh`), line for line (`tests/dry_run.rs`,
+  `tests/payload_golden.rs`); `the_mmaudio_tier_is_the_cut_mmaudio_family` adds that the run is exactly the cut
+  branch's three arms in its order and nothing else (no TAE fetch, no WARN, no clip line, no compare), with their
+  gates, fv-lab's three R2 lines word for word, and the golden free of every dropped arm's name.
+- **`ours-v2a`: kept.** It fits once gated, which the branch now does in lockstep (`gated_cell ours-v2a
+  mmaudio-44k-v2`; it was an ungated `run_cell` reading `$W/mmaudio-44k-v2`, which a cell's ungated arm may not,
+  §15.2 item 6, and `plan.rs` refuses: "the command reads `{weights}/…`: gate the arm on its trees"). Why keep it:
+  - it is the only pod run of the port's own entry point (`mmaudio v2a`: load, three timed generations, the
+    `mmaudio.wav` / `mmaudio.f32` waveform and the muxed `sidecar.mp4`), the "Ours (`mmaudio v2a`)" timing row of
+    `docs/ports/mmaudio.md`, which the sidecar arms do not give (they time the stage inside `wan gen`);
+  - it needs no tree the Wan arms do not already fetch (`mmaudio-44k-v2` is held), and about 1-2 min;
+  - its clip is the static `{runs}/wan13-audio/frames/output.mp4` (`wan gen` writes `<clip-dir>/output.mp4`,
+    `crates/fastvideo-cudarc/src/rt/writer.rs:460`, with the soundtrack muxed in place); an arm may read another
+    arm's output under `{runs}` (serve-engine's `--reference`).
+
+  The cost of keeping it: it reads wan13-audio's clip, so `--cells ours-v2a` alone fails on both runners alike (no
+  clip), and a run whose wan13-audio failed fails it too. The script's `find` fallback did not do better: with
+  wan13-audio's directory missing it ended the whole script under `set -e` (§22.1's dry-run exit 1), and with it
+  present but no `output.mp4` the empty `grep -v` did the same.
+- **`trees` beyond the gate (§22.3's UNVERIFIED point): not allowed**, so the gates are composite cells.
+  `tests/lab_files.rs` alone does not refuse it, but `tests/dry_run.rs`
+  `arms_and_gates_are_the_scripts_and_arms_name_their_trees` holds every script tier's arm's `trees` to exactly the
+  roots of its gate cell's `verify-weights.sh` needs (mutation: `wan13-audio` gated on `fastwan21-1.3b` with
+  `mmaudio-44k-v2` still in its trees fails it), and the arm must list `mmaudio-44k-v2`: fv-lab's R2 plan fetches an
+  arm's `trees` and nothing else, and `plan.rs` refuses an arm whose `env` reads `{weights}/mmaudio-44k-v2` without
+  it. So `verify-weights.sh` gains two composite cells, `fastwan21-1.3b-mmaudio` and `sfwan21-1.3b-mmaudio` (the Wan
+  cell's needs and `mmaudio-44k-v2`'s, as `ltx25-ref2v` composes two cells), and the script's Wan arms gate on them in
+  the same commit. No tree is added (`weights-manifest.tsv` unchanged).
+- **The lockstep change, in the same commit** (a real-run change, as §22.9's and §17.2's): the branch
+  (rpm:471-542 at `b7ddf5fa`, 72 lines; rpm:472-523 on this branch) is cut to the tier's arms. Intended differences,
+  each named in the branch's comment, the cell's header, `lab/tiers.toml` and `tests/dry_run.rs`:
+  1. *Gone, with no tier*: `up-env` (the Python venv, `pip install torch …`, `git clone` of MMAudio at `974010a`),
+     `up-sidecar` (upstream MMAudio timed, and its dump), the three inject arms `mm-pixels`, `mm-features`, `mm-e2e`
+     with their `compare-dumps` (`diff-*`), and the five waveform comparisons (`wave-*`). `scripts/gpu/mmaudio_oracle.py`
+     and `mmaudio_wave_compare.py` stay as by-hand tools (`docs/ports/mmaudio.md` "Oracle"); the commands are in `git
+     show b7ddf5fa:scripts/gpu/runpod-matrix.sh`. **Lost**: re-running parity against upstream MMAudio (the inject arms,
+     `compare-dumps`, the waveform metrics) and the timed upstream sidecar. Their results stand at `778c65e`
+     (`docs/ports/mmaudio.md` "Results").
+  2. *The two `export`s* (`FASTVIDEO_MMAUDIO_WEIGHTS="$MMW"`, `FASTVIDEO_TAE_DIR="$TAE"`, rpm:488 and 493 at
+     `b7ddf5fa`; §22.4's lockstep line) are each Wan arm's own `env` entries: the dry run gains `env
+     FASTVIDEO_MMAUDIO_WEIGHTS=<$W>/mmaudio-44k-v2 FASTVIDEO_TAE_DIR=<$TAE> ` before the binary on the two Wan lines. A
+     no-op for those commands (the same values reach them). `ours-v2a` gets neither: it takes `--weights`, and it
+     decodes no latents: it reads the mp4's frames with ffmpeg and runs no TAE or Wan VAE (`mmaudio_stage.rs` reads
+     neither variable; `MmAudioPipeline::load` reads only `MMAUDIO_MODEL_PATH`), so
+     the only trace is its report's `env` record (`gpucheck-out/mmaudio.json`), which no longer lists them.
+  3. *The composite gates*: an incomplete `mmaudio-44k-v2` now skips the two Wan arms ("weights incomplete") and
+     `ours-v2a`, where the branch only logged `WARN: mmaudio weights incomplete` (its stand-alone `verify-weights.sh
+     mmaudio-44k-v2`, run even in a dry run, which is gone) and let the sidecar fail at load.
+  4. *The static clip*: no `find` fallback and no `V2A clip: …` log line (fv-lab has no such line). The dry run no
+     longer stops at the `find` (exit 1 since §22.1): it exits 0 and shows `ours-v2a`.
+  5. *No TAE fetch in a dry run* (S4's pattern, §22.13 item 2): `[[ -f "$TAEW" || "$DRY_RUN" == 1 ]] || bash
+     fetch_taehv.sh "$TAE"`. Before, a dry run without `taew2_1` downloaded `taew2_1` and `taew2_2` into `$TAE` (or
+     logged `WARN: taew2_1 fetch failed` offline). A real run is unchanged. The script's header now names only `wan`
+     (and `sfwan` through it) as still fetching in a dry run, until S6.
+  6. *`FV_MMAUDIO_PROMPT`* (the branch's prompt) is the cell's default. fv-lab refuses it (`knobs::SCRIPT_KNOBS`, `fv-lab
+     run`'s environment and `pod up --extra-env`, "§22, S5"), as S4 refused `FV_SF_PROMPT`; `runpod-http.sh`'s
+     `FV_LAB_NOT_READ` gains it in S7, when the branch goes.
+  7. *The TAE fetch*: as §22.13 item 4. Both pods' start commands run `fetch-tae.sh` (the script side's `FV_SKIP_TAE`
+     unset, the tier's `tae = true`); on `bz0ofkfx45` the volume's copy is complete, so `$TAE` and `{tae}` are its
+     `auxiliary/tae` (the merged root's link on an R2 run) and the branch's own `fetch_taehv.sh` does not run. When the
+     copy is incomplete, `$TAE` and `{tae}` are `/fvscratch/tae`, and a `taew2_1` the start fetch failed to get is
+     never an arm failure for these `wan gen` arms: they run in the `auto` decoder mode (no `FASTVIDEO_WAN_VAE`, no
+     `--full-vae`), which decodes with the Wan VAE when the TAEHV weights are not found
+     (`crates/fastvideo-cudarc/src/wan/pipeline.rs` `uses_taehv`), while the script's branch retries with
+     `fetch_taehv.sh` first. The two runners could then decode with different VAEs and write different frames (and
+     different audio, which conditions on the clip). This can happen only off `bz0ofkfx45`, whose `auxiliary/tae` is
+     complete; on it neither the start fetch's copy nor the branch's retry is read. (`ours-v2a` reads no TAE file.)
+- **Licence (open, the owner's)**: the MMAudio checkpoints are CC-BY-NC 4.0 (`docs/serve/research-8gb-av.md:196`).
+  The tier only reads `mmaudio-44k-v2` from the owner's R2 store onto the pod's container disk, as the script did from
+  the volume; nothing is mirrored or redistributed. Nothing about the user-facing knob changed: the
+  `FASTVIDEO_WAN_AUDIO` catalog entry (`control/src/cluster/catalog.json`), the CLI's `--audio mmaudio` and GCP
+  staging (`scripts/gcp/weights.sh`) are untouched. Whether the knob stays offered is still §22.6's open owner
+  question 1; meanwhile this tier keeps the sidecar checked on a pod.
+- **Test support**: `tests/payload_golden.rs` counts five `volume+r2` tiers (`gold`, `oracle-r2`, `serve-engine`,
+  `sfstream`, `mmaudio`), holds the tier's body to 180 GB, 85 min and the TAE fetch's guard, and the script side's
+  GPU-check body (`fixtures/runpod-http-mmaudio-r2.json`: `FV_FAMILY=mmaudio FV_R2_TREES="fastwan21-1.3b
+  mmaudio-44k-v2" FV_CONTAINER_DISK_GB=180 runpod-http.sh plan`, a new golden of `fv-lab-goldens.sh`) to fv-lab's R2
+  references, the tier's disk and idle limit, the link roots and both pinned revisions in order
+  (`the_script_side_r2_pod_reads_its_trees_as_the_mmaudio_tier`; S3's helper now takes a list of trees). The script
+  side stages every listed tree before the matrix, so a whole-family script run with `sfwan21-1.3b` too needs
+  `FV_CONTAINER_DISK_GB=200`; the GPU check's two trees need 171 (refused below, `fv-lab-route.test.sh`).
+  `tests/lab_files.rs`: `the_mmaudio_tier_reads_its_three_trees_from_r2_within_its_disk` (every gate a cell, every
+  tree R2-only, the plan's 79.61 GB fetched and 50.68 GB peak within 180 GB with the 120 GB reserve), and the Addition
+  16 readers are now `sfstream`'s two and `mmaudio`'s two Wan arms (`taew2_1`, which `fetch-tae.sh` fetches).
+  `knobs::tests::the_mmaudio_prompt_is_refused_by_fv_lab_only`. `fv-lab-route.test.sh`: `mmaudio` runs on the script
+  path, its `FV_R2_TREES` form plans, a disk under 171 GB is refused before the key, its dry run shows each Wan arm's
+  two env entries, fetches nothing, and runs exactly `wan13-audio sfwan13-audio ours-v2a` and none of the dropped arms.
+- **Mutations, each caught**: the `export`s restored and the env words dropped (`fv-lab-goldens.sh --check`,
+  `fv-lab-route.test.sh`); the dry-run fetch skip removed (`fv-lab-route.test.sh`: "a dry run fetched taew2_1");
+  `ours-v2a` back to an ungated `run_cell` (`fv-lab-goldens.sh --check`: the gates differ); `up-env` restored
+  (`fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`); the `find` fallback restored (both: the dry run exits 1
+  again); the composite cell without `mmaudio-44k-v2`, goldens regenerated
+  (`arms_and_gates_are_the_scripts_and_arms_name_their_trees`); `wan13-audio` gated on `fastwan21-1.3b` with its
+  trees unchanged (that test and `the_mmaudio_tier_is_the_cut_mmaudio_family`); `FV_MMAUDIO_PROMPT` out of
+  `SCRIPT_KNOBS` (`knobs::tests`); the tier's disk 170 GB (`tests/lab_files.rs`, `tests/payload_golden.rs`,
+  `tests/dry_run.rs`); the tier's `tae = false` (`Lab::load` refuses it: every test that loads `lab/` fails).
+- **Before and after** (§22.1's dry runs: the volume's `auxiliary/tae` marked complete with no `taew2_1` in it,
+  `FV_BASELINE_SHA` set, no `FV_LAB_BIN`, no `FV_ORACLE_URL` unless named; `scripts/gpu` at `b7ddf5fa` and on this
+  branch; output with time stamps, the temporary directory and the repository path normalised, `FV_DRY_RUN_GATES`
+  records, stderr and exit status; online): **byte-identical** for `oracle` (26 lines, 8 records), with
+  `FV_ORACLE_TARGETS=sfwan13` (18, 4; also with `FV_GEN_TIMEOUT_S=5400`), its nine tensor-diff targets (43, 14) and
+  ten clip-metric targets (145, 23) at `FV_GEN_TIMEOUT_S=5400`, and with `FV_ORACLE_URL` (26, 8); `sfwan` (96, 24;
+  114, 28 with `FV_ORACLE_URL`); `wan` (102, 65; the same with `FV_ORACLE_URL`); `hd` (10, 8) and with
+  `FV_PROMPTS=…/prompts-hd5.json` (11, 8); `serve-engine` (8, 6), with `FV_ENGINE_CELLS=h3` (4, 2) and with
+  `FV_CELLS="cli-wan-turbo engine-wan-turbo"` (8, 2); `sfstream` (4, 2), with `FV_CELLS=sfstream-main` (4, 1),
+  `FV_SFSTREAM_RUNS` set (4, 2) and `FV_TAE_DIR` set (4, 2); and the 38 refused families (`FV_SCRIPT_RETIRED`'s twenty
+  and `FV_LAB_RETIRED`'s eighteen: 2 lines, exit 2). `mmaudio`, default (base 4 lines, 2 records, exit 1; branch 5,
+  3, exit 0), with `FV_CELLS="wan13-audio ours-v2a"` (4, 1, exit 1; 5, 2, exit 0), with `FV_MMAUDIO_PROMPT` set (4,
+  2; 5, 3) and with `FV_TAE_DIR` set (4, 2; 5, 3): each branch output equals the base's with exactly these changes,
+  checked mechanically: the `WARN: mmaudio weights incomplete` line gone; on each Wan line `env
+  FASTVIDEO_MMAUDIO_WEIGHTS=<$W>/mmaudio-44k-v2 FASTVIDEO_TAE_DIR=<$TAE> ` inserted before the binary (two, one, two,
+  two; `<$TAE>` the volume's directory, or `FV_TAE_DIR`'s); the `ours-v2a` line and `matrix done` added; stderr
+  without the base's `find: … No such file or directory`; the gates' cells the composite ones plus `ours-v2a
+  mmaudio-44k-v2`. The base's dry runs had also downloaded `taew2_1` and `taew2_2` into `$TAE` (into `FV_TAE_DIR`'s
+  directory in that form); this branch's fetched nothing.
+
+#### 22.16 S5: the GPU check
+
+§8's procedure, as §22.14's: one commit `SHA` for both sides (this PR's head or its merge, once
+`fastvideo-rs-runtime:sha-<7>` is published with its `lab/`, fv-lab, `runpod-matrix.sh` and `verify-weights.sh`: the
+script side needs the cut branch and the composite cells), both sides in parallel, then `fv-lab-compare-runs.sh` and
+the arms' own records. One RTX PRO 6000 Blackwell Server Edition per side, EU-RO-1 on `bz0ofkfx45`, about $2.49/hr;
+pod boot and preflight about 5 min per side. `fastwan21-1.3b` (29.21 GB) and `mmaudio-44k-v2` (21.46 GB) are fetched
+from R2 on **both** sides: fv-lab's pod by the tier (`volume+r2`, the plan of the selected arms), the script's by
+`FV_R2_TREES="fastwan21-1.3b mmaudio-44k-v2"` (§21.8: the merged root `/fvscratch/weights`, so `$W`, `$MMW`, `$TAE`
+and every command line are fv-lab's word for word; without it the script side would skip both arms, `weights
+incomplete`) on the tier's 180 GB (171 needed). `taew2_1` is on the volume (`auxiliary/tae`, complete), read through
+the merged root's link on both sides. The Runpod secrets `fv_r2_access_key_id` / `fv_r2_secret_access_key` must exist
+(they did for §21.7). The build pod is stopped first (§21.7).
+
+**The arms**: **`wan13-audio` and `ours-v2a`**, on both sides, for the balance. `wan13-audio` exercises everything S5
+changes on the sidecar path (the per-arm `FASTVIDEO_MMAUDIO_WEIGHTS` and `FASTVIDEO_TAE_DIR`, the composite gate, two R2
+trees in one arm's step, `wan gen --audio mmaudio` and its TAEHV decode); `ours-v2a` is the arm newly gated and the
+static clip. `sfwan13-audio` is kept out: the same binary path, `env` and sidecar, another Wan tree (28.93 GB more
+fetched on fv-lab's side, and a 200 GB disk on the script side, which stages every tree at once). Both sides fetch the
+run's **tree** without PNG frames and caches: the script side's R2 records (`r2-stage.log`, `r2-fetch.json`) are in
+the run directory, which its plain fetch never takes (§22.12), and items 1-5 read `gpucheck-out/`, the clips'
+`output.mp4`, the soundtrack files and `ours-v2a`'s outputs, which only a tree fetch takes on either side (the skip
+matches no `.mp4`, `.wav` or `.f32`).
+
+**What the check verifies**: that the two runners run the same commands to the same records, with the per-arm `env`
+in effect on both: `wan13-audio`'s frames (`fv-lab-compare-runs.sh`), its report and `benchmark.json` (the env, TAEHV,
+the sidecar's audio record), its soundtrack (the 16-bit PCM `frames/output.wav` and `frames/cold/output.wav` the
+sidecar writes before the AAC mux), and `ours-v2a`'s waveform. The audio's determinism across pods is UNVERIFIED until
+this run (the video's is the §8 premise).
+
+**The encode between the frames and the audio** (review of #228): both audio arms condition on the *encoded* clip,
+not on the PNGs. The sidecar reads `output.mp4` back (`mmaudio/sidecar.rs` `run_on_mp4`: `VideoFrames::from_file`),
+and so does `ours-v2a` (`--video …/output.mp4`). The writer encodes it with libx264 (`-preset veryfast -crf 19
+-pix_fmt yuv420p`, no `-threads`: `crates/fastvideo-cudarc/src/rt/writer.rs:695`), so ffmpeg's default thread count
+applies, which follows the CPUs the process sees; and libx264's output depends on its thread count (§20.6). Item 0's
+PNGs can therefore be byte-identical while the two pods' mp4s, and then the audio, differ. Item 3 hashes each clip's
+H.264 stream on its own (`ffmpeg -v error -i <mp4> -map 0:v:0 -c copy -f streamhash -`: one line, `0,v,SHA256=…`,
+the stream's packets without the container or the AAC track; checked with ffmpeg 6.1.1: a remux with another audio
+track keeps the hash, a libx264 encode of the same frames with `-threads 1` and `-threads 4` changes it; a missing or
+non-video file exits non-zero) and reports `SAME 3` or `DIFF 3`, or `FAIL 3` when either clip is missing or unreadable
+on either side. It also prints each side's CPU counts, recorded, not judged:
+- fv-lab: `box.txt`'s `cpus=` (the runner's `std::thread::available_parallelism()`, `run.rs` `record_box`; 27 on the
+  S3 check's pod) and `pod.json`'s `vcpus` (Runpod's `vcpuCount`; 32 there);
+- the script side: only its driver's `pod <id> $<x>/hr (hard cap …) ram=<n>GB vcpu=<n>` line (`runpod-http.sh` `log`,
+  to stderr, not into the run directory), so the driver's output is kept in a file (`$D` below). The script pod's
+  in-pod CPU count is recorded nowhere: its `box.txt` has only the image and GPU lines, and adding one would change
+  the start command every pod golden carries. Which count libx264 actually sees (its own CPU detection) is
+  UNVERIFIED; the stream hashes are the evidence, the counts only context.
+
+**The decision rule for items 3-5**:
+- `SAME 3`, and items 4 and 5 `PASS`: the audio is the same across the runners. Pass.
+- `SAME 3`, and item 4 or 5 `FAIL`: the same encoded video gave different audio: the audio-determinism finding (the
+  MMAudio port on this GPU class across pods), not a runner difference: report it and keep the branch.
+- `DIFF 3`, and item 4 or 5 `FAIL`: the audio's inputs differ, so the difference belongs to the encode (§20.6), not to
+  MMAudio and not to the runners. The audio is then not judged by this run; report the two stream hashes and CPU
+  counts. Judging it needs two pods whose encodes agree (e.g. the same CPU count), the coordinator's call.
+- `DIFF 3`, and items 4 and 5 `PASS`: the encodes differ, but the audio does not; report the stream difference, pass.
+- `FAIL 3`: a clip is missing; the check fails.
+
+Where each field comes from (read from the code): the arm runs in its directory in both runners, and `fv-gpucheck`
+writes `gpucheck-out/<stage>.json` there (`--out` default, the stage `wan` for `wan gen`, `mmaudio` for `mmaudio v2a`:
+`crates/fastvideo-gpucheck/src/main.rs` `stage_name`). `Report::finish` (`report.rs`) writes `status` (`pass` only
+when the stage returned no error), `env` (every `FASTVIDEO_*` variable in effect: the arm's two `env` entries and
+`FASTVIDEO_WAN_AUDIO=mmaudio`, which `--audio mmaudio` sets, `wan_stage.rs:239`) and `checks` (a `note` has `limits`
+`{}`; `gen`'s two checks, `frames` and `middle_frame_not_flat`, have limits; with one prompt they carry no prompt
+suffix). `wan gen` writes the clip into `--clip-dir` (`frames/`: 81 PNGs, `output.mp4`, and with `--warm` the untimed
+generation's 81 under `frames/cold/`), so `frames_digest` in both runners records 162 PNGs; the sidecar
+(`mmaudio/sidecar.rs` `run_on_mp4`) writes `output.wav` beside each `output.mp4` (`write_wav`: 16-bit PCM of the
+waveform), then muxes it in (the H.264 stream copied, `-c:v copy`). `benchmark.json` is beside the clip directory
+(`benchmark::path_beside`: the arm's directory) with `decoder` (`taehv` when TAEHV decoded) and `audio` (`audio_json`:
+`audio`, `audio_codec`, `audio_clip_s` the waveform's seconds). `mmaudio v2a --out {runs}/ours-v2a` writes
+`mmaudio.wav`, `mmaudio.f32` (the waveform's f32 bytes), `sidecar.mp4` and `mmaudio.json` (`variant`, `clip_s`,
+`duration_s`, `samples`, `sample_rate`, and timings, not compared) into the arm's own directory.
+
+```sh
+SHA=<7>
+SKIP='\.png$|\.cache$'
+CELLS=wan13-audio,ours-v2a
+D=/tmp/mmaudio-script-driver.log    # the script driver's output: its `pod … vcpu=<n>` line (item 3)
+# mmaudio: the MMAudio V2A sidecar on FastWan 1.3B DMD, then our port alone on its clip
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family mmaudio --cells $CELLS --wall-cap-s 3600 \
+  --fetch-tree --fetch-skip "$SKIP" --yes --wait
+RUNPOD_API_KEY=… FV_FAMILY=mmaudio FV_CELLS="${CELLS//,/ }" FV_POD_CAP_S=3600 \
+  FV_R2_TREES="fastwan21-1.3b mmaudio-44k-v2" FV_CONTAINER_DISK_GB=180 FV_FETCH_TREE=1 FV_FETCH_SKIP="$SKIP" \
+  bash scripts/gpu/runpod-http.sh run $SHA 2>&1 | tee $D
+L=artifacts/runpod/mmaudio/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/mmaudio/$SHA-<MMDDHHMM>
+# 0. The runners' compare: exit 0, exactly these three lines; wan13-audio's 162 PNG frames (81, and 81 of the
+#    untimed --warm generation under frames/cold/) byte-identical, ours-v2a the same with no frames.
+bash scripts/gpu/fv-lab-compare-runs.sh $L $S >/tmp/cmp.txt; rc=$?; cat /tmp/cmp.txt
+[ "$rc" = 0 ] && [ "$(wc -l </tmp/cmp.txt)" = 3 ] \
+  && [ "$(sed -n 1p /tmp/cmp.txt)" = 'same ours-v2a: {"exit":0,"skipped":null}, no frames' ] \
+  && [ "$(sed -n 2p /tmp/cmp.txt)" = 'same wan13-audio: {"exit":0,"skipped":null}, 162 frames byte-identical' ] \
+  && [ "$(sed -n 3p /tmp/cmp.txt)" = '2 arm(s) the same (1 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)' ] \
+  && echo "PASS 0" || echo "FAIL 0"
+# 1. wan13-audio on each side: its report passed with the per-arm env in effect (the merged root's MMAudio tree and
+#    TAE directory) and the sidecar on; benchmark.json says TAEHV decoded and the sidecar made audio.
+W=wan13-audio/gpucheck-out/wan.json B=wan13-audio/benchmark.json
+for X in $L $S; do
+  jq -e '.status == "pass" and .env.FASTVIDEO_WAN_AUDIO == "mmaudio"
+      and .env.FASTVIDEO_MMAUDIO_WEIGHTS == "/fvscratch/weights/mmaudio-44k-v2"
+      and .env.FASTVIDEO_TAE_DIR == "/fvscratch/weights/auxiliary/tae"' $X/$W >/dev/null \
+    && jq -e '.decoder == "taehv" and .audio.audio == true and .audio.audio_codec == "mmaudio" and .audio.audio_clip_s > 4' $X/$B >/dev/null \
+    && echo "PASS 1 $X" || echo "FAIL 1 $X"
+done
+# 2. wan13-audio's checks (records with limits) and its FASTVIDEO_* env: the same on both sides, exactly these two
+#    checks, all ok.
+chk() { jq -ce '[.checks[] | select(.limits != {}) | {name, ok}] | sort' "$1/$W"; }
+envs() { jq -cSe '.env' "$1/$W"; }
+CL=$(chk $L) && CS=$(chk $S) && [ "$CL" = "$CS" ] && EL=$(envs $L) && ES=$(envs $S) && [ "$EL" = "$ES" ] \
+  && [ "$(jq -r 'map(.name) | join(" ")' <<<"$CL")" = "frames middle_frame_not_flat" ] \
+  && jq -e 'length == 2 and all(.ok)' <<<"$CL" >/dev/null && echo "PASS 2" || echo "FAIL 2"
+# 3. The video streams both audio arms condition on (the sidecar and ours-v2a read the encoded output.mp4 back;
+#    libx264 runs with ffmpeg's default threads, which follow the pod's CPUs, ADR-0019 §20.6): the H.264 stream of each
+#    mp4 hashed without the AAC track; SAME or DIFF is reported, a missing or unreadable mp4 is FAIL. Then each side's
+#    CPU counts, recorded (not judged).
+vs() { (cd "$1/wan13-audio/frames" && for f in output.mp4 cold/output.mp4; do
+  h=$(ffmpeg -v error -i "$f" -map 0:v:0 -c copy -f streamhash -) && [ -n "$h" ] || exit 1; echo "$f $h"; done); }
+if VL=$(vs $L) && VS=$(vs $S) && [ "$(wc -l <<<"$VL")" = 2 ] && [ "$(wc -l <<<"$VS")" = 2 ]; then
+  [ "$VL" = "$VS" ] && echo "SAME 3" || { echo "DIFF 3"; diff <(echo "$VL") <(echo "$VS"); }
+else echo "FAIL 3"; fi
+echo "cpus: fv-lab box.txt $(grep -h '^cpus=' $L/box.txt), pod.json vcpus=$(jq -r '.vcpus // "?"' $L/pod.json);" \
+  "script $(grep -o 'vcpu=[0-9.?]*' $D | head -1)"
+# 4. The sidecar's soundtrack (16-bit PCM written before the AAC mux), timed and untimed: byte-identical on both sides.
+wav() { (cd "$1/wan13-audio/frames" && for f in output.wav cold/output.wav; do
+  [ "$(head -c 4 "$f")" = RIFF ] && [ "$(stat -c %s "$f")" -gt 44 ] || exit 1; done && sha256sum output.wav cold/output.wav); }
+AL=$(wav $L) && AS=$(wav $S) && [ "$AL" = "$AS" ] && [ "$(wc -l <<<"$AL")" = 2 ] && echo "PASS 4" || echo "FAIL 4"
+# 5. ours-v2a: both reports passed; its waveform (wav and raw f32) byte-identical, its length and rate the same.
+O=ours-v2a
+v2a() { jq -e '.status == "pass"' "$1/$O/gpucheck-out/mmaudio.json" >/dev/null \
+  && jq -cSe 'if .samples > 0 then {variant, samples, sample_rate, duration_s, clip_s} else error("no samples") end' "$1/$O/mmaudio.json" \
+  && (cd "$1/$O" && [ "$(head -c 4 mmaudio.wav)" = RIFF ] && test -s mmaudio.f32 && sha256sum mmaudio.wav mmaudio.f32); }
+VL5=$(v2a $L) && VS5=$(v2a $S) && [ "$VL5" = "$VS5" ] && [ "$(wc -l <<<"$VL5")" = 3 ] && echo "PASS 5" || echo "FAIL 5"
+# R2, each file from the side that fetched it; no PNG; no key.
+grep -E '\] (weights /fvscratch/weights: |r2 wan13-audio: )' $L/live.log; jq -er .state $L/wan13-audio/r2-fetch.json
+cat $S/r2-stage.log; jq -er .state $S/r2-fetch.json
+find $L $S -name '*.png' | wc -l                                    # 0
+grep -rlE 'X-Amz-Signature|X-Amz-Credential|FV_WEIGHTS_R2_[A-Z_]+[=":]+ *[^ "{$]+|R2_KEY_(ID|SECRET)=[^"$ ]' $L $S \
+  || echo "no key value or presigned URL in any fetched file"
+```
+
+(`FV_CELLS` and `--cells` name the same two arms on both sides. `FV_GEN_TIMEOUT_S` is `runpod-http.sh`'s default
+3600, the tier's `cell_timeout_s`, so the script side's idle limit is the tier's 85 min. Item 3 needs an ffmpeg with
+the `streamhash` muxer on the machine that reads the runs (6.1.1 checked). Every item fails on a missing or empty
+file: `jq -e`, which exits non-zero on a missing file or a `false` / `null` result, ffmpeg's exit status, the `RIFF`
+and size tests, `test -s`, `wc -l` counts, and the `$(…)` captures chained with `&&`, so an empty capture never
+compares equal to another. The block was run on synthetic run directories shaped as the code writes them (the
+frames records made by the script's own `frames_digest`, the clips real H.264 + AAC mp4s made with libx264): all
+`PASS` and `SAME 3` when equal; `DIFF 3` with one side's `output.mp4` a libx264 encode of the same frames at another
+thread count (items 4-5 still `PASS`), `SAME 3` when only the AAC track differs, and `FAIL 3` with `output.mp4`
+missing on both sides, `cold/output.mp4` missing on one, or an `output.mp4` that is no video; and `FAIL` for item 1
+and 2 with `wan.json` missing on both sides, item 4 with `output.wav` (or `cold/output.wav`) missing on both or one
+`output.wav` changed, item 5 with `ours-v2a`'s waveform files or `mmaudio.json` missing on both, its `mmaudio.f32`
+changed on one side, its report `fail`, or `samples` 0, item 1 (that side) and item 2 with `FASTVIDEO_TAE_DIR` missing
+on one side, item 1 with `decoder` `wan-vae`, item 2 with one check's `ok` false, item 0 with one frame changed, with
+`wan13-audio` failed on both sides, or with `ours-v2a` absent from both.)
+
+**Pass** (all of it):
+- Both pods end `matrix_exit=0`; item 0 prints `PASS 0`. An arm that failed alike on both sides fails item 0 (the
+  count line): a finding about the sidecar on this GPU class, not about the runners: report it and keep the branch.
+- Items 1 and 2 print `PASS` (item 1 once per side):
+  1. both `wan.json` `status` `pass`, with `FASTVIDEO_WAN_AUDIO` `mmaudio`, `FASTVIDEO_MMAUDIO_WEIGHTS`
+     `/fvscratch/weights/mmaudio-44k-v2` and `FASTVIDEO_TAE_DIR` `/fvscratch/weights/auxiliary/tae` (the per-arm `env`
+     reached the binary on both sides); both `benchmark.json` with `decoder` `taehv` and an `audio` record of the
+     sidecar (`audio_codec` `mmaudio`, more than 4 s of audio: `docs/ports/mmaudio.md` measured 5.00 s);
+  2. the two checks equal on both sides and ok, and the whole `FASTVIDEO_*` env equal.
+- Item 3 prints `SAME 3` or `DIFF 3` (never `FAIL 3`), with the CPU counts; items 4 and 5 as the decision rule above:
+  4. `frames/output.wav` and `frames/cold/output.wav` byte-identical on both sides;
+  5. `ours-v2a`'s reports `pass`, `mmaudio.wav` and `mmaudio.f32` byte-identical, its `variant`, `samples`,
+     `sample_rate`, `duration_s` and `clip_s` equal.
+- R2, each file read from the side that fetched it:
+  - fv-lab (`$L`): `live.log` (fetched by every fetch) has `weights /fvscratch/weights: 10 volume trees linked from
+    /workspace/weights; 2 R2 trees (50.68 GB) fetched before the arms that read them, at most 50.68 GB on the container
+    disk at once` and `r2 wan13-audio: fetch fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef (29.21 GB),
+    mmaudio-44k-v2@eu-20261011 (21.46 GB) into /fvscratch/weights`, then `r2 wan13-audio: weights ready: 2 tree(s),
+    50.68 GB fetched in …`; no `r2 ours-v2a:` line (nothing to fetch); `wan13-audio/r2-fetch.json` `state` `done`.
+  - The script side (`$S`, tree fetch only): `r2-stage.log` with `r2_key=env`, `weights /fvscratch/weights: … volume
+    trees linked from /workspace/weights; 2 R2 trees (2 fetched): fastwan21-1.3b@25e7ed7f…
+    mmaudio-44k-v2@eu-20261011` and `exit=0`; `r2-fetch.json` `state` `done`.
+  - No key value or presigned URL in any fetched file of either side.
+- Each preflight's `weights.log` ends `exit=1` (`h3-8step` incomplete), as on every run on this volume.
+- No PNG fetched (`find … -name '*.png'` 0).
+
+**Cost** ($2.49/hr, UNVERIFIED until run): per side, boot and preflight ~5 min; python3 and the 50.68 GB fetch ~2-3
+min (§21.7 measured 28.93 GB in 27-41 s); `wan13-audio`: the FastWan 1.3B, UMT5 and MMAudio loads and two generations
+with the sidecar (at `778c65e` 2.29 s of video and 2.08 s of audio each, 4.37 s end to end, `docs/ports/mmaudio.md`),
+plus 162 PNG writes: ~2-4 min; `ours-v2a`: the MMAudio load and three generations of ~1.9 s: ~1-2 min; the tree
+fetch at the end ~1-2 min (logs, JSON, two short MP4s and WAVs of the arm, the waveform files). In all **~11-16 min a
+side, ~$0.45-$0.66 a side, ~$0.90-$1.35 both** (§22.5's $1.66 assumed 20 min a side and all arms). Bounded by the 1 h
+caps at the tier's $2.50 price cap: $2.50 a pod, $5.00 both. **Balance needed**: at least $9.35 before starting at the
+estimate ($8 floor + $1.35), and $13 to stay above the floor even if both pods ran to their caps (CLAUDE.md: stop
+before the balance would drop below $8). At the about $18.5 the balance stood at when S5 was built, both bounds hold.
+
+**Then (S7, not this slice)**: on a pass, `mmaudio` joins `FV_LAB_RETIRED`, its branch is deleted and its three
+fixtures frozen (§10's way; `runpod-http-mmaudio-r2.json` stops being written with it), and `FV_MMAUDIO_PROMPT` moves
+from `SCRIPT_KNOBS` to `MODE_KNOBS` and `runpod-http.sh`'s `FV_LAB_NOT_READ`. `docs/ports/mmaudio.md` then names
+only the tier.

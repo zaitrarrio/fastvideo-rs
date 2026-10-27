@@ -200,6 +200,51 @@ fn a_volume_r2_script_tier_reads_trees_on_the_volume_or_in_r2() {
     assert_eq!(tier.container_disk_gb, 150);
 }
 
+/// `mmaudio` (ADR-0019 §22, S5): each arm gates on a verify-weights.sh
+/// cell and names manifest trees, all three in R2 (none on the EU volume);
+/// fv-lab's R2 plan over the three arms fetches each tree once (79.61 GB)
+/// and holds at most fastwan21-1.3b and mmaudio-44k-v2 (50.68 GB) at once,
+/// which the tier's 180 GB holds with the 120 GB reserve.
+#[test]
+fn the_mmaudio_tier_reads_its_three_trees_from_r2_within_its_disk() {
+    let lab = Lab::load(&repo_root()).expect("lab/ parses");
+    let tier = lab.tier("mmaudio").expect("mmaudio");
+    assert_eq!(tier.weights, TierWeights::VolumeR2);
+    let verify = read("scripts/gpu/verify-weights.sh");
+    let cells_line = verify
+        .split("CELLS=(")
+        .nth(1)
+        .and_then(|r| r.split(')').next())
+        .expect("verify-weights.sh CELLS=(…)");
+    let gates: BTreeSet<&str> = cells_line.split_whitespace().collect();
+    let sources = TreeSources::load(&repo_root()).expect("volumes.sh, weights-r2.tsv");
+    let mut arms = Vec::new();
+    for c in tier.all_cells().filter_map(|c| lab.cells.get(c)) {
+        for a in &c.arms {
+            let gate = a.gate.as_deref().expect("every arm gated");
+            assert!(gates.contains(gate), "{}: gate {gate}", a.name);
+            for t in &a.trees {
+                assert!(
+                    matches!(sources.source(t), Source::R2(_)),
+                    "{}: {t} in R2 only",
+                    a.name
+                );
+            }
+            arms.push((a.name.as_str(), a.trees.as_slice()));
+        }
+    }
+    assert_eq!(arms.len(), 3);
+    let plan = WeightsPlan::new(&sources, &arms).expect("its R2 trees");
+    assert_eq!(
+        plan.fetch_bytes,
+        29_212_120_229 + 28_928_814_212 + 21_464_170_647
+    );
+    assert_eq!(plan.peak_bytes, 29_212_120_229 + 21_464_170_647);
+    let peak_gb = plan.peak_bytes.div_ceil(1_000_000_000);
+    assert!(u64::from(tier.container_disk_gb) >= peak_gb + DISK_RESERVE_GB);
+    assert_eq!(tier.container_disk_gb, 180);
+}
+
 #[test]
 fn every_tae_file_is_one_fetch_tae_sh_fetches() {
     // The pod's start command runs fetch-tae.sh (the tier's `tae = true`), and
@@ -226,9 +271,10 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
         assert!(t.tae, "tier {} has TAE arms: tae = true", t.name);
     }
     // Addition 16 (ADR-0019 §22.4): the arms that read `{tae}` without a
-    // `tae` file are sfstream's two (`FASTVIDEO_TAE_DIR={tae}`), in a `tae =
-    // true` tier (`Lab::load` refuses any other), and the file they need,
-    // taew2_1, is one fetch-tae.sh fetches.
+    // `tae` file are sfstream's two and mmaudio's two Wan arms (§22, S5)
+    // (`FASTVIDEO_TAE_DIR={tae}`), in a `tae = true` tier (`Lab::load`
+    // refuses any other), and the file they need, taew2_1, is one
+    // fetch-tae.sh fetches.
     let readers: Vec<(&str, &str)> = lab
         .tiers
         .tiers
@@ -244,11 +290,15 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
         readers,
         [
             ("sfstream", "sfstream-main"),
-            ("sfstream", "sfstream-10min")
+            ("sfstream", "sfstream-10min"),
+            ("mmaudio", "wan13-audio"),
+            ("mmaudio", "sfwan13-audio")
         ]
     );
     assert!(lab.tier("sfstream").is_some_and(|t| t.tae));
-    // sfstream's arms read the directory; `wan stream` reads taew2_1 in it.
+    assert!(lab.tier("mmaudio").is_some_and(|t| t.tae));
+    // sfstream's arms read the directory; `wan stream` reads taew2_1 in it,
+    // and so does mmaudio's `wan gen` (the distilled presets' TAEHV).
     assert!(fetch.contains("\nfetch taew2_1.safetensors "));
 }
 
@@ -299,7 +349,10 @@ fn every_tae_file_a_tae_dir_arm_names_is_one_fetch_tae_sh_fetches() {
             }
         }
     }
-    assert!(readers_seen >= 2, "sfstream's two arms at least");
+    assert!(
+        readers_seen >= 4,
+        "sfstream's two arms and mmaudio's two Wan arms at least"
+    );
 }
 
 #[test]

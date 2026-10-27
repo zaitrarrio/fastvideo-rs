@@ -85,7 +85,7 @@ same names. `FASTVIDEO_INJECT_DIR` reads the reference noise (`mm_x0`), and
 sample rel-L2 and cosine, and phase-tolerant spectral measures: log-mel L1
 in dB, spectral convergence, log-mel correlation and mel band-energy cosine.
 
-`runpod-matrix.sh mmaudio` runs the whole thing on one GPU pod:
+Until 2026-10-27, `runpod-matrix.sh mmaudio` ran the whole thing on one GPU pod:
 
 - the FastWan 1.3B and SF-Wan 1.3B cells with the sidecar;
 - upstream (timed) on the FastWan clip;
@@ -93,12 +93,21 @@ in dB, spectral convergence, log-mel correlation and mel band-energy cosine.
 - the three inject arms with `compare-dumps`;
 - the waveform comparisons.
 
+Since then (ADR-0019 §22, S5, §22.15) the pod check is the fv-lab tier `mmaudio` (`lab/cells/mmaudio-sidecar.toml`),
+without upstream parity: `wan13-audio` and `sfwan13-audio` (the two sidecar cells) and `ours-v2a` (our port, timed, on
+the FastWan clip). The script's branch was cut to the same three arms; it is retired in S7, after the tier's GPU
+check (§22.16) passes; `fv-lab run mmaudio` on a pod, `fv-lab pod up --family mmaudio` from a host. Its weights come from the R2
+store (`volume+r2`: `fastwan21-1.3b`, `sfwan21-1.3b`, `mmaudio-44k-v2`). The upstream venv and clone, the timed
+upstream sidecar, the inject arms with `compare-dumps` and the waveform comparisons are no longer run by any family:
+the results below stand at `778c65e`, and the commands are in `git show b7ddf5fa:scripts/gpu/runpod-matrix.sh`.
+`mmaudio_oracle.py` and `mmaudio_wave_compare.py` stay as by-hand tools.
+
 `mmaudio_tiny_reference.py` writes the host fixtures for
 `reference_tests.rs`.
 
 ## Results
 
-These come from `runpod-matrix.sh mmaudio` at `778c65e`, on an RTX PRO 6000
+These come from `runpod-matrix.sh mmaudio` at `778c65e` (the whole family, upstream arms included, before S5 cut it), on an RTX PRO 6000
 Blackwell with the EU volume, on 2026-09-27. The clip is FastWan 1.3B,
 480x832, 81 frames at 16 fps. Upstream truncates the audio to 5.00 s,
 because Synchformer needs 125 frames at 25 fps, and the port matches that.

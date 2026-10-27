@@ -12,7 +12,8 @@
 #                                      ltx25-two-stage ltx23 fastwan21-1.3b
 #                                      wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b
 #                                      sfwan21-1.3b sana-video-2b-480p
-#                                      mmaudio-44k-v2
+#                                      mmaudio-44k-v2 fastwan21-1.3b-mmaudio
+#                                      sfwan21-1.3b-mmaudio
 #                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
 #                                      hy15-720-i2v aux text-fp8 dit-prequant upscalers
 #                                      ltx25-ic-lora-ingredients ltx25-ref2v
@@ -134,6 +135,11 @@ needs() {
     mmaudio-44k-v2)
       local m=mmaudio-44k-v2/safetensors
       echo ":$m/mmaudio_large_44k_v2.safetensors :$m/vae_44k.safetensors :$m/synchformer.safetensors :$m/bigvgan_v2_44k.safetensors :$m/clip_dfn5b_h14_384.safetensors mmaudio-44k-v2:weights mmaudio-44k-v2:ext_weights mmaudio-44k-v2:bigvgan_v2_44khz_128band_512x mmaudio-44k-v2:DFN5B-CLIP-ViT-H-14-384" ;;
+    # A Wan generation with the MMAudio V2A sidecar (`wan gen --audio mmaudio`,
+    # runpod-matrix.sh mmaudio and the fv-lab tier `mmaudio`; docs/adr/0019-fv-lab.md
+    # §22.15): the Wan tree and mmaudio-44k-v2, which the sidecar loads.
+    fastwan21-1.3b-mmaudio | sfwan21-1.3b-mmaudio)
+      echo "$(needs "${1%-mmaudio}") $(needs mmaudio-44k-v2)" ;;
     # SANA-Video 2B 480p Diffusers tree (weights-manifest.tsv sana-video-2b-480p;
     # docs/ports/sana-video.md). vae/ is the Wan 2.1 VAE, byte-identical.
     sana-video-2b-480p)
@@ -204,7 +210,7 @@ needs() {
 }
 
 CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4 vdn-h3 vdn-h3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
-  wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 dit-prequant upscalers
+  wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 fastwan21-1.3b-mmaudio sfwan21-1.3b-mmaudio hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 dit-prequant upscalers
   ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
   sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super upsampler-local
   h3-turbo-loras ncii-guard)
@@ -270,11 +276,15 @@ sha_dests() {
 SHA_LIST="$HERE/weights-sha256.tsv"
 
 if [[ "${1:-}" == "--list" ]]; then
-  for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
-  for c in $FV_VARIANT_IDS; do printf '%-20s %s\n' "variant:$c" "$(variant_trees "$c")"; done
+  # The name column as wide as the longest cell name (fastwan21-1.3b-mmaudio,
+  # ltx25-ic-lora-ingredients); readers split on whitespace (fv-lab-goldens.sh).
+  w=20
+  for c in "${CELLS[@]}"; do (( ${#c} > w )) && w=${#c}; done
+  for c in "${CELLS[@]}"; do printf '%-*s %s\n' "$w" "$c" "$(needs "$c")"; done
+  for c in $FV_VARIANT_IDS; do printf '%-*s %s\n' "$w" "variant:$c" "$(variant_trees "$c")"; done
   if [[ -f "$SHA_LIST" ]]; then
     grep -vE '^[[:space:]]*(#|$)' "$SHA_LIST" | cut -f1 | sort | uniq -c \
-      | awk '{printf "%-20s %s files by recorded hash (weights-sha256.tsv)\n", "sha:" $2, $1}'
+      | awk -v w="$w" '{printf "%-" w "s %s files by recorded hash (weights-sha256.tsv)\n", "sha:" $2, $1}'
   fi
   exit 0
 fi

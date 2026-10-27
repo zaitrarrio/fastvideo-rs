@@ -38,10 +38,11 @@
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
 # bash scripts/gpu/runpod-matrix.sh hd (or any family). A dry run fetches
-# no weights, references or baseline; but `mmaudio` and `wan` (and `sfwan`
-# through it) still run fetch_taehv.sh when $TAE lacks taew2_1 (45 MB from
-# GitHub into $TAE; a `WARN` line when offline), until their slices (S5, S6)
-# skip it as `sfstream`'s does since S4 (ADR-0019 §22.13). With
+# no weights, references or baseline; but `wan` (and `sfwan` through it)
+# still runs fetch_taehv.sh when $TAE lacks taew2_1 (45 MB from GitHub into
+# $TAE; a `WARN` line when offline), until its slice (S6) skips it as
+# `sfstream`'s does since S4 and `mmaudio`'s since S5 (ADR-0019 §22.13,
+# §22.15). With
 # FV_DRY_RUN_GATES=<file> it appends one line per gated cell ("arm", its
 # verify-weights.sh cell, -) and per promotion gate ("gate", kind, OFF arm
 # or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh) when a
@@ -472,73 +473,54 @@ case "$FAMILY" in
     # The MMAudio V2A sidecar on the video-only Wan family (docs/ports/mmaudio.md):
     #   wan13-audio / sfwan13-audio  FastWan 1.3B DMD and SF-Wan 1.3B, 480x832x81,
     #                                 warm, with `--audio mmaudio` (video, audio,
-    #                                 audio RTF, e2e, peak VRAM in benchmark.json)
-    #   up-sidecar                    upstream MMAudio (Python, strobe's sidecar
-    #                                 settings) on wan13-audio's clip: timing + the
-    #                                 oracle dump
-    #   ours-v2a                      our port on the same clip, timed
-    #   mm-pixels / mm-features / mm-e2e  our oracle runs against the dump
-    #                                 (reference pixels; reference features, latent
-    #                                 and mel; reference noise only), compare-dumps
-    #   wave-*                        waveform similarity (mmaudio_wave_compare.py)
-    GPU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    #                                 audio RTF, e2e, peak VRAM in benchmark.json;
+    #                                 the soundtrack as frames/output.wav, muxed
+    #                                 into frames/output.mp4)
+    #   ours-v2a                      our port (`mmaudio v2a`) on wan13-audio's
+    #                                 clip, timed (mmaudio.json, mmaudio.wav)
+    # The fv-lab tier `mmaudio` is these three arms (lab/cells/mmaudio-sidecar.toml;
+    # docs/adr/0019-fv-lab.md §22, S5), held to this branch's dry run by
+    # fv-lab-goldens.sh; it refuses FV_MMAUDIO_PROMPT (its cell is the default;
+    # knobs::SCRIPT_KNOBS). Since S5, in lockstep with the tier (a real-run
+    # change, §22.15):
+    #   - the branch is cut to these arms: the upstream MMAudio venv and clone
+    #     (up-env), its timed sidecar and dump (up-sidecar), the three inject
+    #     arms with compare-dumps (mm-pixels / mm-features / mm-e2e, diff-*)
+    #     and the five waveform comparisons (wave-*) are gone, with no tier.
+    #     Their results stand at 778c65e (docs/ports/mmaudio.md "Results");
+    #     the commands: git show b7ddf5fa:scripts/gpu/runpod-matrix.sh.
+    #     mmaudio_oracle.py and mmaudio_wave_compare.py stay as by-hand tools;
+    #   - FASTVIDEO_MMAUDIO_WEIGHTS and FASTVIDEO_TAE_DIR are each Wan arm's own
+    #     env entries, not `export`s before the arms, so the dry run shows them
+    #     (the same values reach the same two commands; ours-v2a reads neither:
+    #     it takes --weights, reads the mp4's frames with ffmpeg and decodes
+    #     no latents, so no TAE);
+    #   - the two Wan arms gate on composite verify-weights.sh cells (their Wan
+    #     tree and mmaudio-44k-v2), and ours-v2a on mmaudio-44k-v2: an
+    #     incomplete MMAudio tree now skips them ("weights incomplete") where
+    #     it only logged a WARN before and let the sidecar fail;
+    #   - ours-v2a reads the static wan13-audio/frames/output.mp4 (no `find`
+    #     fallback, no "V2A clip:" line): a run without that clip fails the
+    #     arm, as fv-lab's does, where the fallback ended the whole script
+    #     under `set -e` (and every dry run, at exit 1);
+    #   - the taew2_1 fetch (fetch_taehv.sh) is skipped in a dry run, as
+    #     sfstream's since S4 (a real run is unchanged).
     MMW="$W/mmaudio-44k-v2"
     MM_PROMPT="${FV_MMAUDIO_PROMPT:-A red fox running through tall grass at dusk. A narrator says <S>The fox cuts through the meadow at dusk.<E>
 Audio: male narration, grass rustle, wind, distant strings, cricket night}"
-    export FASTVIDEO_MMAUDIO_WEIGHTS="$MMW"
     TAEW="$TAE/taew2_1.safetensors"
-    if [[ ! -f "$TAEW" ]]; then
-      bash "$GPU_DIR/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 || log "WARN: taew2_1 fetch failed"
-    fi
-    export FASTVIDEO_TAE_DIR="$TAE"
-    FV_WEIGHTS="$W" bash "$VERIFY" mmaudio-44k-v2 >"$RUNS/mmaudio.weights.log" 2>&1 || log "WARN: mmaudio weights incomplete"
-    gated_cell wan13-audio fastwan21-1.3b \
+    [[ -f "$TAEW" || "$DRY_RUN" == 1 ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
+      || log "WARN: taew2_1 fetch failed"
+    gated_cell wan13-audio fastwan21-1.3b-mmaudio env FASTVIDEO_MMAUDIO_WEIGHTS="$MMW" FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" --prompt "$MM_PROMPT" --seed "$SEED" \
         --warm --audio mmaudio --clip-dir "$RUNS/wan13-audio/frames"
-    gated_cell sfwan13-audio sfwan21-1.3b \
+    gated_cell sfwan13-audio sfwan21-1.3b-mmaudio env FASTVIDEO_MMAUDIO_WEIGHTS="$MMW" FASTVIDEO_TAE_DIR="$TAE" \
       "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 \
         --num-frames 81 --prompt "$MM_PROMPT" --seed "$SEED" --warm --audio mmaudio \
         --clip-dir "$RUNS/sfwan13-audio/frames"
-    CLIP="$RUNS/wan13-audio/frames/output.mp4"
-    [[ -f "$CLIP" ]] || CLIP="$(find "$RUNS/wan13-audio" -name output.mp4 | grep -v cold | head -1)"
-    log "V2A clip: $CLIP"
-    # Upstream Python (MMAudio 974010a) in a venv on the container disk.
-    UPV="$SCRATCH/mm-venv"
-    run_cell up-env bash -c "
-      set -e
-      (command -v python3 && python3 -m venv --help) >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq python3-venv python3-pip git >/dev/null; }
-      command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git >/dev/null; }
-      python3 -m venv $UPV
-      $UPV/bin/pip install -q --upgrade pip
-      $UPV/bin/pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-      $UPV/bin/pip install -q av open_clip_torch einops timm omegaconf librosa soundfile torchdiffeq colorlog requests tqdm safetensors numpy
-      rm -rf $SCRATCH/MMAudio && git clone -q https://github.com/hkchengrex/MMAudio.git $SCRATCH/MMAudio
-      git -C $SCRATCH/MMAudio checkout -q 974010a026c731054592d8f777218bd9d85a6c24
-      $UPV/bin/python -c 'import torch; print(torch.__version__, torch.cuda.get_device_name(0))'
-    "
-    REF="$SCRATCH/mm-ref"
-    run_cell up-sidecar env PYTHONPATH="$SCRATCH/MMAudio" "$UPV/bin/python" "$GPU_DIR/mmaudio_oracle.py" \
-      --weights "$MMW" --video "$CLIP" --prompt "$MM_PROMPT" --seed 1000 --runs 3 \
-      --out "$RUNS/up-sidecar" --dump "$REF"
-    run_cell ours-v2a "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$CLIP" --prompt "$MM_PROMPT" --seed 1000 \
-      --runs 3 --out "$RUNS/ours-v2a"
-    for arm in "pixels:pixels" "features:features,x1,mel" "e2e:"; do
-      name="${arm%%:*}"; inj="${arm#*:}"
-      rm -rf "$SCRATCH/mm-ours-$name"
-      run_cell "mm-$name" env FASTVIDEO_DUMP_DIR="$SCRATCH/mm-ours-$name" FASTVIDEO_INJECT_DIR="$REF" \
-        FASTVIDEO_MMAUDIO_INJECT="$inj" "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$CLIP" \
-        --prompt "$MM_PROMPT" --seed 1000 --runs 1 --out "$RUNS/mm-$name"
-      oracle_diff "diff-$name" "$REF" "$SCRATCH/mm-ours-$name"
-    done
-    for pair in "e2e-vs-up:$REF/mm_wave.f32:$RUNS/mm-e2e/mmaudio.f32" \
-                "e2e-vs-upf32:$REF/mm_wave_f32.f32:$RUNS/mm-e2e/mmaudio.f32" \
-                "up-bf16-vs-f32:$REF/mm_wave_f32.f32:$REF/mm_wave.f32" \
-                "features-vs-upf32:$REF/mm_wave_f32.f32:$RUNS/mm-features/mmaudio.f32" \
-                "ours-seed-vs-up:$REF/mm_wave.f32:$RUNS/ours-v2a/mmaudio.f32"; do
-      IFS=: read -r label a b <<<"$pair"
-      run_cell "wave-$label" "$UPV/bin/python" "$GPU_DIR/mmaudio_wave_compare.py" --ref "$a" --cand "$b" \
-        --label "$label" --out "$RUNS/wave-$label/wave.json"
-    done
+    gated_cell ours-v2a mmaudio-44k-v2 \
+      "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$RUNS/wan13-audio/frames/output.mp4" \
+        --prompt "$MM_PROMPT" --seed 1000 --runs 3 --out "$RUNS/ours-v2a"
     ;;
   sfwan)
     # SF-Wan 1.3B on one pod: the oracle diff against FastVideo's dump (when
