@@ -171,7 +171,13 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         cmd.contains("lim=85; [ \"$used\" = 1 ] && lim=85"),
         "the idle limit"
     );
-    assert!(cmd.contains("scripts/gpu/fetch-tae.sh"), "the TAE fetch");
+    assert!(
+        cmd.contains(
+            "if [ \"0\" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then"
+        ),
+        "the TAE fetch runs (FV_SKIP_TAE 0)"
+    );
+    assert!(!cmd.contains("if [ \"1\" != 1 ]"), "not skipped");
     // Only the gold tier asks for a host-RAM floor (its 14B arm's host load,
     // lab/tiers.toml); every other tier's pod has Runpod's default. 256 GB
     // since the 7e580e5 gold run measured that arm's peak (ADR-0019 §16.10).

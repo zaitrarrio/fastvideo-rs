@@ -38,7 +38,10 @@
 # logged instead of run (weights not verified, no baseline fetched), so a
 # family's cells can be read off-pod: FV_DRY_RUN=1 FV_WORK=/tmp/fv-dry
 # bash scripts/gpu/runpod-matrix.sh hd (or any family). A dry run fetches
-# nothing, and with
+# no weights, references or baseline; but `mmaudio` and `wan` (and `sfwan`
+# through it) still run fetch_taehv.sh when $TAE lacks taew2_1 (45 MB from
+# GitHub into $TAE; a `WARN` line when offline), until their slices (S5, S6)
+# skip it as `sfstream`'s does since S4 (ADR-0019 §22.13). With
 # FV_DRY_RUN_GATES=<file> it appends one line per gated cell ("arm", its
 # verify-weights.sh cell, -) and per promotion gate ("gate", kind, OFF arm
 # or -), for fv-lab's goldens (scripts/gpu/tests/fv-lab-goldens.sh) when a
@@ -551,17 +554,20 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # Open-ended causal SF-Wan (wan::stream, serve E6): parity with the
     # bounded 81-frame path, long runs (drift, fps, TTFF), prompt switches,
     # and a 10-minute memory-growth run. TAEHV decodes every block.
-    # The fv-lab tier `sfstream` is these two arms (lab/cells/sfstream.toml;
+    # The fv-lab tier `sfstream` is these two arms (lab/cells/sfstream-rollout.toml;
     # docs/adr/0019-fv-lab.md §22, S4), held to this branch's dry run by
     # fv-lab-goldens.sh; it refuses FV_SFSTREAM_RUNS, FV_SF_PROMPT and
     # FV_SF_SWITCH (its cell is their defaults; knobs::SCRIPT_KNOBS). Since S4,
     # in lockstep with the tier (§22.4, Addition 16: `{tae}` without a TAE
     # gate): FASTVIDEO_TAE_DIR="$TAE" is each arm's own env entry, not an
     # `export` before them, so the dry run shows it (the same value reaches
-    # the same two commands; nothing else here reads it). And a dry run
-    # fetches nothing, as the header says: the taew2_1 fetch below is skipped
-    # in a dry run (a real run is unchanged; fv-lab's tier gets the file from
-    # its pod's fetch-tae.sh, `tae = true`, when the volume lacks it).
+    # the same two commands; nothing else here reads it). And the taew2_1
+    # fetch below (fetch_taehv.sh) is skipped in a dry run, which fetched it
+    # into $TAE before (a real run is unchanged). fv-lab's tier has no such
+    # per-arm fetch: its pod's start command runs fetch-tae.sh (`tae = true`,
+    # as runpod-http.sh's does for this branch) into the container disk's
+    # tae/, which is $TAE only when the volume's copy is incomplete; a file
+    # still missing then is the arm's failure, not a skip.
     TAE_W="$TAE/taew2_1.safetensors"
     [[ -f "$TAE_W" || "$DRY_RUN" == 1 ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
       || log "WARN: taew2_1 fetch failed (tae-fetch.log)"

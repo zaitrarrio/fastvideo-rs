@@ -198,7 +198,8 @@ pub struct Tier {
     /// Fetch the tiny autoencoders (`fetch-tae.sh`) onto the container disk
     /// at start, as `runpod-http.sh` does unless `FV_SKIP_TAE=1`. Required
     /// by a cell whose arm reads `{tae}` without an arm `tae` file (ADR-0019
-    /// §22.4, Addition 16): nothing else fetches the files for it.
+    /// §22.4, Addition 16): nothing else tries to fetch the files for it (the
+    /// start's attempt is not retried per arm).
     #[serde(default)]
     pub tae: bool,
     /// The cell files (`lab/cells/<name>.toml`), in run order: the tier's
@@ -849,10 +850,13 @@ pub struct Arm {
     /// the arm recorded as skipped (`tae weights missing`) when still absent.
     /// Without it a gated arm may still read `{tae}` (the directory, or a
     /// file under it: ADR-0019 §22.4, Addition 16, the script's `$TAE` in a
-    /// `gated_cell`): it is then not TAE-gated (no `fetch-tae.sh`, no `tae
-    /// weights missing` skip) and gates on its trees only; such a cell runs
-    /// only in a tier with `tae = true`, whose pod fetches the files when the
-    /// volume lacks them.
+    /// `gated_cell`): it is then not TAE-gated (no fetch by the runner, no
+    /// `tae weights missing` skip) and gates on its trees only, so a file
+    /// still missing is the arm's failure (or, for a `wan gen` arm in the
+    /// `auto` decoder mode, a silent fall back to the Wan VAE). Such a cell
+    /// runs only in a tier with `tae = true`, whose pod start runs
+    /// `fetch-tae.sh` (an attempt, not a guarantee), and every `{tae}/<file>`
+    /// it names must be a file `fetch-tae.sh` fetches (`tests/lab_files.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tae: Option<String>,
     /// `K=V` settings, in order, for `env K=V … fv-gpucheck …`. Absent: no
@@ -3217,12 +3221,35 @@ candidate = "x-tae"
         .unwrap();
         two.cells.insert(
             "c2".into(),
-            CellFile::parse(&CELL.replace("\"c1\"", "\"c2\""), "c2.toml").unwrap(),
+            CellFile::parse(
+                &CELL
+                    .replace("\"c1\"", "\"c2\"")
+                    .replace("\"a1\"", "\"b1\"")
+                    .replace("\"a2\"", "\"b2\""),
+                "c2.toml",
+            )
+            .unwrap(),
         );
         two.validate().unwrap();
         assert_eq!(two.resolve("c1", None).unwrap().0.name, "t1");
         let e = two.resolve("c1", Some("t2")).unwrap_err().to_string();
         assert!(e.contains("tier `t2`.tae"), "{e}");
+        // In a tier's extra cells too: a `tae = false` tier with the reader
+        // among its `extra_cells` is refused.
+        let mut extra = two.clone();
+        extra.tiers = Tiers::parse(
+            &TIERS.replace(
+                "cells = [\"c1\"]",
+                "tae = false\ncells = [\"c2\"]\nextra_cells = [\"c1\"]",
+            ),
+            "tiers.toml",
+        )
+        .unwrap();
+        let e = extra.validate().unwrap_err().to_string();
+        assert!(
+            e.contains("tier `t1`.tae") && e.contains("lab/cells/c1.toml arm `a1`"),
+            "{e}"
+        );
         // A cell without such an arm runs in any tier.
         let plain = CellFile::parse(CELL, "c1.toml").unwrap();
         assert!(plain.tae_dir_arms().is_empty());

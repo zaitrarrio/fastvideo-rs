@@ -513,7 +513,8 @@ prompt is another cell).
 
 ```sh
 ./fv-lab run sfstream --dry-run                 # the script's two arms, each with its FASTVIDEO_TAE_DIR (plus the R2 plan)
-RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family sfstream --cells sfstream-main --yes --wait
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family sfstream --cells sfstream-main --wall-cap-s 3600 \
+  --fetch-tree --fetch-skip '\.png$|\.cache$' --yes --wait
 # the script's side of the same run (until S7): sfwan21-1.3b from R2 on the tier's disk; its R2 records
 # (r2-stage.log, r2-fetch.json) are in the run directory, which only a tree fetch takes
 RUNPOD_API_KEY=… FV_FAMILY=sfstream FV_CELLS=sfstream-main FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 \
@@ -522,8 +523,16 @@ RUNPOD_API_KEY=… FV_FAMILY=sfstream FV_CELLS=sfstream-main FV_R2_TREES=sfwan21
 
 `wan stream` writes no `<arm>/frames` (its report is `gpucheck-out/wan.json`, its window sheets `gpucheck-out/sheets/*.jpg`), so the runs'
 compare (`fv-lab-compare-runs.sh`) counts each arm as the same with no frames and exits 1 ("nothing was
-compared"); the runners' identity is the arm's per-window `latent_hash` in `wan.json`, and its parity checks are
-its own ([ADR-0019 §22.14](../adr/0019-fv-lab.md)).
+compared"). The tier's GPU check reads the runners' identity from the arm's own records instead: `wan.json`'s checks,
+its `run/<name>` notes (each window's latent hash, decoded-pixel statistics and fresh-decode differences), its
+`parity/absolute` note, and the window sheets `gpucheck-out/sheets/*.jpg`, each equal across the two pods
+([ADR-0019 §22.14](../adr/0019-fv-lab.md), with the exact commands).
+
+Addition 16 in practice: an arm that reads `{tae}` without a `tae` file is not TAE-gated, so a TAE file missing when
+it runs is its failure (a `wan gen` arm in the `auto` decoder mode would silently decode with the Wan VAE instead).
+The tier's `tae = true` only makes the pod start run `fetch-tae.sh` once; fv-lab does not retry per arm as the
+script's branches do with `fetch_taehv.sh`. Every `{tae}/<file>` such an arm names must be one `fetch-tae.sh` fetches
+(`tests/lab_files.rs`), and `taew2_2` is not one yet (S6 adds it before `wan` reads it).
 
 ## Retired with no tier (D1g)
 
