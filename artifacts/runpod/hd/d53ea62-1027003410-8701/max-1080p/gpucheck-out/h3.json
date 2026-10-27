@@ -1,0 +1,391 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "text_encoder",
+      "ok": true,
+      "values": {
+        "chosen": "streamed",
+        "device_gib": 0.0,
+        "free_gib_before_load": 94.28277587890625,
+        "load_seconds": 0.0,
+        "requested": "Streamed"
+      }
+    },
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "audio_vae_s": 0.201811566,
+        "dit_residency": "resident",
+        "dit_s": 62.171482709,
+        "refiner_s": 0.068849765,
+        "seconds": 96.772964816,
+        "text_encoder_s": 0.0,
+        "video_vae_s": 26.17012563
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/talking-head",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.161329712,
+        "decode_s": 10.254998148,
+        "denoise_s": 62.457863317,
+        "load_s": 96.772964816,
+        "peak_mib": 42348,
+        "refine_s": 0.070096595,
+        "step_s": [
+          27.412986328125,
+          12.9104814453125,
+          11.6152724609375,
+          10.5189443359375
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.22029375,
+        "total_s": 73.456138995,
+        "video_decode_s": 10.093668436,
+        "video_encode_s": 0.13839057,
+        "video_push_s": 0.00004308,
+        "video_rgb_s": 0.2124450610057211,
+        "video_vae_s": 9.916771235466003,
+        "video_wait_s": 0.05474798,
+        "warm": false,
+        "write_s": 0.272315461
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/talking-head",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/talking-head",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/hd/d53ea62-1027003410-8701/max-1080p/frames/talking-head/frame-062.png",
+        "mean": 0.4692496721044661,
+        "std": 0.26868957615024935
+      }
+    },
+    {
+      "limits": {
+        "expected": "output.mp4 with an audio track"
+      },
+      "name": "mp4_written/talking-head",
+      "ok": true,
+      "values": {
+        "mp4": "/fvscratch/runs/hd/d53ea62-1027003410-8701/max-1080p/frames/talking-head/output.mp4"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.05590061,
+        "decode_s": 10.18953709,
+        "denoise_s": 62.671190057,
+        "load_s": 96.772964816,
+        "peak_mib": 42476,
+        "refine_s": 0.007987327,
+        "step_s": [
+          27.55136328125,
+          12.7945888671875,
+          11.653908203125,
+          10.6711162109375
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.209283474,
+        "total_s": 73.495004348,
+        "video_decode_s": 10.13363648,
+        "video_encode_s": 0.152748374,
+        "video_push_s": 0.00004448000000000001,
+        "video_rgb_s": 0.20624327903134346,
+        "video_vae_s": 9.943464805960655,
+        "video_wait_s": 0.053644871000000004,
+        "warm": false,
+        "write_s": 0.256072617
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/hd/d53ea62-1027003410-8701/max-1080p/frames/spark-mountain-lake/frame-062.png",
+        "mean": 0.3001446823439527,
+        "std": 0.19795465042683166
+      }
+    },
+    {
+      "limits": {
+        "expected": "output.mp4 with an audio track"
+      },
+      "name": "mp4_written/spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "mp4": "/fvscratch/runs/hd/d53ea62-1027003410-8701/max-1080p/frames/spark-mountain-lake/output.mp4"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/ltx-frogyoga",
+      "ok": true,
+      "values": {
+        "audio_decode_s": 0.057420899,
+        "decode_s": 10.182961283000001,
+        "denoise_s": 63.573432429,
+        "load_s": 96.772964816,
+        "peak_mib": 42476,
+        "refine_s": 0.005448588,
+        "step_s": [
+          27.65938671875,
+          13.14994921875,
+          11.916837890625,
+          10.847109375
+        ],
+        "text_cache": "hit",
+        "text_encoder": "cache",
+        "text_s": 0.201350267,
+        "total_s": 74.392971061,
+        "video_decode_s": 10.125540384,
+        "video_encode_s": 0.149282166,
+        "video_push_s": 0.00004533,
+        "video_rgb_s": 0.20695741702518655,
+        "video_vae_s": 9.944926780343055,
+        "video_wait_s": 0.047576872,
+        "warm": false,
+        "write_s": 0.27398053
+      }
+    },
+    {
+      "limits": {
+        "expected": 124
+      },
+      "name": "frames/ltx-frogyoga",
+      "ok": true,
+      "values": {
+        "decoded": 124
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/ltx-frogyoga",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/hd/d53ea62-1027003410-8701/max-1080p/frames/ltx-frogyoga/frame-062.png",
+        "mean": 0.40908717136973866,
+        "std": 0.24891875793552384
+      }
+    },
+    {
+      "limits": {
+        "expected": "output.mp4 with an audio track"
+      },
+      "name": "mp4_written/ltx-frogyoga",
+      "ok": true,
+      "values": {
+        "mp4": "/fvscratch/runs/hd/d53ea62-1027003410-8701/max-1080p/frames/ltx-frogyoga/output.mp4"
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/hd/d53ea62-1027003410-8701/max-1080p/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "device_budget_gib": null,
+    "memory_plan": {
+      "resident": {
+        "peak_gib": 76.42567130923271,
+        "stages": [
+          {
+            "gib": 51.905614107847214,
+            "stage": "text"
+          },
+          {
+            "gib": 48.275975435972214,
+            "stage": "refine"
+          },
+          {
+            "gib": 76.42567130923271,
+            "stage": "denoise"
+          },
+          {
+            "gib": 46.56845685839653,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 51.5221321284771,
+            "stage": "video_decode"
+          }
+        ]
+      },
+      "streamed": {
+        "peak_gib": 33.458852767944336,
+        "stages": [
+          {
+            "gib": 7.503166675567627,
+            "stage": "text"
+          },
+          {
+            "gib": 5.309156894683838,
+            "stage": "refine"
+          },
+          {
+            "gib": 33.458852767944336,
+            "stage": "denoise"
+          },
+          {
+            "gib": 2.40737247467041,
+            "stage": "audio_decode"
+          },
+          {
+            "gib": 13.95655032992363,
+            "stage": "video_decode"
+          }
+        ]
+      }
+    },
+    "mode": "fast",
+    "output": {
+      "audio_samples_per_channel": 165600,
+      "frames": 124,
+      "mp4": "/fvscratch/runs/hd/d53ea62-1027003410-8701/max-1080p/frames/ltx-frogyoga/output.mp4",
+      "sequence_length": 76102,
+      "text_tokens": 208,
+      "wav": "/fvscratch/runs/hd/d53ea62-1027003410-8701/max-1080p/frames/ltx-frogyoga/audio.wav"
+    },
+    "request": {
+      "attention": "sol-attn Engine",
+      "height": 1088,
+      "num_frames": 124,
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "prompt_set": [
+        {
+          "name": "talking-head",
+          "seed": 1024
+        },
+        {
+          "name": "spark-mountain-lake",
+          "seed": 42
+        },
+        {
+          "name": "ltx-frogyoga",
+          "seed": 42
+        }
+      ],
+      "seconds": 5,
+      "seed": 1024,
+      "techniques": {
+        "plan": [
+          "bf16_activations (transform/Load)",
+          "mxfp8 (transform/Load)",
+          "sol_attn [engine] (dense steps 0, dense layers 0-1, tau 1:1,2:1.25,3:1.5, sink prefix, thresh diag)"
+        ],
+        "profile": "h3/sol_h3_4step_engine_ladder",
+        "settings": [
+          {
+            "env_overrides": false,
+            "name": "FASTVIDEO_BF16_ACT",
+            "source": "bf16_activations",
+            "value": "1"
+          },
+          {
+            "env_overrides": false,
+            "name": "FASTVIDEO_H3_QUANT",
+            "source": "mxfp8",
+            "value": "mxfp8"
+          }
+        ],
+        "sources": [
+          {
+            "from": "profile",
+            "seam": "attention_backend"
+          }
+        ]
+      },
+      "text_cache": "/fvscratch/h3-text-cache",
+      "text_weights": "/workspace/weights/h3-base",
+      "video_vae": "official",
+      "warm": false,
+      "width": 1920
+    },
+    "stage_memory": {
+      "dit_residency": "resident",
+      "stages": [
+        {
+          "end_used_gib": 28.932981642894447,
+          "peak_reserved_gib": 29.0625,
+          "peak_used_gib": 28.932981642894447,
+          "stage": "text"
+        },
+        {
+          "end_used_gib": 28.935064467601478,
+          "peak_reserved_gib": 29.0625,
+          "peak_used_gib": 28.957975539378822,
+          "stage": "refine"
+        },
+        {
+          "end_used_gib": 28.9600247470662,
+          "peak_reserved_gib": 40.78125,
+          "peak_used_gib": 37.44376533757895,
+          "stage": "denoise"
+        },
+        {
+          "end_used_gib": 28.9600247470662,
+          "peak_reserved_gib": 29.1875,
+          "peak_used_gib": 29.09167710226029,
+          "stage": "audio_decode"
+        },
+        {
+          "end_used_gib": 28.98701849859208,
+          "peak_reserved_gib": 33.625,
+          "peak_used_gib": 31.768834027461708,
+          "stage": "video_decode"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 318.692330232,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}
