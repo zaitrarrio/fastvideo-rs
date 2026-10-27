@@ -1,0 +1,15 @@
+{
+  "id": "frtucp564l3vsi",
+  "name": "fv-lab-hd-d53ea62-1027003410-8701",
+  "family": "hd",
+  "tag": "d53ea62-1027003410-8701",
+  "sha": "d53ea62",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:7d0392d23dd9246c7356b3f6532bb6667a7e35a9e0e634740dcba16ef25442da",
+  "url": "https://frtucp564l3vsi-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793061258.5942447,
+  "cap_s": 3600,
+  "memory_gb": 94.0,
+  "vcpus": 32.0
+}

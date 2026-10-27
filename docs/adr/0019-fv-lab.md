@@ -38,9 +38,10 @@
   fifteen other script families: eleven retired with no tier, `hd` and `serve-engine` tiers now, `wan`, `sfstream`
   and a small `mmaudio` tier after one cell addition, `{tae}` without a TAE gate) is accepted (coordinator,
   2026-10-26, FVID-2026-10-26-d1-remaining); its slices S1-S8 follow. S2 (§22.9: `hd` and its 1080P-gate sibling
-  `hd5` as tiers, the script's derived step dropped in lockstep) is done CPU-side; its GPU check is §22.10, the
-  coordinator's. S3 (§22.11: `serve-engine` as a `volume+r2` tier, `--tae-dir` dropped from its engine arms in
-  lockstep) is done CPU-side; its GPU check is §22.12, the coordinator's
+  `hd5` as tiers, the script's derived step dropped in lockstep) is done, CPU-side and GPU-side: its GPU check
+  §22.10 passed on `d53ea62` (2026-10-27, §22.10 "Result"); S7 retires `hd` from the script. S3 (§22.11:
+  `serve-engine` as a `volume+r2` tier, `--tae-dir` dropped from its engine arms in lockstep) is done CPU-side; its
+  GPU check is §22.12, the coordinator's
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -3880,7 +3881,8 @@ existing cell file (the schema additions are optional fields and new kinds); `ru
 Status: **accepted** 2026-10-26 (coordinator, after an independent review of #221 that checked every claim).
 Decision-id FVID-2026-10-26-d1-remaining. It was proposed in #221 (draft PR from `claude/d1-remaining-proposal`, docs
 only). The review's corrections are folded in below, and the coordinator's decisions are in §22.6. Each
-family moves or retires in its own slice (§22.6; S1 is done, §22.8), and a tier's branch leaves the script only
+family moves or retires in its own slice (§22.6; S1 is done, §22.8; S2 is done, its GPU check passed on `d53ea62`
+2026-10-27, §22.9-§22.10), and a tier's branch leaves the script only
 after that tier's own check through both runners (§8).
 
 Fifteen `runpod-matrix.sh` families are left besides `oracle` (§18.3). `oracle` retires on its own once §20.7's re-run
@@ -4156,7 +4158,8 @@ cache file, and the tiers keep the paths for equality.
 - *If wanted later*: (b), after a tier field `lpips = true` and an `{lpips}` placeholder.
 
 **`hd`** (rpm:1694-1790): **(a)**, with the derived step dropped from the script in the same PR. This is a real-run
-change, like §17.2's `ltx` gating. Done in S2 (§22.9; its GPU check §22.10, `turbo-768p turbo-1080p max-1080p`).
+change, like §17.2's `ltx` gating. Done in S2 (§22.9; its GPU check §22.10, `turbo-768p turbo-1080p max-1080p`,
+passed on `d53ea62` 2026-10-27).
 - *Measures*: H3 at the served 1080P canvas (`hd_1080p = true` for `sol-h3` and `fasth3-4step-vsa`,
   `families/h3.toml:66-75, 140-149`):
   - turbo and max at 768p and at 1088x1920 (`--oversize-canvas`), portrait, and 10 s, over the prompts of
@@ -4613,6 +4616,56 @@ and `max-1080p` ~5.5 min (321 s), so ~22 min; with margin ~24 min a side, **~$1.
 three arms; its $1.66 assumed 20 min a side). Bounded by the caps above at $2.49 a pod, $4.98 both. **Balance
 needed**: at least $10.00 before starting at the estimate ($8 floor + $2.00), and $13 to stay above the floor even if
 both pods ran to their 1 h caps (CLAUDE.md: stop before the balance would drop below $8).
+
+**Result (2026-10-27): pass.** `SHA=d53ea62` (main after #223) on both sides, run in parallel from about 00:34Z to
+00:51Z: image `ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-d53ea62` (digest
+`sha256:7d0392d23dd9246c7356b3f6532bb6667a7e35a9e0e634740dcba16ef25442da`, build id `9b2b4bdb693b5883` as both
+`box.txt` record, tools label `tools-v0.1.78`: the release built at `d53ea62` itself, its manifest's `input_hash`
+equal to `scripts/ci/tools-release.sh input-hash d53ea62`, so the image's fv-gpucheck and fv-lab are that release's;
+the image of the `workflow_dispatch` run at 00:30Z, which replaced the push run's `compiled` image under the same
+tag), fv-lab 0.1.78 from `tools-v0.1.78` on the driver. Each pod an RTX PRO 6000 Blackwell Server Edition at $2.49/hr
+in EU-RO-1 on `bz0ofkfx45`, driver 595.91.07; the commands above, with `--wall-cap-s 3600` / `FV_POD_CAP_S=3600`.
+
+- *fv-lab side*: pod `frtucp564l3vsi`, created 00:34:18Z, ready 22.9 s after create, deleted at the end (`done`)
+  → `artifacts/runpod/hd/d53ea62-1027003410-8701` (`DONE`, `pod.json`; `matrix start` 00:34:29, `matrix done`
+  00:50:44, `matrix_exit=0`).
+- *Script side*: pod `urtrmxowjpl29h`, created 00:34:13Z, destroyed 00:51:17Z →
+  `artifacts/runpod/hd/d53ea62-10270034` (`matrix start` 00:34:36, `matrix done` 00:50:44, `matrix_exit=0`).
+- *Both*: each arm exit 0; `turbo-768p` ran first and filled the text cache (`text_cache` `miss`), the two 1080p
+  arms read it (`hit`); each `weights.log` ends `exit=1` (`h3-8step` incomplete), as expected; no PNG fetched (the
+  frames stayed on the pods), so each run directory is about 0.4 MB.
+- *The compare* (`artifacts/runpod/hd/compare-d53ea62.txt`, with its command and exit status): `fv-lab-compare-runs.sh`
+  exit 0, `turbo-768p`, `turbo-1080p` and `max-1080p` 372 frames each byte-identical, and §22.10's expected line:
+  "3 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same
+  compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics
+  report(s), 0 difference(s)".
+- *Timings*: `benchmark.json` `total_s` (the median of the three prompts, `aggregate.statistic`) and the arm's wall
+  time (`summary.json` `seconds`, model load and the three prompts included), against the estimate above:
+
+  | arm | `total_s` fv-lab | `total_s` script | arm wall fv-lab | arm wall script | estimate |
+  |---|---|---|---|---|---|
+  | `turbo-768p` | 37.52 s | 36.51 s | 379 s | 370 s | 406 s |
+  | `turbo-1080p` | 54.89 s | 54.53 s | 270 s | 271 s | 285 s |
+  | `max-1080p` | 73.24 s | 72.76 s | 319 s | 317 s | 321 s |
+
+  The two runners' timings differ by under 3 % per arm (the frames are what the check compares; the timings are
+  recorded, not judged).
+- *An aborted first attempt*: started about 00:31Z (fv-lab pod `srb3h0602qs1yb`, script pod `xpzcca9zs8lx2d`, same
+  `SHA`, same commands); a restart of the coordinator's container killed both local drivers about 2 min after the
+  creates (fv-lab's own delete on the interrupt failed with a transport error), and both pods were deleted by hand.
+  Nothing from it is committed or compared; the run above is a fresh pair.
+- *Cost*: the Runpod balance went from $22.64 (fv-deploy's `balance` line) to $21.44 (the coordinator's terminal),
+  **about $1.20**, the aborted attempt included; under the estimate of ~$2.00. At the list price the two passing
+  pods' ~17 min each come to about $1.41 alone, so the after reading may not yet include the last minutes billed.
+- *Secrets*: the two run directories were scanned before the commit (this container's credential values,
+  `X-Amz-Signature`, `X-Amz-Credential`, `hf_`, `rpa_`, `RUNPOD_API_KEY`, `Bearer`, long base64 strings): nothing.
+
+Evidence (force-added, whole): `artifacts/runpod/hd/d53ea62-1027003410-8701`, `artifacts/runpod/hd/d53ea62-10270034`
+and `artifacts/runpod/hd/compare-d53ea62.txt`. `fv-lab-report-goldens.sh` writes a `hd--<tag>.txt` for every run
+directory under `artifacts/runpod/hd/`, so the two new ones have their fixtures
+(`crates/fastvideo-lab/fixtures/report/hd--d53ea62-{10270034,1027003410-8701}.txt`, `hd_report.py`'s output);
+fv-lab 0.1.78's `report summary --kind hd` prints both byte for byte (`tests/report.rs`
+`hd_is_hd_report_without_the_sharpness` reads every `hd--*.txt`). S2 is done GPU-side; S7 below is next for `hd`.
 
 **Then (S7, not this slice)**: on a pass, `hd` joins `FV_LAB_RETIRED`, its branch is deleted and its three
 fixtures frozen (§10's way); `hd5`, a sibling of the family, is frozen with it (out of `FV_LAB_SIBLINGS`, into

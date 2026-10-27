@@ -2160,6 +2160,7 @@ Project code: FVID
 - ADR: docs/adr/0019-fv-lab.md §22.9, §22.10
 - Verification: `tests/dry_run.rs` (the two tiers' dry runs and gates equal the script's), `tests/payload_golden.rs`, `tests/lab_files.rs`, `knobs::tests`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, every family's dry run before and after; GPU: §22.10 (the coordinator's; `turbo-768p turbo-1080p max-1080p`, ~$2.00)
 - Open: S7 (after §22.10 passes): `hd` into `FV_LAB_RETIRED`, its branch deleted, `hd5` frozen with it
+- Result (2026-10-27, coordinator): §22.10's GPU check passed on `d53ea62` (main after #223; fv-lab = script, both `matrix_exit=0`, compare exit 0 with the expected line: `turbo-768p`, `turbo-1080p`, `max-1080p` 372 frames each byte-identical; about $1.20 including an aborted first attempt; ADR-0019 §22.10 "Result", PR `claude/hd-check-d53ea62`); S2 is done GPU-side, S7 is next for `hd`
 
 ### FVID · 2026-10-27 · FVID-2026-10-27-d1-s3-serve-engine
 - Trigger: the coordinator's slice S3 of FVID-2026-10-26-d1-remaining (ADR-0019 §22.6 item 2): `serve-engine` as an fv-lab tier, `--tae-dir` dropped from its engine arms in lockstep
