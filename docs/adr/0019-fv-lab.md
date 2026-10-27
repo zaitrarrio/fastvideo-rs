@@ -6459,6 +6459,24 @@ upstream pod over 7,200 + 1,200 s + the runtime pod over 3,600 + 1,200 s), and t
 the start must cover it too: **$20.50 or more**. At about $17 before the main check (about $15 after it) fv-lab
 refuses it; it needs a top-up first, or waits.
 
+**First attempt (2026-10-27, `SHA=0ebddb0`): refused by `pod up`, fixed.** The fv-lab side failed before creating a
+pod: ``tier `wan` reads upstream references: pass --extra-env FV_ORACLE_URL=…``, although none of the five arms is in an
+oracle cell. `pod up`'s reference check (§15) asked whether *any* cell of the tier has a `[reference]`
+(`Lab::resolve_selected` returns all of a tier's `cells`; `--cells` filters only its `extra_cells`, §20.3), which only
+`oracle` and `oracle-r2`, made entirely of reference cells, had met before; `wan` is the first tier that mixes them.
+The script side ran alone (`artifacts/runpod/wan/0ebddb0-10270616`, about $0.25) and is not compared. The fix (branch
+`claude/fv-lab-pod-up-cells-ref`): with `--cells`, the check reads only the reference cells holding a selected arm;
+without `--cells` a tier with a reference cell is refused as before, and a selected oracle arm still needs
+`FV_ORACLE_URL`. The pod's run already skips an unselected reference cell with one log line, `skip <cell> (no arm in
+FV_CELLS)`, no fetch, no wait and no file (`Runner::reference_cell`, `start_prefetch` and `dry_run_lines` all test
+`verdict_selected` first), as the script's guard skips its oracle blocks (silently), so item 0's 35 lines are
+unchanged. `baseline_for_pod` keeps the whole tier: the pod's `fv-lab run` requires `FV_BASELINE_SHA` and fetches the
+baseline whenever any arm of the plan is `bin = "baseline"`, selected or not (`cmd_run`'s `Lab::needs_baseline`,
+`Runner::run`), and no tier mixes baseline and other cells (`techniques`, `b6`, `b4a` are baseline in every cell).
+`tests/fv_lab_bin.rs` `a_wan_pod_needs_references_only_for_the_oracle_arms_it_selects` holds the three cases and the
+run's skip. The fix is in the driver only (`pod up` where the coordinator runs it; `run.rs` is unchanged), so the
+re-run needs fv-lab built from the fix; both pods' image may stay `sha-0ebddb0`.
+
 **Then (S7, not this slice)**: on a pass, `wan` joins `FV_LAB_RETIRED` and leaves `RP_FV_LAB_TIERS`, its branch is
 deleted and its three fixtures frozen (§10's way; `runpod-http-wan-r2.json` stops being written with it). **One
 ordering constraint for the coordinator**: `sfwan` runs this branch (`bash runpod-matrix.sh wan` with its
