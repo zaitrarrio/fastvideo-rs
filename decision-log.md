@@ -2221,3 +2221,25 @@ Project code: FVID
 - ADR: docs/adr/0019-fv-lab.md §22.15, §22.16
 - Verification: `tests/dry_run.rs` (`the_mmaudio_tier_is_the_cut_mmaudio_family`; the tier's dry run and gates equal the script's), `tests/payload_golden.rs` (five `volume+r2` tiers; the script side's R2 body with two trees), `tests/lab_files.rs` (`the_mmaudio_tier_reads_its_three_trees_from_r2_within_its_disk`; the Addition 16 readers), `knobs::tests::the_mmaudio_prompt_is_refused_by_fv_lab_only`, `fv-lab-goldens.sh --check`, `fv-lab-route.test.sh`, every other family's dry run byte-identical before and after (`mmaudio`'s with exactly the named changes); mutations caught (ADR §22.15); GPU: §22.16 (the coordinator's; ~$0.90-$1.35)
 - Open: S7 (after §22.16 passes): `mmaudio` into `FV_LAB_RETIRED`, its branch deleted, its fixtures frozen, `FV_MMAUDIO_PROMPT` into `FV_LAB_NOT_READ`; the owner's question on the `mmaudio` knob (§22.6 item 1), which matters because the MMAudio checkpoints are CC-BY-NC 4.0 (non-commercial) and the knob runs them inside a user-facing pipeline
+
+### FVID · 2026-10-27 · FVID-2026-10-27-d1-s6-wan
+- Trigger: the coordinator's slice S6 of FVID-2026-10-26-d1-remaining (ADR-0019 §22.6 items 3-5, the `wan` entry of §22.3): `wan` as an fv-lab tier with its two upstream oracle targets, and `runpod.sh matrix` through fv-lab
+- Options:
+  - the cells: one per loop iteration or helper call (§9.2), or what the schema allows when a compare or gate reads an arm of another group;
+  - the two compares across the oracle cells (`wan5b--fw22`, `sfwan13-81f-fullvae--sfwan13-81f-flash`): directory compares (`tag`), or a schema change;
+  - `FASTVIDEO_TAE_DIR` per arm: on every arm that had it through the `export`, or on the gated ones only (Addition 16 refuses `{tae}` in an ungated arm);
+  - the upstream targets' disk: the stack's 150 GB and each target's own tree, or both trees (the pod gets the largest selected target's disk);
+  - `runpod.sh matrix`'s `wan`: through fv-lab now (its branch still there), or at S7
+- Decision: (agent, within the coordinator's decision)
+  - six cells: `wan-fastwan21-1.3b` holds the first 22 arms (the baseline `wan13-dmd` is compared and gated against arms 18-22, and a compare or gate reads arms of its own cell), its compares placed with `after`; the 14B block, the two `[reference]` cells, the TI2V-5B recipe, and the rest from fw22 on;
+  - the two cross-cell compares as directory compares, in the last cell, which the GPU check's engine pair selects (fv-lab runs a directory compare only when an arm of its cell is selected; the script always: a named difference);
+  - `FASTVIDEO_TAE_DIR` on the 45 gated arms only; the four ungated (`kernels-wan`, three `compare-dumps`) read no TAE;
+  - 210 GB for each Wan target (the stack's 150 and both trees), since the tier's two oracle cells run together;
+  - `runpod.sh matrix` runs `wan` through the image's fv-lab now (`RP_FV_LAB_TIERS`), with `FV_SCRATCH` on the container disk and its runs where `matrix` reads them; `FV_SFWAN_CELLS` refused by fv-lab;
+  - `fv-lab-compare-runs.sh`'s listers fixed (a file only in the runpod-http run went unseen when the fv-lab run had none of a lister's last glob), found by the GPU check's simulation
+- Reason: the schema's one-cell rule for compares and gates, and the dry-run equality, fix the grouping; the rest follows S3-S5
+- Reversibility: high (cells, a tier, two upstream targets, fixtures, the branch at `9e6d09ae` in git; the lister fix leaves the committed checks' output unchanged)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §22.17, §22.18
+- Verification: `tests/dry_run.rs` (`the_wan_tier_is_the_wan_family_with_tae_dir_per_arm`; the tier's dry run and gates equal the script's), `tests/payload_golden.rs` (six `volume+r2` tiers, two RAM floors; the script side's R2 body with two trees on 174 GB), `tests/lab_files.rs` (`the_wan_tier_fetches_its_trees_in_turn_within_its_disk`: eleven fetches, 428.10 GB, at most 80.41 GB; the `{tae}` readers and `taew2_2`), `tests/oracle_driver.rs` (the upstream body and the plan of the six oracle arms), `knobs::tests::the_sfwan_cells_knob_is_refused_by_fv_lab_only`; `fv-lab-route.test.sh`, `runpod-plan.test.sh`, `upstream-r2.test.sh`, `fv-lab-goldens.sh --check` (with the comparator cases); before / after dry runs; the GPU check's pass block simulated on synthetic runs (all PASS equal, 31 mutations each FAIL)
+- Open: the GPU check §22.18 (the coordinator's; the oracle cells optional, needing $20.50 at their start); S7 for `wan` must not delete the branch while `sfwan` runs it (wait for S8 or retire `sfwan` with it, §22.18 "Then")

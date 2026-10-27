@@ -334,7 +334,9 @@ upstream_golden fastvideo-sfwan13 UP_IMAGE_TARGET=fastvideo FV_CONTAINER_DISK_GB
 # The fastvideo stack making the wan tier's two references (ADR-0019 §22, S6):
 # their r2:wan22-ti2v-5b and r2:fastwan22-ti2v-5b steps (the R2 key as Runpod
 # secret references) and their targets' 210 GB disk, as fv-lab oracle selects
-# both oracle cells of the wan tier (§22.18).
+# both oracle cells of the wan tier (§22.18). scripts/gpu/oracle.sh does not
+# drive these two targets (its fastvideo targets stay fasth3-*, sfwan13 and
+# h3-ref2va-*): only fv-lab oracle starts this body.
 upstream_golden fastvideo-wan22 UP_IMAGE_TARGET=fastvideo FV_CONTAINER_DISK_GB=210 FV_MIN_RAM_GB=192 \
   "UP_STEPS=info:box r2:wan22-ti2v-5b r2:fastwan22-ti2v-5b oracle:wan22-ti2v,fastwan22-ti2v" \
   "FV_EXTRA_ENV=FASTVIDEO_DUMP_OPS=0,1,24,47"
@@ -572,6 +574,22 @@ clean bash "$CMP" --cells "$TMP/kname" "$TMP/ka" "$TMP/kb" >/dev/null 2>&1 && st
 [[ "$st" == 2 ]] || { echo "fv-lab-goldens: compare-runs exited $st (not 2) on a control named 'a b'" >&2; rc=1; }
 for bad in rc rd re rf rh ri; do
   if clean bash "$CMP" "$TMP/ra" "$TMP/$bad" >/dev/null; then echo "fv-lab-goldens: compare-runs missed a difference ($bad)" >&2; rc=1; fi
+done
+# A file only in the runpod-http run (the second run) when the fv-lab run has
+# no file of a lister's later glob (no gate report, no hashes.json, no
+# metrics.txt): a difference too. The listers' loops once ended on that glob's
+# failed test, which under `set -e` stopped before the second run's list, so
+# such a file went unseen (ADR-0019 §22.18, found by its simulation, S6).
+cp -a "$TMP/rb" "$TMP/xa"; rm -rf "$TMP/xa/gate"; cp -a "$TMP/xa" "$TMP/xb"
+rm "$TMP/xa/compare/compare-clips-a--s.json"
+cp -a "$TMP/xa" "$TMP/xc"; cp -a "$TMP/xa" "$TMP/xd"; cp -a "$TMP/xa" "$TMP/xe"
+echo '{"cell":"c","verdict":"pass","why":""}' >"$TMP/xc/fam-c.verdict.json"
+mkdir -p "$TMP/xd/oracle-t-frames"; echo 'ours: missing x' >"$TMP/xd/oracle-t-frames/metrics.txt"
+mkdir -p "$TMP/xe/z"; echo '{"cell":"z","exit":0,"seconds":1}' >"$TMP/xe/z/summary.json"
+for second in xb xc xd xe; do
+  if clean bash "$CMP" "$TMP/xa" "$TMP/$second" >/dev/null; then
+    echo "fv-lab-goldens: compare-runs missed a file only in the runpod-http run ($second)" >&2; rc=1
+  fi
 done
 for f in ${FROZEN[@]+"${FROZEN[@]}"}; do
   [[ -s "$OUT/$f" ]] || { echo "fv-lab-goldens: frozen fixture $f is missing or empty (crates/fastvideo-lab/fixtures)" >&2; rc=1; continue; }

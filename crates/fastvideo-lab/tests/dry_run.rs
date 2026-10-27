@@ -1283,6 +1283,18 @@ fn the_wan_tier_is_the_wan_family_with_tae_dir_per_arm() {
         .collect();
     assert_eq!(refs, ["reference wan22-ti2v", "reference fastwan22-ti2v"]);
     assert_eq!(theirs.len() - 29 - 20 - 2, 49, "49 commands");
+    // The ungated arms' log copies: kernels-wan's [PASS] / [FAIL] lines, each
+    // compare-dumps' lines (the script's grep after each).
+    for s in Step::flatten(&rendered) {
+        if let Step::Arm { name, echo, .. } = s {
+            let want: &[&str] = match name.as_str() {
+                "kernels-wan" => &["[PASS]", "[FAIL]"],
+                n if n.ends_with("-diff") => &["compare-dumps"],
+                _ => &[],
+            };
+            assert_eq!(echo, want, "{name}");
+        }
+    }
     // fv-lab's steps hold the same arms: 45 gated, 4 ungated, none TAE-gated.
     let arms: Vec<(&str, bool)> = Step::flatten(&rendered)
         .into_iter()

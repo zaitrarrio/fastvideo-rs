@@ -638,6 +638,16 @@ else one prompt.
 - Spend: about $2.2 (GPU pods at $2.09/hr: 34 + 10 + 5 + 8 + 4 min; two
   CPU fetch pods at $0.24/hr, 2 to 3 min each). Every pod was deleted and
   checked gone (404).
+- To rerun (since ADR-0019 §22.17): these are `runpod-matrix.sh wan`'s arms,
+  now the fv-lab tier `wan`, cell `wan-fastwan22-ti2v-5b` (the `fw22*`,
+  `wan5b-*-161f`, `cli-fw22` and `engine-fw22` arms) and the reference cell
+  `wan-fastwan22-ti2v-oracle` (`fw22-oracle`, upstream target
+  `fastwan22-ti2v`): `fv-lab pod up --sha <7> --family wan --cells fw22,fw22-taehv,... --yes --wait`,
+  or `fv-lab oracle --family wan ...` with the oracle arms. The tier runs
+  each cell's one prompt: fv-lab refuses `FV_PROMPTS` (a prompt set is a
+  cell's workload, ADR-0019 §7), so the 5-prompt medians above need a cell
+  with that prompt set; until one exists they rerun on the script path
+  (`runpod-matrix.sh wan` with `FV_PROMPTS=5`, kept until S7).
 
 ### 5.5 Left from P0
 
