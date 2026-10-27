@@ -1,0 +1,23 @@
+[03:13:29] r2-stage: r2_key=env
+[03:13:29] r2-stage: no python3 in the image: apt-get install python3 (apt's output in r2-apt.log)
+[03:13:36] r2-stage: python3 installed
+[03:13:36] r2-stage: fetch sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004 into /fvscratch/weights (cap 3600s)
+03:13:36 plan: 1 tree(s), 28.93 GB, URLs valid 4200s -> /fvscratch/r2/plan.json
+03:13:36 [r2-fetch] 1 tree(s) to fetch, 28.93 GB in 230 GETs of up to 2 x 64 MiB, concurrency 64, 256 CPUs; 0 present
+03:13:41 [r2-fetch] r2 7.6/28.9 GB, 1524 MB/s, eta 14s, trees 0/1 (now 1524 MB/s)
+03:13:46 [r2-fetch] r2 17.1/28.9 GB, 1705 MB/s, eta 7s, trees 0/1 (now 1887 MB/s)
+03:13:47 [r2-fetch] sfwan21-1.3b/text_encoder/model-00003-of-00005.safetensors part 40: slow: 10.5 MB/s after 6s (recent parts 37 MB/s): fetched again on a new connection
+03:13:51 [r2-fetch] r2 25.1/28.9 GB, 1674 MB/s, eta 2s, trees 0/1 (now 1612 MB/s)
+03:13:52 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 38: slow: 8.5 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+03:13:52 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 48: slow: 5.3 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+03:13:52 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 50: slow: 4.6 MB/s after 6s (recent parts 32 MB/s): fetched again on a new connection
+03:13:53 [r2-fetch] sfwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 68: slow: 8.1 MB/s after 7s (recent parts 30 MB/s): fetched again on a new connection
+03:13:56 [r2-fetch] r2 28.7/28.9 GB, 1432 MB/s, eta 0s, trees 0/1 (now 707 MB/s)
+03:13:56 [r2-fetch] sfwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 52: slow: 1.1 MB/s after 8s (recent parts 26 MB/s): fetched again on a new connection
+03:14:01 [r2-fetch] r2 28.8/28.9 GB, 1152 MB/s, eta 0s, trees 0/1 (now 29 MB/s)
+03:14:04 [r2-fetch] sfwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 52: slow: 2.6 MB/s after 8s (recent parts 27 MB/s): fetched again on a new connection
+03:14:06 [r2-fetch] r2 28.8/28.9 GB, 960 MB/s, eta 0s, trees 0/1 (now 0 MB/s)
+03:14:11 [r2-fetch] tree sfwan21-1.3b: ready at 4b44356635ae5e927ca552a220f768022be76004 (28.93 GB, 17 files, 34s since start)
+03:14:11 [r2-fetch] weights ready: 1 tree(s), 28.93 GB fetched in 34.4s (842 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 7
+[03:14:11] r2-stage: weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees (1 fetched): sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004
+exit=0
