@@ -1,0 +1,15 @@
+{
+  "id": "kv30segreufg28",
+  "name": "fv-lab-serve-engine-3bc6d03-1027020329-d34a",
+  "family": "serve-engine",
+  "tag": "3bc6d03-1027020329-d34a",
+  "sha": "3bc6d03",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:762db54fb976dfc0396d8883e1fdd67fed8032b9e19ece4a3e57a3d049f15b88",
+  "url": "https://kv30segreufg28-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793066612.9382286,
+  "cap_s": 3600,
+  "memory_gb": 94.0,
+  "vcpus": 32.0
+}

@@ -1,0 +1,392 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "pool": "ModelPool { entries: {(0, ModelId(\"ltx25-distill-sol\")): PoolEntry { executor: 0, model: ModelId(\"ltx25-distill-sol\"), warm: true, state: Resident, warmup: Off }} }",
+        "readiness": "Ready",
+        "seconds": 211.91346843
+      }
+    },
+    {
+      "limits": {
+        "want": "Ready"
+      },
+      "name": "ready",
+      "ok": true,
+      "values": {
+        "readiness": "Ready"
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "first_step_s": 160.634142964,
+        "load_s": 211.91346843,
+        "metrics": {
+          "build_rtf": 2.7133113145785126,
+          "inference_s": 13.679611211000001,
+          "peak_memory_mb": 44600.696281433105,
+          "stage_durations": {
+            "audio_decode": 0.201540835,
+            "denoise": 13.679611211000001,
+            "encode": 0.100218998,
+            "stage1": 2.938484965,
+            "stage2": 3.963812514,
+            "text": 160.203450456,
+            "upsample": 6.777313732,
+            "video_decode": 1.311282729
+          }
+        },
+        "stages": [
+          {
+            "at_s": 0.000302159,
+            "stage": "text"
+          },
+          {
+            "at_s": 160.23923576,
+            "stage": "denoise"
+          },
+          {
+            "at_s": 163.168381149,
+            "stage": "upsample"
+          },
+          {
+            "at_s": 169.959952015,
+            "stage": "refine"
+          },
+          {
+            "at_s": 173.933995215,
+            "stage": "video_decode"
+          }
+        ],
+        "submit_to_mp4_s": 175.734452658
+      }
+    },
+    {
+      "limits": {
+        "events": 11,
+        "steps": 11
+      },
+      "name": "progress",
+      "ok": true,
+      "values": {
+        "events": 11,
+        "last": [
+          11,
+          11
+        ]
+      }
+    },
+    {
+      "limits": {
+        "audio": true,
+        "frames": 121,
+        "height": 704,
+        "width": 1280
+      },
+      "name": "mp4",
+      "ok": true,
+      "values": {
+        "audio_rate": 48000,
+        "bytes": 2189446,
+        "duration_s": 5.042,
+        "fps": 24.0,
+        "frames": 121,
+        "height": 704,
+        "path": "/fvscratch/runs/serve-engine/3bc6d03-1027020329-d34a/engine-ltx-turbo/out/df4c923c-b5da-40b3-8dc3-f7d09cd5f942/output.mp4",
+        "width": 1280
+      }
+    },
+    {
+      "limits": {
+        "frames": 121
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "frames_sha256": "6d7fb543408ef908d760e81c5cd3e214bdbc57dedac6f7101131ff1eba037f08",
+        "pngs": 121
+      }
+    },
+    {
+      "limits": {
+        "identical": true
+      },
+      "name": "identical_to_cli",
+      "ok": true,
+      "values": {
+        "cli_dir": "/fvscratch/runs/serve-engine/3bc6d03-1027020329-d34a/cli-ltx-turbo/frames",
+        "cli_frames": 121,
+        "cli_sha256": "6d7fb543408ef908d760e81c5cd3e214bdbc57dedac6f7101131ff1eba037f08",
+        "engine_frames": 121,
+        "engine_sha256": "6d7fb543408ef908d760e81c5cd3e214bdbc57dedac6f7101131ff1eba037f08",
+        "first_differing_frame": null
+      }
+    },
+    {
+      "limits": {
+        "end": "cancelled",
+        "steps_after_cancel_max": 1
+      },
+      "name": "cancel",
+      "ok": true,
+      "values": {
+        "cancel_at_s": 6.792380456,
+        "cancel_to_end_s": 0.36478195599999985,
+        "cancelled_at_step": 3,
+        "end": "cancelled",
+        "end_s": 7.157162412,
+        "leftover_frames_dir": null,
+        "pool_used_after": 41331335368,
+        "pool_used_before": 41331335368,
+        "steps_after_cancel": 1
+      }
+    }
+  ],
+  "context": {
+    "caps": {
+      "audio": {
+        "channels": 2,
+        "native_rate": 48000,
+        "via_sidecar": false
+      },
+      "canvas": {
+        "aspect": [
+          0.25,
+          4.0
+        ],
+        "max_area": 8355840,
+        "multiple": 64,
+        "pad_and_crop": true,
+        "short_edges": [
+          1080,
+          480,
+          720,
+          768,
+          1440,
+          2160
+        ]
+      },
+      "family": "ltx2",
+      "fps": {
+        "allowed": [
+          24,
+          25,
+          48,
+          50
+        ],
+        "container_only": false,
+        "default": 24
+      },
+      "frames": {
+        "default": 121,
+        "max": 481,
+        "min": 9,
+        "offset": 1,
+        "step": 8
+      },
+      "id": "ltx25-distill-sol",
+      "knobs": {
+        "flow_shift": false,
+        "guidance": false,
+        "guidance_2": false,
+        "negative": false,
+        "reference_strength": false,
+        "seed": true,
+        "steps": false
+      },
+      "recipe": "ltx25-distill-two-stage-sol",
+      "refs": {
+        "audio": 0,
+        "images": 0,
+        "total": 0,
+        "videos": 0
+      },
+      "resident": true,
+      "served_names": [
+        "ltx25-distill-sol"
+      ],
+      "stream": {
+        "clip": {
+          "max_s": 20.04166603088379,
+          "min_s": 0.375
+        }
+      },
+      "tasks": [
+        "t2v",
+        "i2v",
+        "keyframes",
+        "a2v",
+        "extend",
+        "retake"
+      ],
+      "tier": "turbo"
+    },
+    "cuda_feature": true,
+    "job": {
+      "audio": {
+        "channels": 2,
+        "plan": "native",
+        "rate": 48000
+      },
+      "audio_in": null,
+      "fps": 24,
+      "height": 704,
+      "keyframes": [],
+      "model": "ltx25-distill-sol",
+      "negative_prompt": "",
+      "num_frames": 121,
+      "post": {
+        "crop": null,
+        "drop_audio": false
+      },
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+      "recipe": "ltx25-distill-two-stage-sol",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 1024,
+      "task": "t2v",
+      "tier": "turbo",
+      "width": 1280
+    },
+    "mode": "fast",
+    "model": {
+      "base_caps": {
+        "audio": {
+          "channels": 2,
+          "native_rate": 48000,
+          "via_sidecar": false
+        },
+        "canvas": {
+          "aspect": [
+            0.25,
+            4.0
+          ],
+          "max_area": 8355840,
+          "multiple": 64,
+          "pad_and_crop": true,
+          "short_edges": [
+            1080,
+            480,
+            720,
+            768,
+            1440,
+            2160
+          ]
+        },
+        "family": "ltx2",
+        "fps": {
+          "allowed": [
+            24,
+            25,
+            48,
+            50
+          ],
+          "container_only": false,
+          "default": 24
+        },
+        "frames": {
+          "default": 121,
+          "max": 481,
+          "min": 9,
+          "offset": 1,
+          "step": 8
+        },
+        "id": "ltx25-distill-sol",
+        "knobs": {
+          "flow_shift": false,
+          "guidance": false,
+          "guidance_2": false,
+          "negative": false,
+          "reference_strength": false,
+          "seed": true,
+          "steps": false
+        },
+        "refs": {
+          "audio": 0,
+          "images": 0,
+          "total": 0,
+          "videos": 0
+        },
+        "resident": true,
+        "served_names": [
+          "ltx25-distill-sol"
+        ],
+        "stream": null,
+        "tasks": [
+          "t2v",
+          "i2v",
+          "keyframes",
+          "a2v",
+          "extend",
+          "retake"
+        ]
+      },
+      "gpu": {
+        "min_sm": 80,
+        "min_vram_gib": 80
+      },
+      "id": "ltx25-distill-sol",
+      "public_names": [],
+      "recipe": {
+        "a2v": "distilled",
+        "canvas": [
+          1920,
+          1080
+        ],
+        "dit": "/fvscratch/weights/ltx25",
+        "family": "ltx2",
+        "ic_lora": null,
+        "profile": "ltx2/ltx25_distill_sol",
+        "refine_steps": 3,
+        "sage_attention": false,
+        "stage1_steps": 8,
+        "stage2": "sol",
+        "tae": null,
+        "text": "streamed",
+        "text_weights": null,
+        "two_stage": true,
+        "version": "2.5",
+        "weights": "/fvscratch/weights/ltx25"
+      },
+      "recipe_name": "ltx25-distill-two-stage-sol",
+      "resident": true,
+      "served_names": [
+        "ltx25-distill-sol"
+      ],
+      "tier": "turbo",
+      "variant": "ltx25-distill-sol"
+    },
+    "mp4_encoder": "Nvenc",
+    "process_plan": {
+      "env": {},
+      "profile": "ltx2/ltx25_distill_sol",
+      "settings": {}
+    },
+    "recipe": {
+      "attention": "sol-stage2",
+      "name": "ltx25-distill-two-stage-sol",
+      "profile": "ltx2/ltx25_distill_sol",
+      "steps": 11,
+      "summary": "LTX-2.5 distilled two-stage, Sol stage 2, conv VAE",
+      "vae": "full"
+    }
+  },
+  "elapsed_s": 396.399885951,
+  "env": {},
+  "error": null,
+  "git_sha": null,
+  "stage": "engine",
+  "status": "pass"
+}

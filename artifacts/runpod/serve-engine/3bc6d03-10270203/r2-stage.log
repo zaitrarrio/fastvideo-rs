@@ -1,0 +1,23 @@
+[02:03:57] r2-stage: r2_key=env
+[02:03:57] r2-stage: no python3 in the image: apt-get install python3 (apt's output in r2-apt.log)
+[02:04:03] r2-stage: python3 installed
+[02:04:03] r2-stage: fetch fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef into /fvscratch/weights (cap 3600s)
+02:04:04 plan: 1 tree(s), 29.21 GB, URLs valid 4200s -> /fvscratch/r2/plan.json
+02:04:04 [r2-fetch] 1 tree(s) to fetch, 29.21 GB in 231 GETs of up to 2 x 64 MiB, concurrency 64, 256 CPUs; 0 present
+02:04:09 [r2-fetch] r2 8.1/29.2 GB, 1626 MB/s, eta 13s, trees 0/1 (now 1626 MB/s)
+02:04:14 [r2-fetch] r2 17.1/29.2 GB, 1704 MB/s, eta 7s, trees 0/1 (now 1783 MB/s)
+02:04:19 [r2-fetch] r2 25.9/29.2 GB, 1723 MB/s, eta 2s, trees 0/1 (now 1761 MB/s)
+02:04:19 [r2-fetch] fastwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 4: slow: 2.1 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+02:04:19 [r2-fetch] fastwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 14: slow: 10.5 MB/s after 6s (recent parts 38 MB/s): fetched again on a new connection
+02:04:19 [r2-fetch] fastwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 32: slow: 1.6 MB/s after 5s (recent parts 38 MB/s): fetched again on a new connection
+02:04:20 [r2-fetch] fastwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 44: slow: 6.7 MB/s after 6s (recent parts 35 MB/s): fetched again on a new connection
+02:04:20 [r2-fetch] fastwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 46: slow: 8.0 MB/s after 6s (recent parts 35 MB/s): fetched again on a new connection
+02:04:20 [r2-fetch] fastwan21-1.3b/text_encoder/model-00004-of-00005.safetensors part 50: slow: 7.4 MB/s after 6s (recent parts 35 MB/s): fetched again on a new connection
+02:04:21 [r2-fetch] fastwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 28: slow: 2.6 MB/s after 7s (recent parts 37 MB/s): fetched again on a new connection
+02:04:23 [r2-fetch] fastwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 1: slow: 9.0 MB/s after 6s (recent parts 37 MB/s): fetched again on a new connection
+02:04:24 [r2-fetch] r2 29.0/29.2 GB, 1448 MB/s, eta 0s, trees 0/1 (now 620 MB/s)
+02:04:24 [r2-fetch] fastwan21-1.3b/transformer/diffusion_pytorch_model.safetensors part 15: slow: 1.5 MB/s after 6s (recent parts 37 MB/s): fetched again on a new connection
+02:04:26 [r2-fetch] tree fastwan21-1.3b: ready at 25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef (29.21 GB, 16 files, 22s since start)
+02:04:26 [r2-fetch] weights ready: 1 tree(s), 29.21 GB fetched in 22.1s (1319 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 9
+[02:04:26] r2-stage: weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees (1 fetched): fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef
+exit=0
