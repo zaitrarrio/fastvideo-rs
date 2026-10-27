@@ -1,0 +1,103 @@
+# runpod-matrix.sh `wan`, its Wan2.1 T2V-14B block (docs/ports/wan.md; docs/adr/0019-fv-lab.md §22, S6): the
+# checkpoint's upstream FastVideo sampling defaults (wan_t2v_14b, UniPC, guidance 5.0, flow shift 3.0, 480x832x81),
+# one generation each (no --warm: first-request overhead is small next to 100 forwards). The exact caches' identity
+# on 14B (CFG batch, 40 blocks) at 4 steps each way (--off-identity), then at 50 steps sol-engine's
+# config/wan21_t2v_14b/fullstack.toml (EasyCache 0.036 + Sol-Attn) and each alone, plus the Sol TeaCache preset, each
+# compared and lossy-gated against the plain 50-step run. FASTVIDEO_TAE_DIR={tae} is each arm's env entry, as the
+# script's since S6 (ADR-0019 §22.4, Addition 16; the base checkpoint decodes with the Wan VAE in `auto`).
+# wan21-t2v-14b (80.41 GB) is R2-only since 2026-10-13: fetched before `wan14` (`weights = "volume+r2"`); its arms'
+# host-RAM peak is the reason for the tier's min_ram_gb (§16.10). Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "wan-wan21-t2v-14b"
+description = "Wan2.1 T2V-14B at its upstream defaults (UniPC, guidance 5, shift 3, 480x832x81): the exact caches' identity at 4 steps, then 50 steps plain against EasyCache, TeaCache, Sol-Attn and the full stack"
+
+[workload]
+model = "wan"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; the wan_t2v_14b preset's 480x832x81, 50 steps (4 for the cache identity)"
+
+[lists]
+w14 = ["--weights", "{weights}/wan21-t2v-14b", "--preset", "wan_t2v_14b", "--unipc", "--guidance", "5.0", "--flow-shift",
+  "3.0", "--prompt", "{prompt}", "--seed", "{seed}"]
+
+[[arm]]
+name = "wan14"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "wan", "gen", "{@w14}", "--steps", "50", "--clip-dir", "{runs}/{arm}/frames"]
+
+# Identity of the exact caches on 14B (CFG batch, 40 blocks): 4 steps each way.
+[[arm]]
+name = "wan14-4step"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "wan", "gen", "{@w14}", "--steps", "4", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan14-4step-nocache"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_COND_CACHE=0"]
+argv = ["--mode", "fast", "wan", "gen", "{@w14}", "--steps", "4", "--no-text-cache", "--clip-dir", "{runs}/{arm}/frames"]
+
+# sol-engine config/wan21_t2v_14b/fullstack.toml: EasyCache 0.036 + Sol-Attn (tau 1.0, 10 dense forwards, layer 0
+# dense, Morton3D); and each alone, plus the Sol TeaCache preset.
+[[arm]]
+name = "wan14-easycache"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_SOL_CACHE=easycache", "FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack"]
+argv = ["--mode", "fast", "wan", "gen", "{@w14}", "--steps", "50", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan14-teacache"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_SOL_CACHE=teacache"]
+argv = ["--mode", "fast", "wan", "gen", "{@w14}", "--steps", "50", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan14-sol"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_SOL_ATTN=1"]
+argv = ["--mode", "fast", "wan", "gen", "{@w14}", "--steps", "50", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "wan14-fullstack"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = [
+  "FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_SOL_ATTN=1", "FASTVIDEO_WAN_SOL_CACHE=easycache",
+  "FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack"
+]
+argv = ["--mode", "fast", "wan", "gen", "{@w14}", "--steps", "50", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "wan14-4step"
+candidate = "wan14-4step-nocache"
+args = ["--off-identity"]
+after = "wan14-4step-nocache"
+
+[[compare]]
+baseline = "wan14"
+candidate = "wan14-easycache"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan14"
+candidate = "wan14-teacache"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan14"
+candidate = "wan14-sol"
+gate = { kind = "lossy" }
+
+[[compare]]
+baseline = "wan14"
+candidate = "wan14-fullstack"
+gate = { kind = "lossy" }

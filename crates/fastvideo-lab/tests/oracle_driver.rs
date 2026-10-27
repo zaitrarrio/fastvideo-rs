@@ -82,7 +82,7 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
     let (_, stacks) = lab();
     // The selections fv-lab-goldens.sh passes (oracle.sh's start_up settings,
     // UP_STEPS in §15.7's form): the fixture, the stack, its targets.
-    let cases: [(&str, &str, &[&str]); 3] = [
+    let cases: [(&str, &str, &[&str]); 4] = [
         ("fastvideo", "fastvideo", &["fasth3-4step-vsa"]),
         (
             "sol-ltx25",
@@ -91,6 +91,13 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
         ),
         // A target with an R2 tree (ADR-0019 §21).
         ("fastvideo-sfwan13", "fastvideo", &["sfwan13"]),
+        // The wan tier's two references, each with its R2 tree (ADR-0019
+        // §22, S6).
+        (
+            "fastvideo-wan22",
+            "fastvideo",
+            &["wan22-ti2v", "fastwan22-ti2v"],
+        ),
     ];
     for (golden, name, targets) in cases {
         let stack = stacks
@@ -121,7 +128,11 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
             }
         }
         let want_env = Value::Object(want_env);
-        assert_eq!(r2, golden == "fastvideo-sfwan13", "{golden}");
+        assert_eq!(
+            r2,
+            matches!(golden, "fastvideo-sfwan13" | "fastvideo-wan22"),
+            "{golden}"
+        );
         assert_eq!(ours["env"], want_env, "{golden}");
         assert_eq!(
             theirs.get("env").cloned().unwrap_or_else(|| json!({})),
@@ -129,7 +140,11 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
             "{golden}"
         );
         // The disk: the stack's, or the selected target's when larger.
-        let disk = if r2 { 180 } else { stack.container_disk_gb };
+        let disk = match golden {
+            "fastvideo-sfwan13" => 180,
+            "fastvideo-wan22" => 210,
+            _ => stack.container_disk_gb,
+        };
         assert_eq!(ours["containerDiskInGb"], json!(disk), "{golden}");
         // Difference 2: fv-deploy sends `env` always, the script only with an entry.
         ours.as_object_mut().and_then(|m| m.remove("env"));
@@ -162,8 +177,9 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
     for s in &stacks.stacks {
         assert!(cases.iter().any(|(_, n, _)| *n == s.name), "{}", s.name);
     }
-    // Only the sfwan13 target fetches from R2, and only its selection carries
-    // the key: the fastvideo stack's other targets keep their pod body.
+    // Only the sfwan13 and the two Wan 2.2 TI2V-5B targets fetch from R2,
+    // and only their selections carry the key: the fastvideo stack's other
+    // targets keep their pod body.
     let r2: Vec<(&str, &[String])> = stacks
         .stacks
         .iter()
@@ -171,7 +187,14 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
         .filter(|t| !t.r2.is_empty())
         .map(|t| (t.name.as_str(), t.r2.as_slice()))
         .collect();
-    assert_eq!(r2, [("sfwan13", &["sfwan21-1.3b".to_owned()][..])]);
+    assert_eq!(
+        r2,
+        [
+            ("sfwan13", &["sfwan21-1.3b".to_owned()][..]),
+            ("wan22-ti2v", &["wan22-ti2v-5b".to_owned()][..]),
+            ("fastwan22-ti2v", &["fastwan22-ti2v-5b".to_owned()][..])
+        ]
+    );
     // Only the LTX stack reads gated Hub files.
     let hub: Vec<&str> = stacks
         .stacks
@@ -482,6 +505,71 @@ fn the_plan_of_sfwan13_fetches_its_tree_upstream_and_runs_on_oracle_r2() {
     let p = plan_oracle(&lab, &stacks, &request(&VSA)).expect("plan");
     assert_eq!(p.upstream[0].launch.disk.container_gb, 150);
     assert!(p.upstream[0].launch.env.is_empty());
+}
+
+/// The `wan` tier's two oracle cells (ADR-0019 §22, S6): one `fastvideo` pod
+/// making both references, each target's tree fetched from R2 upstream
+/// (`r2:wan22-ti2v-5b r2:fastwan22-ti2v-5b`), on 210 GB (the stack's 150 and
+/// both trees) with the R2 key as Runpod secret references and the stack's
+/// host-RAM floor; the runtime side is `pod up --family wan`. A cell without a
+/// reference may not be selected (`fv-lab pod up` runs those).
+#[test]
+fn the_plan_of_the_wan_oracle_cells_fetches_both_trees_upstream_and_runs_on_wan() {
+    let (lab, stacks) = lab();
+    let arms: Vec<String> = ["wan-wan22-ti2v-oracle", "wan-fastwan22-ti2v-oracle"]
+        .iter()
+        .flat_map(|c| lab.cells[*c].arms.iter().map(|a| a.name.clone()))
+        .collect();
+    assert_eq!(
+        arms,
+        [
+            "wan5b-oracle",
+            "wan5b-oracle-diff",
+            "wan5b-oracle-exact",
+            "wan5b-oracle-exact-diff",
+            "fw22-oracle",
+            "fw22-oracle-diff"
+        ]
+    );
+    let names: Vec<&str> = arms.iter().map(String::as_str).collect();
+    let mut r = request(&names);
+    r.tier = "wan".into();
+    let p = plan_oracle(&lab, &stacks, &r).expect("plan");
+    assert_eq!(p.tier, "wan");
+    assert_eq!(p.upstream.len(), 1);
+    let u = &p.upstream[0];
+    assert_eq!(u.stack, "fastvideo");
+    assert_eq!(u.targets, ["wan22-ti2v", "fastwan22-ti2v"]);
+    assert_eq!(
+        u.start.up_steps,
+        "info:box r2:wan22-ti2v-5b r2:fastwan22-ti2v-5b oracle:wan22-ti2v,fastwan22-ti2v"
+    );
+    assert_eq!(u.launch.disk.container_gb, 210);
+    // The stack's 150 GB and both trees (34.20 + 24.20 GB) fit 210 GB.
+    let sources = fastvideo_lab::weights::TreeSources::load(&repo_root()).expect("trees");
+    let both: u64 = ["wan22-ti2v-5b", "fastwan22-ti2v-5b"]
+        .iter()
+        .map(|t| sources.r2.get(*t).map(|t| t.bytes).expect("an R2 tree"))
+        .sum();
+    assert!(both.div_ceil(1_000_000_000) + 150 <= 210, "{both}");
+    assert_eq!(u.launch.env, r2_env_refs());
+    assert_eq!(u.launch.gpu.min_ram_gb, Some(192));
+    let a = runtime_args(&p, &["https://a/upstream/t".into()], &p.cells);
+    assert!(a.windows(2).any(|w| w == ["--family", "wan"]), "{a:?}");
+    // One target alone: its own tree, the same disk.
+    let mut one = request(&names[..4]);
+    one.tier = "wan".into();
+    let p = plan_oracle(&lab, &stacks, &one).expect("plan");
+    assert_eq!(p.upstream[0].targets, ["wan22-ti2v"]);
+    assert_eq!(
+        p.upstream[0].start.up_steps,
+        "info:box r2:wan22-ti2v-5b oracle:wan22-ti2v"
+    );
+    // A generation arm of the tier reads no reference: refused.
+    let mut bad = request(&["wan13-dmd"]);
+    bad.tier = "wan".into();
+    let e = plan_oracle(&lab, &stacks, &bad).unwrap_err();
+    assert!(e.contains("reads no upstream reference"), "{e}");
 }
 
 // ------------------------------------------------------------------ the plan

@@ -52,8 +52,8 @@
 # (`oracle-r2`: the oracle family with FV_ORACLE_TARGETS=sfwan13; `hd5`: the
 # hd family with FV_PROMPTS=…/prompts-hd5.json, for the dry run only), its pod
 # body runpod-http.sh plan's for the tier. A `weights = "volume+r2"` tier's
-# body (gold, oracle-r2, serve-engine, sfstream) carries its container disk,
-# idle limit and RAM floor.
+# body (gold, oracle-r2, serve-engine, sfstream, wan) carries its container
+# disk, idle limit and RAM floor.
 #
 # No network, no GPU, no weights: the dry run logs instead of running, and the
 # plan takes the volume's datacentre from FV_PLAN_VOLUME. Needs bash and jq.
@@ -137,7 +137,7 @@ for FAMILY in $FAMILIES; do
   # the GPU's first use), and so is its host-RAM floor (min_ram_gb, passed as
   # FV_MIN_RAM_GB); its env (the R2 key as Runpod secret references) is
   # the one difference tests/payload_golden.rs allows.
-  # A volume+r2 tier's pod (gold, oracle-r2, serve-engine, sfstream): its container disk, idle limit
+  # A volume+r2 tier's pod (gold, oracle-r2, serve-engine, sfstream, wan): its container disk, idle limit
   # and host-RAM floor as the script's settings.
   tv() { awk -v k="$1" -v n="name = \"$FAMILY\"" '/^\[\[tier\]\]/ { t = 0 } $0 == n { t = 1 } t && $1 == k && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' "$ROOT/lab/tiers.toml"; }
   r2_body=()
@@ -272,6 +272,18 @@ clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAM
   FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 \
   bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-sfstream-r2.json"
 FIXTURES+=("runpod-http-sfstream-r2.json")
+# The same for the wan GPU check (ADR-0019 §22, S6, §22.18): the script side's
+# FV_FAMILY=wan with FV_R2_TREES naming the two trees its checked arms read
+# (fastwan21-1.3b: wan13-dmd, wan13-dmd-dense; fastwan22-ti2v-5b: cli-fw22,
+# engine-fw22; kernels-wan reads none), staged at once before the matrix, so
+# their 53.41 GB and the 120 GB: 174 GB (the tier's own body, above, has 210
+# for fv-lab's drop-then-fetch plan of the whole family), the tier's host-RAM
+# floor (FV_MIN_RAM_GB=256, so both pods are placed under the same floor) and
+# its cell cap (runpod-http.sh's default FV_GEN_TIMEOUT_S, 3600).
+clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY=wan \
+  "FV_R2_TREES=fastwan21-1.3b fastwan22-ti2v-5b" FV_CONTAINER_DISK_GB=174 FV_MIN_RAM_GB=256 \
+  bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-wan-r2.json"
+FIXTURES+=("runpod-http-wan-r2.json")
 
 # 3b. The upstream pods of `fv-lab oracle` (ADR-0019 §19): runpod-http.sh
 #     plan-upstream with the settings scripts/gpu/oracle.sh's start_up passes
@@ -307,6 +319,13 @@ upstream_golden sol-ltx25 UP_IMAGE_TARGET=sol-ltx25 FV_CONTAINER_DISK_GB=250 \
 # target's 180 GB disk, as oracle.sh's start_up passes them for sfwan13.
 upstream_golden fastvideo-sfwan13 UP_IMAGE_TARGET=fastvideo FV_CONTAINER_DISK_GB=180 FV_MIN_RAM_GB=192 \
   "UP_STEPS=info:box r2:sfwan21-1.3b oracle:sfwan13" "FV_EXTRA_ENV=FASTVIDEO_DUMP_OPS=0,1,24,47"
+# The fastvideo stack making the wan tier's two references (ADR-0019 §22, S6):
+# their r2:wan22-ti2v-5b and r2:fastwan22-ti2v-5b steps (the R2 key as Runpod
+# secret references) and their targets' 210 GB disk, as fv-lab oracle selects
+# both oracle cells of the wan tier (§22.18).
+upstream_golden fastvideo-wan22 UP_IMAGE_TARGET=fastvideo FV_CONTAINER_DISK_GB=210 FV_MIN_RAM_GB=192 \
+  "UP_STEPS=info:box r2:wan22-ti2v-5b r2:fastwan22-ti2v-5b oracle:wan22-ti2v,fastwan22-ti2v" \
+  "FV_EXTRA_ENV=FASTVIDEO_DUMP_OPS=0,1,24,47"
 
 # 4. The frames digest: the script's own function, on a copy of the sample.
 sed -n '/^frames_digest() {$/,/^}$/p' "$ROOT/scripts/gpu/runpod-matrix.sh" >"$TMP/digest.sh"

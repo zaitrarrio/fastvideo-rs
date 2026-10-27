@@ -16,9 +16,13 @@
 #
 #   taew2_1.safetensors         e589fdd  (the Wan 2.1 latent space; the wan
 #       family's default decoder for the distilled presets)
+#   taew2_2.safetensors         e589fdd  (the Wan 2.2 TI2V-5B latent space, 48
+#       channels: the wan tier's oracle arms' --taehv, its wan5b-taehv /
+#       fw22-taehv arms; docs/adr/0019-fv-lab.md §22, S6). The pin is
+#       fetch_taehv.sh's and weights-manifest.tsv's auxiliary/tae row.
 #
 #   fetch-tae.sh [dest]    -> dest/taeh3.safetensors, dest/taeltx2_3_wide.safetensors,
-#                             dest/taew2_1.safetensors
+#                             dest/taew2_1.safetensors, dest/taew2_2.safetensors
 #
 # The weight volume's copy comes first: $FV_AUX_DIR/tae (default
 # <weights>/auxiliary/tae, the auxiliary/ rows of weights-manifest.tsv) is
@@ -65,4 +69,6 @@ fetch taeltx2_3_wide.safetensors 32ac0146b11007cda5a57b60a3b35653361fb8a4 \
   0a69291425015e8eb4309028e7de1d17d2a11f58ba88e0120453bc36f352e082 60359856 || rc=1
 fetch taew2_1.safetensors e589fddc076e77f5ba8cd6baabe4ba3260b261cd \
   04766eac0221b5390b985ae3fdcca652cbb4b1e8b82b28ea7ff89dfad1b1a93f 22642902 || rc=1
+fetch taew2_2.safetensors e589fddc076e77f5ba8cd6baabe4ba3260b261cd \
+  b84609b2a133d48434bd9636bfcb44bf05168dc436e2d3cecf26256faa1f5325 22848048 || rc=1
 exit $rc

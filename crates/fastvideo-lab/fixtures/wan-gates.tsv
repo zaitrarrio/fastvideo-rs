@@ -1,0 +1,65 @@
+arm	wan13-dmd	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+arm	wan13-dmd-dense	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+arm	wan13-f32act	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+arm	wan13-bf16act	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+arm	wan13-fuse	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+arm	wan13-mxfp8	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+arm	wan13-w8a8	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+gate	wan13-f32act	wan13-bf16act	lossy	-
+gate	wan13-f32act	wan13-fuse	lossy	-
+gate	wan13-f32act	wan13-mxfp8	lossy	-
+gate	wan13-f32act	wan13-w8a8	lossy	-
+gate	wan13-bf16act	wan13-fuse	exact	wan13-fuse
+gate	wan13-fuse	wan13-mxfp8	lossy	-
+gate	wan13-fuse	wan13-w8a8	lossy	-
+arm	sfwan13-81f-flash	sfwan21-1.3b	-	sfwan21-1.3b:transformer sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler
+arm	sfwan13-81f-composed	sfwan21-1.3b	-	sfwan21-1.3b:transformer sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler
+arm	sfwan13-81f-wholeclip	sfwan21-1.3b	-	sfwan21-1.3b:transformer sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler
+gate	sfwan13-81f-composed	sfwan13-81f-flash	lossy	-
+arm	wan5b-f32act	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+arm	wan5b-bf16act	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+arm	wan5b-mxfp8	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+gate	wan5b-f32act	wan5b-bf16act	lossy	-
+gate	wan5b-f32act	wan5b-mxfp8	lossy	-
+arm	wan14b-f32act	wan21-t2v-14b	-	wan21-t2v-14b:transformer wan21-t2v-14b:vae wan21-t2v-14b:text_encoder wan21-t2v-14b:tokenizer wan21-t2v-14b:scheduler
+arm	wan14b-bf16act	wan21-t2v-14b	-	wan21-t2v-14b:transformer wan21-t2v-14b:vae wan21-t2v-14b:text_encoder wan21-t2v-14b:tokenizer wan21-t2v-14b:scheduler
+arm	wan14b-mxfp8	wan21-t2v-14b	-	wan21-t2v-14b:transformer wan21-t2v-14b:vae wan21-t2v-14b:text_encoder wan21-t2v-14b:tokenizer wan21-t2v-14b:scheduler
+gate	wan14b-f32act	wan14b-bf16act	lossy	-
+gate	wan14b-f32act	wan14b-mxfp8	lossy	-
+arm	wan13-dmd-fullvae	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+arm	wan13-dmd-fullvae-chunk1	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+gate	wan13-dmd-fullvae	wan13-dmd	lossy	-
+arm	wan13-dmd-nocache	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+gate	wan13-dmd	wan13-dmd-nocache	exact	-
+arm	wan13-dmd-sol	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+arm	wan13-dmd-teacache	fastwan21-1.3b	-	fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer
+gate	wan13-dmd	wan13-dmd-sol	lossy	-
+gate	wan13-dmd	wan13-dmd-teacache	lossy	-
+arm	wan14	wan21-t2v-14b	-	wan21-t2v-14b:transformer wan21-t2v-14b:vae wan21-t2v-14b:text_encoder wan21-t2v-14b:tokenizer wan21-t2v-14b:scheduler
+arm	wan14-4step	wan21-t2v-14b	-	wan21-t2v-14b:transformer wan21-t2v-14b:vae wan21-t2v-14b:text_encoder wan21-t2v-14b:tokenizer wan21-t2v-14b:scheduler
+arm	wan14-4step-nocache	wan21-t2v-14b	-	wan21-t2v-14b:transformer wan21-t2v-14b:vae wan21-t2v-14b:text_encoder wan21-t2v-14b:tokenizer wan21-t2v-14b:scheduler
+arm	wan14-easycache	wan21-t2v-14b	-	wan21-t2v-14b:transformer wan21-t2v-14b:vae wan21-t2v-14b:text_encoder wan21-t2v-14b:tokenizer wan21-t2v-14b:scheduler
+arm	wan14-teacache	wan21-t2v-14b	-	wan21-t2v-14b:transformer wan21-t2v-14b:vae wan21-t2v-14b:text_encoder wan21-t2v-14b:tokenizer wan21-t2v-14b:scheduler
+arm	wan14-sol	wan21-t2v-14b	-	wan21-t2v-14b:transformer wan21-t2v-14b:vae wan21-t2v-14b:text_encoder wan21-t2v-14b:tokenizer wan21-t2v-14b:scheduler
+arm	wan14-fullstack	wan21-t2v-14b	-	wan21-t2v-14b:transformer wan21-t2v-14b:vae wan21-t2v-14b:text_encoder wan21-t2v-14b:tokenizer wan21-t2v-14b:scheduler
+gate	wan14	wan14-easycache	lossy	-
+gate	wan14	wan14-teacache	lossy	-
+gate	wan14	wan14-sol	lossy	-
+gate	wan14	wan14-fullstack	lossy	-
+arm	wan5b-oracle	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+arm	wan5b-oracle-exact	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+arm	wan5b	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+arm	wan5b-taehv	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+arm	wan5b-i2v	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+arm	wan5b-easycache	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+arm	fw22-oracle	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	fw22	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	fw22-taehv	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	fw22-i2v	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	fw22-580p-161f	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	fw22-720p-161f	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	wan5b-580p-161f	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+arm	wan5b-720p-161f	wan22-ti2v-5b	-	wan22-ti2v-5b:transformer wan22-ti2v-5b:vae wan22-ti2v-5b:text_encoder wan22-ti2v-5b:tokenizer wan22-ti2v-5b:scheduler
+arm	cli-fw22	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	engine-fw22	fastwan22-ti2v-5b	-	fastwan22-ti2v-5b:transformer fastwan22-ti2v-5b:vae fastwan22-ti2v-5b:text_encoder fastwan22-ti2v-5b:tokenizer fastwan22-ti2v-5b:scheduler
+arm	sfwan13-81f-fullvae	sfwan21-1.3b	-	sfwan21-1.3b:transformer sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler

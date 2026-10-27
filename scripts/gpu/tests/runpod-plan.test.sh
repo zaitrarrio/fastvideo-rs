@@ -9,8 +9,11 @@
 #     §18), and no family of that list (§18's and §22's) is in them;
 #   - a family retired to fv-lab (fv-lab-retired.sh, here ltx) runs the
 #     image's `fv-lab run <tier>` and never runpod-matrix.sh, which refuses it;
-#     wan runs runpod-matrix.sh as before; `matrix` gives the retired family
-#     the tier's per-arm cap (no FV_GEN_TIMEOUT_S=300);
+#     so does wan since S6 (docs/adr/0019-fv-lab.md §22.17: a tier whose
+#     branch stays until S7), with FV_SCRATCH on the container disk and its
+#     runs in /workspace/runs/wan, as a volume+r2 tier needs; `matrix` gives
+#     both the tier's per-arm cap (no FV_GEN_TIMEOUT_S=300) and starts
+#     runpod-matrix.sh for neither;
 #   - `gpu` creates one pod per family of its list and starts each;
 #   - `plan gpu|matrix` prints those commands, and fails on a family nothing
 #     can run;
@@ -19,7 +22,9 @@
 #     created, and no recorded command starts runpod-matrix.sh for any retired
 #     family; `runpod.sh b200` is refused (exit 2) without a key;
 #   - the ltx command, as the pod's shell runs it, calls fv-lab as `run ltx`
-#     with FV_WORK=/workspace; without fv-lab it exits 2 naming fv-lab pod up.
+#     with FV_WORK=/workspace; without fv-lab it exits 2 naming fv-lab pod up;
+#     the wan command calls `run wan` with FV_WORK=/workspace,
+#     FV_SCRATCH=/fvscratch and FV_RUNS_DIR=/workspace/runs/wan.
 #
 #   bash scripts/gpu/tests/runpod-plan.test.sh
 set -euo pipefail
@@ -111,9 +116,9 @@ if [[ "$rc" == 0 ]]; then ok "matrix: cmd_matrix runs to the end on the stubs"; 
 for fam in ltx wan; do
   line="$(grep -F 'export FV_WORK=/workspace' "$d/ssh.log" | cut -f2- \
     | grep -E "(runpod-matrix\.sh $fam|run $fam')\$" || true)"
-  if fv_lab_retired "$fam"; then
+  if fv_lab_retired "$fam" || [[ "$fam" == wan ]]; then
     if [[ "$line" == *"\"\$lab\" run $fam'" && "$line" != *runpod-matrix.sh* && "$line" != *FV_GEN_TIMEOUT_S* ]]; then
-      ok "matrix: $fam (retired) runs fv-lab run $fam, the tier's per-arm cap"
+      ok "matrix: $fam runs fv-lab run $fam, the tier's per-arm cap"
     else
       bad "matrix: $fam runs: $line"
     fi
@@ -125,11 +130,11 @@ for fam in ltx wan; do
 done
 
 # 3. No recorded command, remote or local, starts runpod-matrix.sh for a
-#    retired family (to fv-lab or with no tier), and neither list holds a
-#    family retired with no tier.
+#    retired family (to fv-lab or with no tier) or for wan (fv-lab since S6),
+#    and neither list holds a family retired with no tier.
 for mode in gpu matrix; do
   hits=""
-  for fam in $FV_LAB_RETIRED $FV_SCRIPT_RETIRED; do
+  for fam in $FV_LAB_RETIRED $FV_SCRIPT_RETIRED wan; do
     hits+="$(matrix_call "$TMP/$mode/ssh.log" "$fam")$(matrix_call "$TMP/$mode/local.log" "$fam")"
   done
   [[ -z "$hits" ]] && ok "$mode: no runpod-matrix.sh start of a retired family, over ssh or locally" \
@@ -143,9 +148,11 @@ for mode in gpu matrix; do
   want="ltx"; [[ "$mode" == matrix ]] && want="ltx wan"
   got="$(cut -f1 <<<"$out" | tr '\n' ' ' | sed 's/ $//')"
   ltxcmd="$(awk -F'\t' '$1 == "ltx" { print $2 }' <<<"$out")"
+  wancmd="$(awk -F'\t' '$1 == "wan" { print $2 }' <<<"$out")"
   if [[ "$rc" == 0 && "$got" == "$want" && "$ltxcmd" == *"\"\$lab\" run ltx'" && "$ltxcmd" != *runpod-matrix.sh* ]] \
-    && { [[ "$mode" == gpu ]] || grep -qxF "wan	bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh wan" <<<"$out"; }; then
-    ok "plan $mode: $want, ltx through fv-lab"
+    && { [[ "$mode" == gpu ]] || [[ "$wancmd" == *"exec env FV_WORK=/workspace FV_SCRATCH=/fvscratch FV_RUNS_DIR=/workspace/runs/wan \"\$lab\" run wan'" \
+      && "$wancmd" != *runpod-matrix.sh* ]]; }; then
+    ok "plan $mode: $want, ltx (and wan) through fv-lab"
   else
     bad "plan $mode: exit $rc: $out"
   fi
@@ -196,7 +203,7 @@ fi
 ltx="$(env -i PATH="$PATH" HOME="$TMP/home" bash "$RP" plan gpu | awk -F'\t' '$1 == "ltx" { print $2 }')"
 cat >"$TMP/fv-lab" <<'SH'
 #!/bin/sh
-printf 'args=%s work=%s\n' "$*" "${FV_WORK:-}" >"$FAKE_LOG"
+printf 'args=%s work=%s scratch=%s runs=%s\n' "$*" "${FV_WORK:-}" "${FV_SCRATCH:-}" "${FV_RUNS_DIR:-}" >"$FAKE_LOG"
 SH
 chmod +x "$TMP/fv-lab"
 mkdir -p "$TMP/runs"
@@ -206,7 +213,7 @@ run_cmd() { # run_cmd <fv-lab path>
     bash -c "nohup $c > $TMP/runs/driver.log 2>&1 & echo \$! > $TMP/runs/pid; wait \$(cat $TMP/runs/pid)"
 }
 rc=0; run_cmd "$TMP/fv-lab" || rc=$?
-if [[ "$rc" == 0 && "$(cat "$TMP/fake.log" 2>/dev/null)" == "args=run ltx work=/workspace" && -s "$TMP/runs/pid" ]]; then
+if [[ "$rc" == 0 && "$(cat "$TMP/fake.log" 2>/dev/null)" == "args=run ltx work=/workspace scratch= runs=" && -s "$TMP/runs/pid" ]]; then
   ok "ltx on the pod: fv-lab run ltx with FV_WORK=/workspace, pid written"
 else
   bad "ltx on the pod: exit $rc, fv-lab saw: $(cat "$TMP/fake.log" 2>/dev/null)"
@@ -216,6 +223,23 @@ if [[ "$rc" == 2 && "$(cat "$TMP/runs/driver.log")" == *"FATAL: no fv-lab in thi
   ok "ltx on the pod without fv-lab: exit 2, fv-lab pod up named"
 else
   bad "ltx on the pod without fv-lab: exit $rc, $(cat "$TMP/runs/driver.log")"
+fi
+
+# 7. The wan command as the pod's shell runs it (`export …; <cmd>` in
+#    cmd_matrix), fv-lab's path pointed at the stand-in; without fv-lab it
+#    exits 2 naming fv-lab pod up.
+wan="$(env -i PATH="$PATH" HOME="$TMP/home" bash "$RP" plan matrix | awk -F'\t' '$1 == "wan" { print $2 }')"
+rc=0; env -i PATH="$PATH" FAKE_LOG="$TMP/fake.log" bash -c "${wan//$LAB/$TMP/fv-lab}" >"$TMP/wan.out" 2>&1 || rc=$?
+if [[ "$rc" == 0 && "$(cat "$TMP/fake.log")" == "args=run wan work=/workspace scratch=/fvscratch runs=/workspace/runs/wan" ]]; then
+  ok "wan on the pod: fv-lab run wan, the container disk's /fvscratch, runs in /workspace/runs/wan"
+else
+  bad "wan on the pod: exit $rc, fv-lab saw: $(cat "$TMP/fake.log" 2>/dev/null)"
+fi
+rc=0; env -i PATH="$PATH" bash -c "${wan//$LAB/$TMP/none}" >"$TMP/wan.out" 2>&1 || rc=$?
+if [[ "$rc" == 2 && "$(cat "$TMP/wan.out")" == *"FATAL: no fv-lab in this image ($TMP/none): runpod.sh runs wan as its fv-lab tier; fv-lab pod up --family wan"* ]]; then
+  ok "wan on the pod without fv-lab: exit 2, fv-lab pod up named"
+else
+  bad "wan on the pod without fv-lab: exit $rc, $(cat "$TMP/wan.out")"
 fi
 
 if (( fail )); then echo "runpod-plan: FAILED" >&2; exit 1; fi

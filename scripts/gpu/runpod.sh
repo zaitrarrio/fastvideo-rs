@@ -11,8 +11,10 @@
 #   runpod.sh matrix    one PRO 6000; restart between LTX/Wan
 #   runpod.sh plan gpu|matrix   what `gpu` / `matrix` start on each pod, one
 #                       line per family (no key, no pod): a family retired to
-#                       fv-lab (fv-lab-retired.sh, e.g. ltx) runs `fv-lab run`
-#                       from the image, the others runpod-matrix.sh; h3 and
+#                       fv-lab (fv-lab-retired.sh, e.g. ltx) and wan (a tier
+#                       whose branch stays until S7, docs/adr/0019-fv-lab.md
+#                       §22.17) run `fv-lab run` from the image, the others
+#                       runpod-matrix.sh; h3 and
 #                       hunyuan are retired with no tier (FV_SCRIPT_RETIRED,
 #                       docs/adr/0019-fv-lab.md §18) and left the lists
 #   runpod.sh rtx6000   retired with the rtx6000 family's runpod-matrix.sh
@@ -595,6 +597,17 @@ rp_create_gpu_pod() {
 # FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18).
 RP_GPU_FAMILIES=(ltx)
 RP_MATRIX_FAMILIES=(ltx wan)
+# The families these drivers run as their fv-lab tier although their
+# runpod-matrix.sh branch is still there (docs/adr/0019-fv-lab.md §22, S6:
+# wan, whose branch stays until its GPU check; S7 moves it to FV_LAB_RETIRED
+# and out of this list), as a retired family runs (§17.6).
+RP_FV_LAB_TIERS=(wan)
+
+# rp_fv_lab_family <family>: the pod runs the family's tier with the image's
+# fv-lab (retired to fv-lab, or in RP_FV_LAB_TIERS).
+rp_fv_lab_family() {
+  fv_lab_retired "$1" || [[ " ${RP_FV_LAB_TIERS[*]} " == *" $1 "* ]]
+}
 
 # rp_gpu_cap_s <family>: `gpu`'s backstop for that family's pod (s).
 rp_gpu_cap_s() { case "$1" in ltx) echo 7200 ;; *) echo 5400 ;; esac; }
@@ -623,21 +636,38 @@ rp_has_branch() {
 # FV_LAB_RETIRED: its runpod-matrix.sh branch is gone and the script refuses
 # it, docs/adr/0019-fv-lab.md §10, §17.6) runs as its tier with the image's
 # fv-lab (/opt/fastvideo-rs/target/release/fv-lab, lab/ beside it), writing
-# /workspace/runs/<family> as the script did; a family with a branch runs
-# runpod-matrix.sh. A family retired with no tier (FV_SCRIPT_RETIRED, §18)
-# and anything else (an experiment tier, gold, an unknown name) dies here,
-# before a pod exists.
+# /workspace/runs/<family> as the script did; so does a family of
+# RP_FV_LAB_TIERS (wan, §22, S6). A `weights = "volume+r2"` tier (wan) also
+# gets FV_SCRATCH=/fvscratch, the container disk (fv-lab refuses a merged
+# weight root on the volume), and FV_RUNS_DIR=/workspace/runs/<family>, the
+# directory these drivers tail and fetch. These pods carry no R2 key, so its
+# R2 arms are skipped (`r2 fetch failed`), as the script's skipped them
+# (`weights incomplete`: the 500 GB volume has no Wan tree); its ungated
+# kernels-wan runs. A family with a branch runs runpod-matrix.sh. A family
+# retired with no tier (FV_SCRIPT_RETIRED, §18) and anything else (an
+# experiment tier, gold, an unknown name) dies here, before a pod exists.
 rp_family_cmd() {
-  local family="$1"
+  local family="$1" envs="FV_WORK=/workspace" what
   if fv_script_retired "$family"; then
     die "$family is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18, §22): nothing runs it on the pod; $(fv_script_retired_why "$family")"
-  elif fv_lab_retired "$family"; then
-    printf '%s' "bash -c 'lab=/opt/fastvideo-rs/target/release/fv-lab; [ -x \"\$lab\" ] || { echo \"FATAL: no fv-lab in this image (\$lab): $family is fv-lab only; fv-lab pod up --family $family from a host\" >&2; exit 2; }; exec env FV_WORK=/workspace \"\$lab\" run $family'"
+  elif rp_fv_lab_family "$family"; then
+    what="$family is fv-lab only"
+    fv_lab_retired "$family" || what="runpod.sh runs $family as its fv-lab tier"
+    [[ "$(rp_tier_weights "$family")" == volume+r2 ]] \
+      && envs+=" FV_SCRATCH=/fvscratch FV_RUNS_DIR=/workspace/runs/$family"
+    printf '%s' "bash -c 'lab=/opt/fastvideo-rs/target/release/fv-lab; [ -x \"\$lab\" ] || { echo \"FATAL: no fv-lab in this image (\$lab): $what; fv-lab pod up --family $family from a host\" >&2; exit 2; }; exec env $envs \"\$lab\" run $family'"
   elif rp_has_branch "$family"; then
     printf '%s' "bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $family"
   else
     die "$family is neither a runpod-matrix.sh family nor a retired one (fv-lab-retired.sh): nothing to run on the pod; fv-lab pod up --family $family from a host if it is a tier"
   fi
+}
+
+# rp_tier_weights <family>: the `weights` of the family's tier in
+# lab/tiers.toml (volume, volume+r2), empty when it is no tier.
+rp_tier_weights() {
+  awk -v n="name = \"$1\"" '/^\[\[tier\]\]/ { t = 0 } $0 == n { t = 1 } t && $1 == "weights" && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' \
+    "$FV_ROOT/lab/tiers.toml"
 }
 
 # rp_check_families <family...>: every family has a command (rp_family_cmd
@@ -853,12 +883,13 @@ cmd_matrix() {
     rp_ssh "$host" "$port" "nvidia-smi --query-gpu=name,memory.used,driver_version --format=csv,noheader; mkdir -p /workspace/runs/$family /workspace/gpucheck-out/logs"
     rp_rsync "$host" "$port" "$FV_ROOT/scripts/gpu/" "/opt/fastvideo-rs/scripts/gpu/" --exclude '.env*'
     cmd="$(rp_family_cmd "$family")" || exit 2
-    # A script family: 4 cells × 300s + load slack. A retired family runs its
-    # tier through fv-lab, which reads FV_GEN_TIMEOUT_S as its per-arm cap: it
-    # gets the tier's cell_timeout_s instead (ltx: 3600; ltx25-two-stage takes
-    # about 540 s, which 300 would kill).
+    # A script family: 4 cells × 300s + load slack. A family run through
+    # fv-lab (retired, or wan since S6) runs its tier, and fv-lab reads
+    # FV_GEN_TIMEOUT_S as its per-arm cap: it gets the tier's cell_timeout_s
+    # instead (ltx and wan: 3600; ltx25-two-stage takes about 540 s and wan's
+    # 50-step 14B and 5B arms longer, which 300 would kill).
     gen="FV_GEN_TIMEOUT_S=300"
-    fv_lab_retired "$family" && gen=""
+    rp_fv_lab_family "$family" && gen=""
     if ! rp_ssh "$host" "$port" "export FV_WORK=/workspace ${gen} PATH=/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:\$PATH
       $cmd"; then
       rp_log "family $family returned non-zero (cells continue-on-fail inside the script)"

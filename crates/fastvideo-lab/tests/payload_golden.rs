@@ -124,13 +124,14 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         common::restored().len(),
         "every restored mode is a tier"
     );
-    // Only the gold, oracle-r2, serve-engine and sfstream tiers read R2 trees
-    // (ADR-0019 §16, §21, §22 S3, S4); every other tier's pod is unchanged.
+    // Only the gold, oracle-r2, serve-engine, sfstream and wan tiers read R2
+    // trees (ADR-0019 §16, §21, §22 S3, S4, S6); every other tier's pod is
+    // unchanged.
     assert_eq!(
-        r2_tiers, 4,
-        "four volume+r2 tiers (gold, oracle-r2, serve-engine, sfstream)"
+        r2_tiers, 5,
+        "five volume+r2 tiers (gold, oracle-r2, serve-engine, sfstream, wan)"
     );
-    for t in ["gold", "oracle-r2", "serve-engine", "sfstream"] {
+    for t in ["gold", "oracle-r2", "serve-engine", "sfstream", "wan"] {
         assert_eq!(
             lab.tier(t).map(|t| t.weights),
             Some(TierWeights::VolumeR2),
@@ -178,11 +179,30 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         "the TAE fetch runs (FV_SKIP_TAE 0)"
     );
     assert!(!cmd.contains("if [ \"1\" != 1 ]"), "not skipped");
-    // Only the gold tier asks for a host-RAM floor (its 14B arm's host load,
-    // lab/tiers.toml); every other tier's pod has Runpod's default. 256 GB
-    // since the 7e580e5 gold run measured that arm's peak (ADR-0019 §16.10).
-    assert_eq!(floors, 1, "one tier with min_ram_gb (gold)");
+    // wan's (ADR-0019 §22, S6): 210 GB (wan21-t2v-14b's 80.41 GB, the most
+    // fv-lab's drop-then-fetch plan holds at once, and the 120 GB), 85 min,
+    // the TAE fetch at start (its 45 gated arms read `{tae}`, Addition 16).
+    let wan = fixture("wan");
+    assert_eq!(wan["containerDiskInGb"], json!(210));
+    let cmd = wan["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert!(
+        cmd.contains("lim=85; [ \"$used\" = 1 ] && lim=85"),
+        "the idle limit"
+    );
+    assert!(
+        cmd.contains(
+            "if [ \"0\" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then"
+        ),
+        "the TAE fetch runs (FV_SKIP_TAE 0)"
+    );
+    // Two tiers ask for a host-RAM floor, both for a Wan 14B arm's host load
+    // (lab/tiers.toml): gold (256 GB since the 7e580e5 gold run measured its
+    // plug arm's peak, ADR-0019 §16.10) and wan (its 14B arms, as gold's,
+    // §22, S6); every other tier's pod has Runpod's default.
+    assert_eq!(floors, 2, "two tiers with min_ram_gb (gold, wan)");
     assert_eq!(lab.tier("gold").and_then(|t| t.min_ram_gb), Some(256));
+    assert_eq!(lab.tier("wan").and_then(|t| t.min_ram_gb), Some(256));
+    assert_eq!(wan["minRAMPerGPU"], json!(256));
 }
 
 /// The script runner's pod for a `volume+r2` tier's GPU check (ADR-0019
@@ -191,12 +211,20 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
 /// references (`weights::r2_env_refs`), the tier's disk and idle limit,
 /// fv-lab's link roots (`TreeSources::link_roots`) and the pinned revision for
 /// `r2-stage.sh`, and the matrix's `$W` the merged root. Without
-/// `FV_R2_TREES` the body has no `env` (`fv-lab-goldens.sh`). Two: the
+/// `FV_R2_TREES` the body has no `env` (`fv-lab-goldens.sh`). Four: the
 /// `oracle` family's `sfwan13` for `oracle-r2`
-/// (`fixtures/runpod-http-oracle-sfwan13-r2.json`, §21.7) and `serve-engine`'s
-/// wan group (`fixtures/runpod-http-serve-engine-r2.json`, §22.12), one
-/// test each.
-fn script_side_r2_pod(tier: &str, golden: &str, plain: &str, tree: &str) {
+/// (`fixtures/runpod-http-oracle-sfwan13-r2.json`, §21.7), `serve-engine`'s
+/// wan group (`fixtures/runpod-http-serve-engine-r2.json`, §22.12),
+/// `sfstream` (§22.14) and `wan`'s two trees (§22.18), one test each. The
+/// script side's disk is the tier's, but for `wan` (`disk`: it stages the
+/// check's two trees at once where the tier is sized for its whole plan).
+fn script_side_r2_pod(tier: &str, golden: &str, plain: &str, trees: &[&str]) {
+    let t = Lab::load(&repo_root()).expect("lab/ parses");
+    let disk = t.tier(tier).expect("tier").container_disk_gb;
+    script_side_r2_pod_on(tier, golden, plain, trees, disk);
+}
+
+fn script_side_r2_pod_on(tier: &str, golden: &str, plain: &str, trees: &[&str], disk: u32) {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let sources = fastvideo_lab::weights::TreeSources::load(&repo_root()).expect("trees");
     let t = lab.tier(tier).expect("tier");
@@ -206,11 +234,7 @@ fn script_side_r2_pod(tier: &str, golden: &str, plain: &str, tree: &str) {
         .map(|(k, v)| (k, Value::String(v)))
         .collect();
     assert_eq!(body["env"], Value::Object(refs), "{tier}");
-    assert_eq!(
-        body["containerDiskInGb"].as_u64(),
-        Some(u64::from(t.container_disk_gb)),
-        "{tier}"
-    );
+    assert_eq!(body["containerDiskInGb"].as_u64(), Some(u64::from(disk)), "{tier}");
     let cmd = body["dockerStartCmd"][2].as_str().expect("a start command");
     let idle = fastvideo_lab::weights::r2_idle_min(t.cell_timeout_s);
     assert!(
@@ -221,15 +245,22 @@ fn script_side_r2_pod(tier: &str, golden: &str, plain: &str, tree: &str) {
         cmd.starts_with("_fvr2_id=\"${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}\""),
         "{tier}"
     );
-    let rev = sources
-        .r2
-        .get(tree)
-        .map(|t| t.rev.clone())
-        .unwrap_or_else(|| panic!("{tree} in weights-r2.tsv"));
+    let specs: Vec<String> = trees
+        .iter()
+        .map(|tree| {
+            let rev = sources
+                .r2
+                .get(*tree)
+                .map(|t| t.rev.clone())
+                .unwrap_or_else(|| panic!("{tree} in weights-r2.tsv"));
+            format!("{tree}@{rev}")
+        })
+        .collect();
     let want = format!(
-        "$SCRATCH/weights $SCRATCH/r2 \"$OUT\" {} /workspace/weights \"{}\" {tree}@{rev} ",
+        "$SCRATCH/weights $SCRATCH/r2 \"$OUT\" {} /workspace/weights \"{}\" {} ",
         t.cell_timeout_s,
-        sources.link_roots().join(" ")
+        sources.link_roots().join(" "),
+        specs.join(" ")
     );
     assert!(cmd.contains(&want), "{tier}: {want}");
     assert!(
@@ -248,7 +279,12 @@ fn script_side_r2_pod(tier: &str, golden: &str, plain: &str, tree: &str) {
 
 #[test]
 fn the_script_side_r2_pod_reads_its_trees_as_the_oracle_r2_tier() {
-    script_side_r2_pod("oracle-r2", "oracle-sfwan13-r2", "oracle", "sfwan21-1.3b");
+    script_side_r2_pod(
+        "oracle-r2",
+        "oracle-sfwan13-r2",
+        "oracle",
+        &["sfwan21-1.3b"],
+    );
     // The oracle tier's 120 GB body plus the tree.
     assert_eq!(fixture("oracle")["containerDiskInGb"].as_u64(), Some(120));
 }
@@ -259,7 +295,7 @@ fn the_script_side_r2_pod_reads_its_trees_as_the_serve_engine_tier() {
         "serve-engine",
         "serve-engine-r2",
         "serve-engine",
-        "fastwan21-1.3b",
+        &["fastwan21-1.3b"],
     );
     // The tier's own body already has its 150 GB.
     assert_eq!(
@@ -270,6 +306,27 @@ fn the_script_side_r2_pod_reads_its_trees_as_the_serve_engine_tier() {
 
 #[test]
 fn the_script_side_r2_pod_reads_its_trees_as_the_sfstream_tier() {
-    script_side_r2_pod("sfstream", "sfstream-r2", "sfstream", "sfwan21-1.3b");
+    script_side_r2_pod("sfstream", "sfstream-r2", "sfstream", &["sfwan21-1.3b"]);
     assert_eq!(fixture("sfstream")["containerDiskInGb"].as_u64(), Some(150));
+}
+
+/// `wan`'s GPU check (ADR-0019 §22, S6, §22.18): the script side stages both
+/// trees its checked arms read (`wan13-dmd`, `wan13-dmd-dense`:
+/// fastwan21-1.3b; `cli-fw22`, `engine-fw22`: fastwan22-ti2v-5b;
+/// `kernels-wan`: none) before the matrix, on 174 GB (their 53.41 GB and the
+/// 120 GB), with the tier's 256 GB host-RAM floor; the tier's own body has 210
+/// GB, for fv-lab's plan of the whole family.
+#[test]
+fn the_script_side_r2_pod_reads_its_trees_as_the_wan_tier() {
+    let trees = ["fastwan21-1.3b", "fastwan22-ti2v-5b"];
+    script_side_r2_pod_on("wan", "wan-r2", "wan", &trees, 174);
+    assert_eq!(fixture("wan")["containerDiskInGb"].as_u64(), Some(210));
+    assert_eq!(fixture("wan-r2")["minRAMPerGPU"].as_u64(), Some(256));
+    let sources = fastvideo_lab::weights::TreeSources::load(&repo_root()).expect("trees");
+    let bytes: u64 = trees
+        .iter()
+        .map(|t| sources.r2.get(*t).map(|t| t.bytes).expect("an R2 tree"))
+        .sum();
+    assert_eq!(bytes, 53_413_890_791);
+    assert_eq!(bytes.div_ceil(1_000_000_000) + 120, 174);
 }

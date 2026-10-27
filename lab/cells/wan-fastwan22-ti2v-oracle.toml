@@ -1,0 +1,35 @@
+# runpod-matrix.sh `wan`, target fastwan22-ti2v (docs/serve/fal-parity.md §3; docs/adr/0019-fv-lab.md §22, S6): the
+# wan-turbo tier's weights (FastWan2.2 TI2V-5B FullAttn, the TI2V-5B network DMD-distilled) through the same Diffusers
+# modules, the DiT at the DMD timestep 757. The upstream reference's dump (scripts/gpu/upstream/oracle.sh
+# oracle_fastwan22 on the `fastvideo` upstream pod, its tree fetched from R2 there: lab/upstream.toml `r2`) fetched
+# into {ref}, `fv-gpucheck wan oracle` in the production mode with its TAEHV taew2_2 decode, diffed with compare-dumps
+# (ungated, only when both dumps exist; its lines echoed into the log). Without FV_ORACLE_URL the cell is skipped
+# ("reference dump unavailable" on fw22-oracle), as the script skips it. After the cell the dump and the reference are
+# removed. `--taehv {tae}/taew2_2.safetensors` reads `{tae}` without a `tae` file (ADR-0019 §22.4, Addition 16;
+# fetch-tae.sh fetches taew2_2 since S6). fastwan22-ti2v-5b (24.20 GB) is R2-only since 2026-10-13.
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "wan-fastwan22-ti2v-oracle"
+description = "Oracle module parity of FastWan2.2 TI2V-5B FullAttn (wan-turbo's weights) against Diffusers: VAE encode / decode, the t2v and i2v DiT forwards at the DMD timestep 757, the TAEHV decode"
+
+[workload]
+model = "wan oracle"
+note = "the reference's inputs (a fixed 704x1280 clip, the DiT at timestep 757) are in its dump"
+
+[reference]
+target = "fastwan22-ti2v"
+
+[[arm]]
+name = "fw22-oracle"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "--keep-going", "wan", "oracle", "--weights", "{weights}/fastwan22-ti2v-5b", "--reference",
+  "{ref}", "--dump-out", "{runs}/fw22-oracle-dump", "--taehv", "{tae}/taew2_2.safetensors"]
+fresh = ["{runs}/fw22-oracle-dump"]
+
+[[arm]]
+name = "fw22-oracle-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/fw22-oracle-dump"]
+requires = ["{ref}", "{runs}/fw22-oracle-dump"]
+echo = ["compare-dumps"]

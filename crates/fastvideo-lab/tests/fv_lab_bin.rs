@@ -1190,8 +1190,11 @@ fn oracle_without_yes_is_the_plan_and_needs_no_key() {
     assert!(String::from_utf8_lossy(&nokey.stderr).contains("RUNPOD_API_KEY"));
     // `check` reads lab/upstream.toml too.
     let out = stdout(fv_lab().arg("check"));
-    assert!(out.contains("upstream fastvideo: 6 target(s)"), "{out}");
+    // fastvideo: the five H3 targets, sfwan13 (§21) and the wan tier's two
+    // Wan 2.2 TI2V-5B targets (§22, S6).
+    assert!(out.contains("upstream fastvideo: 8 target(s)"), "{out}");
     assert!(out.contains("upstream sol-ltx25: 14 target(s)"), "{out}");
+    assert!(out.contains("wan: 6 cell(s), 49 arm(s)"), "{out}");
     // The oracle tier's clip-metric targets are extra cells (ADR-0019 §20.3).
     assert!(
         out.contains("oracle: 9 cell(s), 32 arm(s) (+10 extra cell(s), 46 arm(s), on request)"),
@@ -1243,7 +1246,7 @@ fn the_runtime_images_lab_subset_passes_check() {
     assert!(lab >= 3, "lab/tiers.toml, lab/cells, lab/upstream.toml");
     let out = stdout(fv_lab().args(["check", "--root"]).arg(&root));
     assert!(out.contains("rtx6000: 2 cell(s), 7 arm(s)"), "{out}");
-    assert!(out.contains("upstream fastvideo: 6 target(s)"), "{out}");
+    assert!(out.contains("upstream fastvideo: 8 target(s)"), "{out}");
     let dry = stdout(
         fv_lab()
             .args([

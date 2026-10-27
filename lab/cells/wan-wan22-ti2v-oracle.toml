@@ -1,0 +1,52 @@
+# runpod-matrix.sh `wan`, target wan22-ti2v (docs/oracle.md "Wan 2.2 TI2V-5B"; docs/adr/0019-fv-lab.md §22, S6): Wan2.2
+# TI2V-5B module parity against Diffusers. The upstream reference's dump (scripts/gpu/upstream/oracle.sh
+# oracle_wan22 on the `fastvideo` upstream pod, its tree fetched from R2 there: lab/upstream.toml `r2`) fetched into
+# {ref}, then `fv-gpucheck wan oracle` (VAE encode / decode, the t2v and i2v DiT forwards) in the production mode, its
+# TAEHV taew2_2 decode too, and the VAE again in exact f32 math (--skip-dit), each diffed with compare-dumps (ungated,
+# only when both dumps exist; its lines echoed into the log). First of the 5B arms, as in the script, so the upstream
+# pod serving the dump can go as soon as it is fetched. Without FV_ORACLE_URL the cell is skipped ("reference dump
+# unavailable" on wan5b-oracle), as the script skips it. The script runs the block when FV_CELLS is empty or names
+# wan5b-oracle; fv-lab runs the cell when any of its arms is selected (§15). After the cell the dumps and the
+# reference are removed (`fresh`; the script's `rm -rf` after the block). `--taehv {tae}/taew2_2.safetensors` reads
+# `{tae}` without a `tae` file (ADR-0019 §22.4, Addition 16): fetch-tae.sh fetches taew2_2 since S6, and a missing file
+# fails the arm. wan22-ti2v-5b (34.20 GB) is R2-only since 2026-10-13. Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "wan-wan22-ti2v-oracle"
+description = "Oracle module parity of Wan2.2 TI2V-5B against Diffusers: VAE encode / decode, the t2v and i2v DiT forwards and the TAEHV decode in the production mode, the VAE again in exact f32 math"
+
+[workload]
+model = "wan oracle"
+note = "the reference's inputs (a fixed 704x1280 clip, the DiT's t2v and i2v timestep layouts) are in its dump"
+
+[reference]
+target = "wan22-ti2v"
+
+[[arm]]
+name = "wan5b-oracle"
+gate = "wan22-ti2v-5b"
+trees = ["wan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "fast", "--keep-going", "wan", "oracle", "--weights", "{weights}/wan22-ti2v-5b", "--reference", "{ref}",
+  "--dump-out", "{runs}/wan5b-oracle-dump", "--taehv", "{tae}/taew2_2.safetensors"]
+fresh = ["{runs}/wan5b-oracle-dump"]
+
+[[arm]]
+name = "wan5b-oracle-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/wan5b-oracle-dump"]
+requires = ["{ref}", "{runs}/wan5b-oracle-dump"]
+echo = ["compare-dumps"]
+
+[[arm]]
+name = "wan5b-oracle-exact"
+gate = "wan22-ti2v-5b"
+trees = ["wan22-ti2v-5b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["--mode", "exact", "--keep-going", "wan", "oracle", "--weights", "{weights}/wan22-ti2v-5b", "--reference", "{ref}",
+  "--dump-out", "{runs}/wan5b-oracle-exact-dump", "--skip-dit"]
+fresh = ["{runs}/wan5b-oracle-exact-dump"]
+
+[[arm]]
+name = "wan5b-oracle-exact-diff"
+argv = ["compare-dumps", "--baseline", "{ref}", "--candidate", "{runs}/wan5b-oracle-exact-dump"]
+requires = ["{ref}", "{runs}/wan5b-oracle-exact-dump"]
+echo = ["compare-dumps"]

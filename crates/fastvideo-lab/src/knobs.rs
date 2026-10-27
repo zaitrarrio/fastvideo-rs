@@ -91,7 +91,13 @@ pub const MODE_KNOBS: [&str; 18] = [
 /// `FV_SFSTREAM_RUNS` (`sfstream-main`'s run list), `FV_SF_PROMPT` and
 /// `FV_SF_SWITCH` (the stream's prompt and switch prompt); the tier's cell
 /// is their defaults.
-pub const SCRIPT_KNOBS: [&str; 14] = [
+///
+/// `wan` (ADR-0019 §22, S6), whose branch stays until its GPU check: its
+/// branch reads no knob of its own (`FV_CELLS` selects its arms, as fv-lab's
+/// `--cells` does); `FV_SFWAN_CELLS` is `sfwan`'s pick of `wan`'s arms
+/// (`runpod-matrix.sh sfwan`, which runs the branch with it as `FV_CELLS`),
+/// which on the `wan` tier is `--cells` itself.
+pub const SCRIPT_KNOBS: [&str; 15] = [
     "FV_ORACLE_TARGETS",
     "FV_ORACLE_F32",
     "FV_ORACLE_OWN_TEXT",
@@ -106,6 +112,7 @@ pub const SCRIPT_KNOBS: [&str; 14] = [
     "FV_SFSTREAM_RUNS",
     "FV_SF_PROMPT",
     "FV_SF_SWITCH",
+    "FV_SFWAN_CELLS",
 ];
 
 /// The knobs of a step dropped from a live family's branch, which neither
@@ -201,6 +208,12 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
         return Some(format!(
             "{key}: no tier reads it (it changed runpod-matrix.sh sfstream's runs or prompts); the sfstream tier's cell (lab/cells/sfstream-rollout.toml) is the script's defaults, its arms sfstream-main and sfstream-10min, selected with --cells (FV_CELLS); another run list or prompt is another cell (ADR-0019 §22, S4)"
         ));
+    }
+    if key == "FV_SFWAN_CELLS" {
+        return Some(
+            "FV_SFWAN_CELLS: no tier reads it (runpod-matrix.sh sfwan's pick of the wan family's arms, default kernels-wan and the four sfwan13-81f-* arms); on the wan tier select them with --cells (FV_CELLS): kernels-wan,sfwan13-81f-flash,sfwan13-81f-composed,sfwan13-81f-wholeclip,sfwan13-81f-fullvae (ADR-0019 §22, S6)"
+                .to_owned(),
+        );
     }
     if DROPPED_KNOBS.contains(&key) {
         return Some(format!(
@@ -508,6 +521,35 @@ mod tests {
             assert!(!MODE_KNOBS.contains(&key));
             assert!(!not_read().any(|k| k == key));
         }
+    }
+
+    #[test]
+    fn the_sfwan_cells_knob_is_refused_by_fv_lab_only() {
+        // sfwan's pick of wan's arms (ADR-0019 §22, S6): refused by fv-lab
+        // with the arms to pass as --cells, in --extra-env and in fv-lab
+        // run's environment; the script's sfwan branch still reads it, so
+        // runpod-http.sh's FV_LAB_NOT_READ does not (it goes with sfwan, S8).
+        let key = "FV_SFWAN_CELLS";
+        for tier in ["wan", "rtx6000"] {
+            let e = check_extra_env(tier, &[format!("{key}=kernels-wan")]).unwrap_err();
+            assert!(
+                e.contains(&format!("--extra-env {key}: no tier reads it")),
+                "{e}"
+            );
+            assert!(
+                e.contains("--cells (FV_CELLS): kernels-wan,sfwan13-81f-flash,sfwan13-81f-composed,sfwan13-81f-wholeclip,sfwan13-81f-fullvae"),
+                "{e}"
+            );
+        }
+        let env = |k: &str| (k == key).then(|| "kernels-wan".to_owned());
+        let e = check_run_env("wan", env).unwrap_err();
+        assert!(e.contains(&format!("{key}: no tier reads it")), "{e}");
+        assert!(e.contains("ADR-0019 §22, S6"), "{e}");
+        assert!(SCRIPT_KNOBS.contains(&key));
+        assert!(!MODE_KNOBS.contains(&key));
+        assert!(!not_read().any(|k| k == key));
+        // The wan branch's own selection stays fv-lab's input.
+        assert!(check_run_env("wan", |k: &str| (k == "FV_CELLS").then(|| "kernels-wan".to_owned())).is_ok());
     }
 
     #[test]
