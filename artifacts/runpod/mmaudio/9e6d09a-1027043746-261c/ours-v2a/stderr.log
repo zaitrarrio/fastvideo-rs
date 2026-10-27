@@ -1,0 +1,7 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] sdpa: device dense B=40 H=16 Sq=730 Sk=730 D=80 query_chunk=574
+[fastvideo] sdpa: fused mma B=14 H=12 Sq=1 Sk=1569 D=64
+mmaudio v2a run 0: 2.042s (pre 0.064 clip 0.735 sync 0.193 text 0.089 dit 0.827 vae 0.007 voc 0.092) duration 5.000s rtf 0.403
+mmaudio v2a run 1: 1.822s (pre 0.066 clip 0.589 sync 0.162 text 0.081 dit 0.810 vae 0.003 voc 0.077) duration 5.000s rtf 0.360
+mmaudio v2a run 2: 1.819s (pre 0.063 clip 0.589 sync 0.161 text 0.079 dit 0.809 vae 0.003 voc 0.077) duration 5.000s rtf 0.359
+[PASS] stage mmaudio → /fvscratch/runs/mmaudio/9e6d09a-1027043746-261c/ours-v2a/mmaudio.json (8.8s)

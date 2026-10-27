@@ -1,0 +1,74 @@
+04:38:22 plan: 2 tree(s), 50.68 GB, URLs valid 2365s -> /fvscratch/r2/plan.json
+04:38:22 [r2-fetch] 2 tree(s) to fetch, 50.68 GB in 407 GETs of up to 2 x 64 MiB, concurrency 64, 256 CPUs; 0 present
+04:38:27 [r2-fetch] r2 3.2/50.7 GB, 648 MB/s, eta 73s, trees 0/2 (now 649 MB/s)
+04:38:30 [r2-fetch] mmaudio-44k-v2/safetensors/clip_dfn5b_h14_384.safetensors part 0: slow: 7.4 MB/s after 8s (recent parts 33 MB/s): fetched again on a new connection
+04:38:30 [r2-fetch] mmaudio-44k-v2/safetensors/clip_dfn5b_h14_384.safetensors part 20: slow: 7.8 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+04:38:30 [r2-fetch] mmaudio-44k-v2/ext_weights/synchformer_state_dict.pth part 2: slow: 7.9 MB/s after 8s (recent parts 33 MB/s): fetched again on a new connection
+04:38:30 [r2-fetch] mmaudio-44k-v2/safetensors/clip_dfn5b_h14_384.safetensors part 36: slow: 2.3 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+04:38:30 [r2-fetch] mmaudio-44k-v2/safetensors/clip_dfn5b_h14_384.safetensors part 26: slow: 6.8 MB/s after 7s (recent parts 33 MB/s): fetched again on a new connection
+04:38:31 [r2-fetch] mmaudio-44k-v2/safetensors/clip_dfn5b_h14_384.safetensors part 46: slow: 1.9 MB/s after 7s (recent parts 34 MB/s): fetched again on a new connection
+04:38:32 [r2-fetch] r2 9.5/50.7 GB, 954 MB/s, eta 43s, trees 0/2 (now 1260 MB/s)
+04:38:32 [r2-fetch] mmaudio-44k-v2/safetensors/clip_dfn5b_h14_384.safetensors part 50: slow: 2.7 MB/s after 6s (recent parts 35 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] r2 15.0/50.7 GB, 1002 MB/s, eta 36s, trees 0/2 (now 1099 MB/s)
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 4: slow: 0.6 MB/s after 8s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/DFN5B-CLIP-ViT-H-14-384/open_clip_pytorch_model.bin part 50: slow: 8.1 MB/s after 8s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 34: slow: 3.2 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 10: slow: 7.3 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 32: slow: 0.0 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 36: slow: 6.5 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 20: slow: 4.2 MB/s after 7s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 46: slow: 1.5 MB/s after 5s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 40: slow: 8.1 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 38: slow: 2.0 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 44: slow: 0.0 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 42: slow: 2.0 MB/s after 6s (recent parts 39 MB/s): fetched again on a new connection
+04:38:37 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 48: slow: 0.8 MB/s after 5s (recent parts 39 MB/s): fetched again on a new connection
+04:38:38 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 56: slow: 1.4 MB/s after 6s (recent parts 44 MB/s): fetched again on a new connection
+04:38:38 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 50: slow: 3.5 MB/s after 6s (recent parts 44 MB/s): fetched again on a new connection
+04:38:38 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 54: slow: 1.4 MB/s after 6s (recent parts 44 MB/s): fetched again on a new connection
+04:38:38 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 58: slow: 0.0 MB/s after 5s (recent parts 44 MB/s): fetched again on a new connection
+04:38:38 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 52: slow: 5.6 MB/s after 6s (recent parts 44 MB/s): fetched again on a new connection
+04:38:38 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 60: slow: 5.9 MB/s after 5s (recent parts 44 MB/s): fetched again on a new connection
+04:38:38 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 0: slow: 1.7 MB/s after 5s (recent parts 44 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/DFN5B-CLIP-ViT-H-14-384/open_clip_pytorch_model.bin part 53: slow: 12.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 8: slow: 0.0 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 2: slow: 0.0 MB/s after 6s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 4: slow: 1.6 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 6: slow: 1.6 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 10: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 20: slow: 0.0 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 12: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 14: slow: 1.7 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 32: slow: 0.0 MB/s after 4s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 26: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 38: slow: 1.0 MB/s after 4s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 18: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 30: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 22: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 24: slow: 1.8 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 34: slow: 1.0 MB/s after 4s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 16: slow: 0.0 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 36: slow: 1.0 MB/s after 4s (recent parts 55 MB/s): fetched again on a new connection
+04:38:39 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 28: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:40 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 40: slow: 0.8 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:40 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 44: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:40 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 42: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:40 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 52: slow: 1.0 MB/s after 4s (recent parts 55 MB/s): fetched again on a new connection
+04:38:40 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 48: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:40 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 50: slow: 0.9 MB/s after 4s (recent parts 55 MB/s): fetched again on a new connection
+04:38:40 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 46: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:40 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 56: slow: 0.0 MB/s after 4s (recent parts 55 MB/s): fetched again on a new connection
+04:38:40 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 54: slow: 0.0 MB/s after 4s (recent parts 55 MB/s): fetched again on a new connection
+04:38:41 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 58: slow: 0.8 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:41 [r2-fetch] mmaudio-44k-v2/weights/mmaudio_large_44k_v2.pth part 60: slow: 0.9 MB/s after 5s (recent parts 55 MB/s): fetched again on a new connection
+04:38:41 [r2-fetch] mmaudio-44k-v2/safetensors/mmaudio_large_44k_v2.safetensors part 44: slow: 5.2 MB/s after 4s (recent parts 55 MB/s): fetched again on a new connection
+04:38:42 [r2-fetch] r2 21.2/50.7 GB, 1058 MB/s, eta 28s, trees 0/2 (now 1227 MB/s)
+04:38:47 [r2-fetch] r2 27.4/50.7 GB, 1097 MB/s, eta 21s, trees 0/2 (now 1250 MB/s)
+04:38:52 [r2-fetch] r2 33.4/50.7 GB, 1113 MB/s, eta 16s, trees 0/2 (now 1191 MB/s)
+04:38:52 [r2-fetch] tree mmaudio-44k-v2: ready at eu-20261011 (21.46 GB, 20 files, 30s since start)
+04:38:57 [r2-fetch] r2 39.0/50.7 GB, 1114 MB/s, eta 10s, trees 1/2 (now 1119 MB/s)
+04:39:02 [r2-fetch] r2 44.9/50.7 GB, 1120 MB/s, eta 5s, trees 1/2 (now 1166 MB/s)
+04:39:07 [r2-fetch] r2 50.6/50.7 GB, 1123 MB/s, eta 0s, trees 1/2 (now 1150 MB/s)
+04:39:12 [r2-fetch] r2 50.7/50.7 GB, 1013 MB/s, eta 0s, trees 1/2 (now 14 MB/s)
+04:39:12 [r2-fetch] tree fastwan21-1.3b: ready at 25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef (29.21 GB, 16 files, 50s since start)
+04:39:12 [r2-fetch] weights ready: 2 tree(s), 50.68 GB fetched in 50.1s (1012 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 59
