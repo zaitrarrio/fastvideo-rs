@@ -12,9 +12,10 @@
 # The Wan arms read `{tae}` without a `tae` file (ADR-0019 §22.4, Addition 16): TAEHV (taew2_1) decodes their clips,
 # found through FASTVIDEO_TAE_DIR={tae}; they are not TAE-gated and gate on their trees only, in a `tae = true` tier.
 # FASTVIDEO_MMAUDIO_WEIGHTS and FASTVIDEO_TAE_DIR are each Wan arm's env entries, moved so from the script's `export`s in
-# the same commit; `ours-v2a` reads neither (it takes --weights and decodes no video). Each arm gates on a
-# verify-weights.sh cell whose trees are exactly the arm's: `fastwan21-1.3b-mmaudio` and `sfwan21-1.3b-mmaudio` (the Wan
-# tree and mmaudio-44k-v2, composite cells added in lockstep), `mmaudio-44k-v2`. All three trees are R2-only since
+# the same commit; `ours-v2a` reads neither (it takes --weights; it reads the mp4's frames with ffmpeg and decodes no
+# latents, so no TAE). Each arm gates on a verify-weights.sh cell whose trees are exactly the arm's:
+# `fastwan21-1.3b-mmaudio` and `sfwan21-1.3b-mmaudio` (the Wan tree and mmaudio-44k-v2, composite cells added in
+# lockstep), `mmaudio-44k-v2`. All three trees are R2-only since
 # 2026-10-13, so the tier is `weights = "volume+r2"`: each fetched before the first arm that reads it, a tree no later
 # arm reads dropped first (at most fastwan21-1.3b and mmaudio-44k-v2, 50.68 GB, on the disk at once).
 # Licence: the MMAudio checkpoints are CC-BY-NC 4.0; the tier only reads the copy already in the owner's R2 store.
@@ -28,7 +29,7 @@ model = "wan mmaudio"
 prompt = "A red fox running through tall grass at dusk. A narrator says <S>The fox cuts through the meadow at dusk.<E>\nAudio: male narration, grass rustle, wind, distant strings, cricket night"
 seed = 1024
 frames = 81
-note = "runpod-matrix.sh mmaudio's default MM_PROMPT (FV_MMAUDIO_PROMPT) and the script's default SEED; frames is sfwan13-audio's --num-frames (wan13-audio takes the preset's 81 at 480x832); ours-v2a's seed is the branch's literal 1000; ours-v2a reads wan13-audio's clip, so it runs after it"
+note = "runpod-matrix.sh mmaudio's default MM_PROMPT (FV_MMAUDIO_PROMPT) and the script's default SEED; frames is sfwan13-audio's --num-frames (wan13-audio passes none and takes wan gen's command-line default --num-frames 81, wan_stage.rs, at its default 480x832); ours-v2a's seed is the branch's literal 1000; ours-v2a reads wan13-audio's clip, so it runs after it"
 
 [[arm]]
 name = "wan13-audio"

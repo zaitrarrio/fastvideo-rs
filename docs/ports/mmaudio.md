@@ -95,8 +95,8 @@ Until 2026-10-27, `runpod-matrix.sh mmaudio` ran the whole thing on one GPU pod:
 
 Since then (ADR-0019 §22, S5, §22.15) the pod check is the fv-lab tier `mmaudio` (`lab/cells/mmaudio-sidecar.toml`),
 without upstream parity: `wan13-audio` and `sfwan13-audio` (the two sidecar cells) and `ours-v2a` (our port, timed, on
-the FastWan clip). The script's branch was cut to the same three arms and stays until the tier's GPU check
-(§22.16); `fv-lab run mmaudio` on a pod, `fv-lab pod up --family mmaudio` from a host. Its weights come from the R2
+the FastWan clip). The script's branch was cut to the same three arms; it is retired in S7, after the tier's GPU
+check (§22.16) passes; `fv-lab run mmaudio` on a pod, `fv-lab pod up --family mmaudio` from a host. Its weights come from the R2
 store (`volume+r2`: `fastwan21-1.3b`, `sfwan21-1.3b`, `mmaudio-44k-v2`). The upstream venv and clone, the timed
 upstream sidecar, the inject arms with `compare-dumps` and the waveform comparisons are no longer run by any family:
 the results below stand at `778c65e`, and the commands are in `git show b7ddf5fa:scripts/gpu/runpod-matrix.sh`.

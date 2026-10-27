@@ -276,11 +276,15 @@ sha_dests() {
 SHA_LIST="$HERE/weights-sha256.tsv"
 
 if [[ "${1:-}" == "--list" ]]; then
-  for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
-  for c in $FV_VARIANT_IDS; do printf '%-20s %s\n' "variant:$c" "$(variant_trees "$c")"; done
+  # The name column as wide as the longest cell name (fastwan21-1.3b-mmaudio,
+  # ltx25-ic-lora-ingredients); readers split on whitespace (fv-lab-goldens.sh).
+  w=20
+  for c in "${CELLS[@]}"; do (( ${#c} > w )) && w=${#c}; done
+  for c in "${CELLS[@]}"; do printf '%-*s %s\n' "$w" "$c" "$(needs "$c")"; done
+  for c in $FV_VARIANT_IDS; do printf '%-*s %s\n' "$w" "variant:$c" "$(variant_trees "$c")"; done
   if [[ -f "$SHA_LIST" ]]; then
     grep -vE '^[[:space:]]*(#|$)' "$SHA_LIST" | cut -f1 | sort | uniq -c \
-      | awk '{printf "%-20s %s files by recorded hash (weights-sha256.tsv)\n", "sha:" $2, $1}'
+      | awk -v w="$w" '{printf "%-" w "s %s files by recorded hash (weights-sha256.tsv)\n", "sha:" $2, $1}'
   fi
   exit 0
 fi

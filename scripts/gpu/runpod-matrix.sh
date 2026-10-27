@@ -493,7 +493,8 @@ case "$FAMILY" in
     #   - FASTVIDEO_MMAUDIO_WEIGHTS and FASTVIDEO_TAE_DIR are each Wan arm's own
     #     env entries, not `export`s before the arms, so the dry run shows them
     #     (the same values reach the same two commands; ours-v2a reads neither:
-    #     it takes --weights and decodes no video);
+    #     it takes --weights, reads the mp4's frames with ffmpeg and decodes
+    #     no latents, so no TAE);
     #   - the two Wan arms gate on composite verify-weights.sh cells (their Wan
     #     tree and mmaudio-44k-v2), and ours-v2a on mmaudio-44k-v2: an
     #     incomplete MMAudio tree now skips them ("weights incomplete") where
