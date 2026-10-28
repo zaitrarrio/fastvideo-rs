@@ -226,59 +226,141 @@ else
         || { echo "fv-lab-experiment-goldens: no $f beside $SOL in the history" >&2; exit 2; }
     fi
   done
-  {
-    echo 'set -u'
-    cut_block "$sol_src" 'PROMPT="${FV_PROMPT:-' line
-    cut_block "$sol_src" 'SEED="${FV_SEED:-' line
-    # The definitions: from their banner up to the set's first log line.
-    SOL_START='# ---- cell definitions' SOL_END='log "set $SET budget' awk '
-      BEGIN { a = ENVIRON["SOL_START"]; b = ENVIRON["SOL_END"] }
-      go == 0 && substr($0, 1, length(a)) == a { go = 1 }
-      go == 1 && substr($0, 1, length(b)) == b { exit }
-      go == 1 { print }' "$sol_src"
-    cut_block "$sol_src" 'case "$SET" in' exact 'esac'
-  } >"$TMP/sol.sh"
-  # SOL_IN to the inputs (its `$(cat …)` prompts), named back below.
-  python3 -I -c '
+  # sol_cut <script> <inputs dir> <work dir> <dest>: every set's commands into
+  # <dest> (the format above); on anything it cannot vouch for, a message and 1:
+  # (c) the paths the stand-in gives the cut must be the script's own lines
+  #     (WORK, W, SCRATCH, RUNS, BIN: each assigned once, as below, and nowhere
+  #     else), and the script may export nothing but PATH and LD_LIBRARY_PATH (an
+  #     exported FASTVIDEO_* setting would reach every cell outside its command);
+  # (b) every arm of its `case "$SET"` is a set the parser accepts (`  <label>)`,
+  #     [a-z0-9][a-z0-9_-]*) or the `*)` refusal: the `;;` count must agree;
+  # (a) every command a set runs goes through `cell`: $BIN is a stand-in that
+  #     records a direct call, an unknown command is recorded by bash's
+  #     command_not_found_handle, and the cut runs under errexit; any record fails.
+  # The self-test below runs it on mutated copies, each of which must fail.
+  sol_cut() {
+    local src="$1" soldir="$2" work="$3" dest="$4" set arms
+    local -a sets=()
+    rm -rf "$work" && mkdir -p "$work/stub" || return 1
+    python3 -I - "$src" <<'PY' || return 1
+import re, sys
+lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
+want = {
+    "WORK": 'WORK="${FV_WORK:-/workspace}"',
+    "W": 'W="$WORK/weights"',
+    "SCRATCH": 'SCRATCH="${FV_SCRATCH:-/fvscratch}"',
+    "RUNS": 'RUNS="$SCRATCH/runs/$FAMILY/${FV_RUN_TAG:?FV_RUN_TAG}"',
+    "BIN": "BIN=/opt/fastvideo-rs/target/release/fv-gpucheck",
+}
+bad = []
+for name, line in want.items():
+    hits = [l for l in lines if re.match(r"\s*((local|declare|export|readonly)(\s+-\w+)*\s+)?" + name + "=", l)]
+    if hits != [line]:
+        bad.append(f"{name} assigned as {hits!r}, want exactly [{line!r}]")
+for l in lines:
+    m = re.match(r"\s*(export|declare\s+-\w*x\w*)\s+([A-Za-z_][A-Za-z0-9_]*)", l)
+    if m and m.group(2) not in ("PATH", "LD_LIBRARY_PATH"):
+        bad.append(f"exports {m.group(2)} ({l.strip()})")
+if bad:
+    sys.exit("fv-lab-experiment-goldens: sol-bench-pod.sh: " + "; ".join(bad))
+PY
+    {
+      echo 'set -eu'
+      cut_block "$src" 'PROMPT="${FV_PROMPT:-' line || return 1
+      cut_block "$src" 'SEED="${FV_SEED:-' line || return 1
+      # The definitions: from their banner up to the set's first log line.
+      SOL_START='# ---- cell definitions' SOL_END='log "set $SET budget' awk '
+        BEGIN { a = ENVIRON["SOL_START"]; b = ENVIRON["SOL_END"] }
+        go == 0 && substr($0, 1, length(a)) == a { go = 1 }
+        go == 1 && substr($0, 1, length(b)) == b { exit }
+        go == 1 { print }' "$src"
+      cut_block "$src" 'case "$SET" in' exact 'esac' || return 1
+    } >"$work/sol.sh" || return 1
+    # SOL_IN to the inputs (its `$(cat …)` prompts), named back below.
+    python3 -I -c '
 import sys
 path, soldir = sys.argv[1:]
 text = open(path, encoding="utf-8").read()
 line = "SOL_IN=/opt/fastvideo-rs/scripts/gpu/sol\n"
 if text.count(line) != 1:
     sys.exit("fv-lab-experiment-goldens: SOL_IN=/opt/fastvideo-rs/scripts/gpu/sol is not one line of the cut")
-open(path, "w", encoding="utf-8").write(text.replace(line, "SOL_IN=" + soldir + "\n"))' "$TMP/sol.sh" "$SOLDIR"
-  grep -q '^cosmos3() {' "$TMP/sol.sh" && grep -q '^esac$' "$TMP/sol.sh" \
-    || { echo "fv-lab-experiment-goldens: the sol-bench cut lacks its definitions or its case block" >&2; exit 2; }
-  # The sets, in the script's order: every `  <label>)` of the case block but `*)`.
-  mapfile -t SETS < <(cut_block "$sol_src" 'case "$SET" in' exact 'esac' \
-    | awk '/^  [a-z0-9]+\)/ { sub(/^  /, ""); sub(/\).*/, ""); print }')
-  (( ${#SETS[@]} > 0 )) || { echo "fv-lab-experiment-goldens: no set in $SOL" >&2; exit 2; }
-  : >"$TMP/sol-calls.txt"
-  for set in "${SETS[@]}"; do
-    env -i PATH="/usr/local/bin:/usr/bin:/bin" HOME="$TMP" LC_ALL=C SET="$set" NL=$'\n' \
-      RUNS="/fvscratch/runs/sol-bench-$set/1234567-10241200" SCRATCH=/fvscratch W=/workspace/weights \
-      BIN=/opt/fastvideo-rs/target/release/fv-gpucheck bash -c '
-        log() { :; }
-        cell() {
-          local name="$1" wcell="$2" est="$3" a
-          shift 3
-          printf "== %s %s %s %s\n" "$SET" "$name" "$wcell" "$est"
-          for a in "$@"; do
-            [[ -n "$a" && "$a" != *"$NL"* ]] || { echo "an empty or multi-line argument in $name" >&2; exit 3; }
-            printf "%s\n" "$a"
-          done
-        }
-        . "$1"' _ "$TMP/sol.sh" >>"$TMP/sol-calls.txt" \
-      || { echo "fv-lab-experiment-goldens: sol-bench set $set failed in the cut" >&2; exit 2; }
-  done
-  n="$(grep -c '^== ' "$TMP/sol-calls.txt" || true)"
-  (( n > 0 )) || { echo "fv-lab-experiment-goldens: the sol-bench sets started no cell" >&2; exit 2; }
-  python3 -I -c '
+open(path, "w", encoding="utf-8").write(text.replace(line, "SOL_IN=" + soldir + "\n"))' "$work/sol.sh" "$soldir" || return 1
+    grep -q '^cosmos3() {' "$work/sol.sh" && grep -q '^esac$' "$work/sol.sh" \
+      || { echo "fv-lab-experiment-goldens: the sol-bench cut lacks its definitions or its case block" >&2; return 1; }
+    # (b) The sets, in the script's order, and every arm accounted for.
+    cut_block "$src" 'case "$SET" in' exact 'esac' >"$work/case.sh" || return 1
+    mapfile -t sets < <(awk '/^  [a-z0-9][a-z0-9_-]*\)/ { sub(/^  /, ""); sub(/\).*/, ""); print }' "$work/case.sh")
+    arms="$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$work/case.sh" | grep -c ';;$' || true)"
+    grep -q '^  \*) ' "$work/case.sh" \
+      || { echo "fv-lab-experiment-goldens: sol-bench-pod.sh's case has no \`*)\` refusal" >&2; return 1; }
+    (( ${#sets[@]} > 0 && ${#sets[@]} + 1 == arms )) \
+      || { echo "fv-lab-experiment-goldens: sol-bench-pod.sh's case has $arms arms but ${#sets[@]} set label(s) parse (${sets[*]}): a label the parser does not accept" >&2; return 1; }
+    # (a) $BIN called outside `cell`: recorded, and fails.
+    printf '#!/bin/bash\nprintf "%%s\\n" "BIN $*" >>"%s/unrecorded.txt"\nexit 3\n' "$work" >"$work/stub/fv-gpucheck"
+    chmod +x "$work/stub/fv-gpucheck"
+    : >"$work/calls.txt"
+    for set in "${sets[@]}"; do
+      env -i PATH="/usr/local/bin:/usr/bin:/bin" HOME="$work" LC_ALL=C SET="$set" NL=$'\n' WORKDIR="$work" \
+        RUNS="/fvscratch/runs/sol-bench-$set/1234567-10241200" SCRATCH=/fvscratch W=/workspace/weights \
+        BIN="$work/stub/fv-gpucheck" bash -c '
+          command_not_found_handle() { printf "%s\n" "CMD $*" >>"$WORKDIR/unrecorded.txt"; return 127; }
+          log() { :; }
+          cell() {
+            local name="$1" wcell="$2" est="$3" a
+            shift 3
+            printf "== %s %s %s %s\n" "$SET" "$name" "$wcell" "$est"
+            for a in "$@"; do
+              [[ -n "$a" && "$a" != *"$NL"* ]] || { echo "an empty or multi-line argument in $name" >&2; exit 3; }
+              printf "%s\n" "$a"
+            done
+          }
+          . "$1"' _ "$work/sol.sh" >>"$work/calls.txt" 2>"$work/stderr-$set.txt" \
+        || { echo "fv-lab-experiment-goldens: sol-bench set $set failed in the cut: $(cat "$work/unrecorded.txt" 2>/dev/null | head -3) $(head -3 "$work/stderr-$set.txt")" >&2; return 1; }
+    done
+    if [[ -s "$work/unrecorded.txt" ]]; then
+      echo "fv-lab-experiment-goldens: sol-bench-pod.sh runs a command outside \`cell\`: $(head -3 "$work/unrecorded.txt")" >&2
+      return 1
+    fi
+    grep -q '^== ' "$work/calls.txt" || { echo "fv-lab-experiment-goldens: the sol-bench sets started no cell" >&2; return 1; }
+    python3 -I -c '
 import sys
-soldir, src, dst = sys.argv[1:]
-text = open(src, encoding="utf-8").read().replace(soldir, "/opt/fastvideo-rs/scripts/gpu/sol")
-open(dst, "w", encoding="utf-8").write(text)' "$SOLDIR" "$TMP/sol-calls.txt" "$TMP/new/sol-bench-script.txt"
+soldir, stub, src, dst = sys.argv[1:]
+text = open(src, encoding="utf-8").read()
+text = text.replace(soldir, "/opt/fastvideo-rs/scripts/gpu/sol").replace(stub, "/opt/fastvideo-rs/target/release/fv-gpucheck")
+open(dst, "w", encoding="utf-8").write(text)' "$soldir" "$work/stub/fv-gpucheck" "$work/calls.txt" "$dest" || return 1
+  }
+  sol_cut "$sol_src" "$SOLDIR" "$TMP/sol-cut" "$TMP/new/sol-bench-script.txt" || exit 2
   NEW+=(sol-bench-script.txt)
+
+  # sol_cut's own holes, each closed: a mutated copy of the script must fail
+  # (ADR-0019 §23.5; the review of #235): (a) a command run outside `cell`,
+  # through $BIN or as an unknown command; (b) a set label the parser does not
+  # accept; (c) $W assigned otherwise, and an exported FASTVIDEO_* setting.
+  sol_mutant() { # <name> <old> <new>: the mutant must fail
+    local name="$1"
+    SOL_OLD="$2" SOL_NEW="$3" python3 -I -c '
+import os, sys
+src, dst = sys.argv[1:]
+text = open(src, encoding="utf-8").read()
+old, new = os.environ["SOL_OLD"], os.environ["SOL_NEW"]
+if text.count(old) < 1:
+    sys.exit("fv-lab-experiment-goldens: mutant pattern not in sol-bench-pod.sh: " + old)
+open(dst, "w", encoding="utf-8").write(text.replace(old, new, 1))' "$sol_src" "$TMP/mutant.sh" || exit 2
+    if sol_cut "$TMP/mutant.sh" "$SOLDIR" "$TMP/mutant-cut" "$TMP/mutant-out.txt" 2>/dev/null; then
+      echo "fv-lab-experiment-goldens: sol_cut accepted the mutant \`$name\`" >&2
+      exit 2
+    fi
+  }
+  sol_mutant direct-bin '  a1) # ' '  a1) "$BIN" --mode fast kernels --groups pisa
+    # '
+  sol_mutant direct-bin-guarded '  a1) # ' '  a1) "$BIN" --mode fast kernels --groups pisa || true
+    # '
+  sol_mutant direct-command '  a1) # ' '  a1) fv-gpucheck-direct --mode fast kernels
+    # '
+  sol_mutant label '  g2) # ' '  g2|h2) # '
+  sol_mutant w-path 'W="$WORK/weights"' 'W="$WORK/weights2"'
+  sol_mutant export 'BIN=/opt/fastvideo-rs/target/release/fv-gpucheck' 'BIN=/opt/fastvideo-rs/target/release/fv-gpucheck
+export FASTVIDEO_WAN_QUANT=off'
 
   # The script's own `cell` under FV_CELLS (the GPU check runs one cell on the
   # script side, ADR-0019 §23.7): an unselected cell is logged and leaves no

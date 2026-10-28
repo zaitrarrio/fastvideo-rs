@@ -14,7 +14,8 @@ rules allow and report the hardware next to each number.
   - No other GPU type is ever rented.
   - Through fv-lab (owner, 2026-10-28): the RTX PRO 6000 only, the rule's own fallback; there is no 5090 tier.
 - **Pods.**
-  - At most 2 pods in parallel, each with at most 1 hour of benchmark wall clock.
+  - At most 2 pods in parallel, each with at most 1 hour of benchmark wall clock. The 2-pod limit is the launcher's
+    check: neither fv-lab nor fv-deploy counts pods another launch has up.
   - Each pod is backstopped at 65 min. The script used a local timer plus a pod-side self-delete at 64 min. Through
     fv-lab (owner, 2026-10-28) one wall cap of 65 min (`wall_cap_s = 3900`) drives both the pod's self-delete and the
     driver's backstop.
@@ -32,7 +33,8 @@ rules allow and report the hardware next to each number.
     `volume+r2` tier fetches them (owner, 2026-10-28: the volume holds only H3 and LTX now). Hub downloads stay
     forbidden. TAE and LPIPS fetches are off (`tae = false`; the script's `FV_SKIP_TAE=1`, no `FV_LPIPS`).
 - **Budget.** Stop before the Runpod balance would drop below $10. The account is shared with other agents.
-  fv-deploy's guard enforces $8 (CLAUDE.md); the $10 is checked by whoever launches.
+  fv-lab's guard (fv-deploy's `MIN_BALANCE_USD`) enforces only $8 (CLAUDE.md), so the $10 floor is the launcher's
+  check: before each pod, the balance less that pod's cap must stay at or above $10.
 - **Methodology.**
   - Warm numbers exclude load, as sol-engine's `benchmark.json` does. Load is reported separately.
   - A `--warm` cell runs one untimed generation first.

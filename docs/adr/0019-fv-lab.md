@@ -62,7 +62,7 @@
   2026-10-28: the `mmaudio` knob stays offered, and `sol-bench-pod.sh` moves to fv-lab. §23 (the owner's answers on its
   rules, 2026-10-28) is done CPU-side: the 22 sets are the experiment tiers `sol-bench-<set>`, `volume` for `a1` / `a3`
   and `volume+r2` for the rest, held to the script word for word, with Addition 18 (`unset`, for `env -u`). Its GPU
-  check (§23.7, `h3-768p-fullopt` through both runners, about $1.05) is the coordinator's; the script stays until then
+  check (§23.7, `h3-768p-fullopt` through both runners, about $1.05-$1.25) is the coordinator's; the script stays until then
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -6969,6 +6969,25 @@ It runs every set under `env -i` with `cell` stood in by a recorder. `SOL_IN` po
 cell, `== <set> <cell> <weight cell> <estimate>`, then its command one argument per line. There are 22 sets and 57
 cells. The script's `cell` adds only the gate, the budget and the timeout, which the runner replaces (difference 3).
 
+The extraction (`sol_cut`) refuses what it cannot vouch for (review of #235):
+- **(a)** a command a set runs outside `cell`: `$BIN` is a stand-in that records a direct call, bash's
+  `command_not_found_handle` records an unknown command, and the cut runs under errexit;
+- **(b)** a `case` arm whose label the parser does not accept (`[a-z0-9][a-z0-9_-]*`): the `;;` count must equal the
+  parsed sets plus the `*)` refusal;
+- **(c)** paths the stand-in passes that are not the script's own lines (`WORK`, `W`, `SCRATCH`, `RUNS` and `BIN` each
+  assigned exactly once, as now), and any `export` but `PATH` and `LD_LIBRARY_PATH` (an exported `FASTVIDEO_*` would
+  reach every cell outside its command).
+
+Its self-test (CI, the same `--check`) runs `sol_cut` on six mutated copies of the script, and each must fail:
+- a direct `"$BIN" …`, also with `|| true`;
+- an unknown direct command;
+- a `g2|h2)` label;
+- `W="$WORK/weights2"`;
+- an `export FASTVIDEO_WAN_QUANT=off`.
+
+`control.yml` runs the check on a change to `sol-bench-pod.sh` or `scripts/gpu/sol/**` (the Cosmos3 prompts pasted into
+`b5` / `b6` / `c4` / `d2`) as well.
+
 The same script also runs the script's own `cell` under `FV_CELLS`, on stubs. An unselected cell is logged
 `skip <cell> (not in FV_CELLS)` and leaves no directory; a selected one runs; with none set, all run.
 
@@ -7058,8 +7077,16 @@ AdaLN and text caches, the clip directory and the report paths. Both sides run o
 merge, with `fastvideo-rs-runtime:sha-<7>` published, and the local checkout at that commit, because the script side
 ships the local `sol-bench-pod.sh` with its `FV_CELLS` filter.
 
-Both pods run with a 2400 s cap. That leaves fv-lab's runner 1200 s from create, enough for boot and one arm. It also
-keeps the worst case within the balance.
+The two sides' caps differ, each sized to its own clock (review of #235):
+- **fv-lab side, `--wall-cap-s 3600`.** The runner's deadline is create + cap − 1200 s (`pod.rs`
+  `RUN_DEADLINE_RESERVE_S`), and an arm needs 600 s left (`run.rs` `MIN_ARM_S`). That leaves 2400 s from create for
+  boot and the arm. An uncached `sha-<7>` image pull alone has taken 458 s (`deploy/deploy.toml`, `boot_timeout_s`), so
+  a 2400 s cap (600 s for boot) would be too tight.
+- **Script side, `FV_POD_CAP_S=2400`** and **`FV_SOL_CAP_S=2340`**. The first is runpod-http.sh's cap: its driver's
+  backstop, and the pod's cap watchdog in the start command (`runpod-http.sh:51-52`). The second is the pod script's own
+  self-delete, counted from container start and a minute earlier, as the script's rule has it. The script has no fetch reserve:
+  its cell runs from container start under its 3300 s budget. A 458 s pull, the arm and the PNG fetch come to about
+  920 s, well within 2400.
 
 The script side is the script's own launch (`docs/perf/sol-bench.md`) as `FV_FAMILY=sol-bench`:
 - `sol-bench-a1` is an experiment tier, which `runpod-http.sh run` refuses; `sol-bench` is the script's default family
@@ -7088,7 +7115,7 @@ SKIP_F='\.png$|\.cache$|text-cache'          # fv-lab side: no PNG (frames.sha25
 SKIP_S='\.cache$|text-cache|\.wav$'          # script side: the PNGs, for their digest
 D=$PWD/sol-bench-script-driver.log
 # fv-lab side
-RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family sol-bench-a1 --cells h3-768p-fullopt --wall-cap-s 2400 \
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family sol-bench-a1 --cells h3-768p-fullopt --wall-cap-s 3600 \
   --fetch-tree --fetch-skip "$SKIP_F" --yes --wait
 # script side (the same commit checked out: FV_POD_FILES ships the local script)
 RUNPOD_API_KEY=… FV_FAMILY=sol-bench FV_POD_FILES=$PWD/scripts/gpu/sol-bench-pod.sh FV_POD_SCRIPT=sol-bench-pod.sh \
@@ -7149,7 +7176,7 @@ else echo "FAIL 4"; fi
 
 The script side's pod body was checked with `runpod-http.sh plan`, which creates nothing, under the settings above.
 Its runner line is `env FV_SOL_SET=a1 FV_SOL_CAP_S=2340 FV_WORK=/workspace … FV_CELLS="h3-768p-fullopt" … bash
-/fvscratch/files/sol-bench-pod.sh sol-bench`. It also has the TAE fetch skipped, the self-delete at 2400 s, the volume
+/fvscratch/files/sol-bench-pod.sh sol-bench`. It also has the TAE fetch skipped, the pod's cap watchdog at 2400 s, the volume
 `bz0ofkfx45`, and `FV_POD_FILES_TGZ` in `env`.
 
 **Pass:** both sides end `DONE` / `matrix_exit=0`, and the block prints exactly eight `PASS` lines (0a, 0, 1, 2 for
@@ -7159,31 +7186,64 @@ passed, and printed `FAIL` for a changed frame, a changed command word or env, a
 command (item 1) is a determinism finding about H3 TeaCache across pods, not a runner difference: report it, and keep
 the script.
 
-**Cost:** two RTX PRO 6000 pods in EU-RO-1 at about $2.49/hr. Each is about 5 min of boot, about 5 min of arm (283 s
-on 2026-10-06; today's build is UNVERIFIED) and about 2 min of fetch (the script side's 248 PNGs, about 0.3 GB): **about
-25 pod-minutes, about $1.05**. The two 2400 s caps bound it at **$3.32**. Against the doc's $10 floor the balance must
-be at least **$13.32** at the start: the worst case keeps $10, and the expected case leaves about $12.30 from $13.32,
-or about $13.85 from $14.90. The build pod is stopped first. No new tree, and no R2 fetch.
+**Cost:** two RTX PRO 6000 pods in EU-RO-1 at about $2.49/hr. Each is about 5-8 min of boot (up to 458 s for an
+uncached image pull), about 5 min of arm (283 s on 2026-10-06; today's build is UNVERIFIED) and about 2 min of fetch
+(the script side's 248 PNGs, about 0.3 GB): **about 25-30 pod-minutes, about $1.05-$1.25**. The caps (3600 s and
+2400 s) bound it at **$4.15**. Against the doc's $10 floor the balance must be at least **$14.15** at the start, so that
+the worst case keeps $10. From $14.90 the worst case leaves about $10.75, and the expected case about $13.65-$13.85.
+The build pod is stopped first. No new tree, and no R2 fetch.
+
+**Launcher checks, not enforced by fv-lab:** the doc's $10 floor and its limit of two pods at once. fv-deploy's guard
+(`guard::MIN_BALANCE_USD`) stops at $8, the CLAUDE.md floor, and nothing counts the pods another launch has up. Whoever
+launches checks the balance against $10 plus the caps of the pods about to start, and starts at most two.
 
 **Then:** record the result here. If it passes, the follow-up deletes `sol-bench-pod.sh` (§23.8), and the
 goldens script reads it from the parent of the deleting commit, as for `h3-graphs`.
 
 #### 23.8 What the script's deletion will touch
 
-These are the callers and mentions now; nothing else uses `FV_POD_SCRIPT`:
-- **`scripts/gpu/runpod-http.sh`**: the `FV_POD_FILES` / `FV_POD_SCRIPT` usage text (lines 73-75, 91-93), the tarball
-  in `env` (487-498) and the start command's `${FV_POD_SCRIPT:+…}` (378, 398). `hd-upscaler.sh` no longer ships by it:
-  `FV_HD_POST_URL` has been refused since S2 (`hd-upscaler.sh:3-8`, `runpod-http.sh:709-713`).
-- **Kept, as §22.19 kept it**: the `FV_POD_FILES` comment in the pod start command (`runpod-http.sh:348-351`), which is
-  in every `runpod-http-*.json` golden and in `pod-start.sh.in`.
-- **The fv-lab route's refusals** of `FV_POD_FILES` / `FV_POD_SCRIPT` (`runpod-http.sh:804`, `fv-lab-route.test.sh:77`)
-  stay, or go with the knob.
-- **`fv-lab-experiment-goldens.sh`** reads the script and its two Cosmos3 inputs from the history (`source_of`; its
-  `FV_CELLS` check then runs on that copy), and keeps the fixture in a shallow clone.
-- **`scripts/gpu/sol_bench_mirror.py`** names the script's run directory. `pod fetch --fetch-tree` replaces it: delete
-  it, or keep it for the committed runs.
-- **The docs**: `docs/perf/sol-bench.md` (its launch section), `docs/dev/fv-lab.md` (`FV_POD_SCRIPT` refused), and §7's
-  table (line 315), §14.6 and §22.3 here.
+These are the callers and mentions now, outside `artifacts/`. The review of #235 found the first list incomplete, so
+this one is the output of:
+
+`git grep -n -I -E 'sol-bench-pod\.sh|sol_bench_mirror|FV_POD_SCRIPT|FV_POD_FILES' -- . ':!artifacts'`
+
+Nothing but `sol-bench-pod.sh` uses `FV_POD_SCRIPT`.
+
+- **Code and its tests:**
+  - `scripts/gpu/runpod-http.sh`: the `FV_POD_FILES` / `FV_POD_SCRIPT` usage text (lines 73-75, 91-93), the tarball in
+    `env` (487-498), and the start command's `${FV_POD_SCRIPT:+…}` (378, 398). `hd-upscaler.sh` names `FV_POD_FILES`
+    only in its history comment (lines 3-8): `FV_HD_POST_URL` has been refused since S2 (`runpod-http.sh:709-713`).
+  - **Kept, as §22.19 kept it:** the `FV_POD_FILES` comment and unpack in the start command (`runpod-http.sh:348-351`).
+    They are in every `runpod-http-*.json` golden and in `crates/fastvideo-lab/src/pod-start.sh.in` (lines 58-61, and
+    the `FV_POD_SCRIPT` preflight comment at 87). `tests/payload_golden.rs`'s header names `FV_POD_FILES` as difference 2.
+  - The fv-lab route's refusals of the two knobs (`runpod-http.sh:804`, `fv-lab-route.test.sh:77`, `docs/dev/fv-lab.md`
+    "no equivalent, refused when set") stay, or go with the knob.
+  - `scripts/gpu/fv-lab-retired.sh`:
+    - `fv_script_retired_why`'s `solbench`, `sol-lingbot` and `sol-cosmos3` pointers (lines 167-169) say the benchmark
+      runs `sol-bench-pod.sh`. At deletion they must name the `sol-bench-<set>` tiers. `fv-lab-route.test.sh` (457,
+      476) and `runpod-plan.test.sh` (221) compare against the function's output, so they follow it.
+    - The comment at line 93, and `FV_LAB_EXPERIMENTS`' comment (44-46).
+  - `scripts/gpu/tests/fv-lab-experiment-goldens.sh` reads the script and its two Cosmos3 inputs from the history
+    (`source_of`; its `sol_cut` self-test and `FV_CELLS` check then run on that copy) and keeps the fixture in a shallow
+    clone.
+  - `.github/workflows/control.yml`'s two path filters list the script and `scripts/gpu/sol/**`. The script's line goes;
+    `sol/**` stays, because `lingbot-t2v-val3.txt` is read at run time by the LingBot arms.
+  - `scripts/gpu/sol_bench_mirror.py` names the script's run directory. `pod fetch --fetch-tree` replaces it: delete it,
+    or keep it for the committed runs.
+- **Data:** `lab/gold/wan22-ti2v-5b.toml:25` (`prompt_set` names the script as the prompt's source) and the generated
+  `lab/cells/gold-wan22-ti2v-5b.toml` (`fv-lab gold cells --write`). The source can become `sol-bench-a2`'s cells. The
+  22 `lab/cells/sol-bench-*.toml` headers and `lab/tiers.toml`'s sol-bench comment name the script as their origin
+  ("was"), as the retired families' cells do.
+- **Docs:**
+  - `docs/perf/sol-bench.md`: its rules, the phase A launch (`FV_POD_FILES … FV_POD_SCRIPT=sol-bench-pod.sh`), the
+    phase B "Arguments" paragraph, and the mirror note.
+  - `docs/perf/sol-lingbot-cosmos3-plan.md:24, 40`.
+  - `docs/ports/cosmos3.md:130`, `docs/ports/lingbot.md:162, 165`, `docs/ports/sol-wan-ltx23.md:9, 265, 296`.
+  - `docs/ops/r2-weights.md:661` (the library relink).
+  - `docs/adr/0023-lab-report-and-ci-bridge.md:233, 252, 255` (the self-delete inventory).
+  - `docs/dev/fv-lab.md` (lines 86, 154-168 and 680).
+  - The plan doc and `decision-log.md`: records, kept as written.
+  - This ADR: §7's table (line 315), §14.6, §22.3, §22.6 and this section.
 
 #### 23.9 Code and tests
 
@@ -7191,7 +7251,7 @@ These are the callers and mentions now; nothing else uses `FV_POD_SCRIPT`:
   `schemas/cell.v1.json`.
 - **Data**: `lab/tiers.toml` (22 tiers), `lab/cells/sol-bench-*.toml` (22).
 - **Scripts**: `scripts/gpu/fv-lab-retired.sh` (`FV_LAB_EXPERIMENTS`), `scripts/gpu/sol-bench-pod.sh` (`FV_CELLS`),
-  `scripts/gpu/tests/{fv-lab-experiment-goldens,fv-lab-goldens}.sh`.
+  `scripts/gpu/tests/{fv-lab-experiment-goldens,fv-lab-goldens}.sh`, `.github/workflows/control.yml` (path filters).
 - **Fixtures**: `experiments/sol-bench-script.txt`, `sol-bench-<set>-dry-run.txt` (22), `runpod-http-sol-bench-<set>.json`
   (22).
 - **Tests**: `tests/experiment_tiers.rs` (four sol-bench tests, the experiment list), `tests/payload_golden.rs` (the

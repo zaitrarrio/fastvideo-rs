@@ -2348,3 +2348,18 @@ Project code: FVID
 - ADR: docs/adr/0019-fv-lab.md §23
 - Verification: `fv-lab-experiment-goldens.sh --check` (22 sets, 57 cells; the `FV_CELLS` filter on the script's own `cell`); `tests/experiment_tiers.rs` (4 sol-bench tests); `plan::tests::unset_renders_env_dash_u_before_the_settings`; `fv-lab-goldens.sh --check` (22 pod bodies); the GPU-check pass block rehearsed on fake run directories; mutations, each caught
 - Open: the GPU check (ADR-0019 §23.7), then the script's deletion (§23.8)
+
+### FVID · 2026-10-28 · FVID-2026-10-28-d1-sol-bench-review
+- Trigger: the independent review of PR #235 (sol-bench tiers): CI path filters, silent holes in the goldens extraction, the GPU check's fv-lab cap, an incomplete deletion list, the launcher-only checks
+- Options: per finding, fix or argue; for the GPU check's caps, 3600 s on both sides or each side sized to its own clock
+- Decision: (agent, within the coordinator's instruction)
+  - `control.yml` runs the experiment goldens on `sol-bench-pod.sh` and `scripts/gpu/sol/**`;
+  - the extraction fails on a command outside `cell`, an unparsed `case` label, the script's paths or an `export` other than PATH / LD_LIBRARY_PATH, with a self-test of six mutants in CI;
+  - the GPU check runs fv-lab at `--wall-cap-s 3600` (2400 s left the runner 600 s for boot, against a 458 s uncached pull). The script side keeps `FV_POD_CAP_S=2400` / `FV_SOL_CAP_S=2340`, since it has no fetch reserve. The bound is $4.15 and the start ≥ $14.15;
+  - ADR §23.8 lists every mention, by grep;
+  - the $10 floor and the 2-pod limit are stated as launcher checks
+- Reason: the review's findings, each verified
+- Reversibility: high
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §23.5, §23.7, §23.8
+- Verification: `fv-lab-experiment-goldens.sh --check` (six mutants refused, each with its own message); the gates on the build pod

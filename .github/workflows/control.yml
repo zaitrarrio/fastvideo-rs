@@ -69,6 +69,9 @@ on:
       - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
       - "scripts/gpu/prompts-hd5.json"
       - "scripts/gpu/prompts-h3-graphs-*.json"
+      # ADR-0019 §23: the sol-bench tiers' goldens, cut from sol-bench-pod.sh and its Cosmos3 prompt files
+      - "scripts/gpu/sol-bench-pod.sh"
+      - "scripts/gpu/sol/**"
       - "scripts/gpu/hd_report.py"
       - "scripts/gpu/timings.sh"
       # the report goldens' inputs (fixtures/report is under crates/fastvideo-lab/fixtures/**)
@@ -155,6 +158,9 @@ on:
       - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
       - "scripts/gpu/prompts-hd5.json"
       - "scripts/gpu/prompts-h3-graphs-*.json"
+      # ADR-0019 §23: the sol-bench tiers' goldens, cut from sol-bench-pod.sh and its Cosmos3 prompt files
+      - "scripts/gpu/sol-bench-pod.sh"
+      - "scripts/gpu/sol/**"
       - "scripts/gpu/hd_report.py"
       - "scripts/gpu/timings.sh"
       # the report goldens' inputs (fixtures/report is under crates/fastvideo-lab/fixtures/**)
