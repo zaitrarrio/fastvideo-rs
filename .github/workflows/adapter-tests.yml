@@ -45,8 +45,7 @@ on:
       - "scripts/gpu/verify-weights.sh"
       - "scripts/gpu/volumes.sh"
       - "scripts/gpu/fetch-tae.sh"
-      # tests/dry_run.rs reads these (the retired families, their branches gone).
-      - "scripts/gpu/runpod-matrix.sh"
+      # tests/dry_run.rs reads this (the retired families; runpod-matrix.sh is gone, ADR-0019 §22.20).
       - "scripts/gpu/fv-lab-retired.sh"
       # tests/report.rs and tests/fetch_tree.rs (ADR-0019 §13): the reports'
       # inputs, the goldens' layout helper, the script fetch_tree is cut from.
@@ -96,8 +95,7 @@ on:
       - "scripts/gpu/verify-weights.sh"
       - "scripts/gpu/volumes.sh"
       - "scripts/gpu/fetch-tae.sh"
-      # tests/dry_run.rs reads these (the retired families, their branches gone).
-      - "scripts/gpu/runpod-matrix.sh"
+      # tests/dry_run.rs reads this (the retired families; runpod-matrix.sh is gone, ADR-0019 §22.20).
       - "scripts/gpu/fv-lab-retired.sh"
       # tests/report.rs and tests/fetch_tree.rs (ADR-0019 §13): the reports'
       # inputs, the goldens' layout helper, the script fetch_tree is cut from.

@@ -18,14 +18,22 @@
 # ltxvae-gen) are in that list from the start: their fixtures are the script's
 # in that mode at 5987e6a4 (fv-lab-restored-goldens.sh reproduces them).
 # A sibling tier frozen with its family (FV_LAB_RETIRED_SIBLINGS, ADR-0019
-# §22.19: hd5 with hd) is in it too; so are the script-side GPU-check bodies of
-# the volume+r2 families retired here (runpod-http-<f>-r2.json of
-# serve-engine, sfstream and mmaudio, §22.19), which runpod-http.sh plan can no
+# §22.19: hd5 with hd; §22.20: oracle-r2 with oracle) is in it too; so are the
+# script-side GPU-check bodies of the volume+r2 families retired here
+# (runpod-http-<f>-r2.json of serve-engine, sfstream and mmaudio, §22.19, and
+# wan, with oracle's sfwan13 body, §22.20), which runpod-http.sh plan can no
 # longer write (it routes those families to fv-lab).
+# Since S8 (ADR-0019 §22.20) every runpod-matrix.sh family is frozen or
+# retired with no tier, and the script is gone: nothing here runs it. Only
+# the pod bodies of the tiers that never were script families (gold, the
+# experiment tiers) and of the upstream pods are still written, by
+# runpod-http.sh plan / plan-upstream, and the frames digest by the frozen
+# copy of the script's frames_digest (fixtures/oracle-script/, §20.8 item 3).
 #
 # Fixtures, per family <f> (every [[tier]] name of lab/tiers.toml but the
-# frozen ones; for the `gold` tier, generated from lab/gold/ and no script
-# family, and the experiment tiers (FV_LAB_EXPERIMENTS), only the pod body):
+# frozen ones, which since §22.20 leaves none; for the `gold` tier, generated
+# from lab/gold/ and no script family, and the experiment tiers
+# (FV_LAB_EXPERIMENTS), only the pod body), as they were written:
 #   <f>-dry-run.txt            FV_DRY_RUN=1 runpod-matrix.sh <f>: every log line of the
 #                              family without its [HH:MM:SS] stamp, the volume at
 #                              /workspace (its auxiliary/tae complete), the container disk at /fvscratch, the
@@ -42,22 +50,22 @@
 #                              plan-upstream with oracle.sh's settings for that stack
 #                              (fv-lab oracle's upstream pods, ADR-0019 §19)
 #   frames-sample.sha256.json  runpod-matrix.sh's frames_digest over frames-sample/frames
-#                              (the per-arm byte-identity record, ADR-0019 §8)
+#                              (the per-arm byte-identity record, ADR-0019 §8), cut
+#                              since §22.20 from the frozen copy
+#                              crates/fastvideo-lab/fixtures/oracle-script/runpod-matrix.sh
 #
 # Every script runs under `env -i` (PATH, HOME, LC_ALL=C only): the caller's
-# FV_* / RUNPOD_* settings cannot reach the fixtures. One tier is the script
-# under fixed settings (fam_env below, ADR-0019 §15): `oracle` is the family
-# with FV_ORACLE_TARGETS naming its nine tensor-diff targets and the
-# FV_GEN_TIMEOUT_S scripts/gpu/oracle.sh passes (5400), for all three fixtures;
-# and its extra cells (ADR-0019 §20.3, the ten clip-metric targets) are the
-# family with FV_ORACLE_TARGETS naming those: oracle-extra-dry-run.txt and
-# oracle-extra-gates.tsv (the pod body is the tier's, one fixture). A sibling
-# tier (fv-lab-retired.sh FV_LAB_SIBLINGS, ADR-0019 §21) has no branch of
-# its own: its dry run and gates are its family's under its settings
-# (`oracle-r2`: the oracle family with FV_ORACLE_TARGETS=sfwan13), its pod
-# body runpod-http.sh plan's for the tier. A `weights = "volume+r2"` tier's
-# body (gold, oracle-r2, wan; serve-engine, sfstream and mmaudio, frozen)
-# carries its container disk, idle limit and RAM floor.
+# FV_* / RUNPOD_* settings cannot reach the fixtures. Until S8 (§22.20) one
+# tier was the script under fixed settings (ADR-0019 §15): `oracle`, the
+# family with FV_ORACLE_TARGETS naming its nine tensor-diff targets and the
+# FV_GEN_TIMEOUT_S scripts/gpu/oracle.sh passed (5400), for all three
+# fixtures, and its extra cells (ADR-0019 §20.3, the ten clip-metric targets)
+# the family with FV_ORACLE_TARGETS naming those (oracle-extra-dry-run.txt,
+# oracle-extra-gates.tsv); the sibling tier `oracle-r2` was the oracle family
+# with FV_ORACLE_TARGETS=sfwan13. All frozen now. A `weights = "volume+r2"`
+# tier's body (gold, the sol-bench tiers that fetch; oracle-r2, wan,
+# serve-engine, sfstream and mmaudio, frozen) carries its container disk,
+# idle limit and RAM floor.
 #
 # No network, no GPU, no weights: the dry run logs instead of running, and the
 # plan takes the volume's datacentre from FV_PLAN_VOLUME. Needs bash and jq.
@@ -81,12 +89,18 @@ FAMILIES="$(awk '/^\[\[tier\]\]/ { t = 1; next } t && /^name = "/ { gsub(/^name 
 # shellcheck source=scripts/gpu/fv-lab-retired.sh
 . "$ROOT/scripts/gpu/fv-lab-retired.sh"
 MATRIX="$ROOT/scripts/gpu/runpod-matrix.sh"
+# runpod-matrix.sh had no branch left after S8 and was deleted (ADR-0019
+# §22.6, §22.20): it must stay gone, or its families' frozen fixtures would
+# no longer be the only reference.
+[[ ! -e "$MATRIX" ]] || { echo "fv-lab-goldens: $MATRIX is back; it was deleted with its last branch (ADR-0019 §22.20): every family is a frozen tier or retired with no tier" >&2; exit 2; }
 # A family's `case` branch in runpod-matrix.sh: a label of the top-level
 # `case "$FAMILY" in` (two-space indent; `name)`, `name )`, `a|name)`, a
-# trailing comment all count; nested cases' labels do not).
-# grep reads all of its input (no -q): under pipefail an early exit would
-# SIGPIPE sed and read as "no branch" whenever the branch is found.
+# trailing comment all count; nested cases' labels do not). With the script
+# gone no family has one; the checks below keep the lists' other rules.
 has_branch() {
+  [[ -f "$MATRIX" ]] || return 1
+  # grep reads all of its input (no -q): under pipefail an early exit would
+  # SIGPIPE sed and read as "no branch" whenever the branch is found.
   sed -n '/^case "\$FAMILY" in$/,/^esac$/p' "$MATRIX" \
     | grep -E "^  ([A-Za-z0-9_-]+ *\| *)*$1( *\| *[A-Za-z0-9_-]+)* *\)" >/dev/null
 }
@@ -132,7 +146,6 @@ mkdir -p "$TMP/new"
 # A clean environment for every script run.
 clean() { env -i PATH="$PATH" HOME="$HOME" LC_ALL=C "$@"; }
 
-list="$(clean bash "$ROOT/scripts/gpu/verify-weights.sh" --list)"
 FIXTURES=()
 FROZEN=()
 for FAMILY in $FAMILIES; do
@@ -152,7 +165,7 @@ for FAMILY in $FAMILIES; do
   # the GPU's first use), and so is its host-RAM floor (min_ram_gb, passed as
   # FV_MIN_RAM_GB); its env (the R2 key as Runpod secret references) is
   # the one difference tests/payload_golden.rs allows.
-  # A volume+r2 tier's pod (gold, oracle-r2, wan; serve-engine, sfstream and mmaudio frozen): its container
+  # A volume+r2 tier's pod (gold and the sol-bench tiers that fetch; oracle-r2, wan, serve-engine, sfstream and mmaudio frozen): its container
   # disk, idle limit and host-RAM floor as the script's settings.
   tv() { awk -v k="$1" -v n="name = \"$FAMILY\"" '/^\[\[tier\]\]/ { t = 0 } $0 == n { t = 1 } t && $1 == k && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' "$ROOT/lab/tiers.toml"; }
   r2_body=()
@@ -192,86 +205,27 @@ for FAMILY in $FAMILIES; do
       exit 2
     fi
     FROZEN+=("$FAMILY-dry-run.txt" "$FAMILY-gates.tsv" "runpod-http-$FAMILY.json")
+    # The oracle tier's extra cells (ADR-0019 §20.3): their dry run and gates
+    # were the oracle family's with the ten clip-metric targets, frozen with it.
+    [[ "$FAMILY" == oracle ]] && FROZEN+=("oracle-extra-dry-run.txt" "oracle-extra-gates.tsv")
     continue
   fi
-  # The script family whose branch the tier's goldens come from: its own, or
-  # a sibling tier's family (FV_LAB_SIBLINGS).
-  SCRIPT_FAMILY="$(fv_lab_sibling "$FAMILY" || echo "$FAMILY")"
-  has_branch "$SCRIPT_FAMILY" || {
-    echo "fv-lab-goldens: tier $FAMILY has no runpod-matrix.sh branch and is not in fv-lab-retired.sh (freeze its fixtures there, or restore the branch)" >&2
-    exit 2
-  }
-  # The settings a tier is the script under (ADR-0019 §15), else none; and
-  # those its extra cells are (ADR-0019 §20.3: lab/tiers.toml extra_cells,
-  # run on request only, so a golden of their own, <f>-extra-*).
-  fam_env=() extra_env=()
-  case "$FAMILY" in
-    oracle)
-      fam_env=("FV_ORACLE_TARGETS=fasth3-8step fasth3-8step-vsa0 fasth3-4step-vsa fasth3-4step-dense h3-ref2va-4step ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense"
-        FV_GEN_TIMEOUT_S=5400)
-      extra_env=("FV_ORACLE_TARGETS=ltx25-i2v ltx25-kf ltx25-ref2v ltx25-a2v ltx25-a2v-i2v ltx25-retake ltx25-retake-v ltx25-retake-a ltx25-extend ltx25-a2v-guided"
-        FV_GEN_TIMEOUT_S=5400) ;;
-    # The oracle family's SF-Wan target, on its volume+r2 tier (ADR-0019 §21).
-    oracle-r2)
-      fam_env=(FV_ORACLE_TARGETS=sfwan13 FV_GEN_TIMEOUT_S=5400) ;;
-  esac
-  # 1. and 2.: <name>-dry-run.txt and <name>-gates.tsv of the family under <env>.
-  dry_golden() { # <name> [K=V …]
-    local name="$1"
-    shift
-    rm -rf "$TMP/work" "$TMP/scratch" "$TMP/pairs.txt"
-    # The volume's TAE copy is complete, as on bz0ofkfx45 (auxiliary/tae): the
-    # script's $TAE is then /workspace/weights/auxiliary/tae, not the container
-    # disk, so a cell that hard-codes {scratch}/tae differs.
-    mkdir -p "$TMP/work/weights/auxiliary/tae" "$TMP/scratch"
-    : >"$TMP/work/weights/auxiliary/tae/.complete"
-    # 1. The dry run: the commands, in order (the family's own log lines).
-    clean "$@" FV_DRY_RUN=1 FV_DRY_RUN_GATES="$TMP/pairs.txt" FV_WORK="$TMP/work" FV_SCRATCH="$TMP/scratch" \
-      FV_RUN_TAG="$TAG" FV_BASELINE_SHA="$BASELINE_SHA" \
-      bash "$ROOT/scripts/gpu/runpod-matrix.sh" "$SCRIPT_FAMILY" 2>/dev/null \
-      | sed -E 's/^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] //' \
-      | grep -F "[$SCRIPT_FAMILY] " \
-      | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" -e "s#$ROOT#/opt/fastvideo-rs#g" \
-        >"$TMP/new/$name-dry-run.txt"
-
-    # 2. The gates, in run order: every `gated_cell` the dry run reached
-    #    (arm, weight cell, TAE file or -, the cell's needs) and every
-    #    `gate_cells` (gate, baseline, candidate, kind, OFF arm or -).
-    [[ -s "$TMP/pairs.txt" ]] || { echo "fv-lab-goldens: $name gated no cell" >&2; exit 2; }
-    while IFS=$'\t' read -r what a b c d; do
-      case "$what" in
-        arm)
-          needs="$(awk -v x="$b" '$1 == x { $1 = ""; sub(/^ +/, ""); print; exit }' <<<"$list")"
-          [[ -n "$needs" ]] || { echo "fv-lab-goldens: verify-weights.sh --list has no cell $b" >&2; exit 2; }
-          printf 'arm\t%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$needs" ;;
-        gate) printf 'gate\t%s\t%s\t%s\t%s\n' "$a" "$b" "$c" "$d" ;;
-        *) echo "fv-lab-goldens: unknown FV_DRY_RUN_GATES line $what" >&2; exit 2 ;;
-      esac
-    done <"$TMP/pairs.txt" | sed -e "s#$TMP/scratch#/fvscratch#g" -e "s#$TMP/work#/workspace#g" >"$TMP/new/$name-gates.tsv"
-  }
-  dry_golden "$FAMILY" ${fam_env[@]+"${fam_env[@]}"}
-  if (( ${#extra_env[@]} )); then
-    dry_golden "$FAMILY-extra" "${extra_env[@]}"
-    FIXTURES+=("$FAMILY-extra-dry-run.txt" "$FAMILY-extra-gates.tsv")
-  fi
-
-  # 3. The pod body (a volume+r2 tier's with its disk, idle limit and floor).
-  clean ${fam_env[@]+"${fam_env[@]}"} ${r2_body[@]+"${r2_body[@]}"} RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" \
-    bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
-  FIXTURES+=("$FAMILY-dry-run.txt" "$FAMILY-gates.tsv" "runpod-http-$FAMILY.json")
+  # Any other tier would need a runpod-matrix.sh branch to make its goldens
+  # from, and the script is gone (ADR-0019 §22.20): a new tier is gold-like
+  # (its own dry run, its pod body below) or an experiment tier.
+  echo "fv-lab-goldens: tier $FAMILY is neither gold, an experiment tier nor retired (fv-lab-retired.sh); runpod-matrix.sh is gone (ADR-0019 §22.20), so no script makes its goldens" >&2
+  exit 2
 done
 
 # 3a. The script runner's pod for the oracle-r2 GPU check (ADR-0019 §21.7,
 #     §21.8): FV_FAMILY=oracle with FV_R2_TREES=sfwan21-1.3b (the R2 key as the
 #     Runpod secret references, r2-stage.sh before the matrix, FV_WORK the
-#     merged root's parent), the oracle-r2 tier's disk and cell cap.
-#     tests/payload_golden.rs holds its env to fv-lab's references and its
-#     idle limit to the tier's. Without FV_R2_TREES every body above is
-#     unchanged (they are all made without it).
-clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY=oracle \
-  FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 FV_GEN_TIMEOUT_S=5400 \
-  bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-oracle-sfwan13-r2.json"
-FIXTURES+=("runpod-http-oracle-sfwan13-r2.json")
+#     merged root's parent), the oracle-r2 tier's disk and cell cap. Written
+#     here until oracle's branch went (§22.20): runpod-http.sh plan routes the
+#     family to fv-lab now, so it is frozen as the script last wrote it
+#     (tests/payload_golden.rs still holds fv-lab's references and idle limit
+#     to it).
+FROZEN+=("runpod-http-oracle-sfwan13-r2.json")
 # The script sides of the serve-engine, sfstream and mmaudio GPU checks
 # (ADR-0019 §22.12, §22.14, §22.16: FV_FAMILY=<f> with FV_R2_TREES and the
 # tier's disk) were written here until their branches went (§22.19):
@@ -279,7 +233,7 @@ FIXTURES+=("runpod-http-oracle-sfwan13-r2.json")
 # frozen as the script last wrote them (tests/payload_golden.rs still holds
 # fv-lab's R2 references, disk and idle limit to them).
 FROZEN+=("runpod-http-serve-engine-r2.json" "runpod-http-sfstream-r2.json" "runpod-http-mmaudio-r2.json")
-# The same for the wan GPU check (ADR-0019 §22, S6, §22.18): the script side's
+# The wan GPU check's (ADR-0019 §22, S6, §22.18) was the script side's
 # FV_FAMILY=wan with FV_R2_TREES naming the two trees its checked arms read
 # (fastwan21-1.3b: wan13-dmd, wan13-dmd-dense; fastwan22-ti2v-5b: cli-fw22,
 # engine-fw22; kernels-wan reads none), staged at once before the matrix, so
@@ -287,17 +241,17 @@ FROZEN+=("runpod-http-serve-engine-r2.json" "runpod-http-sfstream-r2.json" "runp
 # for fv-lab's drop-then-fetch plan of the whole family), the tier's host-RAM
 # floor (FV_MIN_RAM_GB=256, so both pods are placed under the same floor) and
 # its cell cap (runpod-http.sh's default FV_GEN_TIMEOUT_S, 3600).
-clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY=wan \
-  "FV_R2_TREES=fastwan21-1.3b fastwan22-ti2v-5b" FV_CONTAINER_DISK_GB=174 FV_MIN_RAM_GB=256 \
-  bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-wan-r2.json"
-FIXTURES+=("runpod-http-wan-r2.json")
+# Written here until wan's branch went (§22.18 "Then", §22.20): frozen too.
+FROZEN+=("runpod-http-wan-r2.json")
 
 # 3b. The upstream pods of `fv-lab oracle` (ADR-0019 §19): runpod-http.sh
-#     plan-upstream with the settings scripts/gpu/oracle.sh's start_up passes
+#     plan-upstream with the settings scripts/gpu/oracle.sh's start_up passed
+#     (until it went with the script path, §22.20; fv-lab oracle starts these
+#     bodies)
 #     (image, disk, FV_EXTRA_ENV, UP_CELL_TIMEOUT_S), for one selection per
 #     stack of lab/upstream.toml (UP_STEPS in §15.7's form; the clone commit
 #     UP_SHA fixed), and for the fastvideo stack FV_MIN_RAM_GB=192, which
-#     oracle.sh does not set but takes from its caller's environment (§15.7's
+#     oracle.sh did not set but took from its caller's environment (§15.7's
 #     command and docs/oracle.md "Upstream cells: host RAM" set it; fv-lab
 #     takes it from the stack's min_ram_gb). The sol-ltx25 body carries
 #     `env: {HF_TOKEN: "{{ RUNPOD_SECRET_fv_hf_token }}"}` (its weights:ltx25
@@ -323,22 +277,25 @@ upstream_golden sol-ltx25 UP_IMAGE_TARGET=sol-ltx25 FV_CONTAINER_DISK_GB=250 \
   "FV_EXTRA_ENV=FASTVIDEO_DUMP_OPS=0,1,24,47 RECON_ACCEPT_MISMATCH=1"
 # The fastvideo stack making sfwan13 (ADR-0019 §21): its r2:sfwan21-1.3b step
 # (the R2 key as Runpod secret references in the body's env) and its
-# target's 180 GB disk, as oracle.sh's start_up passes them for sfwan13.
+# target's 180 GB disk, as oracle.sh's start_up passed them for sfwan13.
 upstream_golden fastvideo-sfwan13 UP_IMAGE_TARGET=fastvideo FV_CONTAINER_DISK_GB=180 FV_MIN_RAM_GB=192 \
   "UP_STEPS=info:box r2:sfwan21-1.3b oracle:sfwan13" "FV_EXTRA_ENV=FASTVIDEO_DUMP_OPS=0,1,24,47"
 # The fastvideo stack making the wan tier's two references (ADR-0019 §22, S6):
 # their r2:wan22-ti2v-5b and r2:fastwan22-ti2v-5b steps (the R2 key as Runpod
 # secret references) and their targets' 210 GB disk, as fv-lab oracle selects
-# both oracle cells of the wan tier (§22.18). scripts/gpu/oracle.sh does not
-# drive these two targets (its fastvideo targets stay fasth3-*, sfwan13 and
+# both oracle cells of the wan tier (§22.18). scripts/gpu/oracle.sh never
+# drove these two targets (its fastvideo targets were fasth3-*, sfwan13 and
 # h3-ref2va-*): only fv-lab oracle starts this body.
 upstream_golden fastvideo-wan22 UP_IMAGE_TARGET=fastvideo FV_CONTAINER_DISK_GB=210 FV_MIN_RAM_GB=192 \
   "UP_STEPS=info:box r2:wan22-ti2v-5b r2:fastwan22-ti2v-5b oracle:wan22-ti2v,fastwan22-ti2v" \
   "FV_EXTRA_ENV=FASTVIDEO_DUMP_OPS=0,1,24,47"
 
-# 4. The frames digest: the script's own function, on a copy of the sample.
-sed -n '/^frames_digest() {$/,/^}$/p' "$ROOT/scripts/gpu/runpod-matrix.sh" >"$TMP/digest.sh"
-grep -q '^frames_digest() {$' "$TMP/digest.sh" || { echo "fv-lab-goldens: no frames_digest in runpod-matrix.sh" >&2; exit 2; }
+# 4. The frames digest: the script's own function, on a copy of the sample;
+#    from the frozen copy of runpod-matrix.sh since the script went (ADR-0019
+#    §22.20; fixtures/oracle-script/, its frame unchanged from 7e513f6a).
+DIGEST_SRC="$OUT/oracle-script/runpod-matrix.sh"
+sed -n '/^frames_digest() {$/,/^}$/p' "$DIGEST_SRC" >"$TMP/digest.sh"
+grep -q '^frames_digest() {$' "$TMP/digest.sh" || { echo "fv-lab-goldens: no frames_digest in $DIGEST_SRC" >&2; exit 2; }
 cp -a "$OUT/frames-sample" "$TMP/sample"
 clean bash -c '. "$1" && frames_digest "$2" sample' _ "$TMP/digest.sh" "$TMP/sample"
 cp "$TMP/sample/frames.sha256.json" "$TMP/new/frames-sample.sha256.json"

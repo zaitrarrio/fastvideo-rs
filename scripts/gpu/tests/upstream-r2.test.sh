@@ -15,8 +15,9 @@
 #   - runpod-http.sh plan-upstream: the two Runpod secret references (never
 #     values) for an r2:<tree> step whatever whitespace separates the steps,
 #     none without one, beside the Hub token's;
-#   - scripts/gpu/oracle.sh gives sfwan13 its r2 step and 180 GB, as
-#     lab/upstream.toml's target;
+#   - lab/upstream.toml gives sfwan13 its r2 step and 180 GB (as
+#     scripts/gpu/oracle.sh did, until it went with the script path,
+#     ADR-0019 §22.20);
 #   - upstream/oracle.sh's oracle_wan22 / oracle_fastwan22 read their tree
 #     from $UW when the r2 step completed it, else the volume's (ADR-0019 §22,
 #     S6, as oracle_sfwan's §21.2), and lab/upstream.toml gives their targets
@@ -258,13 +259,10 @@ out="$(env -i PATH="$PATH" FV_WEIGHTS_R2_ACCESS_KEY_ID=AKIDtest0123 FV_WEIGHTS_R
 C="$(cmd "UP_STEPS=info:box weights:h3-diffusers oracle:fasth3-4step-vsa")"
 ! grep -qE '_fvr2_|FV_WEIGHTS_R2' <<<"$C" && ok "upstream start command without an r2 step: no R2 line" || bad "upstream: R2 lines without r2 step"
 
-# scripts/gpu/oracle.sh: sfwan13's r2 step and disk, as lab/upstream.toml's target.
-grep -qF 'fvw="${fvw:+$fvw }r2:sfwan21-1.3b"' "$ROOT/scripts/gpu/oracle.sh" && grep -qx '  fvdisk=180' "$ROOT/scripts/gpu/oracle.sh" \
-  && ok "oracle.sh: sfwan13 fetches sfwan21-1.3b on a 180 GB disk" || bad "oracle.sh: sfwan13's r2 step / disk"
-grep -qx '  rt_r2=sfwan21-1.3b' "$ROOT/scripts/gpu/oracle.sh" && grep -qx '  rt_disk="${FV_CONTAINER_DISK_GB:-150}"' "$ROOT/scripts/gpu/oracle.sh" \
-  && ok "oracle.sh: its runtime pod reads sfwan13's tree from R2 (FV_R2_TREES, 150 GB)" || bad "oracle.sh: the runtime side's FV_R2_TREES"
+# sfwan13's r2 step and disk in lab/upstream.toml (scripts/gpu/oracle.sh's
+# copy of them went with it, ADR-0019 §22.20).
 grep -qF 'r2 = ["sfwan21-1.3b"]' "$ROOT/lab/upstream.toml" && grep -qx 'container_disk_gb = 180' "$ROOT/lab/upstream.toml" \
-  && ok "lab/upstream.toml: the same tree and disk" || bad "lab/upstream.toml: sfwan13's r2 / disk"
+  && ok "lab/upstream.toml: sfwan13 fetches sfwan21-1.3b on a 180 GB disk" || bad "lab/upstream.toml: sfwan13's r2 / disk"
 
 # upstream/oracle.sh's Wan 2.2 TI2V-5B references (ADR-0019 §22, S6): the
 # functions cut from the script, oracle_cell stubbed to print its argv.

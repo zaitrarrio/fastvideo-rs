@@ -3,22 +3,25 @@
 # commit, driven entirely through the REST API and the pod's HTTPS proxy.
 # For hosts (sandboxes, CI) that can reach https://*.runpod.io but not TCP 22.
 #
-#   runpod-http.sh run [sha]     create pod, run $FV_FAMILY (default rtx6000), pull
-#                                summaries + logs, destroy the pod. A family retired
-#                                to fv-lab (fv-lab-retired.sh: rtx6000, techniques,
-#                                b6, rtx5090, fastvideo, h3arms, trace, ltxfps,
-#                                ltxvae, precision; the restored modes precision-nvfp4,
+#   runpod-http.sh run [sha]     run the fv-lab tier $FV_FAMILY (default rtx6000):
+#                                every family retired to fv-lab (fv-lab-retired.sh
+#                                FV_LAB_RETIRED: rtx6000, techniques, b6, ..., wan,
+#                                oracle; the restored modes precision-nvfp4,
 #                                ltxvae-gen) runs `fv-lab pod up --yes --wait`
-#                                instead (docs/adr/0019-fv-lab.md §10, §12); FV_DRY_RUN=1
+#                                (docs/adr/0019-fv-lab.md §10, §12); FV_DRY_RUN=1
 #                                prints the route and the command, creates nothing.
+#                                runpod-matrix.sh, the script path, is gone: it had
+#                                no family left after §22's S8 (§22.20), so any
+#                                other name is refused (exit 1) before any pod.
 #                                A family retired with no tier (fv-lab-retired.sh
-#                                FV_SCRIPT_RETIRED, §18: h3, b4b, writer, ...) is
-#                                refused (exit 2) with what replaces it, as are
+#                                FV_SCRIPT_RETIRED, §18: h3, b4b, writer, sfwan, ...)
+#                                is refused (exit 2) with what replaces it, as are
 #                                `all` and `plan` for it
 #   runpod-http.sh weights       weight gate only (verify-weights.sh), no cells
 #   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
-#   runpod-http.sh all [sha]     kernels, then the $FV_FAMILY cells, on one pod
-#                                (pod creation retries for FV_CREATE_WAIT_S)
+#   runpod-http.sh all [sha]     was kernels, then runpod-matrix.sh's $FV_FAMILY cells,
+#                                on one pod; with the script gone (§22.20) it is
+#                                refused for every family: run `kernels`, then `run`
 #   runpod-http.sh upstream [sha] upstream Python references (scripts/gpu/upstream/pod.sh):
 #                                UP_IMAGE_TARGET picks the baked image
 #                                ghcr.io/…/fastvideo-rs-upstream-<target>:sha-<sha>;
@@ -65,7 +68,7 @@
 # REST cannot name the 13.1 / 13.2 hosts ("13.0" alone hides every RTX PRO
 # 6000); instead the pod checks its driver (>= FV_MIN_DRIVER, default 580) and
 # stops early if older.
-# Env: FV_FAMILY (runpod-matrix.sh family, default rtx6000; rtx5090 is the
+# Env: FV_FAMILY (an fv-lab tier, default rtx6000; rtx5090 is the
 # sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
 # fv-weights-h3-ltx-500), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
 # (per-cell cap, default 3600), FV_PROMPTS / FV_LPIPS (forwarded to
@@ -77,15 +80,10 @@
 # floor is its min_ram_gb in lab/tiers.toml, ADR-0019 §16.10),
 # FV_AVOID_MACHINES (space-separated Runpod machine ids: a pod placed on one
 # is deleted at once and created again),
-# FV_R2_TREES (`run` / `all` / `plan` only; space-separated weights-r2.tsv trees the EU
-# volume lacks, e.g. sfwan21-1.3b: the pod gets the R2 key as the Runpod
-# secret references fv-lab's volume+r2 pods carry, and before the matrix
-# scripts/gpu/r2-stage.sh makes fv-lab's merged weight root /fvscratch/weights
-# (the volume's trees linked, these fetched from R2) and the matrix runs with
-# FV_WORK=/fvscratch, so its $W and its command lines are a volume+r2 tier's;
-# FV_CONTAINER_DISK_GB must hold the trees and 120 GB, and the idle limits
-# default to fv-lab's weights::r2_idle_min; ADR-0019 §21.8. Unset: nothing
-# changes).
+# FV_R2_TREES (the script runner's R2 trees, ADR-0019 §21.8: r2-stage.sh made
+# fv-lab's merged weight root before runpod-matrix.sh ran) went with the
+# script path (§22.20): set, it is refused; a volume+r2 tier fetches its trees
+# itself (fv-lab pod up).
 # FV_POD_FILES / FV_POD_SCRIPT (local files shipped in the pod's env, one run
 # instead of runpod-matrix.sh) went with scripts/gpu/sol-bench-pod.sh, their
 # only user, after its tiers' GPU check (docs/adr/0019-fv-lab.md §23.10): set,
@@ -137,57 +135,19 @@ if [[ "${1:-}" == run || "${1:-}" == all || "${1:-}" == plan ]] && fv_script_ret
   echo "runpod-http: $FAMILY is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18, §22): $(fv_script_retired_why "$FAMILY")" >&2
   exit 2
 fi
-# FV_R2_TREES (ADR-0019 §21.8): checked before the key, any lookup or a pod.
-# Each tree a weights-r2.tsv dest that the EU volume neither holds nor sits
-# inside; the container disk at least the trees and fv-lab's 120 GB reserve
-# (refused, not raised: the body says what the caller asked for); `run` /
-# `all` / `plan` of a script family only, on the EU volume (the link roots are
-# FV_EU_VOLUME_TREES, so another volume is refused). Sets R2_SPECS (dest@rev …) and R2_LINKS
-# (fv-lab's TreeSources::link_roots of FV_EU_VOLUME_TREES), and the idle
-# limits' defaults (an R2 fetch keeps the GPU at 0 %).
-R2_SPECS="" R2_LINKS=""
+# FV_R2_TREES (ADR-0019 §21.8) was the script runner's R2 trees: r2-stage.sh
+# made fv-lab's merged weight root on the pod before runpod-matrix.sh ran. It
+# went with the script path (§22.6, §22.20), r2-stage.sh with it. Refused (exit
+# 2) before the key, any lookup or a pod, on every command but `down`,
+# `status` and `attach`, and but `run` / `plan` of an fv-lab tier, whose route
+# refuses it with its own answer (fv_lab_route: fv-lab fetches a volume+r2
+# tier's trees itself).
 if [[ -n "${FV_R2_TREES:-}" && -n "${FV_R2_TREES//[[:space:]]/}" ]]; then
-  r2die() { echo "runpod-http: FV_R2_TREES: $*" >&2; exit 2; }
-  [[ "${1:-}" == run || "${1:-}" == all || "${1:-}" == plan ]] \
-    || r2die "for \`run\`, \`all\` and \`plan\` only (the matrix's weights), not \`${1:-}\`"
-  [[ "${RUNPOD_NO_VOLUME:-0}" != 1 ]] || r2die "the merged root links the EU volume's trees: not with RUNPOD_NO_VOLUME=1"
-  # The links are the EU volume's trees (FV_EU_VOLUME_TREES): another volume
-  # would get links to trees it may not hold.
-  [[ -z "${RUNPOD_VOLUME_ID:-}" || "$RUNPOD_VOLUME_ID" == "$FV_EU_VOLUME_ID" ]] \
-    || r2die "the merged root links the EU volume's trees ($FV_EU_VOLUME_ID): not with RUNPOD_VOLUME_ID=$RUNPOD_VOLUME_ID"
-  [[ "$VOL_NAME" == "$FV_EU_VOLUME_NAME" ]] \
-    || r2die "the merged root links the EU volume's trees ($FV_EU_VOLUME_NAME): not with the volumes '$VOL_NAME'"
-  [[ -z "${FV_PLAN_VOLUME:-}" || "${FV_PLAN_VOLUME%% *}" == "$FV_EU_VOLUME_ID" ]] \
-    || r2die "the merged root links the EU volume's trees ($FV_EU_VOLUME_ID): not with FV_PLAN_VOLUME=$FV_PLAN_VOLUME"
-  r2_table="$ROOT/scripts/gpu/weights-r2.tsv"
-  r2_bytes=0
-  for t in $FV_R2_TREES; do
-    [[ "$t" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ && "/$t/" != */./* && "/$t/" != */../* ]] \
-      || r2die "'$t' is not a tree name (relative, [A-Za-z0-9._/-], no . or ..)"
-    [[ " $R2_SPECS " != *" $t@"* ]] || r2die "$t twice"
-    for v in $FV_EU_VOLUME_TREES; do
-      [[ "$t" == "$v" || "$t" == "$v"/* ]] && r2die "$t is on the EU volume ($v): the matrix reads it there"
-      [[ "$v" == "$t"/* ]] && r2die "$t holds the EU volume's tree $v (its link would sit inside the fetched tree)"
-    done
-    row="$(awk -F'\t' -v d="$t" '$1 == d { print $2 "\t" $4; exit }' "$r2_table")"
-    [[ -n "$row" ]] || r2die "$t is not a dest of scripts/gpu/weights-r2.tsv"
-    R2_SPECS+="${R2_SPECS:+ }$t@${row%%$'\t'*}"
-    r2_bytes=$(( r2_bytes + ${row##*$'\t'} ))
-  done
-  for v in $FV_EU_VOLUME_TREES; do
-    covered=0
-    for o in $FV_EU_VOLUME_TREES; do [[ "$o" != "$v" && "$v" == "$o"/* ]] && covered=1; done
-    (( covered )) || R2_LINKS+=" $v"
-  done
-  R2_LINKS="$(tr ' ' '\n' <<<"$R2_LINKS" | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/^ *//; s/ *$//')"
-  r2_need=$(( (r2_bytes + 999999999) / 1000000000 + 120 ))
-  [[ "${FV_CONTAINER_DISK_GB:-120}" =~ ^[0-9]+$ ]] && (( 10#${FV_CONTAINER_DISK_GB:-120} >= r2_need )) \
-    || r2die "the container disk (FV_CONTAINER_DISK_GB=${FV_CONTAINER_DISK_GB:-120}) must hold the trees ($(awk -v b="$r2_bytes" 'BEGIN { printf "%.2f", b / 1e9 }') GB) and 120 GB: FV_CONTAINER_DISK_GB=$r2_need or more"
-  r2_cell="${FV_GEN_TIMEOUT_S:-3600}"
-  [[ "$r2_cell" =~ ^[0-9]+$ ]] || r2die "FV_GEN_TIMEOUT_S '$r2_cell' is not a number of seconds"
-  (( r2_cell > 0 )) || r2_cell=3600
-  r2_idle=$(( (600 + r2_cell + 59) / 60 + 15 )); (( r2_idle >= 30 )) || r2_idle=30
-  FV_IDLE_GPU_MIN="${FV_IDLE_GPU_MIN:-$r2_idle}" FV_IDLE_GPU_GRACE_MIN="${FV_IDLE_GPU_GRACE_MIN:-$r2_idle}"
+  case "${1:-}" in
+    down | status | attach) ;;
+    run | plan) fv_lab_retired "$FAMILY" || { echo "runpod-http: FV_R2_TREES went with the script path (runpod-matrix.sh, r2-stage.sh; docs/adr/0019-fv-lab.md §21.8, §22.20): a volume+r2 tier fetches its trees itself: fv-lab pod up --family <tier>" >&2; exit 2; } ;;
+    *) echo "runpod-http: FV_R2_TREES went with the script path (runpod-matrix.sh, r2-stage.sh; docs/adr/0019-fv-lab.md §21.8, §22.20): a volume+r2 tier fetches its trees itself: fv-lab pod up --family <tier>" >&2; exit 2 ;;
+  esac
 fi
 # A dry run (FV_DRY_RUN=1: the route and the command, nothing created) needs no key.
 [[ "${FV_DRY_RUN:-0}" == 1 ]] || : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
@@ -301,6 +261,15 @@ WDEOF
 # went, §23.10), and keeps the preflight's pod-script comment and its
 # `if [ -z "" ]` (rendered from ${FV_POD_SCRIPT:-} before FV_POD_SCRIPT went):
 # the bodies are byte for byte what they were.
+# Likewise its `run` / `all` block still starts
+# /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh, which is gone (ADR-0019
+# §22.20): no pod this driver creates reaches it (`run` and `all` route every
+# tier to fv-lab and refuse anything else before a pod; kernels, weights and
+# upstream do not enter the block), but `plan` still renders it, as the pod
+# body golden of the tiers that never were script families (gold, h3-graphs,
+# the sol-bench-<set> tiers: tests/payload_golden.rs holds fv-lab's body to it
+# with that one line replaced by `fv-lab run <tier>`). Dropping the block would
+# rewrite those goldens; they freeze when this driver goes (§14.6).
 start_cmd() {
   local tag="$2" mode="$3"
   if [[ "$mode" == upstream ]]; then
@@ -308,25 +277,9 @@ start_cmd() {
     return
   fi
   local cells="fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage"
-  # FV_R2_TREES (ADR-0019 §21.8): the R2 key leaves the start command's
-  # environment on its first line, before anything starts, so no child (the
-  # watchdogs, the file server, the matrix) has it in its environment;
-  # r2-stage.sh alone gets it back, and hands it to its plan step alone. It
-  # stays in the container's initial environment (PID 1's /proc/<pid>/environ),
-  # readable by root on the pod, as HF_TOKEN and RUNPOD_API_KEY are; it is the
-  # store's read-only key (§21.2). The matrix's $W is the merged root then.
-  local work=/workspace r2_block=""
-  if [[ -n "$R2_SPECS" ]]; then
-    printf '%s\n' '_fvr2_id="${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}" _fvr2_secret="${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}"; unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY'
-    work='$SCRATCH'
-    r2_block="# FV_R2_TREES (docs/adr/0019-fv-lab.md §21.8): fv-lab's merged weight root of a volume+r2 tier,
-# \$SCRATCH/weights (the volume's trees linked, these fetched from R2; never the volume), the matrix's \$W.
-FV_WEIGHTS_R2_ACCESS_KEY_ID=\"\$_fvr2_id\" FV_WEIGHTS_R2_SECRET_ACCESS_KEY=\"\$_fvr2_secret\" bash /opt/fastvideo-rs/scripts/gpu/r2-stage.sh \\
-  \$SCRATCH/weights \$SCRATCH/r2 \"\$OUT\" ${r2_cell} /workspace/weights \"$R2_LINKS\" $R2_SPECS >\"\$OUT/r2-stage.log\" 2>&1
-echo \"exit=\$?\" >>\"\$OUT/r2-stage.log\"
-_fvr2_id=\"\" _fvr2_secret=\"\"
-"
-  fi
+  # (FV_R2_TREES, ADR-0019 §21.8, rendered an R2 block before the matrix
+  # here and set FV_WORK to the merged root; it went with the script path,
+  # §22.20. Unset, it rendered nothing, so every body is what it was.)
   idle_watchdog
   cat <<EOF
 set -u
@@ -405,8 +358,8 @@ if [ "$mode" = kernels ] || [ "$mode" = all ]; then
   echo "exit=\$?" >>"\$OUT/kernels.out"
   cp "\$OUT"/gpucheck/*.json "\$OUT"/ 2>/dev/null
 fi
-${r2_block}if [ "$mode" = run ] || [ "$mode" = all ]; then
-  env ${FV_EXTRA_ENV:-} FV_WORK=$work FV_SCRATCH=\$SCRATCH FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
+if [ "$mode" = run ] || [ "$mode" = all ]; then
+  env ${FV_EXTRA_ENV:-} FV_WORK=/workspace FV_SCRATCH=\$SCRATCH FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
     ${FV_PROMPTS:+FV_PROMPTS="$FV_PROMPTS"} ${FV_LPIPS:+FV_LPIPS=$FV_LPIPS} \
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
     bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $FAMILY >"\$OUT/matrix.out" 2>&1
@@ -497,7 +450,6 @@ pod_payload() {
   local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" hub=false r2=false
   [[ "$mode" == upstream ]] && upstream_hub_token && hub=true
   [[ "$mode" == upstream ]] && upstream_r2_key && r2=true
-  [[ ( "$mode" == run || "$mode" == all ) && -n "$R2_SPECS" ]] && r2=true
   jq -n --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
     --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" \
@@ -704,7 +656,11 @@ tier_value() {
 # with FV_CELLS; serve-engine's group picker FV_ENGINE_CELLS, sfstream's run
 # list and prompts FV_SFSTREAM_RUNS / FV_SF_PROMPT / FV_SF_SWITCH and
 # mmaudio's prompt FV_MMAUDIO_PROMPT since theirs went, §22.19, the first
-# answered with FV_CELLS, the others with the tier's cell), hd's dropped
+# answered with FV_CELLS, the others with the tier's cell; the oracle's knobs
+# FV_ORACLE_TARGETS / FV_ORACLE_F32 / FV_ORACLE_OWN_TEXT / FV_ORACLE_PREFETCH,
+# FV_REF2VA_PROMPT and the five FV_LTX_*_PROMPT, and sfwan's FV_SFWAN_CELLS,
+# since oracle's and wan's branches went with the script, §22.20,
+# FV_ORACLE_TARGETS and FV_SFWAN_CELLS answered with FV_CELLS), hd's dropped
 # post-script hook (FV_DROPPED_KNOBS below, §22),
 # the prompts fv-lab ignores (§7), and what the start command sets after
 # FV_EXTRA_ENV anyway.
@@ -712,6 +668,9 @@ FV_LAB_NOT_READ="FV_PRECISION_ARM FV_NVFP4_WORKLOADS FV_VAE_GEN FV_VAE_TRACE FV_
   FV_LTXFPS FV_LTXFPS_FRAMES FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS
   FV_DET_CELLS FV_DET_REPEATS FV_DET_PROMPT FV_DET_T2V_PROMPT FV_DET_I2V_PROMPT FV_ATTN3_ARMS FV_ATTN3_VSA
   FV_ENGINE_CELLS FV_SFSTREAM_RUNS FV_SF_PROMPT FV_SF_SWITCH FV_MMAUDIO_PROMPT
+  FV_ORACLE_TARGETS FV_ORACLE_F32 FV_ORACLE_OWN_TEXT FV_ORACLE_PREFETCH FV_REF2VA_PROMPT
+  FV_LTX_REF_PROMPT FV_LTX_A2V_PROMPT FV_LTX_A2V_I2V_PROMPT FV_LTX_RETAKE_PROMPT FV_LTX_EXTEND_PROMPT
+  FV_SFWAN_CELLS
   FV_HD_POST_URL FV_HD_POST_TIMEOUT_S
   FV_PROMPTS FV_PROMPT FV_SEED FV_WORK FV_SCRATCH FV_RUN_TAG FV_CELLS FV_GEN_TIMEOUT_S"
 
@@ -834,9 +793,10 @@ fv_lab_route() {
     [[ "${!v:-0}" != 1 ]] || refuse "has no $v=1"
   done
   # The retired families' pair, group and arm selectors (ADR-0019 §9.4,
-  # §11.5, §15.10, §17.6, §22.19): ignored, the run would cover every cell of
-  # the tier.
-  for v in FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_DET_CELLS FV_ATTN3_ARMS FV_ATTN3_VSA FV_ENGINE_CELLS; do
+  # §11.5, §15.10, §17.6, §22.19, §22.20): ignored, the run would cover every
+  # cell of the tier.
+  for v in FV_TECH_CELLS FV_B6_CELLS FV_B4A_CELLS FV_DET_CELLS FV_ATTN3_ARMS FV_ATTN3_VSA FV_ENGINE_CELLS \
+    FV_ORACLE_TARGETS FV_SFWAN_CELLS; do
     [[ -z "${!v:-}" ]] || refuse "has no $v: it selects by arm, FV_CELLS (fv-lab pod up --cells)"
   done
   # The tier's values (lab/tiers.toml).
@@ -908,6 +868,12 @@ fv_lab_route() {
       FV_MMAUDIO_PROMPT)
         keys+=("$k")
         why+=("$k: the mmaudio tier's cell (lab/cells/mmaudio-sidecar.toml) is runpod-matrix.sh mmaudio's default prompt, its arms wan13-audio, sfwan13-audio and ours-v2a selected with FV_CELLS; another prompt is another cell (ADR-0019 §22, S5, §22.19)") ;;
+      FV_ORACLE_TARGETS)
+        keys+=("$k")
+        why+=("$k: oracle selects by arm, as every tier: FV_CELLS with every arm of each oracle-<target> cell, e.g. FV_CELLS=\"oracle-fasth3-4step-vsa oracle-fasth3-4step-vsa-diff\" (fv-lab pod up --cells, or fv-lab oracle --cells, which also makes the references; ADR-0019 §15, §21.9, §22.20)") ;;
+      FV_SFWAN_CELLS)
+        keys+=("$k")
+        why+=("$k: it was runpod-matrix.sh sfwan's pick of the wan family's arms; on the wan tier FV_CELLS is that pick, e.g. FV_CELLS=\"kernels-wan sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae\" (fv-lab pod up --cells; ADR-0019 §22.18, §22.20)") ;;
       FV_HD_POST_URL|FV_HD_POST_TIMEOUT_S)
         keys+=("$k")
         why+=("$(dropped_why "$k")") ;;
@@ -917,7 +883,7 @@ fv_lab_route() {
         # not dropped. Every other tier passes it on (oracle reads it).
         if [[ "$FAMILY" == determinism ]]; then
           keys+=("$k")
-          why+=("$k: determinism no longer runs the oracle first; run the oracle on its own (scripts/gpu/oracle.sh; ADR-0019 §15.5, §15.10)")
+          why+=("$k: determinism no longer runs the oracle first; run the oracle on its own (fv-lab oracle; ADR-0019 §15.5, §15.10)")
         fi ;;
       *)
         if [[ " $(echo $FV_LAB_NOT_READ) " == *" $k "* ]]; then
@@ -972,16 +938,9 @@ cmd_run() {
   if [[ "$FAMILY" == gold && ( "$mode" == run || "$mode" == all ) ]]; then
     die "gold is no runpod-matrix.sh family (docs/adr/0023-lab-report-and-ci-bridge.md): fv-lab pod up --sha $sha --family gold --yes --wait"
   fi
-  # Nor is a sibling tier (fv-lab-retired.sh FV_LAB_SIBLINGS): its cells are
-  # its family's targets on another pod (oracle-r2: weights from R2). hd5,
-  # the hd family's prompts-hd5.json mode (§22, S2), was one until hd's branch
-  # went (§22.19): frozen with it, it is FV_LAB_RETIRED and routed below.
-  local sib
-  if sib="$(fv_lab_sibling "$FAMILY")" && [[ "$mode" == run || "$mode" == all ]]; then
-    [[ "$sib" == oracle ]] \
-      && die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib's targets its tier cannot run (docs/adr/0019-fv-lab.md §21): fv-lab oracle --family $FAMILY --sha $sha --cells <arms> --yes, or fv-lab pod up --sha $sha --family $FAMILY --cells <arms> --yes --wait; the script runs them as FV_FAMILY=$sib"
-    die "$FAMILY is no runpod-matrix.sh family: the fv-lab tier of runpod-matrix.sh $sib in a mode its tier does not run (docs/adr/0019-fv-lab.md §21, §22): fv-lab pod up --sha $sha --family $FAMILY --yes --wait (narrowed by arm with --cells <arms>); the script runs it as FV_FAMILY=$sib $(fv_lab_sibling_mode "$FAMILY")"
-  fi
+  # No sibling tier is live (fv-lab-retired.sh FV_LAB_SIBLINGS is empty): hd5
+  # (§22.19) and oracle-r2 (§22.20) were frozen with their families; both are
+  # FV_LAB_RETIRED and routed below.
   # Nor were the tiers made from a port one-off (fv-lab-retired.sh FV_LAB_EXPERIMENTS).
   if fv_lab_experiment "$FAMILY" && [[ "$mode" == run || "$mode" == all ]]; then
     die "$FAMILY is no runpod-matrix.sh family: an fv-lab tier made from a port one-off (docs/adr/0019-fv-lab.md §14): fv-lab pod up --sha $sha --family $FAMILY --yes --wait"
@@ -992,11 +951,17 @@ cmd_run() {
     fv_lab_route run "$sha"
     return
   fi
+  # The script path is gone (docs/adr/0019-fv-lab.md §22.6, §22.20; §14.6):
+  # runpod-matrix.sh had no family left after S8 and was deleted, so `run` and
+  # `all` have nothing to start for a name that is no fv-lab tier of
+  # fv-lab-retired.sh. Refused before any lookup or pod.
+  if [[ "$mode" == run || "$mode" == all ]]; then
+    die "$FAMILY is no fv-lab tier of fv-lab-retired.sh, and the script path is gone (runpod-matrix.sh had no family left and was deleted, docs/adr/0019-fv-lab.md §22.20): nothing runs it; an fv-lab tier: FV_FAMILY=<tier> runpod-http.sh run, or fv-lab pod up --sha $sha --family <tier> --yes --wait"
+  fi
   refuse_dropped
-  # FV_DRY_RUN=1: say what would run and create nothing (the commands
-  # themselves: FV_DRY_RUN=1 bash scripts/gpu/runpod-matrix.sh <family>).
+  # FV_DRY_RUN=1: say what would run and create nothing.
   if [[ "${FV_DRY_RUN:-0}" == 1 ]]; then
-    echo "runpod-http: dry run: $mode $FAMILY at $sha on the script path, nothing created: a pod running runpod-matrix.sh $FAMILY${FV_CELLS:+ (FV_CELLS=$FV_CELLS)}; its body: runpod-http.sh plan $sha; its commands: FV_DRY_RUN=1 bash scripts/gpu/runpod-matrix.sh $FAMILY" >&2
+    echo "runpod-http: dry run: $mode $FAMILY at $sha, nothing created: a $mode pod" >&2
     return 0
   fi
   image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}"
@@ -1014,7 +979,8 @@ cmd_run() {
   done
   [[ -n "$id" ]] || die "no pod came up after 3 attempts"
   echo "$id" >"${TMPDIR:-/tmp}/fv-$FAMILY.pod"
-  # FV_POD_FILE: "<pod id> <run tag>" for a caller driving several pods (oracle.sh).
+  # FV_POD_FILE: "<pod id> <run tag>" for a caller driving several pods (oracle.sh did,
+  # until it went with the script path, ADR-0019 §22.20).
   [[ -n "${FV_POD_FILE:-}" ]] && echo "$id $tag" >"$FV_POD_FILE"
   wait_done "$id" "$tag" || rc=1
   fetch_results "$id" "$tag"

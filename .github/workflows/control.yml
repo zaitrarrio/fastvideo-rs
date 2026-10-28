@@ -44,7 +44,6 @@ on:
       - "scripts/gcp/vm.sh"
       - "scripts/gcp/lib.sh"
       - "scripts/gcp/tests/**"
-      - "scripts/gpu/runpod-matrix.sh"
       - "scripts/gpu/runpod-http.sh"
       - "scripts/gpu/tests/fv-lab-goldens.sh"
       - "scripts/gpu/fv-lab-compare-runs.sh"
@@ -59,15 +58,11 @@ on:
       - "scripts/gpu/tests/hub-token.test.sh"
       # the upstream pod's R2 trees (ADR-0019 §21)
       - "scripts/gpu/upstream/oracle.sh"
-      - "scripts/gpu/oracle.sh"
       - "scripts/gpu/tests/upstream-r2.test.sh"
       # the sol-ltx25 reference's PyAV pin (ADR-0019 §20.10)
       - "scripts/gpu/upstream/setup.sh"
       - "docker/upstream.Dockerfile"
       - "scripts/gpu/tests/upstream-pyav.test.sh"
-      # the script runner's R2 trees (ADR-0019 §21.8)
-      - "scripts/gpu/r2-stage.sh"
-      - "scripts/gpu/tests/runpod-r2.test.sh"
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
       # D1e (ADR-0019 §14): the experiment tiers' goldens, cut from the experiments' pod scripts (read from the history since §14.4)
       - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
@@ -137,7 +132,6 @@ on:
       - "scripts/gcp/vm.sh"
       - "scripts/gcp/lib.sh"
       - "scripts/gcp/tests/**"
-      - "scripts/gpu/runpod-matrix.sh"
       - "scripts/gpu/runpod-http.sh"
       - "scripts/gpu/tests/fv-lab-goldens.sh"
       - "scripts/gpu/fv-lab-compare-runs.sh"
@@ -152,15 +146,11 @@ on:
       - "scripts/gpu/tests/hub-token.test.sh"
       # the upstream pod's R2 trees (ADR-0019 §21)
       - "scripts/gpu/upstream/oracle.sh"
-      - "scripts/gpu/oracle.sh"
       - "scripts/gpu/tests/upstream-r2.test.sh"
       # the sol-ltx25 reference's PyAV pin (ADR-0019 §20.10)
       - "scripts/gpu/upstream/setup.sh"
       - "docker/upstream.Dockerfile"
       - "scripts/gpu/tests/upstream-pyav.test.sh"
-      # the script runner's R2 trees (ADR-0019 §21.8)
-      - "scripts/gpu/r2-stage.sh"
-      - "scripts/gpu/tests/runpod-r2.test.sh"
       - "scripts/gpu/tests/fv-lab-report-goldens.sh"
       # D1e (ADR-0019 §14): the experiment tiers' goldens, cut from the experiments' pod scripts (read from the history since §14.4)
       - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
@@ -238,7 +228,7 @@ jobs:
       - name: gcp/vm.sh creates, deletes and reaps against a local mock of Compute Engine (ADR-0018 §8.3)
         working-directory: .
         run: bash scripts/gcp/tests/vm.test.sh
-      - name: fv-lab goldens are what runpod-matrix.sh / runpod-http.sh do for every lab/tiers.toml tier, frozen for the retired ones (ADR-0019 §9.3, §10)
+      - name: fv-lab goldens are what runpod-matrix.sh / runpod-http.sh did for every lab/tiers.toml tier, frozen for the retired ones since the script went (ADR-0019 §9.3, §10, §22.20)
         working-directory: .
         run: bash scripts/gpu/tests/fv-lab-goldens.sh --check
       - name: fv-lab report goldens are what the report scripts print on committed run directories (ADR-0019 §13.2)
@@ -250,7 +240,7 @@ jobs:
       - name: runpod-http.sh routes the retired families to fv-lab, refusing what fv-lab would not honour and the families retired with no tier (ADR-0019 §10, §18, §22)
         working-directory: .
         run: bash scripts/gpu/tests/fv-lab-route.test.sh
-      - name: runpod.sh gpu / matrix run a retired family's tier with fv-lab, never runpod-matrix.sh, and stop before any pod on a family nothing runs (ADR-0019 §17.6, §18, §22)
+      - name: runpod.sh gpu / matrix run a retired family's tier with fv-lab (runpod-matrix.sh is gone), and stop before any pod on a family nothing runs (ADR-0019 §17.6, §18, §22)
         working-directory: .
         run: bash scripts/gpu/tests/runpod-plan.test.sh
       - name: the upstream pod's Hub token is a Runpod secret reference, never a value; pod.sh reads it, or the volume's file, and box.txt names only its source (ADR-0019 §20.7)
@@ -262,9 +252,6 @@ jobs:
       - name: the sol-ltx25 reference pins PyAV and its install fails unless upstream's decode_audio_from_file reads the retake fixture as [2, 222208] (ADR-0019 §20.10)
         working-directory: .
         run: bash scripts/gpu/tests/upstream-pyav.test.sh
-      - name: runpod-http.sh run's FV_R2_TREES builds fv-lab's merged weight root on the script runner's pod, the key by Runpod secret reference to the plan step alone; unset changes nothing (ADR-0019 §21.8)
-        working-directory: .
-        run: bash scripts/gpu/tests/runpod-r2.test.sh
       - name: the pod scripts send a config the serve images can boot (one image, ADR-0011)
         working-directory: .
         run: bash scripts/serve/tests/no-baked-config.test.sh

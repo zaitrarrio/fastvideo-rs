@@ -6,35 +6,37 @@
 #     dropped modes' knobs refused in FV_EXTRA_ENV (the two restored modes
 #     naming their tier, ADR-0019 §12), lists split without globbing, and a
 #     fake FV_LAB_BIN receiving exactly the command;
-#   - `gold`, the experiment tiers (h3-graphs, ADR-0019 §14) and the sibling
-#     tier (oracle-r2, §21) refused for run / all (their plan still the
-#     script's body);
+#   - `gold` and the experiment tiers (h3-graphs, ADR-0019 §14) refused for
+#     run / all (their plan still the script's body);
 #   - hd (with its sibling hd5), serve-engine, sfstream and mmaudio, retired
 #     to fv-lab after their GPU checks (§22.19, S7): routed, `all` refused,
-#     fv-lab's plan, refused by runpod-matrix.sh; their knobs
-#     (FV_ENGINE_CELLS, FV_SFSTREAM_RUNS, FV_SF_PROMPT, FV_SF_SWITCH,
-#     FV_MMAUDIO_PROMPT) and the script side's FV_R2_TREES refused;
-#   - wan (§22, S6) on the script path, its GPU check's FV_R2_TREES form
-#     planned; its dry run with each gated arm's FASTVIDEO_TAE_DIR, no
-#     --tae-dir, no TAE fetch, and sfwan's (its SF-Wan arms) the same;
+#     fv-lab's plan; their knobs (FV_ENGINE_CELLS, FV_SFSTREAM_RUNS,
+#     FV_SF_PROMPT, FV_SF_SWITCH, FV_MMAUDIO_PROMPT) and FV_R2_TREES refused;
+#   - wan, oracle and oracle-r2 (oracle's sibling, frozen with it), retired
+#     to fv-lab in S8 (§22.20): routed, `all` refused, fv-lab's plan; their
+#     knobs (FV_ORACLE_TARGETS, FV_ORACLE_F32, FV_ORACLE_OWN_TEXT,
+#     FV_ORACLE_PREFETCH, FV_REF2VA_PROMPT, the five FV_LTX_*_PROMPT,
+#     FV_SFWAN_CELLS) refused; oracle with FV_ORACLE_TARGETS=sfwan13 names
+#     oracle-r2; runpod-matrix.sh, scripts/gpu/oracle.sh and r2-stage.sh gone;
+#     `run` / `all` of a name that is no fv-lab tier refused before any pod
+#     (the script path is gone), FV_R2_TREES refused on every pod command;
 #   - hd's dropped post-script hook (FV_HD_POST_URL, FV_HD_POST_TIMEOUT_S,
-#     ADR-0019 §22, S2) refused by runpod-http.sh (script path and fv-lab
-#     route);
+#     ADR-0019 §22, S2) refused by runpod-http.sh (the pod modes, the
+#     script body's plan, the fv-lab route);
 #   - FV_POD_FILES / FV_POD_SCRIPT, gone with sol-bench-pod.sh (ADR-0019
 #     §23.10), refused by runpod-http.sh on every path, naming the
 #     sol-bench-<set> tiers;
 #   - the families retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
 #     ADR-0019 §18 and §22's S1, `headline` among them) refused by
-#     runpod-http.sh run / all / plan (dry run or not, before the key) and by
-#     runpod-matrix.sh, exit 2, naming what replaces each; never routed to
-#     fv-lab;
+#     runpod-http.sh run / all / plan (dry run or not, before the key), exit
+#     2, naming what replaces each (sfwan, S8, its two halves); never routed
+#     to fv-lab;
 #   - the usage texts print their whole header.
 #
 #   bash scripts/gpu/tests/fv-lab-route.test.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 HTTP="$ROOT/scripts/gpu/runpod-http.sh"
-MATRIX="$ROOT/scripts/gpu/runpod-matrix.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fail=0
@@ -86,8 +88,8 @@ done
 for kv in FV_POD_FILES=x FV_POD_SCRIPT=sol-bench-pod.sh; do
   why="${kv%%=*} went with scripts/gpu/sol-bench-pod.sh, its only user (docs/adr/0019-fv-lab.md §23.10): the benchmark's sets are the fv-lab tiers sol-bench-<set>"
   dry "refused (gone): $kv, fv-lab route" 1 "$why" FV_FAMILY=trace "$kv"
-  dry "refused (gone): $kv, script path" 1 "$why" FV_FAMILY=wan "$kv"
-  expect "refused (gone): $kv, plan" 1 "$why" -- RUNPOD_API_KEY=t FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_FAMILY=wan \
+  dry "refused (gone): $kv, no tier" 1 "$why" FV_FAMILY=no-such-family "$kv"
+  expect "refused (gone): $kv, plan" 1 "$why" -- RUNPOD_API_KEY=t FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_FAMILY=gold \
     "$kv" bash "$HTTP" plan abc1234 abc1234-10261200
 done
 # ... but not for `down`, `status` and `attach`, which act on a pod that exists:
@@ -117,9 +119,10 @@ done
 # (ADR-0019 §16.10).
 dry "refused: FV_MIN_RAM_GB names the tier's min_ram_gb" 1 "a pod's host-RAM floor is its tier's min_ram_gb in lab/tiers.toml" \
   FV_FAMILY=trace FV_MIN_RAM_GB=192
-# FV_MIN_RAM_GB on the script path: minRAMPerGPU in the body; anything but a
-# whole positive number of GB stops before jq or the API.
-plan_env=(RUNPOD_API_KEY=t FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_FAMILY=oracle)
+# FV_MIN_RAM_GB in runpod-http.sh's own body (gold's plan, the script body
+# since oracle went, §22.20): minRAMPerGPU; anything but a whole positive
+# number of GB stops before jq or the API.
+plan_env=(RUNPOD_API_KEY=t FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_FAMILY=gold)
 expect "plan: FV_MIN_RAM_GB=192 is minRAMPerGPU" 0 '"minRAMPerGPU": 192' -- \
   "${plan_env[@]}" FV_MIN_RAM_GB=192 bash "$HTTP" plan abc1234 abc1234-10261200
 for v in 0 012 12.5 abc -1 "1 2"; do
@@ -189,28 +192,15 @@ expect "plan: restored mode named" 1 "it is the fv-lab tier precision-nvfp4 now:
   FV_DRY_RUN=1 FV_FAMILY=precision FV_EXTRA_ENV="FV_PRECISION_ARM=ltx-nvfp4" bash "$HTTP" plan abc1234
 expect "plan: restored tier is fv-lab's plan" 0 "--family precision-nvfp4 --root $ROOT --tag abc1234-1025120000-abcd" -- \
   FV_DRY_RUN=1 FV_FAMILY=precision-nvfp4 bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
-# runpod-matrix.sh names the restored tier: asked for as family + setting, or by name.
-mx() { # mx <name> <text> <env...> <family>: the dry run's FATAL line (exit 2)
-  local name="$1" text="$2" out rc=0
-  shift 2
-  mkdir -p "$TMP/mx/w/weights" "$TMP/mx/s"
-  out="$(clean FV_DRY_RUN=1 FV_WORK="$TMP/mx/w" FV_SCRATCH="$TMP/mx/s" FV_RUN_TAG=t "${@:1:$#-1}" bash "$MATRIX" "${!#}" 2>&1)" || rc=$?
-  if [[ "$rc" == 2 && "$out" == *"$text"* ]]; then ok "$name"; else bad "$name: exit $rc (want 2), output: $out"; fi
-}
-mx "matrix: precision + ltx-nvfp4 names precision-nvfp4" \
-  "FATAL: FV_PRECISION_ARM=ltx-nvfp4 was a mode of precision; it is the fv-lab tier precision-nvfp4 now: fv-lab run precision-nvfp4" \
-  FV_PRECISION_ARM=ltx-nvfp4 precision
-mx "matrix: ltxvae + FV_VAE_GEN=1 names ltxvae-gen" "it is the fv-lab tier ltxvae-gen now: fv-lab run ltxvae-gen" FV_VAE_GEN=1 ltxvae
-mx "matrix: precision-nvfp4 was never a script family" \
-  "FATAL: precision-nvfp4 is an fv-lab tier (the precision family's FV_PRECISION_ARM=ltx-nvfp4 mode), never a runpod-matrix.sh family: fv-lab run precision-nvfp4" \
-  precision-nvfp4
-mx "matrix: ltxvae-gen was never a script family" "ltxvae-gen is an fv-lab tier (the ltxvae family's FV_VAE_GEN=1 mode)" ltxvae-gen
-# hd's branch, which refused FV_HD_POST_* itself, is gone (§22.19): hd is
-# refused before anything reads the hook.
-mx "matrix: hd with FV_HD_POST_URL is refused as retired" "FATAL: hd is retired to fv-lab (fv-lab-retired.sh): fv-lab run hd " \
-  FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh hd
-mx "matrix: precision alone is the retired family" "FATAL: precision is retired to fv-lab (fv-lab-retired.sh): fv-lab run precision " \
-  FV_PRECISION_ARM=all precision
+# runpod-matrix.sh, which refused the retired families and named the
+# restored tiers on the box, is gone (ADR-0019 §22.20), with
+# scripts/gpu/oracle.sh (the script path's oracle driver) and r2-stage.sh (the
+# script path's R2 trees, §21.8): runpod-http.sh and runpod.sh refuse instead.
+for f in runpod-matrix.sh oracle.sh r2-stage.sh; do
+  [[ ! -e "$ROOT/scripts/gpu/$f" ]] && ok "scripts/gpu/$f is gone" || bad "scripts/gpu/$f is back"
+done
+[[ -f "$ROOT/scripts/gpu/upstream/oracle.sh" ]] && ok "scripts/gpu/upstream/oracle.sh (the reference side) stays" \
+  || bad "scripts/gpu/upstream/oracle.sh is gone"
 # The restored tiers themselves are fv-lab only.
 dry "restored tier: precision-nvfp4 through fv-lab" 0 \
   "fv-lab pod up --sha abc1234 --family precision-nvfp4 --root $ROOT --cells ltx25-4k5s-sol-bf16 ltx25-4k5s-sol-nvfp4 --lpips --yes --wait" \
@@ -238,28 +228,20 @@ done
 expect "h3-graphs: plan is runpod-http.sh's body" 0 '"name": "fv-lab-h3-graphs-abc1234-t"' -- RUNPOD_API_KEY=x \
   FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=h3-graphs bash "$HTTP" plan abc1234 abc1234-t
 
-# A sibling tier (fv-lab-retired.sh FV_LAB_SIBLINGS, ADR-0019 §21: oracle-r2,
-# the oracle family's sfwan13 on a volume+r2 pod; hd5 was one until hd's branch
-# went, §22.19): like gold, never the script path (its targets run there as
-# FV_FAMILY=oracle); its plan the script's body.
-# FV_DRY_RUN=1: a refusal that broke would print the script path's dry run,
-# never reach the API.
-for mode in run all; do
-  expect "oracle-r2: $mode refused" 1 "fv-lab oracle --family oracle-r2 --sha abc1234" -- FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=oracle-r2 bash "$HTTP" "$mode" abc1234
-  expect "oracle-r2: $mode names the script family" 1 "the script runs them as FV_FAMILY=oracle" -- FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=oracle-r2 bash "$HTTP" "$mode" abc1234
-done
-expect "oracle-r2: plan is runpod-http.sh's body" 0 '"name": "fv-lab-oracle-r2-abc1234-t"' -- RUNPOD_API_KEY=x \
-  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=oracle-r2 bash "$HTTP" plan abc1234 abc1234-t
+# No sibling tier is live (fv-lab-retired.sh FV_LAB_SIBLINGS is empty, ADR-0019
+# §22.20): oracle-r2 was the oracle family's sfwan13 on a volume+r2 pod, hd5
+# hd's prompts-hd5.json mode; both are frozen with their family (below).
+[[ -z "$(echo $FV_LAB_SIBLINGS)" ]] && ok "FV_LAB_SIBLINGS is empty" || bad "FV_LAB_SIBLINGS: $FV_LAB_SIBLINGS"
 # hd's post-script hook (FV_HD_POST_URL, its cap FV_HD_POST_TIMEOUT_S) was
 # dropped with the family's derived step (ADR-0019 §22, S2): refused in
-# FV_EXTRA_ENV on the script path (refuse_dropped: wan here, before any pod or
-# key, since hd's own branch went, §22.19) and on the fv-lab route (hd's own
-# included, run and plan).
+# FV_EXTRA_ENV by refuse_dropped (the pod modes, here kernels, and the script
+# body's plan, here gold's; before any pod or key; the script path that ran
+# wan is gone, §22.20) and on the fv-lab route (hd's own included, run and plan).
 for k in FV_HD_POST_URL FV_HD_POST_TIMEOUT_S; do
-  for mode in run all plan; do
-    expect "script path: $k refused ($mode)" 1 "$k: the hd family's post-script hook was dropped with its derived step" -- \
-      FV_DRY_RUN=1 FV_FAMILY=wan FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1" bash "$HTTP" "$mode" abc1234
-  done
+  expect "kernels: $k refused" 1 "$k: the hd family's post-script hook was dropped with its derived step" -- \
+    FV_DRY_RUN=1 FV_FAMILY=no-such-family FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1" bash "$HTTP" kernels abc1234
+  expect "the script body's plan (gold): $k refused" 1 "$k: the hd family's post-script hook was dropped with its derived step" -- \
+    FV_DRY_RUN=1 FV_FAMILY=gold FV_EXTRA_ENV="FASTVIDEO_X=1 $k=1" bash "$HTTP" plan abc1234
   for fam in precision hd; do
     dry "fv-lab route: $k refused ($fam)" 1 "reads no $k from FV_EXTRA_ENV ($k: the hd family's post-script hook was dropped" \
       FV_FAMILY="$fam" FV_EXTRA_ENV="$k=1"
@@ -267,14 +249,14 @@ for k in FV_HD_POST_URL FV_HD_POST_TIMEOUT_S; do
   expect "plan: $k refused (hd)" 1 "reads no $k from FV_EXTRA_ENV ($k: the hd family's post-script hook was dropped" -- \
     FV_DRY_RUN=1 FV_FAMILY=hd FV_EXTRA_ENV="$k=1" bash "$HTTP" plan abc1234
 done
-expect "wan: the script path without the hook is unchanged" 0 "a pod running runpod-matrix.sh wan" -- \
-  FV_DRY_RUN=1 FV_FAMILY=wan FV_EXTRA_ENV="FASTVIDEO_X=1" bash "$HTTP" run abc1234
+expect "kernels without the hook: a dry run, nothing created" 0 "dry run: kernels no-such-family at abc1234, nothing created" -- \
+  FV_DRY_RUN=1 FV_FAMILY=no-such-family FV_EXTRA_ENV="FASTVIDEO_X=1" bash "$HTTP" kernels abc1234
 
 # hd (with its sibling hd5), serve-engine, sfstream and mmaudio (ADR-0019
 # §22.19, S7): retired to fv-lab after their GPU checks (§22.10, §22.12,
 # §22.14, §22.16). runpod-http.sh run routes each to fv-lab pod up (never the
-# script path), `all` is refused, `plan` is fv-lab's plan; runpod-matrix.sh
-# refuses each (exit 2) naming fv-lab's commands. The families are named here,
+# script path), `all` is refused, `plan` is fv-lab's plan (runpod-matrix.sh
+# refused each, exit 2, until it went, §22.20). The families are named here,
 # not read from the list, so one dropped from FV_LAB_RETIRED fails.
 # shellcheck source=scripts/gpu/fv-lab-retired.sh
 . "$ROOT/scripts/gpu/fv-lab-retired.sh"
@@ -289,7 +271,6 @@ for fam in hd hd5 serve-engine sfstream mmaudio; do
   expect "all: refused for $fam" 1 "run \`kernels\`, then \`run\`" -- RUNPOD_API_KEY=x FV_FAMILY="$fam" bash "$HTTP" all abc1234
   expect "plan: fv-lab's plan for $fam" 0 "--family $fam --root $ROOT --tag abc1234-1025120000-abcd" -- \
     FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
-  mx "matrix: $fam is retired" "FATAL: $fam is retired to fv-lab (fv-lab-retired.sh): fv-lab run $fam on the box, runpod-http.sh run or fv-lab pod up --family $fam from a host" "$fam"
 done
 # hd5 is frozen with hd (FV_LAB_RETIRED_SIBLINGS, with its mode): no longer a
 # live sibling, so run reaches fv-lab rather than the sibling refusal.
@@ -322,15 +303,8 @@ dry "hd: FV_PROMPTS in FV_EXTRA_ENV refused (another prompt set)" 1 "reads no FV
   FV_FAMILY=hd FV_EXTRA_ENV=FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json
 out="$(cd "$TMP" && clean FV_DRY_RUN=1 FV_FAMILY=hd FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json bash "$HTTP" run abc1234 2>&1 || true)"
 [[ "$out" != *hd5* ]] && ok "hd: another prompt set's refusal does not name hd5" || bad "hd: $out"
-dry "wan: prompts-hd5.json is not hd5's mode for another family" 0 "on the script path, nothing created" \
+dry "wan: prompts-hd5.json is not hd5's mode for another family" 1 "wan runs through fv-lab (fv-lab-retired.sh), which has no FV_PROMPTS; unset it" \
   FV_FAMILY=wan FV_PROMPTS="$hd5_mode"
-for v in "$hd5_mode" scripts/gpu/prompts-hd5.json; do
-  mx "matrix: hd + FV_PROMPTS=$v names hd5" \
-    "FATAL: FV_PROMPTS=$v with hd is the fv-lab tier hd5 now (hd's FV_PROMPTS mode, frozen with it: fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS, ADR-0019 §22.19; without it the run would be hd's own): fv-lab run hd5 on the box, FV_FAMILY=hd5 runpod-http.sh run or fv-lab pod up --family hd5 from a host" \
-    FV_PROMPTS="$v" hd
-done
-mx "matrix: hd + another FV_PROMPTS is the retired family" "FATAL: hd is retired to fv-lab (fv-lab-retired.sh): fv-lab run hd " \
-  FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd.json hd
 # The volume+r2 tiers' GPU-check form (FV_R2_TREES, §21.8) was the script
 # side's; fv-lab fetches the tier's trees itself, so it is refused.
 for kv in "serve-engine fastwan21-1.3b 150" "sfstream sfwan21-1.3b 150" "mmaudio fastwan21-1.3b 180"; do
@@ -357,37 +331,85 @@ dry "mmaudio: FV_MMAUDIO_PROMPT refused, the cell named" 1 \
 dry "FV_MMAUDIO_PROMPT in another tier's FV_EXTRA_ENV: refused" 1 "reads no FV_MMAUDIO_PROMPT from FV_EXTRA_ENV" \
   FV_FAMILY=hd FV_EXTRA_ENV="FV_MMAUDIO_PROMPT=a"
 
-# wan (ADR-0019 §22, S6): on the script path until S8, its GPU check's two trees from R2 (the
-# script side stages both at once: 53.41 GB and the 120 GB); its dry run shows
-# each gated arm's FASTVIDEO_TAE_DIR and fetches no TAE file; sfwan, which runs
-# the branch's SF-Wan arms, inherits both.
-expect "wan: run is the script path" 0 "a pod running runpod-matrix.sh wan" -- \
-  FV_DRY_RUN=1 FV_FAMILY=wan bash "$HTTP" run abc1234
-expect "wan: the GPU check's script side plans" 0 '"name": "fv-lab-wan-abc1234-t"' -- RUNPOD_API_KEY=x \
-  FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY=wan "FV_R2_TREES=fastwan21-1.3b fastwan22-ti2v-5b" \
-  FV_CONTAINER_DISK_GB=174 FV_MIN_RAM_GB=256 bash "$HTTP" plan abc1234 abc1234-t
-expect "wan: FV_R2_TREES needs a disk for both trees" 2 "(53.41 GB) and 120 GB: FV_CONTAINER_DISK_GB=174 or more" -- \
-  FV_DRY_RUN=1 FV_FAMILY=wan "FV_R2_TREES=fastwan21-1.3b fastwan22-ti2v-5b" FV_CONTAINER_DISK_GB=173 bash "$HTTP" run abc1234
-for fam in wan sfwan; do
-  rm -rf "$TMP/ww" "$TMP/ws"; mkdir -p "$TMP/ww/weights/auxiliary/tae" "$TMP/ws"
-  : >"$TMP/ww/weights/auxiliary/tae/.complete"
-  expect "$fam: each SF-Wan arm's own FASTVIDEO_TAE_DIR, no fetch in a dry run" 0 \
-    "dry-run sfwan13-81f-flash: env FASTVIDEO_TAE_DIR=$TMP/ww/weights/auxiliary/tae FASTVIDEO_WAN_CAUSAL_FLASH=1 " -- \
-    FV_DRY_RUN=1 FV_WORK="$TMP/ww" FV_SCRATCH="$TMP/ws" bash "$MATRIX" "$fam"
-  if [[ -n "$(ls -A "$TMP/ww/weights/auxiliary/tae" | grep -v '^\.complete$')" || -e "$TMP/ws/runs/$fam/tae-fetch.log" ]]; then
-    bad "$fam: a dry run fetched a TAE file"
+# wan, oracle and oracle-r2 (ADR-0019 §22.20, S8): retired to fv-lab after
+# their GPU checks (wan §22.18; oracle §15.7, §19.7, §20.7; oracle-r2 §21.7).
+# runpod-http.sh run routes each to fv-lab pod up, `all` is refused, `plan`
+# is fv-lab's plan. oracle-r2 is frozen with oracle (FV_LAB_RETIRED_SIBLINGS,
+# its mode FV_ORACLE_TARGETS=sfwan13). Named here, not read from the list.
+for fam in wan oracle oracle-r2; do
+  if fv_lab_retired "$fam" && ! fv_lab_sibling "$fam" >/dev/null && ! fv_script_retired "$fam"; then
+    ok "$fam: in FV_LAB_RETIRED only"
   else
-    ok "$fam: a dry run fetched nothing"
+    bad "$fam: not retired to fv-lab (FV_LAB_RETIRED: $FV_LAB_RETIRED)"
   fi
+  dry "$fam: run is fv-lab only" 0 "fv-lab pod up --sha abc1234 --family $fam --root $ROOT --yes --wait" FV_FAMILY="$fam"
+  dry "$fam: never the script path" 0 "$fam is fv-lab only (fv-lab-retired.sh); nothing created" FV_FAMILY="$fam"
+  expect "all: refused for $fam" 1 "run \`kernels\`, then \`run\`" -- RUNPOD_API_KEY=x FV_FAMILY="$fam" bash "$HTTP" all abc1234
+  expect "plan: fv-lab's plan for $fam" 0 "--family $fam --root $ROOT --tag abc1234-1025120000-abcd" -- \
+    FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
 done
-out="$(cd "$TMP" && clean FV_DRY_RUN=1 FV_WORK="$TMP/ww" FV_SCRATCH="$TMP/ws" bash "$MATRIX" wan 2>&1)" || true
-if [[ "$out" != *"--tae-dir"* && "$out" == *"dry-run engine-fw22: env FASTVIDEO_TAE_DIR=$TMP/ww/weights/auxiliary/tae "* \
-  && "$(grep -c ": env FASTVIDEO_TAE_DIR=$TMP/ww/weights/auxiliary/tae " <<<"$out")" == 45 \
-  && "$out" == *"dry-run kernels-wan: "* && "$out" != *"dry-run kernels-wan: env "* ]]; then
-  ok "wan: 45 gated arms with their own FASTVIDEO_TAE_DIR (kernels-wan none), engine-fw22 without --tae-dir"
-else
-  bad "wan: the dry run's TAE lines: $out"
-fi
+[[ " $FV_LAB_RETIRED_SIBLINGS " == *" oracle-r2:oracle:FV_ORACLE_TARGETS=sfwan13 "* ]] \
+  && ok "oracle-r2: a retired sibling of oracle with its FV_ORACLE_TARGETS mode" || bad "oracle-r2: FV_LAB_RETIRED_SIBLINGS=$FV_LAB_RETIRED_SIBLINGS"
+# The tensor-diff and clip-metric targets and sfwan13 by arm through fv-lab;
+# the GPU checks' fetch settings pass.
+dry "oracle: a target's arms through fv-lab, the tree fetched" 0 \
+  "fv-lab pod up --sha abc1234 --family oracle --root $ROOT --cells oracle-ltx25-retake oracle-ltx25-retake-diff --extra-env FV_ORACLE_URL=https://x-8000.proxy.runpod.net/upstream/t --fetch-tree --fetch-skip /frames/ --yes --wait" \
+  FV_FAMILY=oracle FV_CELLS="oracle-ltx25-retake oracle-ltx25-retake-diff" FV_FETCH_TREE=1 FV_FETCH_SKIP=/frames/ \
+  FV_EXTRA_ENV="FV_ORACLE_URL=https://x-8000.proxy.runpod.net/upstream/t"
+dry "wan: sfwan's SF-Wan arms by arm through fv-lab" 0 \
+  "fv-lab pod up --sha abc1234 --family wan --root $ROOT --cells kernels-wan sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae --yes --wait" \
+  FV_FAMILY=wan FV_CELLS="kernels-wan,sfwan13-81f-flash,sfwan13-81f-composed,sfwan13-81f-wholeclip,sfwan13-81f-fullvae"
+# The oracle's FV_ORACLE_TARGETS=sfwan13 is the oracle-r2 tier: named, before
+# any other refusal, in the host environment or FV_EXTRA_ENV; oracle-r2 with
+# its own setting drops it.
+or2_why="with FV_FAMILY=oracle is the fv-lab tier oracle-r2 now (oracle's FV_ORACLE_TARGETS mode, frozen with it: fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS, docs/adr/0019-fv-lab.md §22.19): use FV_FAMILY=oracle-r2 without FV_ORACLE_TARGETS"
+for mode in run all plan; do
+  expect "oracle + FV_ORACLE_TARGETS=sfwan13 names oracle-r2 ($mode)" 1 "FV_ORACLE_TARGETS=sfwan13 $or2_why" -- \
+    FV_DRY_RUN=1 RUNPOD_API_KEY=x FV_FAMILY=oracle FV_EXTRA_ENV="FASTVIDEO_X=1 FV_ORACLE_TARGETS=sfwan13" FV_AVOID_MACHINES=m1 bash "$HTTP" "$mode" abc1234
+done
+dry "oracle + host FV_ORACLE_TARGETS=sfwan13 names oracle-r2" 1 "FV_ORACLE_TARGETS=sfwan13 $or2_why" \
+  FV_FAMILY=oracle FV_ORACLE_TARGETS=sfwan13
+dry "oracle-r2 with its own FV_ORACLE_TARGETS: drop it" 1 \
+  "FV_FAMILY=oracle-r2 is the oracle family's FV_ORACLE_TARGETS=sfwan13 mode already: drop FV_ORACLE_TARGETS" \
+  FV_FAMILY=oracle-r2 FV_EXTRA_ENV="FV_ORACLE_TARGETS=sfwan13"
+# Their knobs (§22.20, out of knobs::SCRIPT_KNOBS into MODE_KNOBS and
+# FV_LAB_NOT_READ): FV_ORACLE_TARGETS and FV_SFWAN_CELLS answered with
+# FV_CELLS, in FV_EXTRA_ENV and in the host environment; the others refused
+# in FV_EXTRA_ENV, on any retired family, all in one message.
+dry "oracle: FV_ORACLE_TARGETS refused, FV_CELLS named" 1 \
+  "reads no FV_ORACLE_TARGETS from FV_EXTRA_ENV (FV_ORACLE_TARGETS: oracle selects by arm, as every tier: FV_CELLS with every arm of each oracle-<target> cell" \
+  FV_FAMILY=oracle FV_EXTRA_ENV="FV_ORACLE_TARGETS=fasth3-4step-vsa"
+dry "wan: FV_SFWAN_CELLS refused, FV_CELLS named" 1 \
+  "reads no FV_SFWAN_CELLS from FV_EXTRA_ENV (FV_SFWAN_CELLS: it was runpod-matrix.sh sfwan's pick of the wan family's arms; on the wan tier FV_CELLS is that pick" \
+  FV_FAMILY=wan FV_EXTRA_ENV="FV_SFWAN_CELLS=kernels-wan"
+for kv in "oracle FV_ORACLE_TARGETS=ltx25-retake" "wan FV_SFWAN_CELLS=kernels-wan"; do
+  read -r fam setting <<<"$kv"
+  dry "host env refused: ${setting%%=*} ($fam)" 1 "which has no ${setting%%=*}: it selects by arm, FV_CELLS" FV_FAMILY="$fam" "$setting"
+done
+dry "oracle: the other oracle knobs refused in one message" 1 \
+  "reads no FV_ORACLE_F32, FV_ORACLE_OWN_TEXT, FV_ORACLE_PREFETCH, FV_REF2VA_PROMPT, FV_LTX_REF_PROMPT, FV_LTX_A2V_PROMPT, FV_LTX_A2V_I2V_PROMPT, FV_LTX_RETAKE_PROMPT, FV_LTX_EXTEND_PROMPT from FV_EXTRA_ENV" \
+  FV_FAMILY=oracle FV_EXTRA_ENV="FV_ORACLE_F32=1 FV_ORACLE_OWN_TEXT=1 FASTVIDEO_X=1 FV_ORACLE_PREFETCH=0 FV_REF2VA_PROMPT=a FV_LTX_REF_PROMPT=a FV_LTX_A2V_PROMPT=a FV_LTX_A2V_I2V_PROMPT=a FV_LTX_RETAKE_PROMPT=a FV_LTX_EXTEND_PROMPT=a"
+dry "FV_SFWAN_CELLS in another tier's FV_EXTRA_ENV: refused" 1 "reads no FV_SFWAN_CELLS from FV_EXTRA_ENV" \
+  FV_FAMILY=rtx6000 FV_EXTRA_ENV="FV_SFWAN_CELLS=kernels-wan"
+# FV_R2_TREES (§21.8) went with the script path: refused on the fv-lab route
+# (fv-lab fetches a volume+r2 tier's trees) and on every other pod command
+# (exit 2, before the key), but not for down / status / attach.
+dry "wan: FV_R2_TREES refused (fv-lab fetches the tier's trees)" 1 "which has no FV_R2_TREES" \
+  FV_FAMILY=wan "FV_R2_TREES=fastwan21-1.3b fastwan22-ti2v-5b" FV_CONTAINER_DISK_GB=174 FV_MIN_RAM_GB=256
+dry "oracle: FV_R2_TREES refused (the oracle-r2 tier fetches sfwan13's tree)" 1 "which has no FV_R2_TREES" \
+  FV_FAMILY=oracle FV_R2_TREES=sfwan21-1.3b FV_CONTAINER_DISK_GB=150 FV_GEN_TIMEOUT_S=5400
+r2_gone="FV_R2_TREES went with the script path (runpod-matrix.sh, r2-stage.sh; docs/adr/0019-fv-lab.md §21.8, §22.20)"
+for mode in run all kernels weights upstream plan plan-upstream; do
+  expect "FV_R2_TREES refused ($mode, no tier)" 2 "$r2_gone" -- FV_FAMILY=gold FV_R2_TREES=sfwan21-1.3b bash "$HTTP" "$mode" abc1234
+done
+out="$(cd "$TMP" && clean PATH="$TMP/podcurl:$PATH" RUNPOD_API_KEY=t FV_R2_TREES=sfwan21-1.3b timeout 60 bash "$HTTP" down p1 2>&1)" && rc=0 || rc=$?
+[[ "$rc" == 0 && "$out" == *"deleted p1"* ]] && ok "FV_R2_TREES: not refused for down" || bad "FV_R2_TREES, down: exit $rc, $out"
+# A name that is no fv-lab tier: `run` and `all` refused before any pod (the
+# script path, which ran runpod-matrix.sh, is gone); kernels still makes its pod.
+for mode in run all; do
+  expect "no tier: $mode refused before any pod" 1 "no-such-family is no fv-lab tier of fv-lab-retired.sh, and the script path is gone" -- \
+    RUNPOD_API_KEY=x FV_FAMILY=no-such-family bash "$HTTP" "$mode" abc1234
+done
 
 # b4a (ADR-0019 §11.6): fv-lab only, its GPU gate's cell selected by arm;
 # the script side's FV_B4A_CELLS in FV_EXTRA_ENV is refused with that answer.
@@ -410,8 +432,6 @@ for kv in "b4a FV_B4A_CELLS=b4a-h3-4step-tea" "techniques FV_TECH_CELLS=h3-480p-
   dry "host env refused: ${setting%%=*} ($fam)" 1 "which has no ${setting%%=*}: it selects by arm, FV_CELLS" \
     FV_FAMILY="$fam" FV_BASELINE_SHA=e93e357 "$setting"
 done
-mx "matrix: b4a is retired" "FATAL: b4a is retired to fv-lab (fv-lab-retired.sh): fv-lab run b4a " \
-  FV_BASELINE_SHA=e93e357 b4a
 
 # det-short and determinism (ADR-0019 §15.10): fv-lab only, their GPU checks'
 # groups selected by arm; the script side's FV_DET_CELLS is refused with that
@@ -440,11 +460,6 @@ dry "another tier: FV_ORACLE_URL passes to --extra-env" 0 \
 dry "FV_EXTRA_ENV with a newline refused (later lines would be dropped)" 1 \
   "reads FV_EXTRA_ENV as one line of space-separated K=V entries, and it holds a newline" \
   FV_FAMILY=det-short FV_EXTRA_ENV="FASTVIDEO_X=1"$'\n'"FV_DET_CELLS=h3"
-mx "matrix: det-short is retired" "FATAL: det-short is retired to fv-lab (fv-lab-retired.sh): fv-lab run det-short " det-short
-mx "matrix: determinism is retired" "FATAL: determinism is retired to fv-lab (fv-lab-retired.sh): fv-lab run determinism " \
-  determinism
-# oracle keeps its branch (ADR-0019 §15.10): the script path, as before.
-dry "oracle: still a script family" 0 "on the script path, nothing created" FV_FAMILY=oracle
 
 # fuse, attn3 and ltx (ADR-0019 §17.6): fv-lab only, their GPU checks' arms
 # selected by arm; attn3's arm pickers (FV_ATTN3_ARMS, FV_ATTN3_VSA) are
@@ -469,7 +484,6 @@ for kv in FV_ATTN3_ARMS=v2 FV_ATTN3_VSA=1; do
   dry "host env refused: ${kv%%=*} (attn3)" 1 "which has no ${kv%%=*}: it selects by arm, FV_CELLS" FV_FAMILY=attn3 "$kv"
 done
 for fam in fuse attn3 ltx; do
-  mx "matrix: $fam is retired" "FATAL: $fam is retired to fv-lab (fv-lab-retired.sh): fv-lab run $fam " "$fam"
   expect "all: refused for $fam" 1 "run \`kernels\`, then \`run\`" -- RUNPOD_API_KEY=x FV_FAMILY="$fam" bash "$HTTP" all abc1234
   expect "plan: fv-lab's plan for $fam" 0 "--family $fam --root $ROOT --tag abc1234-1025120000-abcd" -- \
     FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
@@ -477,18 +491,20 @@ done
 # Retired with no tier (FV_SCRIPT_RETIRED): h3 (§17.4), the B4 families
 # (§17.3 option (b)) and the §14.7 rows (ADR-0019 §18); then §22's S1 nine.
 # No branch and no tier: runpod-http.sh run / all / plan refuse them (exit 2)
-# before the key, with or without a dry run, naming what replaces each;
-# runpod-matrix.sh refuses them too. Each has a pointer, none is a tier or in
-# FV_LAB_RETIRED / FV_LAB_EXPERIMENTS. The loop runs over the families named
+# before the key, with or without a dry run, naming what replaces each
+# (runpod-matrix.sh refused them too until it went, §22.20). Each has a pointer, none is a tier or in
+# FV_LAB_RETIRED / FV_LAB_EXPERIMENTS; and sfwan (S8, §22.20), whose pointer
+# names its two halves. The loop runs over the families named
 # here, not the list, so one dropped from the list fails its refusals too.
 # shellcheck source=scripts/gpu/fv-lab-retired.sh
 . "$ROOT/scripts/gpu/fv-lab-retired.sh"
 retired_18="h3 hunyuan sana-video b200 writer precision-debug identity b4b b4c b4c2 h3attn"
 retired_22="sfquality headline speechtest cold eval ltxoffload solbench sol-lingbot sol-cosmos3"
-[[ "$FV_SCRIPT_RETIRED" == "$retired_18 $retired_22" ]] \
-  && ok "FV_SCRIPT_RETIRED: the eleven families of ADR-0019 §18 and the nine of §22 (S1)" || bad "FV_SCRIPT_RETIRED: $FV_SCRIPT_RETIRED"
+retired_s8="sfwan"
+[[ "$FV_SCRIPT_RETIRED" == "$retired_18 $retired_22 $retired_s8" ]] \
+  && ok "FV_SCRIPT_RETIRED: the eleven families of ADR-0019 §18, the nine of §22 (S1) and sfwan (S8)" || bad "FV_SCRIPT_RETIRED: $FV_SCRIPT_RETIRED"
 tiers="$(awk '/^\[\[tier\]\]/ { t = 1; next } t && /^name = "/ { gsub(/^name = "|"$/, ""); print; t = 0 }' "$ROOT/lab/tiers.toml")"
-for fam in $retired_18 $retired_22; do
+for fam in $retired_18 $retired_22 $retired_s8; do
   why="$(fv_script_retired_why "$fam")"
   if [[ -n "$why" ]] && ! fv_lab_retired "$fam" && ! fv_lab_experiment "$fam" && ! grep -qx "$fam" <<<"$tiers"; then
     ok "$fam: a pointer, no tier, not routed to fv-lab"
@@ -501,7 +517,6 @@ for fam in $retired_18 $retired_22; do
   # No key: a regression past the refusal stops at the key check, never at the API.
   expect "$fam: all refused" 2 "$msg" -- FV_FAMILY="$fam" bash "$HTTP" all abc1234
   expect "$fam: plan refused" 2 "$msg" -- FV_DRY_RUN=1 FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-1025120000-abcd
-  mx "matrix: $fam is retired with no tier" "FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED): $why" "$fam"
 done
 
 # Two pointers name a tier S7 retired from the script (ADR-0019 §22.19): the
@@ -547,8 +562,11 @@ done
 [[ "$(sb_named "x in sol-bench-a2, -b1 and -g2: y")" == "a2 b1 g2 " && "$(sb_arms cosmos3-)" != "$(sb_arms cosmos3- wan5b-)" ]] \
   && ok "the pointer check parses set lists and tells the families apart" || bad "the pointer check: sb_named / sb_arms"
 
-# A script family's dry run creates nothing.
-dry "script family: dry run" 0 "on the script path, nothing created" FV_FAMILY=wan
+# sfwan's pointer names its two halves' fv-lab commands (ADR-0019 §22.18
+# "Then" option 2).
+why="$(fv_script_retired_why sfwan)"
+[[ "$why" == *"fv-lab oracle --family oracle-r2"* && "$why" == *"fv-lab pod up --family wan --cells kernels-wan sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae"* ]] \
+  && ok "sfwan: its pointer names oracle-r2 and the wan tier's SF-Wan arms" || bad "sfwan: $why"
 
 # A fake fv-lab: exactly the command, its exit code back.
 cat >"$TMP/fake-fv-lab" <<'EOF'
@@ -573,9 +591,9 @@ expect "h3: refused, the fake FV_LAB_BIN not called" 2 "the rtx6000 tier runs ev
   FV_LAB_BIN="$TMP/fake-fv-lab" FAKE_LOG="$TMP/never.log" FV_FAMILY=h3 bash "$HTTP" run abc1234
 [[ ! -e "$TMP/never.log" ]] && ok "h3: fv-lab not run" || bad "h3: fv-lab ran: $(cat "$TMP/never.log")"
 # headline ran its cells through fv-lab (FV_LAB_BIN), even in a dry run; retired
-# (ADR-0019 §22, S1), runpod-matrix.sh refuses it before fv-lab is called.
-mx "matrix: headline refused, fv-lab not called" "FATAL: headline is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED): its nine arms are cells of four tiers" \
-  FV_LAB_BIN="$TMP/fake-fv-lab" FAKE_LOG="$TMP/never-headline.log" headline
+# (ADR-0019 §22, S1), runpod-http.sh refuses it before fv-lab is called.
+expect "headline: refused, the fake FV_LAB_BIN not called" 2 "its nine arms are cells of four tiers" -- RUNPOD_API_KEY=x \
+  FV_LAB_BIN="$TMP/fake-fv-lab" FAKE_LOG="$TMP/never-headline.log" FV_FAMILY=headline bash "$HTTP" run abc1234
 [[ ! -e "$TMP/never-headline.log" ]] && ok "headline: fv-lab not run" || bad "headline: fv-lab ran: $(cat "$TMP/never-headline.log")"
 
 # runpod-http.sh's private copy (TMPDIR/runpod-http.XXXXXX) is removed when the
