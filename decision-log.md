@@ -2381,3 +2381,13 @@ Project code: FVID
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §23.10
 - Verification: `fv-lab-experiment-goldens.sh --check` from the history, plus the other three goldens `--check`; `fv-lab-route.test.sh` (369 → 384 ok: six refusal cases, six not-refused cases for `down` / `status` / `attach`, four pointer-to-tier checks and their self-check); every `*.test.sh`; `tests/payload_golden.rs`, `tests/experiment_tiers.rs`, `tests/gold_tier.rs` on the build pod
+
+### FVID · 2026-10-28 · FVID-2026-10-28-pin-reference-pyav
+- Trigger: §20.7's GPU check on `4902297` stopped `oracle-ltx25-retake`. The reference's `v2v_audio_wave` was [2, 221152], and ours was [2, 222208]
+- Options: change our decode to the reference's length; pin the reference's PyAV
+- Decision: (coordinator) pin the reference's PyAV. Ours is correct. The `sol-ltx25` stack installs `av==18.0.0` after `uv sync`, and its install (at image build) fails unless upstream's own `decode_audio_from_file` reads the retake fixture as [2, 222208]
+- Reason: LTX-2 `fd4ded7` leaves `av` unpinned. Under PyAV 19, upstream's decode starts the fixture's audio 1024 samples late after its `seek(0)`. PyAV 15.1-18.0, ours and the 2026-09-29 reference agree (n 444416, rel_l2 7.021e-5)
+- Reversibility: high (one constant in `setup.sh`; the image rebuilds)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §20.10
+- Verification: `scripts/gpu/tests/upstream-pyav.test.sh` (CI); `check_ltx25_av` on `fd4ded7`'s `decode.py` locally (CPU torch): PyAV 18.0.0 passes, 19.0.2 fails with `gave (2, 221152)`; the GPU re-check of the retake cells waits for the rebuilt `sol-ltx25` image

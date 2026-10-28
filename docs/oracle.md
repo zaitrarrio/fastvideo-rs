@@ -742,6 +742,12 @@ already serve. The driver is `scripts/gpu/upstream/ltx25_edit.py`, which
 swaps `DistilledPipeline.__call__` for that flow on the pipeline's own
 blocks, through sol-engine's `gpu_infer.py` as for every LTX target.
 
+The reference stack's PyAV is pinned to 18.0.0 (`scripts/gpu/upstream/setup.sh` `LTX25_AV_VERSION`, since
+2026-10-28; ADR-0019 §20.10). LTX-2 `fd4ded7` leaves `av` unpinned. Under PyAV 19, `decode_audio_from_file`
+reads this fixture's AAC 1024 samples late (after its `seek(0)`), which gives a `v2v_audio_wave` of
+[2, 221152] instead of [2, 222208]. The image build now fails unless upstream's own decode gives [2, 222208]
+on the fixture.
+
 Targets, all on the committed source clip
 `scripts/gpu/fixtures/beach-push-768x512-24fps.mp4` (121 frames at 24 fps,
 768x512, a slow zoom over the beach still with the speech fixture as AAC
