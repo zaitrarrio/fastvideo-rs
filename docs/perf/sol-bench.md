@@ -27,8 +27,9 @@ rules allow and report the hardware next to each number.
     `:sha-<7>` tag (owner, 2026-10-28): CI pushes each tag once, for that commit's image, and pushes it again only when
     that commit's own CI re-runs.
   - The pod script was `scripts/gpu/sol-bench-pod.sh`, shipped through `runpod-http.sh FV_POD_SCRIPT`. Since
-    2026-10-28 its sets are the fv-lab experiment tiers `sol-bench-<set>` (below; ADR-0019 §23). The script stays
-    until their GPU check passes.
+    2026-10-28 its sets are the fv-lab experiment tiers `sol-bench-<set>` (below; ADR-0019 §23). The script stayed
+    until their GPU check passed. It passed on `21d70f6` on 2026-10-28: `h3-768p-fullopt` through both runners, 248
+    frames byte-identical (ADR-0019 §23.7 "Result"). The script's deletion (§23.8) follows.
   - Weights come from the volume, or from the R2 weights store onto the container disk, sha-verified, as every fv-lab
     `volume+r2` tier fetches them (owner, 2026-10-28: the volume holds only H3 and LTX now). Hub downloads stay
     forbidden. TAE and LPIPS fetches are off (`tae = false`; the script's `FV_SKIP_TAE=1`, no `FV_LPIPS`).
