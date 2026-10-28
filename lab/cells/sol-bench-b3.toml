@@ -1,0 +1,113 @@
+# sol-bench set b3 (scripts/gpu/sol-bench-pod.sh FV_SOL_SET=b3; docs/perf/sol-bench.md; docs/adr/0019-fv-lab.md §23):
+# Phase B: LTX-2.3 HQ base and fullopt, then the LingBot router check and LingBot fullopt on one prompt.
+# The commands are the pod script's, word for word (tests/experiment_tiers.rs against
+# fixtures/experiments/sol-bench-script.txt, which scripts/gpu/tests/fv-lab-experiment-goldens.sh cuts from the
+# script); the arms are its cells, in its order, named as its run directories so `fv-lab report table --kind
+# sol-bench` reads them. The script's per-cell estimates (seconds) were ltx23-hq-base 660, ltx23-hq-fullopt 600, lingbot-router 60, lingbot-fullopt 1200;
+# the runner's deadline replaces them (§23, intended difference 3).
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "sol-bench-b3"
+description = "Phase B: LTX-2.3 HQ base and fullopt, then the LingBot router check and LingBot fullopt on one prompt"
+
+[workload]
+model = "ltx2 lingbot"
+note = "Set b3 of sol-bench-pod.sh."
+
+[[arm]]
+name = "ltx23-hq-base"
+gate = "ltx23-hq"
+trees = ["ltx23", "ltx23-dev"]
+env = ["FASTVIDEO_LTX2_UPSAMPLER={weights}/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"]
+argv = [
+  "--mode",
+  "fast",
+  "ltx2",
+  "gen",
+  "--model-version",
+  "2.3",
+  "--hq",
+  "--weights",
+  "{weights}/ltx23",
+  "--dit",
+  "{weights}/ltx23-dev/ltx-2.3-22b-dev.safetensors",
+  "--prompt",
+  "A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail",
+  "--seed",
+  "42",
+  "--text",
+  "streamed",
+  "--dit-offload",
+  "resident",
+  "--warm",
+  "--dense-stage2",
+  "--clip",
+  "{runs}/{arm}/frames",
+]
+
+[[arm]]
+name = "ltx23-hq-fullopt"
+gate = "ltx23-hq"
+trees = ["ltx23", "ltx23-dev"]
+env = ["FASTVIDEO_LTX2_UPSAMPLER={weights}/ltx23-dev/ltx-2.3-spatial-upscaler-x2-1.1.safetensors", "FASTVIDEO_LTX2_STAGE1_CACHE=1", "FASTVIDEO_LTX2_MIDPOINT_PRUNE=1", "FASTVIDEO_NVFP4=1"]
+argv = [
+  "--mode",
+  "fast",
+  "ltx2",
+  "gen",
+  "--model-version",
+  "2.3",
+  "--hq",
+  "--weights",
+  "{weights}/ltx23",
+  "--dit",
+  "{weights}/ltx23-dev/ltx-2.3-22b-dev.safetensors",
+  "--prompt",
+  "A cinematic 10 second aerial shot of an antique brass clockwork train crossing a snowy mountain bridge at sunrise, steam drifting through golden light, smooth camera movement, high detail",
+  "--seed",
+  "42",
+  "--text",
+  "streamed",
+  "--dit-offload",
+  "resident",
+  "--warm",
+  "--pisa-stage2",
+  "--clip",
+  "{runs}/{arm}/frames",
+]
+
+[[arm]]
+name = "lingbot-router"
+gate = "lingbot-moe"
+trees = ["lingbot-video-moe-30b-a3b"]
+argv = [
+  "--mode",
+  "fast",
+  "sol",
+  "lingbot-router",
+]
+
+[[arm]]
+name = "lingbot-fullopt"
+gate = "lingbot-moe"
+trees = ["lingbot-video-moe-30b-a3b"]
+argv = [
+  "--mode",
+  "fast",
+  "sol",
+  "lingbot-gen",
+  "--weights",
+  "{weights}/lingbot-video-moe-30b-a3b",
+  "--prompts",
+  "{root}/scripts/gpu/sol/lingbot-t2v-val3.txt",
+  "--num-prompts",
+  "1",
+  "--arm",
+  "fullopt",
+  "--residency",
+  "swap",
+  "--seed",
+  "42",
+  "--clip",
+  "{runs}/{arm}/clips",
+]

@@ -125,12 +125,59 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         "every restored mode is a tier"
     );
     // Only the gold, oracle-r2, serve-engine, sfstream, mmaudio and wan tiers
-    // read R2 trees (ADR-0019 §16, §21, §22 S3, S4, S5, S6); every other
-    // tier's pod is unchanged.
+    // read R2 trees (ADR-0019 §16, §21, §22 S3, S4, S5, S6), and the 20
+    // sol-bench tiers but a1 / a3 (§23); every other tier's pod is unchanged.
     assert_eq!(
-        r2_tiers, 6,
-        "six volume+r2 tiers (gold, oracle-r2, serve-engine, sfstream, mmaudio, wan)"
+        r2_tiers, 26,
+        "six volume+r2 tiers (gold, oracle-r2, serve-engine, sfstream, mmaudio, wan) and 20 sol-bench tiers"
     );
+    // The sol-bench tiers' pods (ADR-0019 §23): the TAE fetch skipped (tae =
+    // false), the self-delete at the 3900 s cap, the 3300 s cell cap; a
+    // volume+r2 one with its disk, its 188 GB floor and the idle limit of its
+    // cell cap (r2_idle_min(3300): 80 min), a1 / a3 the volume tiers' 120 GB.
+    for t in lab
+        .tiers
+        .tiers
+        .iter()
+        .filter(|t| t.name.starts_with("sol-bench-"))
+    {
+        let f = fixture(&t.name);
+        let cmd = f["dockerStartCmd"][2].as_str().unwrap_or("");
+        assert!(
+            cmd.contains(
+                "if [ \"1\" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then"
+            ),
+            "{}: the TAE fetch skipped",
+            t.name
+        );
+        assert!(
+            cmd.contains("    sleep 3900\n"),
+            "{}: the 3900 s cap",
+            t.name
+        );
+        assert!(
+            cmd.contains("FV_GEN_TIMEOUT_S=3300"),
+            "{}: the cell cap",
+            t.name
+        );
+        assert_eq!(
+            f["containerDiskInGb"],
+            json!(t.container_disk_gb),
+            "{}",
+            t.name
+        );
+        if t.weights == TierWeights::VolumeR2 {
+            assert!(
+                cmd.contains("lim=80; [ \"$used\" = 1 ] && lim=80"),
+                "{}: the idle limit",
+                t.name
+            );
+            assert_eq!(f["minRAMPerGPU"], json!(188), "{}", t.name);
+        } else {
+            assert_eq!(f["containerDiskInGb"], json!(120), "{}", t.name);
+        }
+    }
+    assert_eq!(fastvideo_lab::weights::r2_idle_min(3300), 80);
     for t in [
         "gold",
         "oracle-r2",
@@ -222,7 +269,10 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     // (lab/tiers.toml): gold (256 GB since the 7e580e5 gold run measured its
     // plug arm's peak, ADR-0019 §16.10) and wan (its 14B arms, as gold's,
     // §22, S6); every other tier's pod has Runpod's default.
-    assert_eq!(floors, 2, "two tiers with min_ram_gb (gold, wan)");
+    assert_eq!(
+        floors, 22,
+        "tiers with min_ram_gb: gold, wan and the 20 volume+r2 sol-bench tiers"
+    );
     assert_eq!(lab.tier("gold").and_then(|t| t.min_ram_gb), Some(256));
     assert_eq!(lab.tier("wan").and_then(|t| t.min_ram_gb), Some(256));
     assert_eq!(wan["minRAMPerGPU"], json!(256));

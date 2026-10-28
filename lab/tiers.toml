@@ -795,3 +795,461 @@ weights = "volume+r2"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["wan-fastwan21-1.3b", "wan-wan21-t2v-14b", "wan-wan22-ti2v-oracle", "wan-wan22-ti2v-5b", "wan-fastwan22-ti2v-oracle", "wan-fastwan22-ti2v-5b"]
+
+# ---- sol-bench as fv-lab experiment tiers (docs/adr/0019-fv-lab.md §23; owner decisions
+# 2026-10-28; docs/perf/sol-bench.md): one tier per FV_SOL_SET of scripts/gpu/sol-bench-pod.sh, named
+# as phase A ran it (FV_FAMILY=sol-bench-<set>), its cell the set's cells in its order, word for word
+# (fixtures/experiments/sol-bench-script.txt, tests/experiment_tiers.rs). The owner's rules hold: the RTX
+# PRO 6000 only (rule 1's fallback; no 5090 tier), at most 2 pods at once, at most 1 h of benchmark wall
+# clock a pod: wall_cap_s 3900 (65 min) drives both the pod's self-delete and the driver's backstop, and
+# the runner's deadline (create + cap - 1200 s; an arm skipped with under 600 s left plus its fetch at
+# 250 MB/s) replaces the script's estimates and 3300 s budget (intended differences 1-3, §23);
+# cell_timeout_s 3300 is that budget, the most any arm could get there. tae = false: no TAE or LPIPS
+# fetch. a1 and a3 read the EU volume only (weights "volume", 120 GB, no host-RAM floor: the H3 and
+# LTX-2.5 tiers run without one); every other set reads R2 trees (weights "volume+r2", fetched and
+# sha-verified onto the container disk: the owner's rule 22 of 2026-10-28), its disk its largest arm's R2
+# trees plus the 120 GB every tier keeps (tests/experiment_tiers.rs), and min_ram_gb = 188, the host RAM
+# every 2026-10-06/07 sol-bench pod had and every committed cell ran in (docs/perf/sol-bench.md; b2's
+# A14B was OOM-killed at it only before the lazy expert load). The pods a set needs (its --cells groups,
+# each within one pod's deadline) are §23's run plan.
+
+# Set a1: one pod.
+[[tier]]
+name = "sol-bench-a1"
+description = "sol-bench a1: Phase A, instance 1: MiniMax-H3 1344x768 fullopt and dense, LTX-2.5 distilled two-stage at 4k5s and 1080p20s, Sol stage 2 BF16 and NVFP4 (sol-bench-pod.sh FV_SOL_SET=a1)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-a1"]
+
+# Set a3: one pod.
+[[tier]]
+name = "sol-bench-a3"
+description = "sol-bench a3: Phase A, instance 1 follow-up: MiniMax-H3 768p fullopt and dense with BF16 linears and the prompt encoded in every request (sol-bench-pod.sh FV_SOL_SET=a3)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 120
+weights = "volume"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-a3"]
+
+# Set a2: pods: --cells "wan5b-base wan5b-easycache wan5b-opt" | --cells "wan14-720p-fullstack wan14-720p-base-s15".
+[[tier]]
+name = "sol-bench-a2"
+description = "sol-bench a2: Phase A, instance 2: Wan2.2 TI2V-5B base, EasyCache and EasyCache + PISA; Wan2.1 T2V-14B 720p fullstack and base at 15 of 50 steps (sol-bench-pod.sh FV_SOL_SET=a2)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 210
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-a2"]
+
+# Set b1: one pod.
+[[tier]]
+name = "sol-bench-b1"
+description = "sol-bench b1: Phase B: SANA-Video 2B baseline and full; Wan2.1 T2V-1.3B pinned base and fullstack over five prompts (sol-bench-pod.sh FV_SOL_SET=b1)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 150
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-b1"]
+
+# Set b2: pods: --cells "a14b-sol-base" | --cells "a14b-sol-fullopt".
+[[tier]]
+name = "sol-bench-b2"
+description = "sol-bench b2: Phase B: Wan2.2 T2V-A14B pinned base and fullopt (EasyCache + PISA) (sol-bench-pod.sh FV_SOL_SET=b2)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-b2"]
+
+# Set b2r: pods: --cells "a14b-sol-base" | --cells "a14b-sol-fullopt".
+[[tier]]
+name = "sol-bench-b2r"
+description = "sol-bench b2r: Phase B retry of b2: Wan2.2 T2V-A14B base and fullopt with background read-ahead off (FASTVIDEO_PREFETCH=0) (sol-bench-pod.sh FV_SOL_SET=b2r)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-b2r"]
+
+# Set b3: pods: --cells "ltx23-hq-base ltx23-hq-fullopt" | --cells "lingbot-router lingbot-fullopt".
+[[tier]]
+name = "sol-bench-b3"
+description = "sol-bench b3: Phase B: LTX-2.3 HQ base and fullopt, then the LingBot router check and LingBot fullopt on one prompt (sol-bench-pod.sh FV_SOL_SET=b3)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-b3"]
+
+# Set b4: one pod. Its arm does not finish within one pod's deadline (load + base + all eight dense
+# refiner steps, about 3.6k s, docs/perf/sol-bench.md phase B3): the runner caps it at the deadline, as the
+# script's budget did; d1 / f1 measure it with --refiner-steps 1.
+[[tier]]
+name = "sol-bench-b4"
+description = "sol-bench b4: Phase B: LingBot-Video MoE baseline on one prompt (all eight refiner steps) (sol-bench-pod.sh FV_SOL_SET=b4)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-b4"]
+
+# Set b5: one pod.
+[[tier]]
+name = "sol-bench-b5"
+description = "sol-bench b5: Phase B: Cosmos3-Super baseline (BF16) (sol-bench-pod.sh FV_SOL_SET=b5)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-b5"]
+
+# Set b6: pods: --cells "cosmos3-teacache-fp8" | --cells "cosmos3-baseline-fp8".
+[[tier]]
+name = "sol-bench-b6"
+description = "sol-bench b6: Phase B: Cosmos3-Super with W8A8 FP8, TeaCache then the no-cache baseline (sol-bench-pod.sh FV_SOL_SET=b6)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-b6"]
+
+# Set c1: pods: --cells "a14b-sol-base" | --cells "a14b-sol-fullopt".
+[[tier]]
+name = "sol-bench-c1"
+description = "sol-bench c1: Phase B2: Wan2.2 T2V-A14B base and fullopt (b2's cells, experts loaded lazily) (sol-bench-pod.sh FV_SOL_SET=c1)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-c1"]
+
+# Set c2: pods: --cells "ltx23-hq-base ltx23-hq-fullopt" | --cells "lingbot-router lingbot-fullopt".
+[[tier]]
+name = "sol-bench-c2"
+description = "sol-bench c2: Phase B2: LTX-2.3 HQ base and fullopt, the LingBot router check and LingBot fullopt (b3's cells) (sol-bench-pod.sh FV_SOL_SET=c2)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-c2"]
+
+# Set c3: pods: --cells "lingbot-router lingbot-baseline" | --cells "lingbot-fullopt". Its baseline does not
+# finish within one pod's deadline, as b4's.
+[[tier]]
+name = "sol-bench-c3"
+description = "sol-bench c3: Phase B2: the LingBot router check, LingBot baseline, then LingBot fullopt (sol-bench-pod.sh FV_SOL_SET=c3)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-c3"]
+
+# Set c4: pods: --cells "ltx23-hq-base cosmos3-teacache" | --cells "cosmos3-baseline".
+[[tier]]
+name = "sol-bench-c4"
+description = "sol-bench c4: Phase B2: LTX-2.3 HQ base again, then Cosmos3-Super BF16 baseline and TeaCache (sol-bench-pod.sh FV_SOL_SET=c4)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-c4"]
+
+# Set c6: one pod.
+[[tier]]
+name = "sol-bench-c6"
+description = "sol-bench c6: Phase B2: Wan2.2 T2V-A14B base again (experts swap on the 96 GB card) (sol-bench-pod.sh FV_SOL_SET=c6)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-c6"]
+
+# Set d1: one pod.
+[[tier]]
+name = "sol-bench-d1"
+description = "sol-bench d1: Phase B3: the LingBot router check, then LingBot baseline with --refiner-steps 1 (3 of 8 refiner sigmas) (sol-bench-pod.sh FV_SOL_SET=d1)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-d1"]
+
+# Set d2: one pod.
+[[tier]]
+name = "sol-bench-d2"
+description = "sol-bench d2: Phase B3: Cosmos3-Super BF16 + TeaCache 1.15/10/3 (sol-bench-pod.sh FV_SOL_SET=d2)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-d2"]
+
+# Set e1: pods: --cells "pisa-parity ltx23-hq-fullopt" | --cells "a14b-sol-fullopt".
+[[tier]]
+name = "sol-bench-e1"
+description = "sol-bench e1: Phase B3: the device PISA parity check, LTX-2.3 HQ fullopt (PISA stage 2) and A14B fullopt (EasyCache + PISA) (sol-bench-pod.sh FV_SOL_SET=e1)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-e1"]
+
+# Set f1: one pod.
+[[tier]]
+name = "sol-bench-f1"
+description = "sol-bench f1: Phase B3: LingBot baseline with --refiner-steps 1 again (refiner released before the 1080p decode) (sol-bench-pod.sh FV_SOL_SET=f1)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-f1"]
+
+# Set f2: pods: --cells "wan5b-opt" | --cells "lingbot-fullopt".
+[[tier]]
+name = "sol-bench-f2"
+description = "sol-bench f2: Phase B3: Wan2.2 TI2V-5B EasyCache + PISA (pinned), then LingBot fullopt (sol-bench-pod.sh FV_SOL_SET=f2)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-f2"]
+
+# Set g1: pods: --cells "pisa-parity ltx23-hq-fullopt ltx23-hq-fullopt-zeroth" | --cells "wan5b-opt".
+[[tier]]
+name = "sol-bench-g1"
+description = "sol-bench g1: Phase B3: the PISA parity check, LTX-2.3 HQ fullopt, the same with the zeroth-order remainder only, then Wan2.2 TI2V-5B opt (sol-bench-pod.sh FV_SOL_SET=g1)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-g1"]
+
+# Set g2: pods: --cells "a14b-sol-fullopt" | --cells "lingbot-fullopt".
+[[tier]]
+name = "sol-bench-g2"
+description = "sol-bench g2: Phase B3: Wan2.2 T2V-A14B fullopt and LingBot fullopt with the scaled first-order term (sol-bench-pod.sh FV_SOL_SET=g2)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 3900
+cell_timeout_s = 3300
+container_disk_gb = 250
+min_ram_gb = 188
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = false
+cells = ["sol-bench-g2"]

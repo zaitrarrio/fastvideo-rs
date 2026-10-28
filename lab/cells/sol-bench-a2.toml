@@ -1,0 +1,205 @@
+# sol-bench set a2 (scripts/gpu/sol-bench-pod.sh FV_SOL_SET=a2; docs/perf/sol-bench.md; docs/adr/0019-fv-lab.md §23):
+# Phase A, instance 2: Wan2.2 TI2V-5B base, EasyCache and EasyCache + PISA; Wan2.1 T2V-14B 720p fullstack and base at 15 of 50 steps.
+# The commands are the pod script's, word for word (tests/experiment_tiers.rs against
+# fixtures/experiments/sol-bench-script.txt, which scripts/gpu/tests/fv-lab-experiment-goldens.sh cuts from the
+# script); the arms are its cells, in its order, named as its run directories so `fv-lab report table --kind
+# sol-bench` reads them. The script's per-cell estimates (seconds) were wan5b-base 480, wan5b-easycache 330, wan14-720p-fullstack 900, wan14-720p-base-s15 900, wan5b-opt 330;
+# the runner's deadline replaces them (§23, intended difference 3).
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "sol-bench-a2"
+description = "Phase A, instance 2: Wan2.2 TI2V-5B base, EasyCache and EasyCache + PISA; Wan2.1 T2V-14B 720p fullstack and base at 15 of 50 steps"
+
+[workload]
+model = "wan"
+note = "Set a2 of sol-bench-pod.sh. The 14B base runs 15 steps, its 50-step denoise extrapolated 50/15 by report table."
+
+[[arm]]
+name = "wan5b-base"
+gate = "wan22-ti2v-5b"
+trees = ["wan22-ti2v-5b"]
+unset = ["FASTVIDEO_WAN_SOL_CACHE"]
+argv = [
+  "--mode",
+  "fast",
+  "wan",
+  "gen",
+  "--weights",
+  "{weights}/wan22-ti2v-5b",
+  "--preset",
+  "wan_2_2_ti2v_5b",
+  "--unipc",
+  "--steps",
+  "50",
+  "--guidance",
+  "5.0",
+  "--flow-shift",
+  "5.0",
+  "--fps",
+  "24",
+  "--negative",
+  "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+  "--seed",
+  "1024",
+  "--warm",
+  "--height",
+  "704",
+  "--width",
+  "1280",
+  "--num-frames",
+  "121",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--clip-dir",
+  "{runs}/{arm}/frames",
+]
+
+[[arm]]
+name = "wan5b-easycache"
+gate = "wan22-ti2v-5b"
+trees = ["wan22-ti2v-5b"]
+env = ["FASTVIDEO_WAN_SOL_CACHE=easycache", "FASTVIDEO_WAN_EASYCACHE_PROFILE=5b"]
+argv = [
+  "--mode",
+  "fast",
+  "wan",
+  "gen",
+  "--weights",
+  "{weights}/wan22-ti2v-5b",
+  "--preset",
+  "wan_2_2_ti2v_5b",
+  "--unipc",
+  "--steps",
+  "50",
+  "--guidance",
+  "5.0",
+  "--flow-shift",
+  "5.0",
+  "--fps",
+  "24",
+  "--negative",
+  "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+  "--seed",
+  "1024",
+  "--warm",
+  "--height",
+  "704",
+  "--width",
+  "1280",
+  "--num-frames",
+  "121",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--clip-dir",
+  "{runs}/{arm}/frames",
+]
+
+[[arm]]
+name = "wan14-720p-fullstack"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+env = ["FASTVIDEO_WAN_SOL_ATTN=1", "FASTVIDEO_WAN_SOL_CACHE=easycache", "FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack"]
+argv = [
+  "--mode",
+  "fast",
+  "wan",
+  "gen",
+  "--weights",
+  "{weights}/wan21-t2v-14b",
+  "--preset",
+  "wan_t2v_14b",
+  "--unipc",
+  "--steps",
+  "50",
+  "--guidance",
+  "5.0",
+  "--flow-shift",
+  "5.0",
+  "--height",
+  "720",
+  "--width",
+  "1280",
+  "--num-frames",
+  "81",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--seed",
+  "1024",
+  "--clip-dir",
+  "{runs}/{arm}/frames",
+]
+
+[[arm]]
+name = "wan14-720p-base-s15"
+gate = "wan21-t2v-14b"
+trees = ["wan21-t2v-14b"]
+unset = ["FASTVIDEO_WAN_SOL_CACHE"]
+argv = [
+  "--mode",
+  "fast",
+  "wan",
+  "gen",
+  "--weights",
+  "{weights}/wan21-t2v-14b",
+  "--preset",
+  "wan_t2v_14b",
+  "--unipc",
+  "--steps",
+  "15",
+  "--guidance",
+  "5.0",
+  "--flow-shift",
+  "5.0",
+  "--height",
+  "720",
+  "--width",
+  "1280",
+  "--num-frames",
+  "81",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--seed",
+  "1024",
+  "--clip-dir",
+  "{runs}/{arm}/frames",
+]
+
+[[arm]]
+name = "wan5b-opt"
+gate = "wan22-ti2v-5b"
+trees = ["wan22-ti2v-5b"]
+env = ["FASTVIDEO_WAN_SOL_CACHE=easycache", "FASTVIDEO_WAN_EASYCACHE_PROFILE=5b", "FASTVIDEO_WAN_PISA=1"]
+argv = [
+  "--mode",
+  "fast",
+  "wan",
+  "gen",
+  "--weights",
+  "{weights}/wan22-ti2v-5b",
+  "--preset",
+  "wan_2_2_ti2v_5b",
+  "--unipc",
+  "--steps",
+  "50",
+  "--guidance",
+  "5.0",
+  "--flow-shift",
+  "5.0",
+  "--fps",
+  "24",
+  "--negative",
+  "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+  "--seed",
+  "1024",
+  "--warm",
+  "--height",
+  "704",
+  "--width",
+  "1280",
+  "--num-frames",
+  "121",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--clip-dir",
+  "{runs}/{arm}/frames",
+]

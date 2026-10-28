@@ -11,6 +11,10 @@
 #   FV_SOL_CAP_S      pod self-delete after this many seconds of container
 #                     uptime (default 3840 = 64 min), independent of the
 #                     driver's own 65-min backstop
+#   FV_CELLS          only these cells (space or comma separated; runpod-http.sh
+#                     passes its own): the others are logged `skip <cell> (not in
+#                     FV_CELLS)` and leave no directory, as fv-lab's --cells
+#                     (docs/adr/0019-fv-lab.md §23: the GPU check's one cell)
 #
 # Every cell writes <cell>/summary.json (exit, seconds) and the stage's
 # benchmark.json; clips land as <cell>/frames/output.mp4.
@@ -91,6 +95,10 @@ gpu_clean() {
 cell() {
   local name="$1" wcell="$2" est="$3" dir="$RUNS/$1" rc t0 secs left
   shift 3
+  if [[ -n "${FV_CELLS:-}" && " ${FV_CELLS//,/ } " != *" $name "* ]]; then
+    log "skip $name (not in FV_CELLS)"
+    return 0
+  fi
   mkdir -p "$dir"
   left=$(( BUDGET_S - $(uptime_s) ))
   if (( est > left )); then

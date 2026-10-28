@@ -172,6 +172,14 @@ for FAMILY in $FAMILIES; do
   fi
   if [[ "$FAMILY" == gold ]] || fv_lab_experiment "$FAMILY"; then
     extra=(${r2_body[@]+"${r2_body[@]}"})
+    # Its wall cap and cell cap as the script's FV_POD_CAP_S / FV_GEN_TIMEOUT_S
+    # (runpod-http.sh's defaults, 14400 / 3600, for gold and h3-graphs; the
+    # sol-bench tiers' 3900 / 3300, ADR-0019 §23), and a tier without the TAE
+    # fetch (tae = false: sol-bench's rule) as the script's FV_SKIP_TAE=1.
+    cap="$(tv wall_cap_s)"; gen="$(tv cell_timeout_s)"
+    [[ "$cap" =~ ^[0-9]+$ && "$gen" =~ ^[0-9]+$ ]] || { echo "fv-lab-goldens: no wall_cap_s / cell_timeout_s for the $FAMILY tier" >&2; exit 2; }
+    extra+=(FV_POD_CAP_S="$cap" FV_GEN_TIMEOUT_S="$gen")
+    [[ "$(tv tae)" == false ]] && extra+=(FV_SKIP_TAE=1)
     clean RUNPOD_API_KEY=golden FV_PLAN_VOLUME="$VOLUME" FV_POD_PREFIX=fv-lab FV_FAMILY="$FAMILY" ${extra[@]+"${extra[@]}"} \
       bash "$ROOT/scripts/gpu/runpod-http.sh" plan "$SHA" "$TAG" | jq -S . >"$TMP/new/runpod-http-$FAMILY.json"
     FIXTURES+=("runpod-http-$FAMILY.json")

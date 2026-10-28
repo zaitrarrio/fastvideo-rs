@@ -150,6 +150,7 @@ pub fn gold_cell(g: &Gold, v: &VariantManifest) -> Result<CellFile, String> {
             bin: ArmBin::Gpucheck,
             tae: None,
             env: None,
+            unset: Vec::new(),
             argv,
             fresh: Vec::new(),
             requires: Vec::new(),

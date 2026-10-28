@@ -40,8 +40,11 @@ FV_LAB_RESTORED="precision-nvfp4:precision:FV_PRECISION_ARM=ltx-nvfp4 ltxvae-gen
 # tests/fv-lab-experiment-goldens.sh; their dry
 # run is fv-lab's own golden (fixtures/<tier>-dry-run.txt) and their pod body
 # runpod-http.sh plan's, like the `gold` tier's. runpod-http.sh refuses `run`
-# and `all` for them and names the fv-lab command.
-FV_LAB_EXPERIMENTS="h3-graphs"
+# and `all` for them and names the fv-lab command. The sol-bench-<set> tiers
+# (ADR-0019 §23, one per FV_SOL_SET of scripts/gpu/sol-bench-pod.sh, in its
+# order) are made the same way from that pod script; until its GPU check
+# passes, the script still runs as FV_FAMILY=sol-bench with FV_POD_SCRIPT.
+FV_LAB_EXPERIMENTS="h3-graphs sol-bench-a1 sol-bench-a3 sol-bench-a2 sol-bench-b1 sol-bench-b2 sol-bench-b2r sol-bench-b3 sol-bench-b4 sol-bench-b5 sol-bench-b6 sol-bench-c1 sol-bench-c2 sol-bench-c3 sol-bench-c4 sol-bench-c6 sol-bench-d1 sol-bench-d2 sol-bench-e1 sol-bench-f1 sol-bench-f2 sol-bench-g1 sol-bench-g2"
 
 # Sibling tiers of a live runpod-matrix.sh family (ADR-0019 §20.5, §21, §22):
 # `<tier>:<family>` is a tier whose cells are targets of <family>'s branch
