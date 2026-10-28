@@ -127,8 +127,9 @@ The runpod-matrix family `sol-cosmos3` (cells `cosmos3-baseline`,
 `cosmos3-teacache`, `cosmos3-teacache-fp8`, each `fv-gpucheck sol cosmos3-gen
 --warm`) is **retired** with no tier (ADR-0019 §22, S1):
 `FV_FAMILY=sol-cosmos3 runpod-http.sh run` is refused (exit 2). The benchmark
-runs `scripts/gpu/sol-bench-pod.sh` (`docs/perf/sol-bench.md`), whose Cosmos3
-sets run the same arms; `FASTVIDEO_COSMOS3_UND=resident` keeps the text tower
+runs the fv-lab tiers `sol-bench-<set>` (`docs/perf/sol-bench.md`; they were
+`scripts/gpu/sol-bench-pod.sh`, deleted after their GPU check, ADR-0019 §23), whose Cosmos3 sets (`sol-bench-b5`, `-b6`, `-c4`, `-d2`) run the
+same arms; `FASTVIDEO_COSMOS3_UND=resident` keeps the text tower
 on a B200. The family's commands are in
 `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`. Estimates in
 docs/perf/sol-lingbot-cosmos3-plan.md.

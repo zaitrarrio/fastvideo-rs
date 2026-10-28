@@ -6,7 +6,8 @@ produced yet for any of the three.** The weights are on the EU volume
 (fetched and verified 2026-10-06; see [Weight trees](#weight-trees)), but no
 pod has run the cells. The benchmark arms were written as
 `runpod-matrix.sh solbench`, retired with no tier since (ADR-0019 §22); the
-benchmark runs `scripts/gpu/sol-bench-pod.sh` ([below](#benchmark-arms)).
+benchmark runs the fv-lab tiers `sol-bench-<set>` ([below](#benchmark-arms)), which were
+`scripts/gpu/sol-bench-pod.sh` until ADR-0019 §23.
 
 Sources:
 
@@ -262,7 +263,8 @@ Both arms share the drift, so the ratio compares like with like.
 **Retired** ([ADR-0019 §22](../adr/0019-fv-lab.md), S1): the `solbench` family
 is retired with no tier, and `runpod-matrix.sh`, `runpod-http.sh` and
 `runpod.sh` refuse it (exit 2). The sol-engine benchmark runs
-`scripts/gpu/sol-bench-pod.sh` (`docs/perf/sol-bench.md`), whose sets cover the
+the fv-lab tiers `sol-bench-<set>` (`docs/perf/sol-bench.md`; they were
+`scripts/gpu/sol-bench-pod.sh`, deleted after their GPU check, ADR-0019 §23), whose sets cover the
 default arms below, without compares or gates and without
 `wan13-sol-easycache`, `wan13-sol-attn` and `a14b-sol-mxfp8`. None of those was
 ever recorded. The family's commands are in
@@ -293,7 +295,7 @@ All Wan cells run with:
 
 The family's runs (`FV_FAMILY=solbench bash scripts/gpu/runpod-http.sh run
 <sha>`, with `FV_SOL_A14B_MOE=both` on a B200) are refused now; the
-`sol-bench-pod.sh` launch is in `docs/perf/sol-bench.md`.
+tiers' `fv-lab pod up` launch is in `docs/perf/sol-bench.md`.
 
 Its per-cell wall caps were:
 

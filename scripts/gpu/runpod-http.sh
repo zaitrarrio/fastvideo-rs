@@ -70,8 +70,6 @@
 # fv-weights-h3-ltx-500), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
 # (per-cell cap, default 3600), FV_PROMPTS / FV_LPIPS (forwarded to
 # runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells),
-# FV_POD_FILES (space-separated local files, at most a few hundred KB in all,
-# unpacked on the pod into /fvscratch/files/<basename>; run mode only),
 # FV_MIN_RAM_GB (PodCreateInput minRAMPerGPU, whole GB: the pod's host RAM floor;
 # unset = Runpod's default floor of 8 GB per GPU, above which the host's share
 # decides; too small a share is the suspected cause of the 2026-10-26 upstream
@@ -87,10 +85,11 @@
 # FV_WORK=/fvscratch, so its $W and its command lines are a volume+r2 tier's;
 # FV_CONTAINER_DISK_GB must hold the trees and 120 GB, and the idle limits
 # default to fv-lab's weights::r2_idle_min; ADR-0019 §21.8. Unset: nothing
-# changes),
-# FV_POD_SCRIPT (the basename of one of FV_POD_FILES, run instead of the
-# image's runpod-matrix.sh with the same environment, e.g. sol-bench-pod.sh;
-# it skips the default weight gate).
+# changes).
+# FV_POD_FILES / FV_POD_SCRIPT (local files shipped in the pod's env, one run
+# instead of runpod-matrix.sh) went with scripts/gpu/sol-bench-pod.sh, their
+# only user, after its tiers' GPU check (docs/adr/0019-fv-lab.md §23.10): set,
+# either is refused.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Bash reads a script as it runs; a runs lasts hours, so run from a private
@@ -195,6 +194,12 @@ fi
 
 die() { echo "runpod-http: $*" >&2; exit 1; }
 # Checked before anything else runs, so a bad value never reaches jq or the API.
+# FV_POD_FILES / FV_POD_SCRIPT shipped scripts/gpu/sol-bench-pod.sh, their only
+# user, which went after its tiers' GPU check (docs/adr/0019-fv-lab.md §23.10):
+# refused, not silently dropped, on every path.
+for v in FV_POD_FILES FV_POD_SCRIPT; do
+  [[ -z "${!v:-}" ]] || die "$v went with scripts/gpu/sol-bench-pod.sh, its only user (docs/adr/0019-fv-lab.md §23.10): the benchmark's sets are the fv-lab tiers sol-bench-<set>: fv-lab pod up --sha <sha> --family sol-bench-<set> --yes --wait (docs/perf/sol-bench.md)"
+done
 [[ -z "${UP_HUB_TOKEN:-}" || "$UP_HUB_TOKEN" == 0 || "$UP_HUB_TOKEN" == 1 ]] \
   || die "UP_HUB_TOKEN is 1 (pass the Hub token's secret reference), 0 (do not) or unset (for weights:ltx25* steps), not '$UP_HUB_TOKEN'"
 [[ -z "${FV_MIN_RAM_GB:-}" || "$FV_MIN_RAM_GB" =~ ^[1-9][0-9]*$ ]] \
@@ -286,7 +291,11 @@ WDEOF
 # frozen ones (§10, §22.19) and the restored modes' reproduced from 5987e6a4
 # (§12) too, and fv-lab's pod-start.sh.in, which tests/payload_golden.rs holds
 # equal to them; editing it would rewrite every pod golden for a comment
-# (docs/adr/0019-fv-lab.md §22.9 item 1, §22.19).
+# (docs/adr/0019-fv-lab.md §22.9 item 1, §22.19). For the same reason the
+# command still unpacks FV_POD_FILES_TGZ (nothing sends it since FV_POD_FILES
+# went, §23.10), and keeps the preflight's pod-script comment and its
+# `if [ -z "" ]` (rendered from ${FV_POD_SCRIPT:-} before FV_POD_SCRIPT went):
+# the bodies are byte for byte what they were.
 start_cmd() {
   local tag="$2" mode="$3"
   if [[ "$mode" == upstream ]]; then
@@ -375,7 +384,7 @@ fi
 if [ "$mode" != kernels ]; then
 ( cd /workspace/weights && for d in *; do echo "== \$d"; find -L "\$d" -maxdepth 3 \( -name '*.safetensors' -o -name '*.json' \) -printf '%s %p\n' 2>/dev/null | head -60; done ) >"\$OUT/tree.txt" 2>&1
 # A pod script (FV_POD_SCRIPT) gates each of its cells on its own trees.
-if [ -z "${FV_POD_SCRIPT:-}" ]; then
+if [ -z "" ]; then
 FV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.sh $cells >"\$OUT/weights.log" 2>&1
 echo "exit=\$?" >>"\$OUT/weights.log"
 fi
@@ -395,7 +404,7 @@ ${r2_block}if [ "$mode" = run ] || [ "$mode" = all ]; then
   env ${FV_EXTRA_ENV:-} FV_WORK=$work FV_SCRATCH=\$SCRATCH FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
     ${FV_PROMPTS:+FV_PROMPTS="$FV_PROMPTS"} ${FV_LPIPS:+FV_LPIPS=$FV_LPIPS} \
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
-    bash ${FV_POD_SCRIPT:+/fvscratch/files/}${FV_POD_SCRIPT:-/opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh} $FAMILY >"\$OUT/matrix.out" 2>&1
+    bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $FAMILY >"\$OUT/matrix.out" 2>&1
   echo "matrix_exit=\$?" >>"\$OUT/matrix.out"
 fi
 echo "done $tag" >"\$OUT/DONE"
@@ -480,23 +489,15 @@ upstream_r2_key() {
 }
 
 pod_payload() {
-  local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" files="" f hub=false r2=false
+  local image="$1" tag="$2" mode="$3" vol="$4" dc="$5" hub=false r2=false
   [[ "$mode" == upstream ]] && upstream_hub_token && hub=true
   [[ "$mode" == upstream ]] && upstream_r2_key && r2=true
   [[ ( "$mode" == run || "$mode" == all ) && -n "$R2_SPECS" ]] && r2=true
-  if [[ -n "${FV_POD_FILES:-}" ]]; then
-    local ft
-    ft="$(mktemp -d)"
-    for f in $FV_POD_FILES; do cp "$f" "$ft/" || die "FV_POD_FILES: $f"; done
-    files="$(tar -czf - -C "$ft" . | base64 -w0)"
-    rm -rf "$ft"
-  fi
-  jq -n --arg files "$files" --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
+  jq -n --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
     --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" \
     --arg ram "${FV_MIN_RAM_GB:-}" --argjson hub "$hub" --argjson r2 "$r2" '
-    ((if $files == "" then {} else {FV_POD_FILES_TGZ: $files} end)
-      + (if $hub then {HF_TOKEN: "{{ RUNPOD_SECRET_fv_hf_token }}"} else {} end)
+    ((if $hub then {HF_TOKEN: "{{ RUNPOD_SECRET_fv_hf_token }}"} else {} end)
       + (if $r2 then {FV_WEIGHTS_R2_ACCESS_KEY_ID: "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
           FV_WEIGHTS_R2_SECRET_ACCESS_KEY: "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}"} else {} end)) as $env
     | {
@@ -801,7 +802,7 @@ fv_lab_route() {
   [[ -n "$cap" && -n "$cell_s" && -n "$disk" && -n "$cloud" && -n "$gpu" && -n "$tae" && -n "$max_dph" ]] \
     || die "$FAMILY: no complete [[tier]] in lab/tiers.toml"
   # No equivalent at all.
-  for v in FV_POD_FILES FV_POD_SCRIPT FV_POD_FILE FV_PROMPTS FV_PROMPT FV_SEED FV_AVOID_MACHINES \
+  for v in FV_POD_FILE FV_PROMPTS FV_PROMPT FV_SEED FV_AVOID_MACHINES \
     FV_CREATE_WAIT_S RUNPOD_ALLOWED_CUDA FV_R2_TREES; do
     [[ -z "${!v:-}" ]] || refuse "has no $v"
   done

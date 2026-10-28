@@ -25,7 +25,9 @@
 # run onto the script's turbo lines (the mapping is ADR-0019 §14.3's table)
 # and finds them equal.
 #
-# sol-bench (scripts/gpu/sol-bench-pod.sh, docs/perf/sol-bench.md; ADR-0019 §23):
+# sol-bench (scripts/gpu/sol-bench-pod.sh, deleted after the tiers' GPU check,
+# ADR-0019 §23.7 and §23.10, so read from the history with its two Cosmos3
+# inputs; docs/perf/sol-bench.md; ADR-0019 §23):
 #   crates/fastvideo-lab/fixtures/experiments/sol-bench-script.txt
 #       every command each of the script's sets (FV_SOL_SET, every label of its
 #       `case "$SET"`, in the script's order) hands its `cell`, in order: a

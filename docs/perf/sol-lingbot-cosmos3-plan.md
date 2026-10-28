@@ -21,8 +21,8 @@ Not fetched (not needed for T2V): Cosmos3 `vision_encoder/`, `sound_tokenizer/`,
 They ran as the runpod-matrix families `sol-lingbot` and `sol-cosmos3`
 through `runpod-http.sh`. Both families are **retired** with no tier
 (ADR-0019 §22, S1): every driver refuses them (exit 2). The benchmark runs
-`scripts/gpu/sol-bench-pod.sh` (`docs/perf/sol-bench.md`), whose sets run these
-arms (LingBot on one prompt). The families' commands are in
+the fv-lab tiers `sol-bench-<set>` (`docs/perf/sol-bench.md`; they were
+`scripts/gpu/sol-bench-pod.sh`, deleted after their GPU check, ADR-0019 §23), whose sets run these arms (LingBot on one prompt). The families' commands are in
 `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
 
 | family / cell | what | published reference |
@@ -37,7 +37,7 @@ arms (LingBot on one prompt). The families' commands are in
 The families' `runpod-http.sh run` commands (B200 with
 `FV_LINGBOT_RESIDENCY=both` / `FASTVIDEO_COSMOS3_UND=resident`, a 14400 s cap on
 an RTX PRO 6000, `FV_LINGBOT_PROMPTS=1` / `FV_COSMOS3_ARMS=baseline` for a
-cheaper first pass) are refused now; the `sol-bench-pod.sh` launch is in
+cheaper first pass) are refused now; the tiers' `fv-lab pod up` launch is in
 `docs/perf/sol-bench.md`.
 
 ## 3. Estimates (FLOP-based, not measured)

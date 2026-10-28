@@ -42,8 +42,8 @@ FV_LAB_RESTORED="precision-nvfp4:precision:FV_PRECISION_ARM=ltx-nvfp4 ltxvae-gen
 # runpod-http.sh plan's, like the `gold` tier's. runpod-http.sh refuses `run`
 # and `all` for them and names the fv-lab command. The sol-bench-<set> tiers
 # (ADR-0019 §23, one per FV_SOL_SET of scripts/gpu/sol-bench-pod.sh, in its
-# order) are made the same way from that pod script; until its GPU check
-# passes, the script still runs as FV_FAMILY=sol-bench with FV_POD_SCRIPT.
+# order) are made the same way from that pod script, deleted after their GPU
+# check (§23.7, §23.10) and read from the history like h3-graphs'.
 FV_LAB_EXPERIMENTS="h3-graphs sol-bench-a1 sol-bench-a3 sol-bench-a2 sol-bench-b1 sol-bench-b2 sol-bench-b2r sol-bench-b3 sol-bench-b4 sol-bench-b5 sol-bench-b6 sol-bench-c1 sol-bench-c2 sol-bench-c3 sol-bench-c4 sol-bench-c6 sol-bench-d1 sol-bench-d2 sol-bench-e1 sol-bench-f1 sol-bench-f2 sol-bench-g1 sol-bench-g2"
 
 # Sibling tiers of a live runpod-matrix.sh family (ADR-0019 §20.5, §21, §22):
@@ -90,7 +90,8 @@ FV_LAB_RETIRED_SIBLINGS="hd5:hd:FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts
 # A family joins this list in the PR that deletes its branch. The last nine
 # (ADR-0019 §22, S1, FVID-2026-10-26-d1-remaining) are finished studies and
 # measurements, a run of other tiers' cells, and the sol-engine branches the
-# benchmark does not run (it runs sol-bench-pod.sh); each pointer also names
+# benchmark does not run (it runs the sol-bench-<set> tiers, which were
+# sol-bench-pod.sh until ADR-0019 §23.10); each pointer also names
 # what is lost, and their commands are in
 # `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
 FV_SCRIPT_RETIRED="h3 hunyuan sana-video b200 writer precision-debug identity b4b b4c b4c2 h3attn sfquality headline speechtest cold eval ltxoffload solbench sol-lingbot sol-cosmos3"
@@ -164,8 +165,8 @@ fv_script_retired_why() {
     cold) echo "no result of it was recorded and nothing reads one. Lost: the page-cache-cold end-to-end time with load included (sol-engine's e2e), which no tier measures (rtx5090's LTX-2.5 4k5s / 1080p20s arms run warm); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
     eval) echo "its pieces run elsewhere: the precision tiers' f32act / bf16act pairs with lossy gates, fuse's exact gates with an OFF arm, prompt sets in cells (h3-graphs), and LPIPS as --lpips on any fv-lab run. Lost: a prompt set, LPIPS and the promotion gate in one run; the BF16_ACT=0 OFF-identity gate; the 480p / 512p five-prompt LPIPS pairs (never recorded); the LPIPS self-test on a pod (by hand: fv-gpucheck lpips --weights <dir>); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
     ltxoffload) echo "a finished measurement: its numbers are in docs/ports/ltx25.md (runs a73173e-09270009, a2cd194-09270039, a2cd194-09270103), and the b6 tier's b6-ltx25-offload-cpu arm still checks --offload cpu across builds. Lost: LTX cpu-against-resident identity and the 4K cpu peaks; its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
-    solbench) echo "the sol-engine benchmark runs scripts/gpu/sol-bench-pod.sh (docs/perf/sol-bench.md), not this branch, and nothing served reads its trees. Lost, never recorded: each arm's compare and lossy gate against its base, and the arms sol-bench-pod.sh lacks (wan13-sol-easycache, wan13-sol-attn, a14b-sol-mxfp8); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
-    sol-lingbot) echo "the sol-engine benchmark runs scripts/gpu/sol-bench-pod.sh (docs/perf/sol-bench.md; its LingBot sets run lingbot-router too), not this branch, and nothing served reads the tree. Lost, never recorded: LingBot on three prompts (sol-bench-pod.sh runs one), and the B200 path with both base and refiner resident (FV_LINGBOT_RESIDENCY=both: sol-bench-pod.sh hard-codes --residency swap); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
-    sol-cosmos3) echo "the sol-engine benchmark runs scripts/gpu/sol-bench-pod.sh (docs/perf/sol-bench.md; its Cosmos3 sets), not this branch, and nothing served reads the tree; its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
+    solbench) echo "the sol-engine benchmark runs the fv-lab tiers sol-bench-<set> (docs/perf/sol-bench.md; its Wan and SANA arms in sol-bench-a2, -b1, -b2, -b2r, -c1, -c6, -e1, -f2, -g1 and -g2: fv-lab pod up --family sol-bench-<set>), not this branch, and nothing served reads its trees. Lost, never recorded: each arm's compare and lossy gate against its base, and the arms those tiers lack (wan13-sol-easycache, wan13-sol-attn, a14b-sol-mxfp8); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3, §23)" ;;
+    sol-lingbot) echo "the sol-engine benchmark runs the fv-lab tiers sol-bench-<set> (docs/perf/sol-bench.md; its LingBot arms in sol-bench-b3, -b4, -c2, -c3, -d1, -f1, -f2 and -g2, with lingbot-router too: fv-lab pod up --family sol-bench-<set>), not this branch, and nothing served reads the tree. Lost, never recorded: LingBot on three prompts (the tiers run one), and the B200 path with both base and refiner resident (FV_LINGBOT_RESIDENCY=both: the tiers' LingBot arms pass --residency swap); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3, §23)" ;;
+    sol-cosmos3) echo "the sol-engine benchmark runs the fv-lab tiers sol-bench-<set> (docs/perf/sol-bench.md; its Cosmos3 arms in sol-bench-b5, -b6, -c4 and -d2: fv-lab pod up --family sol-bench-<set>), not this branch, and nothing served reads the tree; its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3, §23)" ;;
   esac
 }

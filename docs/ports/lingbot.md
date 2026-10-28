@@ -159,10 +159,10 @@ then `sol lingbot-gen --arm baseline` and `--arm fullopt` over the three
 prompts; knobs `FV_LINGBOT_RESIDENCY`, `FV_LINGBOT_PROMPTS`, `FV_LINGBOT_ARMS`,
 `FV_SOL_TIMEOUT_S`) is **retired** with no tier (ADR-0019 §22, S1):
 `FV_FAMILY=sol-lingbot runpod-http.sh run` is refused (exit 2). The benchmark
-runs `scripts/gpu/sol-bench-pod.sh` (`docs/perf/sol-bench.md`), whose LingBot
-sets run `lingbot-router` and the two arms on one prompt; LingBot on three
-prompts and the B200 path with both resident (`FV_LINGBOT_RESIDENCY=both`;
-`sol-bench-pod.sh` hard-codes `--residency swap`) are lost (never recorded). The family's commands are in
+runs the fv-lab tiers `sol-bench-<set>` (`docs/perf/sol-bench.md`; they were
+`scripts/gpu/sol-bench-pod.sh`, deleted after their GPU check, ADR-0019 §23), whose LingBot sets run `lingbot-router` and the two arms on one
+prompt; LingBot on three prompts and the B200 path with both resident
+(`FV_LINGBOT_RESIDENCY=both`; the tiers' LingBot arms pass `--residency swap`) are lost (never recorded). The family's commands are in
 `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`. Estimates in
 docs/perf/sol-lingbot-cosmos3-plan.md.
 

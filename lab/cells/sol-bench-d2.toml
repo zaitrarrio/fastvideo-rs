@@ -1,4 +1,4 @@
-# sol-bench set d2 (scripts/gpu/sol-bench-pod.sh FV_SOL_SET=d2; docs/perf/sol-bench.md; docs/adr/0019-fv-lab.md §23):
+# sol-bench set d2 (was scripts/gpu/sol-bench-pod.sh FV_SOL_SET=d2, deleted after the GPU check of docs/adr/0019-fv-lab.md §23.7; docs/perf/sol-bench.md; docs/adr/0019-fv-lab.md §23):
 # Phase B3: Cosmos3-Super BF16 + TeaCache 1.15/10/3.
 # The commands are the pod script's, word for word (tests/experiment_tiers.rs against
 # fixtures/experiments/sol-bench-script.txt, which scripts/gpu/tests/fv-lab-experiment-goldens.sh cuts from the

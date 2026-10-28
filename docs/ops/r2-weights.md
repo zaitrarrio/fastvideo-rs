@@ -658,7 +658,7 @@ written, renamed or deleted, and temp files went to the pod's container disk.
     - It holds 5 symlinks and no regular files: `libcublas.so`, `libcublasLt.so`, `libcudnn.so`, `libcupti.so` and
       `libnvrtc.so`. They point into a GPU image's CUDA libraries, so on a CPU pod none of them resolves.
     - The repo still uses this path. `runpod.sh` creates `/workspace/fv-libs` and puts it on `LD_LIBRARY_PATH`;
-      `runpod-matrix.sh` and `sol-bench-pod.sh` relink `$SCRATCH/fv-libs/lib*.so`; and `fastvideo-gpucheck`'s
+      `runpod-matrix.sh` relinks `$SCRATCH/fv-libs/lib*.so` (as `sol-bench-pod.sh` did until ADR-0019 §23.10); and `fastvideo-gpucheck`'s
       `mathprobe.rs` reads the `/workspace/fv-libs/libcublas.so` link. Each pod recreates the links itself.
   - Before copying, each directory was scanned for Hub-token-shaped strings, and the copies in R2 were scanned for
     credential names and token shapes. Neither scan found anything.

@@ -29,7 +29,9 @@ rules allow and report the hardware next to each number.
   - The pod script was `scripts/gpu/sol-bench-pod.sh`, shipped through `runpod-http.sh FV_POD_SCRIPT`. Since
     2026-10-28 its sets are the fv-lab experiment tiers `sol-bench-<set>` (below; ADR-0019 §23). The script stayed
     until their GPU check passed. It passed on `21d70f6` on 2026-10-28: `h3-768p-fullopt` through both runners, 248
-    frames byte-identical (ADR-0019 §23.7 "Result"). The script's deletion (§23.8) follows.
+    frames byte-identical (ADR-0019 §23.7 "Result"). The script is deleted (§23.10), and with it `runpod-http.sh`'s
+    `FV_POD_FILES` / `FV_POD_SCRIPT`, which only it used; its last version is `git show
+    21d70f63:scripts/gpu/sol-bench-pod.sh`.
   - Weights come from the volume, or from the R2 weights store onto the container disk, sha-verified, as every fv-lab
     `volume+r2` tier fetches them (owner, 2026-10-28: the volume holds only H3 and LTX now). Hub downloads stay
     forbidden. TAE and LPIPS fetches are off (`tae = false`; the script's `FV_SKIP_TAE=1`, no `FV_LPIPS`).
@@ -48,7 +50,7 @@ rules allow and report the hardware next to each number.
 
 ## Running through fv-lab
 
-Each `FV_SOL_SET` of `sol-bench-pod.sh` is an fv-lab tier, `sol-bench-<set>` (`lab/tiers.toml`, `lab/cells/sol-bench-<set>.toml`; ADR-0019 §23):
+Each `FV_SOL_SET` of `sol-bench-pod.sh` (deleted, ADR-0019 §23.10) is an fv-lab tier, `sol-bench-<set>` (`lab/tiers.toml`, `lab/cells/sol-bench-<set>.toml`; ADR-0019 §23):
 - Its arms are the set's cells, word for word, named as the script's run directories.
 - `a1` and `a3` read the volume only.
 - The other sets fetch their R2 trees before the arms that read them, on a 150-250 GB container disk with a 188 GB
@@ -220,7 +222,7 @@ None of these models has an RTX 5090 or H100 published number, so every cell run
 Before each phase-B pod:
 
 1. Check that the weight tree's `verify-weights.sh` cell exists and passes on EU.
-2. Add the set (`b1`, `b2`, …) to `scripts/gpu/sol-bench-pod.sh`.
+2. Add the set (`b1`, `b2`, …) to `scripts/gpu/sol-bench-pod.sh` (since ADR-0019 §23.10: a tier `sol-bench-<set>` in `lab/tiers.toml` and its cell `lab/cells/sol-bench-<set>.toml`).
 3. Update the estimates from a first-request timing if one exists.
 
 H3 lesson from phase A: check what each model's sm_120 defaults switch on (quantized linears, FP8 text encoders, caches). Pin each arm to sol-engine's config explicitly, for example with `FASTVIDEO_H3_QUANT=off`, and record any extra technique as its own arm.
@@ -242,7 +244,7 @@ Pairing (two pods in parallel):
 
 Each cell writes a `benchmark.json` (`total_s` excludes load) and an `output.mp4`. Generate the table with `fv-lab report table --kind sol-bench` (it replaced `scripts/gpu/sol_bench_table.py` in D1c) after adding each cell's published number to its `PUBLISHED` map (`crates/fastvideo-lab/src/table.rs`). Cost bound: about $2.26 per pod-hour cap.
 
-Launch, one line per pod, from a host that reaches `*.runpod.io` over HTTPS. Look up the current main image digest with the GHCR manifest API first:
+Launch, one line per pod, from a host that reaches `*.runpod.io` over HTTPS. Look up the current main image digest with the GHCR manifest API first. This was the script's launch: since ADR-0019 §23.10 the script is gone and `runpod-http.sh` refuses `FV_POD_FILES` / `FV_POD_SCRIPT`; a set runs as `fv-lab pod up --family sol-bench-<set>` ([Running through fv-lab](#running-through-fv-lab)), on `bz0ofkfx45` in EU-RO-1 (the rules above).
 
 ```bash
 RUNPOD_IMAGE=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:<digest of sha-<main>> \
@@ -275,7 +277,7 @@ The ports landed on main in #29, #30 and #31, and their weights reached EU in #3
 
 **Pods:** six pods in three pairs, (b1, b2), then (b3, b4), then (b5, b6), so at most 2 are up at once. Each pod has 55 min of cell budget from container start, a 64-min self-delete and a 65-min local backstop. Every launch sets `FV_AVOID_MACHINES=s3p8exc9lcvi`.
 
-**Arguments:** they mirror main's `solbench`, `sana-video`, `sol-lingbot` and `sol-cosmos3` families (`scripts/gpu/sol-bench-pod.sh` sets `b1`–`b6`). Those families are retired with no tier since (`sana-video` in ADR-0019 §18, the other three in §22): `sol-bench-pod.sh` is what runs these arms.
+**Arguments:** they mirror main's `solbench`, `sana-video`, `sol-lingbot` and `sol-cosmos3` families (`scripts/gpu/sol-bench-pod.sh` sets `b1`–`b6`). Those families are retired with no tier since (`sana-video` in ADR-0019 §18, the other three in §22): `sol-bench-pod.sh` ran these arms, and since its deletion (ADR-0019 §23.10) the `sol-bench-<set>` tiers do.
 
 **Precision is pinned to sol-engine's:**
 - Wan arms run with `FASTVIDEO_WAN_QUANT=off`, the full Wan VAE and Diffusers UniPC sigmas.
@@ -385,7 +387,7 @@ All phase B pods were created and deleted by this run (UTC):
 - **Parallelism and wall clock:** never more than 2 pods at once. Every pod was deleted within 38 min of its creation (b1 37.5 min, b6 32 min, the rest under 11 min).
 - **Balance:** $35.26 before, $31.03 after.
 - **Bad hosts:** host `lkyvy1sgj4rc` behaved like `s3p8exc9lcvi` (no container start after 10 min). Both are in `FV_AVOID_MACHINES` for future runs.
-- **Result mirroring:** `scripts/gpu/sol_bench_mirror.py` copied each finished cell while its pod was still up. b6's results come from that copy, because the driver was stopped before its own fetch.
+- **Result mirroring:** `scripts/gpu/sol_bench_mirror.py` copied each finished cell while its pod was still up. b6's results come from that copy, because the driver was stopped before its own fetch. (Deleted with `sol-bench-pod.sh`, ADR-0019 §23.10: `fv-lab pod fetch --fetch-tree` fetches a tier's run directory; the mirror is `git show 21d70f63:scripts/gpu/sol_bench_mirror.py`.)
 
 ## Phase B2 (unblocked ports): run plan (2026-10-06, planned before renting)
 

@@ -63,7 +63,8 @@
   rules, 2026-10-28) is done CPU-side: the 22 sets are the experiment tiers `sol-bench-<set>`, `volume` for `a1` / `a3`
   and `volume+r2` for the rest, held to the script word for word, with Addition 18 (`unset`, for `env -u`). It is done
   GPU-side too: its GPU check (§23.7, `h3-768p-fullopt` through both runners) passed on `21d70f6` (2026-10-28, §23.7
-  "Result": 248 frames byte-identical, eight `PASS`, no `FAIL`, `SAME 4`), so the script's deletion (§23.8) follows
+  "Result": 248 frames byte-identical, eight `PASS`, no `FAIL`, `SAME 4`), and the script is deleted (§23.10, as §23.8
+  listed: with it `runpod-http.sh`'s `FV_POD_FILES` / `FV_POD_SCRIPT`, now refused, and `sol_bench_mirror.py`)
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -283,7 +284,8 @@ check; `pod_payload` factored out of `create_pod` unchanged) with `FV_POD_PREFIX
 `fixtures/runpod-http-rtx6000.json`; `tests/payload_golden.rs` asserts fv-lab's `POST /pods` body equals it except:
 
 1. the runner line (`fv-lab run` for `bash runpod-matrix.sh`);
-2. `env: {}` (fv-deploy's `create_body` always sends `env`; the script only with `FV_POD_FILES`, which fv-lab lacks);
+2. `env: {}` (fv-deploy's `create_body` always sends `env`; the script only with `FV_POD_FILES`, which fv-lab lacks,
+   and which went with `sol-bench-pod.sh`, §23.10);
 3. at `up` only, the image pinned to its digest (`ghcr_resolve`), as fv-deploy does.
 
 `pod fetch <id> [--wait] [--down]` is `wait_done` (the `DONE` marker carries the tag; the pod's state; new `live.log`
@@ -317,7 +319,7 @@ usd_per_hr }`), because `reap` selects by id or name pattern and age, `up` check
 | `FV_PROMPTS`, `FV_PROMPT`, `FV_SEED` | override the family's commands | ignored, each with a warning | a cell's prompts and seeds are its workload |
 | run tag | `<sha>-<MMDDHHMM>` | `<sha>-<MMDDHHMMSS>-<4 hex>`, name checked free | unique pod names (§6) |
 | run verdict | `matrix_exit≠0` or an old driver fail | also no `DONE` or no `matrix_exit=0` fail | a run that did not finish is not a success |
-| `FV_POD_FILES`, `FV_POD_SCRIPT`, `kernels` / `all` modes | yes | no | not used by `rtx6000`; later slices if needed |
+| `FV_POD_FILES`, `FV_POD_SCRIPT`, `kernels` / `all` modes | yes (the first two refused since §23.10) | no | not used by `rtx6000`; later slices if needed; the first two went with `sol-bench-pod.sh`, their only user (§23.10) |
 | `FV_FETCH_TREE` mirror | yes | `pod up --wait` / `pod fetch` `--fetch-tree [--fetch-skip] [--fetch-max-mb]` (D1c, §13.3) | |
 
 ### 8. The GPU gate, and what retires when
@@ -1520,7 +1522,7 @@ Not deleted: it still has callers. At this commit:
 
 | mode | callers | after |
 |---|---|---|
-| `run` (script path) | every family with a `runpod-matrix.sh` branch: `mmaudio`, `speechtest`, `sfwan`, `sfstream`, `sfquality`, `headline`, `cold`, `wan`, `eval`, `oracle`, `ltxoffload`, `solbench`, `hd`, `serve-engine`, `sol-lingbot`, `sol-cosmos3` (16; `determinism` and `det-short` left with §15.10, `fuse`, `attn3` and `ltx` with §17.6, and eleven retired with no tier with §18: `h3`, `hunyuan`, `sana-video`, `b200`, `writer`, `precision-debug`, `identity`, `b4b`, `b4c`, `b4c2`, `h3attn`); `oracle.sh` (`FV_FAMILY=oracle`, `FV_ORACLE_RUN_MODE`, `FV_KEEP_POD`, `FV_POD_FILE`); `FV_POD_FILES` / `FV_POD_SCRIPT=sol-bench-pod.sh` (`docs/perf/sol-bench.md`; `hd-upscaler.sh` ships by it) | goes with `runpod-matrix.sh` (each family a tier or retired) and the sol-bench pod script |
+| `run` (script path) | every family with a `runpod-matrix.sh` branch: `mmaudio`, `speechtest`, `sfwan`, `sfstream`, `sfquality`, `headline`, `cold`, `wan`, `eval`, `oracle`, `ltxoffload`, `solbench`, `hd`, `serve-engine`, `sol-lingbot`, `sol-cosmos3` (16; `determinism` and `det-short` left with §15.10, `fuse`, `attn3` and `ltx` with §17.6, and eleven retired with no tier with §18: `h3`, `hunyuan`, `sana-video`, `b200`, `writer`, `precision-debug`, `identity`, `b4b`, `b4c`, `b4c2`, `h3attn`); `oracle.sh` (`FV_FAMILY=oracle`, `FV_ORACLE_RUN_MODE`, `FV_KEEP_POD`, `FV_POD_FILE`); `FV_POD_FILES` / `FV_POD_SCRIPT=sol-bench-pod.sh` (`docs/perf/sol-bench.md`; `hd-upscaler.sh` ships by it; both knobs gone with the script, refused since §23.10) | goes with `runpod-matrix.sh` (each family a tier or retired) and the sol-bench pod script (gone, §23.10) |
 | `run` (fv-lab route, §10) | the 18 retired tiers (13, then `det-short` and `determinism`, §15.10, then `fuse`, `attn3` and `ltx`, §17.6); the Taskfile's `rtx6000` task | the Taskfile calls `fv-lab pod up` directly |
 | `run` / `all` refused | `gold`, the experiment tiers (§14.3); `run` / `all` / `plan` (exit 2) the families retired with no tier (§18) | — |
 | `plan` | `fv-lab-goldens.sh` (every script family's, `gold`'s and `h3-graphs`'s pod body: `fixtures/runpod-http-*.json`), `fv-lab-restored-goldens.sh` (at `5987e6a4`), the route test | the bodies freeze as the families' fixtures did (§10 item 3) |
@@ -4404,7 +4406,8 @@ GPU check §22.16, `wan13-audio ours-v2a`, passed on `9e6d09a` 2026-10-27).
   - `docs/ports/cosmos3.md:126`;
   - `docs/perf/sol-lingbot-cosmos3-plan.md:21-40`.
 - The open sol-bench items stay with `sol-bench-pod.sh`, which calls `runpod-http.sh` itself (§14.6): `lingbot-fullopt`
-  and the `a14b-sol-fullopt` rerun (`docs/perf/sol-bench.md:568-575`).
+  and the `a14b-sol-fullopt` rerun (`docs/perf/sol-bench.md:568-575`). (Since §23 they are the tier `sol-bench-g2`'s
+  arms, and the script is deleted, §23.10.)
 
 #### 22.4 The one schema addition: `{tae}` without a TAE gate (cell v1, additive)
 
@@ -4519,7 +4522,8 @@ Each slice from S2 on edits `runpod-matrix.sh` and compares the other families' 
 (§10 item 1), so they go one at a time.
 
 After S7 and S8, `runpod-matrix.sh` has no branch left and goes, and with it `runpod-http.sh run`'s script path
-(§14.6). `oracle.sh`'s upstream pods and `sol-bench-pod.sh` still call `runpod-http.sh`.
+(§14.6). `oracle.sh`'s upstream pods and `sol-bench-pod.sh` still call `runpod-http.sh` (`sol-bench-pod.sh` no
+longer: it is deleted, §23.10).
 
 **Owner questions, left open**:
 1. Whether the `mmaudio` knob stays offered: the `FASTVIDEO_WAN_AUDIO` catalog entry, the CLI's `--audio mmaudio`,
@@ -6858,14 +6862,14 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
 ### 23. sol-bench as fv-lab experiment tiers (done, CPU-side and GPU-side)
 
 Status: done CPU-side and GPU-side. Its GPU check (§23.7, the coordinator's) passed on `21d70f6` on 2026-10-28
-(§23.7 "Result"). The owner made two decisions on 2026-10-28:
+(§23.7 "Result"), and `sol-bench-pod.sh` is deleted (§23.10). The owner made two decisions on 2026-10-28:
 - `scripts/gpu/sol-bench-pod.sh` moves to fv-lab experiment tiers, as `h3-graphs` did (§22.6, question 2);
 - the owner answered this section's first draft's five questions (§23.2).
 
 A first pass of this slice stopped before building anything. Rules 17, 18 and 20 of `docs/perf/sol-bench.md` could not
 be kept as written, the open items read R2 trees that rule 22 forbade, and the script's `env -u` had no cell field.
 The owner's answers settle the rules. `env -u` became Addition 18 (§23.4). `sol-bench-pod.sh` stayed until the GPU
-check passed (it did, §23.7 "Result"); §23.8 lists what its deletion will touch.
+check passed (it did, §23.7 "Result"); §23.8 lists what its deletion would touch, and §23.10 records it.
 
 #### 23.1 What moved
 
@@ -7244,11 +7248,11 @@ The trees were on `bz0ofkfx45` (`volume`, no R2 fetch, as planned). The balance 
 - *Cost*: $38.49 → $37.28, **$1.21** (the estimate was $1.05-$1.25). That is about 13 + 18 pod-minutes, and no
   other pod ran. No new tree and no R2 fetch.
 
-So `sol-bench-pod.sh` can go: its deletion (§23.8) is the follow-up, recorded in this section when it is done.
+So `sol-bench-pod.sh` can go: its deletion (§23.8) is the follow-up, recorded in §23.10.
 
 #### 23.8 What the script's deletion will touch
 
-These are the callers and mentions now, outside `artifacts/`. The review of #235 found the first list incomplete, so
+Done: §23.10 records the deletion against this list. These are the callers and mentions now, outside `artifacts/`. The review of #235 found the first list incomplete, so
 this one is the output of:
 
 `git grep -n -I -E 'sol-bench-pod\.sh|sol_bench_mirror|FV_POD_SCRIPT|FV_POD_FILES' -- . ':!artifacts'`
@@ -7304,3 +7308,70 @@ Nothing but `sol-bench-pod.sh` uses `FV_POD_SCRIPT`.
   sol-bench bodies: TAE skipped, the 3900 s cap, the 3300 s cell cap, the 80-min idle limit, disk and floor; 26 `volume+r2`
   tiers, 22 floors), `plan::tests::
   unset_renders_env_dash_u_before_the_settings`, and `tests/schema.rs` for the regenerated schema.
+
+#### 23.10 The script's deletion (done, 2026-10-28)
+
+The GPU check passed on `21d70f6` (§23.7 "Result"), so `scripts/gpu/sol-bench-pod.sh` is deleted. The deletion
+follows §23.8's list item by item, and the h3-graphs precedent (§14.4). Its last version is
+`git show 21d70f63:scripts/gpu/sol-bench-pod.sh`; the PR that records the check changes no script.
+
+- **Code and its tests:**
+  - `scripts/gpu/runpod-http.sh`:
+    - The `FV_POD_FILES` / `FV_POD_SCRIPT` usage text is gone, and so is the tarball in `pod_payload`'s `env`.
+    - The start command's `${FV_POD_SCRIPT:+…}` forms are gone. The preflight's guard is now the literal
+      `if [ -z "" ]`, which is what it rendered with the knob unset, and the matrix line names `runpod-matrix.sh`
+      alone.
+    - The `FV_POD_FILES` comment and unpack stay, as §22.19 kept them, and so does the preflight's pod-script
+      comment. They are in every `runpod-http-*.json` golden and in `pod-start.sh.in`. Every golden is byte for byte
+      what it was (`fv-lab-goldens.sh --check`, `tests/payload_golden.rs`). `start_cmd`'s header says why.
+    - **Refused, not dropped:** a caller that sets either knob would otherwise get `runpod-matrix.sh` silently. So
+      either one is refused before anything else runs, on every path (`run`, `plan`, the fv-lab route), naming the
+      `sol-bench-<set>` tiers. The fv-lab route's own refusal of the two ("go with the knob", §23.8) is dropped from
+      its list, since nothing reaches it now.
+    - `fv-lab-route.test.sh` drops the two from the route's refusal loop. It adds six cases (each knob on the route,
+      the script path and `plan`) and the usage header's new last line: 369 → 373 `ok`.
+    - `hd-upscaler.sh`'s history comment is unchanged.
+  - `scripts/gpu/fv-lab-retired.sh`:
+    - The `solbench`, `sol-lingbot` and `sol-cosmos3` pointers now name the `sol-bench-<set>` tiers, the sets that
+      hold each family's arms, and `fv-lab pod up --family sol-bench-<set>`. "The arms sol-bench-pod.sh lacks" and
+      "hard-codes `--residency swap`" now say "those tiers lack" and "the tiers' LingBot arms pass".
+    - `fv-lab-route.test.sh` and `runpod-plan.test.sh` compare against the function's output, so they follow it
+      unchanged (113 `ok` in `runpod-plan`, as before).
+    - The comments at `FV_LAB_EXPERIMENTS` and `FV_SCRIPT_RETIRED` say the script is deleted.
+  - `scripts/gpu/tests/fv-lab-experiment-goldens.sh` already read a deleted pod script and its inputs from the
+    parent of the deleting commit (`source_of`, `deleted_in`). Its header now says so for sol-bench.
+    - `--check` passes from the history: `sol-bench-script.txt` is regenerated byte for byte. `sol_cut`'s six
+      mutants and the `FV_CELLS` check run on that copy.
+    - A shallow clone keeps the fixture as frozen and says so.
+  - `.github/workflows/control.yml`: both path filters drop the script's line, and `scripts/gpu/sol/**` stays.
+  - `scripts/gpu/sol_bench_mirror.py` is deleted. `fv-lab pod fetch --fetch-tree` fetches a tier's run directory,
+    and the mirror is `git show 21d70f63:scripts/gpu/sol_bench_mirror.py`.
+  - Kept as §23.8 says: `pod-start.sh.in` (lines 58-61, 87) and `tests/payload_golden.rs`'s header (difference 2).
+  - Unchanged historical mentions that §23.8 did not list, all of which describe Addition 18's origin:
+    - `src/plan.rs`'s `Arm::unset` doc and the generated `schemas/cell.v1.json` (`sol-bench-pod.sh`'s
+      `env -u …`);
+    - `tests/experiment_tiers.rs`'s count comment.
+
+    The module doc of `tests/experiment_tiers.rs` says the script is read from the history.
+  - `self-delete.test.sh` needs no change: it finds 120 inline copies, one fewer, against its floor of 34.
+- **Data:**
+  - `lab/gold/wan22-ti2v-5b.toml`'s `prompt_set` names `lab/cells/sol-bench-a2.toml` as the prompt's source.
+  - The generated `lab/cells/gold-wan22-ti2v-5b.toml` note follows (`tests/gold_tier.rs`, `fv-lab gold cells
+    --check`).
+  - The 22 `lab/cells/sol-bench-*.toml` headers and `lab/tiers.toml`'s sol-bench comment say "was …, deleted after
+    the GPU check of §23.7". Their `note` and `description` fields, which name the set's origin, are unchanged.
+  - No dry run or pod body changes.
+- **Docs:**
+  - `docs/perf/sol-bench.md`: its rules and the "Running through fv-lab" lead. Its phase B "Before each pod" step and
+    launch block are marked as the script's, with the fv-lab launch named. Its "Arguments" paragraph and its
+    mirror note are updated.
+  - `docs/perf/sol-lingbot-cosmos3-plan.md`, `docs/ports/{cosmos3,lingbot,sol-wan-ltx23}.md`.
+  - `docs/ops/r2-weights.md` (the relink).
+  - `docs/adr/0023-lab-report-and-ci-bridge.md`'s self-delete inventory (noted as deleted, kept as a record).
+  - `docs/dev/fv-lab.md`: the tier table, the sol-bench paragraph, the route's refusal list and the retired table.
+  - This ADR: the status header; §7's table and its difference 2; §14.6; §22.3; §22.6; §23's status; §23.8.
+  - The plan doc and `decision-log.md` gain records, and earlier records are kept as written.
+
+Re-grep, after: `git grep -n -I -E 'sol-bench-pod\.sh|sol_bench_mirror|FV_POD_SCRIPT|FV_POD_FILES' -- . ':!artifacts'`
+leaves what is listed above as kept, the records, the "was" headers, the cells' and tiers' origin notes, and the new
+refusal and its tests.

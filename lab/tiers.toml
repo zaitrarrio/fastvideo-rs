@@ -797,7 +797,8 @@ tae = true
 cells = ["wan-fastwan21-1.3b", "wan-wan21-t2v-14b", "wan-wan22-ti2v-oracle", "wan-wan22-ti2v-5b", "wan-fastwan22-ti2v-oracle", "wan-fastwan22-ti2v-5b"]
 
 # ---- sol-bench as fv-lab experiment tiers (docs/adr/0019-fv-lab.md §23; owner decisions
-# 2026-10-28; docs/perf/sol-bench.md): one tier per FV_SOL_SET of scripts/gpu/sol-bench-pod.sh, named
+# 2026-10-28; docs/perf/sol-bench.md): one tier per FV_SOL_SET of scripts/gpu/sol-bench-pod.sh (was:
+# deleted after these tiers' GPU check on 21d70f6, ADR-0019 §23.7, §23.10), named
 # as phase A ran it (FV_FAMILY=sol-bench-<set>), its cell the set's cells in its order, word for word
 # (fixtures/experiments/sol-bench-script.txt, tests/experiment_tiers.rs). The owner's rules hold: the RTX
 # PRO 6000 only (rule 1's fallback; no 5090 tier), at most 2 pods at once, at most 1 h of benchmark wall

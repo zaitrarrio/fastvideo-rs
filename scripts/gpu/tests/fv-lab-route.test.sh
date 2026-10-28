@@ -20,6 +20,9 @@
 #   - hd's dropped post-script hook (FV_HD_POST_URL, FV_HD_POST_TIMEOUT_S,
 #     ADR-0019 §22, S2) refused by runpod-http.sh (script path and fv-lab
 #     route);
+#   - FV_POD_FILES / FV_POD_SCRIPT, gone with sol-bench-pod.sh (ADR-0019
+#     §23.10), refused by runpod-http.sh on every path, naming the
+#     sol-bench-<set> tiers;
 #   - the families retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
 #     ADR-0019 §18 and §22's S1, `headline` among them) refused by
 #     runpod-http.sh run / all / plan (dry run or not, before the key) and by
@@ -74,9 +77,18 @@ dry "lists split without globbing" 0 "--cells sol-h3 \\* --extra-env FASTVIDEO_X
 # 1. Refused: no equivalent, or not what fv-lab would do.
 dry "the reviewer's case" 1 "which has no FV_AVOID_MACHINES" FV_FAMILY=precision FV_POD_CAP_S=1800 \
   RUNPOD_VOLUME_ID=other RUNPOD_CLOUD_TYPE=COMMUNITY FV_AVOID_MACHINES=m1 FV_SKIP_TAE=1
-for kv in FV_POD_FILES=x FV_POD_SCRIPT=x FV_POD_FILE=x FV_PROMPTS=5 FV_PROMPT=x FV_SEED=1 FV_AVOID_MACHINES=m1 \
+for kv in FV_POD_FILE=x FV_PROMPTS=5 FV_PROMPT=x FV_SEED=1 FV_AVOID_MACHINES=m1 \
   FV_CREATE_WAIT_S=60 RUNPOD_ALLOWED_CUDA=13.0 FV_MIN_RAM_GB=192; do
   dry "refused: $kv" 1 "which has no ${kv%%=*}" FV_FAMILY=trace "$kv"
+done
+# FV_POD_FILES / FV_POD_SCRIPT went with sol-bench-pod.sh (ADR-0019 §23.10):
+# refused before anything else, on the fv-lab route, the script path and a plan.
+for kv in FV_POD_FILES=x FV_POD_SCRIPT=sol-bench-pod.sh; do
+  why="${kv%%=*} went with scripts/gpu/sol-bench-pod.sh, its only user (docs/adr/0019-fv-lab.md §23.10): the benchmark's sets are the fv-lab tiers sol-bench-<set>"
+  dry "refused (gone): $kv, fv-lab route" 1 "$why" FV_FAMILY=trace "$kv"
+  dry "refused (gone): $kv, script path" 1 "$why" FV_FAMILY=wan "$kv"
+  expect "refused (gone): $kv, plan" 1 "$why" -- RUNPOD_API_KEY=t FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_FAMILY=wan \
+    "$kv" bash "$HTTP" plan abc1234 abc1234-10261200
 done
 # A tier without a floor: FV_MIN_RAM_GB refused, naming the tier's min_ram_gb
 # (ADR-0019 §16.10).
@@ -530,7 +542,7 @@ cp "$HTTP" "$TMP/http-in-place.sh"
   || bad "runpod-http.sh removed the script it ran in place"
 
 # 6. The usage texts: the whole header, to its last entry.
-expect "runpod-http.sh usage: whole header" 2 "it skips the default weight gate)." -- RUNPOD_API_KEY=x bash "$HTTP"
+expect "runpod-http.sh usage: whole header" 2 "either is refused." -- RUNPOD_API_KEY=x bash "$HTTP"
 expect "runpod.sh usage: whole header" 2 "runpod.sh reap" -- bash "$ROOT/scripts/gpu/runpod.sh"
 
 if (( fail )); then

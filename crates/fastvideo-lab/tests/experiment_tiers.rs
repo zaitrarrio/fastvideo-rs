@@ -14,8 +14,10 @@
 //!
 //! The `sol-bench-<set>` tiers (ADR-0019 §23) are made the same way from
 //! `scripts/gpu/sol-bench-pod.sh`, one tier per `FV_SOL_SET`
-//! (`fixtures/experiments/sol-bench-script.txt`): their arms are the set's
-//! cells word for word, with no mapping but the weight root.
+//! (`fixtures/experiments/sol-bench-script.txt`; the script was deleted after
+//! the tiers' GPU check, §23.10, and the goldens script reads it from the
+//! history): their arms are the set's cells word for word, with no mapping
+//! but the weight root.
 
 mod common;
 

@@ -237,7 +237,8 @@ driver fetches what is there 15 min before the cap (ADR-0019 §16.7), so even an
   `h3-trim-pod.sh:56`, `h3-trim-validate.sh:120`, `h3-tier-options-validate.sh:126`, `fasth3-nvfp4-validate.sh:93`,
   `h3-trim-nvfp4-pod.sh:48`, `fasth3-nvfp4-pod.sh:56`, `h3-turbo-loras-pod.sh:49`, `h3-trim-nvfp4-validate.sh:83`).
   A re-grep found no others. (D1e, docs/adr/0019-fv-lab.md §14, later deleted every one-off above but
-  `h3-graphs-{validate,pod}.sh`; they are in git at `22a5fd7b`.) Each now calls `fv_self_delete`, whose one definition is
+  `h3-graphs-{validate,pod}.sh`; they are in git at `22a5fd7b`. `sol-bench-pod.sh` was deleted after its tiers' GPU
+  check, docs/adr/0019-fv-lab.md §23.10; it is in git at `21d70f63`.) Each now calls `fv_self_delete`, whose one definition is
   `scripts/gpu/lib/self-delete.sh`; `runpod-http.sh` and `pod-start.sh.in` carry the same text (their goldens
   regenerated). After review (2026-10-25) the function hands curl the `Authorization` header on stdin (`printf … |
   curl … -H @-`: POSIX, the key never in a process's argv), keeps its status in `_fvsd_code` / `_fvsd_ok` (no global
@@ -249,7 +250,8 @@ driver fetches what is there 15 min before the cap (ADR-0019 §16.7), so even an
     prints it), `ltx-pod.sh` through `entry_cmd` (`entry` prints it); the start commands' "delete 10/20/30 min after
     DONE" is now `until fv_self_delete /tmp/self-delete.log; do sleep 60; done`, and ltx-pod.sh's idle watchdog calls
     it each idle minute (as `runpod-http.sh`);
-  - the scripts that run on a pod (`family-pool-pod.sh`, the ten `experiments/*-pod.sh`, `sol-bench-pod.sh`,
+  - the scripts that run on a pod (`family-pool-pod.sh`, the ten `experiments/*-pod.sh`, `sol-bench-pod.sh` (deleted
+    since, docs/adr/0019-fv-lab.md §23.10),
     `pod-boot.sh`) carry the same text inline: they are shipped alone (a bundle, a base64 env, an older image) and
     cannot source the repository. The busy-GPU exit tries 5 times, 30 s apart, before the start command's own
     retrying delete; `sol-bench-pod.sh`'s cap retries each minute; `pod-boot.sh`'s idle guard each 30 s idle tick,

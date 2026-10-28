@@ -22,7 +22,7 @@ height = 704
 frames = 121
 fps = 24
 steps = 50
-prompt_set = "the sol-bench prompt (one prompt; scripts/gpu/sol-bench-pod.sh)"
+prompt_set = "the sol-bench prompt (one prompt; lab/cells/sol-bench-a2.toml)"
 seeds = [1024]
 note = "sol-bench phase A, instance 2: T2V 704x1280, 50 UniPC steps, CFG 5, shift 5, --warm, one timed request; RTX PRO 6000 Server (96 GB, sm_120, driver 595.91), EUR-IS-1, image fastvideo-rs-runtime@sha256:76aba91a (sha-c74c5f5), $2.09/hr. The run used the Wan defaults (the default DiT precision is bf16: docs/perf/raw-inference.md adds FASTVIDEO_WAN_QUANT=mxfp8 only in its max-speed arm); the quant pin (WAN_QUANT=off, Diffusers sigmas, full VAE) was made explicit from phase B on."
 
