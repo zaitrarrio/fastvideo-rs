@@ -3478,6 +3478,45 @@ without `--fetch-tree`; `oracle.sh`; the script's real runs of the tensor-diff t
 (`Runner::metric`, `metric_value`, the dry-run lines, `raw_line`), `oracle.rs` (`runtime_fetch`), `bin/fv-lab.rs`;
 tests in `plan.rs`, `run.rs`, `tests/{dry_run,repeats_oracle,oracle_driver,fv_lab_bin,lab_files}.rs`.
 
+#### 20.10 Reference fix: the `sol-ltx25` stack's PyAV pinned (2026-10-28)
+
+§20.7's run of 2026-10-28 on `4902297` stopped `oracle-ltx25-retake` with `FASTVIDEO_INJECT_DIR: v2v_audio_wave:
+reference shape [2, 221152] (442304 values), ours needs 444416`. The analysis and the coordinator's decision are in
+§20.7's record. In short, the reference changed and ours did not. LTX-2 `fd4ded7` ships no lockfile and
+`ltx-pipelines` asks for `"av"` unpinned, so the rebuilt `sol-ltx25` image (`sha256:6089397…`) got a newer PyAV. Under
+PyAV 19 (FFmpeg 9), upstream's `decode_audio_from_file` (`media_io/decode.py:240-300`) reads the fixture's AAC from
+pts 1024 after its `seek(0)`, so the audio starts 1024 samples (23 ms) late and loses the last frame's 32 padding
+samples. The same code under PyAV 15.1.0-18.0.0 gives [2, 222208]. That is ours, and also what the 2026-09-29
+reference gave (`v2v_audio_wave … n 444416`, rel_l2 7.021e-5).
+
+The fix is on the reference side (`scripts/gpu/upstream/setup.sh`, `docker/upstream.Dockerfile`):
+
+- `install_sol_ltx25` installs `av==$LTX25_AV_VERSION` (18.0.0, a constant) after `uv sync`. Its stamp becomes
+  `ltx2:<rev>:sol:<rev>:av:18.0.0:v3`.
+- `check_ltx25_av` fails the install unless `av.__version__` is the pin. It also runs upstream's own
+  `decode_audio_from_file` from the checkout with start 0 and `max_duration` 121 / 24, the call of `ltx25_edit.py`.
+  It loads `decode.py` without the package `__init__`s, which import Triton. It requires [2, 222208] on
+  `scripts/gpu/fixtures/beach-push-768x512-24fps.mp4`.
+- The image's `sol-ltx25` step bind-mounts the fixture for that step only. So the check runs **at image build**, in
+  `upstream-images.yml`, before the image is pushed. This is the cheapest place that runs before any oracle cell: no
+  pod time, and a wrong reference image is never published. `fv-lab oracle` defaults to `--upstream-image-tag
+  latest`, which resolves to the rebuilt digest.
+- `upstream/pod.sh`'s `info_box` writes `sol-ltx25 av=<version>` to `box.txt` as the run's record.
+- `scripts/gpu/tests/upstream-pyav.test.sh` (CI) holds the pin, the order of the install, the image's mount, and the
+  check's outcomes on stubs.
+
+Measured on the fixture. A copy of `fd4ded7`'s decode loop under PyAV 15.1.0 / 16.0.1 / 17.0.0 / 18.0.0 (FFmpeg
+7.1.1 / 8.0 / 8.0.1 / 8.1.2) gives [2, 222208]. Under PyAV 19.0.2 (FFmpeg 9.0.2) it gives [2, 221152], equal to
+18.0.0's wave shifted by 1024 samples (max_abs 0). `check_ltx25_av` on `fd4ded7`'s own `decode.py` (CPU torch)
+passes with 18.0.0 and fails with 19.0.2 on `gave (2, 221152)`. Ours (ffmpeg CLI) against PyAV 18.0.0 is rel_l2
+7.021e-5, max_abs 3.747e-4, n 444416: the September line exactly. Against the shifted wave, the `-ownenc` arm's
+`v2v_audio_latent` moved from 9.9e-2 (2026-09-29) to 6.4e-1. The FLAC of `ltx25-a2v*` has no priming and decodes
+the same under both (which is why `oracle-ltx25-a2v-i2v` passed).
+
+**The GPU re-check of the retake cells waits for the rebuilt `sol-ltx25` image**, which `upstream-images.yml` builds
+on this change's merge to main. Changing `setup.sh` changes `base-os`'s `COPY`, so all four upstream images rebuild
+with new digests.
+
 ### 21. D1j: `sfwan13` as cells: the `oracle-r2` tier, the upstream R2 step, `decode` and directory compares
 
 Status: accepted 2026-10-26 (coordinator): §21.7's GPU check passed on `4b4980b` on every criterion (§21.7

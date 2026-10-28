@@ -61,6 +61,10 @@ on:
       - "scripts/gpu/upstream/oracle.sh"
       - "scripts/gpu/oracle.sh"
       - "scripts/gpu/tests/upstream-r2.test.sh"
+      # the sol-ltx25 reference's PyAV pin (ADR-0019 §20.10)
+      - "scripts/gpu/upstream/setup.sh"
+      - "docker/upstream.Dockerfile"
+      - "scripts/gpu/tests/upstream-pyav.test.sh"
       # the script runner's R2 trees (ADR-0019 §21.8)
       - "scripts/gpu/r2-stage.sh"
       - "scripts/gpu/tests/runpod-r2.test.sh"
@@ -150,6 +154,10 @@ on:
       - "scripts/gpu/upstream/oracle.sh"
       - "scripts/gpu/oracle.sh"
       - "scripts/gpu/tests/upstream-r2.test.sh"
+      # the sol-ltx25 reference's PyAV pin (ADR-0019 §20.10)
+      - "scripts/gpu/upstream/setup.sh"
+      - "docker/upstream.Dockerfile"
+      - "scripts/gpu/tests/upstream-pyav.test.sh"
       # the script runner's R2 trees (ADR-0019 §21.8)
       - "scripts/gpu/r2-stage.sh"
       - "scripts/gpu/tests/runpod-r2.test.sh"
@@ -251,6 +259,9 @@ jobs:
       - name: the upstream pod's R2 trees reach it by Runpod secret references, never values; pod.sh hands the key to the plan step alone and fetches onto the container disk (ADR-0019 §21)
         working-directory: .
         run: bash scripts/gpu/tests/upstream-r2.test.sh
+      - name: the sol-ltx25 reference pins PyAV and its install fails unless upstream's decode_audio_from_file reads the retake fixture as [2, 222208] (ADR-0019 §20.10)
+        working-directory: .
+        run: bash scripts/gpu/tests/upstream-pyav.test.sh
       - name: runpod-http.sh run's FV_R2_TREES builds fv-lab's merged weight root on the script runner's pod, the key by Runpod secret reference to the plan step alone; unset changes nothing (ADR-0019 §21.8)
         working-directory: .
         run: bash scripts/gpu/tests/runpod-r2.test.sh

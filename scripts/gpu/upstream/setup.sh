@@ -20,6 +20,18 @@ SOL_REPO="https://github.com/NVlabs/Sana.git"
 SOL_REV="${SOL_REV:-6c2f582ba9681dfe352ae4ca23b6f0030cf120cf}"          # branch sol-engine
 SGLANG_REV="${SGLANG_REV:-6fa3f9df11c8bdbc0e3b4ddc87a3d873343aca72}"    # RTX5090 SOURCE_SNAPSHOT
 LTX2_REV="${LTX2_REV:-fd4ded7f2d88d3da713abcdd4ad41ecc4a9314ca}"        # ltx25/RTX5090 README
+# PyAV of the sol-ltx25 stack, pinned exactly (not overridable): LTX-2 fd4ded7 ships no lockfile and
+# ltx-pipelines asks for "av" unpinned, so `uv sync` took whatever PyAV was newest. PyAV 19 (FFmpeg 9) changed
+# what upstream's decode_audio_from_file (media_io/decode.py:240-300) reads after its container.seek(0) on AAC
+# with encoder priming: the first decoded frame is pts 1024, so the source audio starts 1024 samples (23 ms at
+# 44.1 kHz) late, and FFmpeg 9 also drops the last frame's 32 padding samples. The retake fixture then decodes
+# to [2, 221152] where PyAV 15.1-18.0 (and the reference of 2026-09-29, `v2v_audio_wave` n 444416) give
+# [2, 222208]. 18.0.0 is the newest release measured to decode as before (ADR-0019 §20.10); check_ltx25_av
+# holds the venv to it.
+LTX25_AV_VERSION=18.0.0
+# The source clip of the retake / extend references (oracle.sh LTX_EDIT_SOURCE_NAME): check_ltx25_av decodes
+# it. Beside this file in the repo (pod.sh); the image build bind-mounts it at /opt/fixtures (upstream.Dockerfile).
+LTX25_AUDIO_FIXTURE="${LTX25_AUDIO_FIXTURE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../fixtures/beach-push-768x512-24fps.mp4}"
 FV_REPO="${FV_REPO:-https://github.com/hao-ai-lab/FastVideo.git}"
 FV_REV="${FV_REV:-e90be598e56138af5c82590f0d72f6fa2dfce400}"            # FastVideo main, 2026-09-24
 # FastH3 NVFP4 on sm_120 (docs/inference/fasth3_rtx_pro_6000.md upstream; docs/ports/fasth3-nvfp4.md here):
@@ -169,8 +181,45 @@ install_sol_h3_4step() {
   echo "$stamp" >"$v/.stamp"
 }
 
+# check_ltx25_av <python> [<fixture>]: the stack's PyAV is LTX25_AV_VERSION, and upstream's own
+# decode_audio_from_file (the fd4ded7 file, as ltx25_edit.py calls it: start 0, max_duration 121 / 24) reads the
+# retake fixture as [2, 222208] (44.1 kHz AAC, 218 packets of 1024 samples less the 1024 priming; the cap
+# round(121 / 24 * 44100) = 222338 does not bite). decode.py is loaded without the package __init__s: they
+# import the model blocks (Triton), which cannot import without a GPU, as at image build (smoke).
+check_ltx25_av() {
+  local py="$1" fx="${2:-$LTX25_AUDIO_FIXTURE}"
+  [[ -f "$fx" ]] || { slog "sol-ltx25: no audio fixture at $fx for the PyAV check"; return 1; }
+  fx="$(realpath -- "$fx")" || return 1
+  (cd / && "$py" -I -B - "$LTX25_AV_VERSION" "$fx") <<'PY'
+import importlib
+import importlib.util
+import os
+import sys
+import types
+
+import av
+
+want, fixture = sys.argv[1], sys.argv[2]
+if av.__version__ != want:
+    sys.exit(f"sol-ltx25: PyAV {av.__version__}, pinned {want} (setup.sh LTX25_AV_VERSION)")
+root = importlib.util.find_spec("ltx_pipelines").submodule_search_locations[0]
+for name, sub in (("ltx_pipelines", ""), ("ltx_pipelines.utils", "utils"),
+                  ("ltx_pipelines.utils.media_io", os.path.join("utils", "media_io"))):
+    pkg = types.ModuleType(name)
+    pkg.__path__ = [os.path.join(root, sub)]
+    sys.modules[name] = pkg
+decode = importlib.import_module("ltx_pipelines.utils.media_io.decode")
+audio = decode.decode_audio_from_file(fixture, "cpu", 0.0, 121 / 24)
+shape = tuple(audio.waveform[0].shape) if audio is not None else None
+if shape != (2, 222208):
+    sys.exit(f"sol-ltx25: decode_audio_from_file({fixture}, 0, 121/24) gave {shape}, want (2, 222208) "
+             f"(PyAV {av.__version__}, {decode.__file__})")
+print(f"sol-ltx25: PyAV {av.__version__}, decode_audio_from_file {shape} at {audio.sampling_rate} Hz: ok")
+PY
+}
+
 install_sol_ltx25() {
-  local d="$UP/sol-ltx25" stamp="ltx2:$LTX2_REV:sol:$SOL_REV:v2"
+  local d="$UP/sol-ltx25" stamp="ltx2:$LTX2_REV:sol:$SOL_REV:av:$LTX25_AV_VERSION:v3"
   stamp_ok "$d" "$stamp" && { slog "sol-ltx25 venv ok"; return 0; }
   sources || return 1
   mkdir -p "$d"
@@ -178,9 +227,12 @@ install_sol_ltx25() {
   slog "uv sync LTX-2 @ $LTX2_REV"
   (cd "$d/LTX-2" && uv sync -q) || return 1
   local py="$d/LTX-2/.venv/bin/python"
+  # The PyAV pin (LTX25_AV_VERSION's note): after the sync, which resolves "av" unpinned.
+  uv pip install -q --python "$py" "av==$LTX25_AV_VERSION" || return 1
   # apache-tvm-ffi: the CuTe DSL from_dlpack path (Sol-Attn) imports tvm_ffi.
   uv pip install -q --python "$py" "nvidia-cutlass-dsl>=4.5" cuda-python apache-tvm-ffi || return 1
   uv pip install -q --python "$py" -e "$SRC/sol-engine/techniques/sparse_backends" || return 1
   smoke "$py" ltx_pipelines, sol_attn, tvm_ffi || return 1
+  check_ltx25_av "$py" || return 1
   echo "$stamp" >"$d/.stamp"
 }

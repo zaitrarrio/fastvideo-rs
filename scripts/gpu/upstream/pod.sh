@@ -179,6 +179,9 @@ info_box() {
       [[ -x "$UP/$v/bin/python" ]] && echo "$v: $(cat "$UP/$v/.stamp" 2>/dev/null)"
     done
     [[ -f "$UP/sol-ltx25/.stamp" ]] && echo "sol-ltx25: $(cat "$UP/sol-ltx25/.stamp")"
+    # The stack's PyAV (pinned at install, setup.sh LTX25_AV_VERSION; checked there on the retake fixture).
+    [[ -x "$UP/sol-ltx25/LTX-2/.venv/bin/python" ]] \
+      && echo "sol-ltx25 av=$("$UP/sol-ltx25/LTX-2/.venv/bin/python" -I -c 'import av; print(av.__version__)' 2>&1 | tail -1)"
     env | grep -E '^(HOME|UV_|XDG_|HF_HOME)=' | sort
     # Where the Hub token came from, never its value; whether the R2 key is here.
     echo "hf_token=$HF_TOKEN_SRC"

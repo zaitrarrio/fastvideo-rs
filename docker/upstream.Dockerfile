@@ -8,8 +8,8 @@
 #                  (Rust extensions off) + Sol-Attn (techniques/sparse_backends), torch 2.11 cu130
 #   sol-h3-4step   sol-engine Sol-H3 package requirements (torch 2.10 cu130, diffusers pin,
 #                  cudnn-frontend[cutedsl])
-#   sol-ltx25      Lightricks/LTX-2 @ fd4ded7 (uv sync; torch 2.13 cu132) + nvidia-cutlass-dsl
-#                  + cuda-python + Sol-Attn
+#   sol-ltx25      Lightricks/LTX-2 @ fd4ded7 (uv sync; torch 2.13 cu132; PyAV pinned, setup.sh
+#                  LTX25_AV_VERSION) + nvidia-cutlass-dsl + cuda-python + Sol-Attn
 #
 # Every stack is a uv venv under /opt/upstream built by scripts/gpu/upstream/setup.sh
 # (the same installer pods used before), so the pins live in one place. The base
@@ -75,6 +75,11 @@ COPY scripts/gpu/upstream /opt/fvrs/scripts/gpu/upstream
 LABEL org.opencontainers.image.description="sol-engine Sol-H3 four-step package"
 
 FROM base AS sol-ltx25
-RUN . /opt/upstream-setup/setup.sh && install_sol_ltx25 && rm -rf /tmp/uv-cache /root/.cache
+# The retake fixture, bind-mounted for this step only (not kept in the image): install_sol_ltx25's
+# check_ltx25_av decodes it with upstream's own decode_audio_from_file and fails the build unless PyAV is the
+# pinned one (setup.sh LTX25_AV_VERSION) and the wave is [2, 222208].
+RUN --mount=type=bind,source=scripts/gpu/fixtures/beach-push-768x512-24fps.mp4,target=/opt/fixtures/beach-push-768x512-24fps.mp4 \
+    export LTX25_AUDIO_FIXTURE=/opt/fixtures/beach-push-768x512-24fps.mp4 \
+ && . /opt/upstream-setup/setup.sh && install_sol_ltx25 && rm -rf /tmp/uv-cache /root/.cache
 COPY scripts/gpu/upstream /opt/fvrs/scripts/gpu/upstream
 LABEL org.opencontainers.image.description="sol-engine LTX-2.5 RTX5090 (LTX-2 fd4ded7 + Sol-Attn)"
