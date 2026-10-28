@@ -1,0 +1,56 @@
+[fv-lab oracle] upstream pod (sol-ltx25): info:box weights:ltx25 oracle:ltx25-retake on ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25:latest
+[fv-lab oracle] fv-lab-upstream-7e513f6-1028214646-6001 on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25@sha256:64ed4d38834213c78da41bb840c93f2587a9c7dc8cd4c7f105bff54b088f63ed (ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25:latest)
+[fv-deploy] balance $34.06 (floor $8.00)
+[fv-deploy] backstop armed for 7fpuddmdzvss20 (pid 1249): deleted at the latest 7200 s after create
+[fv-deploy] runpod-pod 7fpuddmdzvss20 on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr ram=94GB vcpu=32
+[fv-deploy] 7fpuddmdzvss20 ready 201.6 s after create
+[fv-deploy] keeping 7fpuddmdzvss20 (the backstop deletes it 7200 s after create; `fv-deploy down 7fpuddmdzvss20` now)
+[fv-lab oracle] upstream sol-ltx25 pod 7fpuddmdzvss20 tag 7e513f6-1028214646-6001: https://7fpuddmdzvss20-8000.proxy.runpod.net/upstream/7e513f6-1028214646-6001
+[fv-lab oracle] reference ltx25-retake served by 7fpuddmdzvss20
+[fv-lab oracle] FV_ORACLE_URL=https://7fpuddmdzvss20-8000.proxy.runpod.net/upstream/7e513f6-1028214646-6001 -> <scratch>/o210/urls
+[fv-lab oracle] runtime side (pid 1893): fv-lab pod up --sha 7e513f6 --family oracle --tag 7e513f6-1028214646-8346 --cells oracle-ltx25-retake,oracle-ltx25-retake-diff,oracle-ltx25-retake-ownenc,oracle-ltx25-retake-ownenc-diff --extra-env FV_ORACLE_URL=https://7fpuddmdzvss20-8000.proxy.runpod.net/upstream/7e513f6-1028214646-6001 --wall-cap-s 3600 --fetch-tree --fetch-skip /frames/ --yes --wait
+[fv-lab] fv-lab-oracle-7e513f6-1028214646-8346 on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:54e90baf6050ee82bdc7c881c66bec385378644a61026d103854ec539a1cf478 (ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-7e513f6)
+[fv-deploy] balance $33.65 (floor $8.00)
+[fv-deploy] backstop armed for re3lfq84wh7qvj (pid 1932): deleted at the latest 3600 s after create
+[fv-deploy] runpod-pod re3lfq84wh7qvj on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr ram=188GB vcpu=32
+[fv-deploy] re3lfq84wh7qvj ready 38.0 s after create
+[fv-deploy] keeping re3lfq84wh7qvj (the backstop deletes it 3600 s after create; `fv-deploy down re3lfq84wh7qvj` now)
+{
+  "name": "fv-lab-oracle-7e513f6-1028214646-8346",
+  "provider": "runpod-pod",
+  "instance": {
+    "id": "re3lfq84wh7qvj",
+    "provider": "runpod-pod",
+    "name": "fv-lab-oracle-7e513f6-1028214646-8346",
+    "state": "running",
+    "url": "https://re3lfq84wh7qvj-8000.proxy.runpod.net",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "data_center": "EU-RO-1",
+    "usd_per_hr": 2.49,
+    "created_at": 1793224847.440152,
+    "memory_gb": 188.0,
+    "vcpus": 32.0
+  },
+  "cycles": [
+    {
+      "n": 1,
+      "instance": "re3lfq84wh7qvj",
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "usd_per_hr": 2.49,
+      "ready_after_s": 38.01586198806763,
+      "outcome": "ready"
+    }
+  ],
+  "smoke": null,
+  "deleted": false,
+  "ok": true
+}
+[fv-lab] pod re3lfq84wh7qvj runs `fv-lab run oracle` (tag 7e513f6-1028214646-8346); results: fv-lab pod fetch re3lfq84wh7qvj --wait --down
+[fv-lab] pod: [22:01:30] [oracle] ▶ oracle-ltx25-retake  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/ltx25-retake/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/7e513f6-1028214646-8346/oracle-ltx25-retake-dump /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --edit retake:/opt/fastvideo-rs/scripts/gpu/fixtures/beach-push-768x512-24fps.mp4:1.5:3.5:av --prompt A huge wave crashes over the dark rocks at golden hour, white spray bursting high into the air, a narrator speaks calmly. --seed 1024 --text streamed --clip /fvscratch/runs/oracle/7e513f6-1028214646-8346/oracle-ltx25-retake/frames  (wall cap 2352s; 0=none)
+[fv-lab] pod: [22:05:38] [oracle] ▶ oracle-ltx25-retake-ownenc  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/ltx25-retake/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/7e513f6-1028214646-8346/oracle-ltx25-retake-dump-ownenc FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --edit retake:/opt/fastvideo-rs/scripts/gpu/fixtures/beach-push-768x512-24fps.mp4:1.5:3.5:av --prompt A huge wave crashes over the dark rocks at golden hour, white spray bursting high into the air, a narrator speaks calmly. --seed 1024 --text streamed --clip /fvscratch/runs/oracle/7e513f6-1028214646-8346/oracle-ltx25-retake-ownenc/frames  (wall cap 2104s; 0=none)
+[fv-lab] results -> <repo>/artifacts/runpod/oracle/7e513f6-1028214646-8346
+[fv-deploy] deleted re3lfq84wh7qvj (done)
+[fv-lab oracle] release upstream pod 7fpuddmdzvss20 (sol-ltx25): the runtime side ended; the hold is lifted
+[fv-lab] results -> <repo>/artifacts/runpod/upstream/7e513f6-1028214646-6001
+[fv-deploy] deleted 7fpuddmdzvss20 (down)
+[fv-lab oracle] results: <repo>/artifacts/runpod/oracle/7e513f6-1028214646-8346 and artifacts/runpod/upstream/<tag> (7e513f6-1028214646-6001)

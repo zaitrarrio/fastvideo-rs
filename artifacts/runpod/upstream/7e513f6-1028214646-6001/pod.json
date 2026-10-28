@@ -1,0 +1,15 @@
+{
+  "id": "7fpuddmdzvss20",
+  "name": "fv-lab-upstream-7e513f6-1028214646-6001",
+  "family": "upstream",
+  "tag": "7e513f6-1028214646-6001",
+  "sha": "7e513f6",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25@sha256:64ed4d38834213c78da41bb840c93f2587a9c7dc8cd4c7f105bff54b088f63ed",
+  "url": "https://7fpuddmdzvss20-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793224010.4574091,
+  "cap_s": 7200,
+  "memory_gb": 94.0,
+  "vcpus": 32.0
+}
