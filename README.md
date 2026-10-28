@@ -73,7 +73,7 @@ scripts/gpu/runpod-http.sh kernels [sha]  # every kernel vs host math, no weight
 scripts/gpu/runpod-http.sh upstream [sha] # the upstream Python references (scripts/gpu/upstream/)
 ```
 
-`scripts/gpu/README.md` has the family matrix (`runpod-matrix.sh`), the
+`scripts/gpu/README.md` has the family matrix (now the fv-lab tiers of `lab/`; `runpod-matrix.sh` was deleted, ADR-0019 §22.20), the
 evaluation layer and the older Vast ladder (`validate.sh`, `task clip`); the
 port experiment drivers that were under `scripts/gpu/experiments/` are deleted
 or fv-lab tiers (`h3-graphs`, `docs/adr/0019-fv-lab.md` §14). Serving
@@ -101,7 +101,7 @@ crates/
   fastvideo-cli        `fastvideo` binary
   fastvideo-gpucheck   GPU parity / stage checks
 scripts/
-  gpu/                 Runpod drivers (runpod-http.sh, runpod.sh, runpod-matrix.sh),
+  gpu/                 Runpod drivers (runpod-http.sh, runpod.sh; the tiers run through fv-lab),
                        weights tooling (r2-*.py, verify-weights.sh, the TSVs),
                        the Vast ladder (validate.sh) and experiments/
   dev/build-pod.sh     the shared CPU build pod (docs/dev/build-pod.md)

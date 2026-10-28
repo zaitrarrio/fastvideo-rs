@@ -27,8 +27,15 @@
 //! '1,454p;2114,2327p;3093,3119p'`), and that commit's `b4-verdict.sh`,
 //! `cuda-13.pins` and `fv-lab-retired.sh` whole. So a change to fv-lab's
 //! `[repeats]` step is still held to the script's bytes, and a change to
-//! `scripts/gpu/` no longer moves the reference. `oracle`'s branch is live
-//! (it stays whole, §15.10) and is copied from this checkout. The frozen
+//! `scripts/gpu/` no longer moves the reference. `oracle`'s branch stayed
+//! whole (§15.10) until it retired with the script itself in §22's S8
+//! (ADR-0019 §20.8 item 3, §21.9 item 3, §22.20); its tests (the `sfwan13`
+//! one included) run its frozen copy, `fixtures/oracle-script/`:
+//! `runpod-matrix.sh` at main `7e513f6a` (the last commit with the script)
+//! cut to its shared frame, the `oracle` branch and the fallback branch,
+//! every kept line unchanged (`git show 7e513f6a:scripts/gpu/runpod-matrix.sh
+//! | sed -n '1,469p;814,1208p'`), and that commit's `cuda-13.pins` and
+//! `fv-lab-retired.sh` whole. The frozen
 //! `determinism` branch's oracle prelude (`FV_ORACLE_URL` set: `bash
 //! runpod-matrix.sh oracle`) would hit "unknown family" in the cut copy,
 //! which has no `oracle` branch; no test sets `FV_ORACLE_URL` for it.
@@ -144,9 +151,9 @@ impl Fake {
     }
 }
 
-/// runpod-matrix.sh and what it sources, from this checkout for `oracle`
-/// (its branch is live). `b4-verdict.sh` went with the B4 branches
-/// (ADR-0019 §18), so the live script no longer sources it.
+/// runpod-matrix.sh and what it sources, from `fixtures/oracle-script/`
+/// (frozen at `7e513f6a`) for `oracle`. `b4-verdict.sh` went with the B4
+/// branches (ADR-0019 §18), so that copy no longer sources it.
 const SOURCED: [&str; 3] = ["runpod-matrix.sh", "cuda-13.pins", "fv-lab-retired.sh"];
 
 /// The same from `fixtures/det-script/` (frozen at `0f63c56b`) for the
@@ -167,7 +174,11 @@ fn script_source(family: &str) -> (PathBuf, &'static [&'static str]) {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/det-script"),
             &SOURCED_FROZEN,
         ),
-        _ => (repo_root().join("scripts/gpu"), &SOURCED),
+        "oracle" => (
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/oracle-script"),
+            &SOURCED,
+        ),
+        _ => panic!("{family}: no frozen copy of its runpod-matrix.sh branch"),
     }
 }
 

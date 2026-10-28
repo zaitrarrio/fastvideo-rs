@@ -11,7 +11,8 @@
 # (lab/cells/oracle-<target>.toml) and the weight steps its reference needs
 # (`steps`; `r2`: trees fetched from the R2 weights store, with the pod's
 # container disk raised to the target's `container_disk_gb`).
-# Values from scripts/gpu/oracle.sh (start_up) and the §15.7 GPU check.
+# Values from scripts/gpu/oracle.sh (start_up; deleted in ADR-0019 §22.20, read it
+# with git show 7e513f6a:scripts/gpu/oracle.sh) and the §15.7 GPU check.
 schema = 1
 
 # FastVideo (FastH3 8-step V2, the FastH3 4-step LoRAs, the H3 Ref2VA

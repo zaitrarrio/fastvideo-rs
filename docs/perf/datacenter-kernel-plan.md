@@ -662,7 +662,7 @@ Original scope:
    `RUNPOD_NO_VOLUME=1 FV_EXTRA_ENV=FV_KERNEL_GROUPS=<groups> scripts/gpu/runpod-http.sh kernels <sha>`.
    The harness image must carry the new cubins (`Cubin(90)` /
    `Cubin(100)` in the log, not NVRTC).
-3. **Oracle tier** (`scripts/gpu/oracle.sh`, `docs/oracle.md`).
+3. **Oracle tier** (`fv-lab oracle`, `docs/oracle.md`; `scripts/gpu/oracle.sh` until ADR-0019 §22.20).
    - For attention and conv changes on a served model.
    - Run on the target GPU. The recorded oracle numbers are sm_120, so
      first record the incumbent kernel's numbers on that GPU.

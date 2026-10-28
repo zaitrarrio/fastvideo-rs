@@ -18,8 +18,8 @@ included. `WanPipeline::generate_to` is `generate()` with timings: the decode
 streams each chunk through the H3/LTX frame drain into `wan/writer.rs`'s
 `VideoWriter`.
 
-Matrix: the fv-lab tier `wan` (`lab/cells/wan-*.toml`, the arms of
-`runpod-matrix.sh wan` since ADR-0019 §22.17; `docs/dev/fv-lab.md`). Each
+Matrix: the fv-lab tier `wan` (`lab/cells/wan-*.toml`; it was `runpod-matrix.sh
+wan` until ADR-0019 §22.17, and the script went in §22.20; `docs/dev/fv-lab.md`). Each
 Wan tree is R2-only since 2026-10-13 (fetched before the arms that read it).
 Until then: FastWan 1.3B cells ran on
 `fv-weights-h3-ltx-hy`; 14B, TI2V-5B and SF-Wan cells on
@@ -479,12 +479,17 @@ see "Not measured" below. SF-Wan is measured in the next section.
   `fv-lab pod up --sha <7> --family wan --cells wan5b-bf16act,... --yes --wait`.
 - SF-Wan on RTX PRO 6000: none was in stock in US-CA-2, so the numbers
   below are from H100. To rerun (the US volume was deleted 2026-10 and
-  `sfwan21-1.3b` is R2-only since 2026-10-13: `oracle.sh` fetches it from R2
-  on both pods, the upstream step `r2:sfwan21-1.3b` and the runtime pod's
-  `FV_R2_TREES`, ADR-0019 §21): `ORACLE_TARGETS=sfwan13 FV_ORACLE_FAMILY=sfwan UP_AFTER=cells:fv-sfwan13
-  UP_IMAGE_TAG=latest FASTVIDEO_DUMP_OPS=0,1,15,29 FV_PROMPTS=5 FV_LPIPS=1
-  scripts/gpu/oracle.sh <sha>`. This runs the oracle and the upstream bench
-  on one pod, and the oracle and SF-Wan cells on the other.
+  `sfwan21-1.3b` is R2-only since 2026-10-13; the `sfwan` family and
+  `scripts/gpu/oracle.sh` went with `runpod-matrix.sh`, ADR-0019 §22.20):
+  the oracle is the `oracle-r2` tier, `fv-lab oracle --family oracle-r2
+  --sha <sha> --yes` (its upstream step `r2:sfwan21-1.3b`, its runtime pod's
+  merged weight root, ADR-0019 §21), and the SF-Wan cells are the `wan`
+  tier's, `fv-lab pod up --sha <sha> --family wan --cells kernels-wan
+  sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip
+  sfwan13-81f-fullvae --yes --wait`. The upstream bench is `runpod-http.sh
+  upstream` with `UP_STEPS=cells:fv-sfwan13` (`UP_IMAGE_TARGET=fastvideo`).
+  The 5-prompt medians below need a cell with that prompt set (fv-lab refuses
+  `FV_PROMPTS`, ADR-0019 §7).
 - MXFP8 on sm_100 (B200): default by analogy with H3, not measured here.
 - The fused norm kernels do not yet write MXFP8 activations directly (H3's
   `NormOut::Mx`); with FP8 off on sm_120 they have no consumer there.
@@ -522,7 +527,7 @@ Not covered: SF-Wan 2.2 A14B / I2V (`sf_wan_2_2_*` presets). They still map
 to the non-causal MoE configs, and FastVideo runs them with a 1-frame first
 block and two caches.
 
-### Oracle (`scripts/gpu/oracle.sh`, target `sfwan13`)
+### Oracle (`scripts/gpu/oracle.sh`, target `sfwan13`; the `oracle-r2` tier since ADR-0019 §21)
 
 This run was on H100 80GB HBM3, because US-CA-2 had no RTX PRO 6000. Both
 sides ran on the same GPU type. Runtime image `sha-fadb6f1` (run
@@ -569,7 +574,7 @@ the same floor.
 
 ### SF-Wan 1.3B timings (H100 80GB HBM3, warm, medians over the 5 prompts)
 
-`runpod-matrix.sh wan` cells (the fv-lab tier `wan` since ADR-0019 §22.17; also run by the `sfwan` family), 4 steps,
+`runpod-matrix.sh wan` cells (the fv-lab tier `wan` since ADR-0019 §22.17; run by the `sfwan` family until §22.20), 4 steps,
 480x832x81, bf16. Upstream: `bench_fastwan.py` (`pod.sh fv-sfwan13`: one
 excluded warm-up, then the median of 3 per prompt, median over the same 5
 prompts). FastVideo defaults: full VAE (bf16 decode), then VideoSave.

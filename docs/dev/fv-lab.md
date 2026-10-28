@@ -2,19 +2,21 @@
 
 `fv-lab` runs the lab's run plan (`lab/tiers.toml`, `lab/cells/*.toml`) on a GPU box and makes that box: a Runpod pod
 on fv-deploy's guards (price cap, $8 floor, EU volume, detached backstop, ready within 600 s in at most 3 cycles).
-Design: [ADR-0019](../adr/0019-fv-lab.md). Today it carries twenty tiers that were `runpod-matrix.sh` families (and `hd5`, a sibling frozen with `hd`). Each
+Design: [ADR-0019](../adr/0019-fv-lab.md). Today it carries twenty-two tiers that were `runpod-matrix.sh` families (and `hd5` and `oracle-r2`, siblings frozen with `hd` and `oracle`). Each
 passed its GPU gate (fv-lab's run and the script's of one commit, frames byte-identical), so its script branch is
 deleted and the tier is fv-lab only ([The families](#the-families), [ADR-0019 §10](../adr/0019-fv-lab.md)). Each is
-held to the script's last dry run by a frozen golden ([below](#keeping-it-equal-to-the-scripts)). The other families
-stay in the script and move in later slices. `b4a` (D1d) is the first whose cells carry a verdict step ([Verdicts
+held to the script's last dry run by a frozen golden ([below](#keeping-it-equal-to-the-scripts)). No family is left
+in the script: with §22's S8 it had no branch left and `runpod-matrix.sh` was deleted (ADR-0019 §22.20). `b4a` (D1d) is the first whose cells carry a verdict step ([Verdicts
 and `fv-lab gate`](#verdicts-and-fv-lab-gate); its GPU gate passed on `e82b6b7`, ADR-0019 §11.6); `det-short` and
 `determinism` (D1d) the last, with their `[repeats]` frame hashes (GPU checks passed on `f93a961`, §15.10). `oracle`
-is a tier whose script branch stays whole ([below](#determinism-and-the-oracle-d1d-second-slice)), and `fuse`,
+kept its script branch whole until its GPU checks passed ([below](#determinism-and-the-oracle-d1d-second-slice); retired
+in S8, §22.20), and `fuse`,
 `attn3` and `ltx` (D1f) are retired too (GPU checks passed on `762ce4d`, §17.6; [below](#fuse-attn3-ltx-d1f)), and so
 are `hd` with its 1080P-gate sibling `hd5` (D1 S2, [below](#hd-and-hd5-d1-s2)), `serve-engine` (D1 S3,
 [below](#serve-engine-d1-s3)), `sfstream` (D1 S4, [below](#sfstream-d1-s4)) and `mmaudio` (D1 S5,
 [below](#mmaudio-d1-s5)), each after its GPU check (ADR-0019 §22.10, §22.12, §22.14, §22.16; retired in S7, §22.19).
-`wan` (D1 S6, [below](#wan-d1-s6)) is a tier whose script branch stays until `sfwan` goes with `oracle` (S8). `gold`
+`wan` (D1 S6, [below](#wan-d1-s6)) retired with `oracle` and its sibling `oracle-r2` in S8 (§22.20), `sfwan` with no
+tier. `gold`
 is fv-lab's own: every gold variant's canonical cell (ADR-0023).
 `precision-nvfp4` and `ltxvae-gen` are two modes of retired families, restored as tiers ([ADR-0019 §12](../adr/0019-fv-lab.md)).
 Eleven more families left the script with no tier (`h3`, `hunyuan`, `sana-video`, `b200`, `writer`, `precision-debug`,
@@ -70,8 +72,8 @@ dry run show what will run.
 | `ltxvae-gen` | `ltxvae`'s 4 + `ltxvae-gen-{4k5s,1080p20s}` | 16 | `ltxvae`, plus per workload a cold gen saving its latents and the streaming decoder on them | was `ltxvae`'s `FV_VAE_GEN=1`; restored (§12); shares `ltxvae`'s cells |
 | `det-short` | `det-short-{h3,wan,ltx,ltx-sage}` | 15 | byte identity across fresh processes at short configs, three runs per group and the timed-pick control; `determinism.txt` | D1d (§15); retired after its GPU check (§15.10); `wan` skips on the EU volume |
 | `determinism` | `determinism-{ltx-t2v,ltx-i2v,h3}` | 9 | byte identity of 1080p runs within one process and across two; prompt sets as files, hashes per run, stage digests | D1d (§15); retired after its GPU check (§15.10) |
-| `oracle` | `oracle-<target>` (9), and 10 extra cells | 32 (+46) | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`); on request (`extra_cells`, run when `--cells` names their arms) the ten LTX clip-metric targets with their ffmpeg / ffprobe `[[metric]]` reports (D1i, §20) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells`; GPU check passed (`f93a961`; the clip-metric targets': §20.7), but **not retired**: the script branch stays whole for `sfwan13` and `oracle.sh` (§15.10, §20.5) |
-| `oracle-r2` | `oracle-sfwan13` | 10 | the oracle diff of SF-Wan 1.3B (`sfwan13`), its tree fetched from R2 (`weights = "volume+r2"`): tensors, the f32 floor, the frames against the reference's decoded clip and the codec floor (`decode` metrics, directory `[[compare]]`s), the pre-fix and composed paths | D1j ([§21](../adr/0019-fv-lab.md)); a sibling of the `oracle` family (`FV_LAB_SIBLINGS`); `fv-lab oracle --family oracle-r2`; GPU check §21.7, pending §21.8 |
+| `oracle` | `oracle-<target>` (9), and 10 extra cells | 32 (+46) | the GPU oracle diff of the nine tensor-diff targets against the upstream references (`FV_ORACLE_URL`); on request (`extra_cells`, run when `--cells` names their arms) the ten LTX clip-metric targets with their ffmpeg / ffprobe `[[metric]]` reports (D1i, §20) | D1d (§15); needs `--extra-env FV_ORACLE_URL=…` and `--cells` (or `fv-lab oracle`); GPU checks passed (`f93a961`, `664473b`; the clip-metric targets' §20.7 on `4902297` and `7e513f6`); retired in S8 (§22.20), `scripts/gpu/oracle.sh` deleted with the script |
+| `oracle-r2` | `oracle-sfwan13` | 10 | the oracle diff of SF-Wan 1.3B (`sfwan13`), its tree fetched from R2 (`weights = "volume+r2"`): tensors, the f32 floor, the frames against the reference's decoded clip and the codec floor (`decode` metrics, directory `[[compare]]`s), the pre-fix and composed paths | D1j ([§21](../adr/0019-fv-lab.md)); a sibling of the `oracle` family (the script with `FV_ORACLE_TARGETS=sfwan13`), frozen with it (`FV_LAB_RETIRED_SIBLINGS`, §22.20); `fv-lab oracle --family oracle-r2`; GPU check passed (§21.7, `4b4980b`) |
 | `fuse` | `fuse-{kernels,trace,switch}` | 10 | DiT block fusions: the kernels bit for bit (ungated), a traced step per workload, fusions off against on (`--off-identity`, `exact` gate) | D1f ([§17](../adr/0019-fv-lab.md)); retired after its GPU check (§17.6); 3 arms skip on the EU volume (`h3-8step`) |
 | `attn3` | `attn3-h3-ltx25` | 6 | flash v2 against cuDNN SDPA on FastH3 4-step dense and LTX-2.5 1080p20s dense, VSA bf16 in place against f32 | D1f (§17); retired after its GPU check (§17.6); `FV_ATTN3_ARMS` / `FV_ATTN3_VSA` refused (select by arm) |
 | `ltx` | `ltx-versions` | 3 | LTX-2.5 two-stage, LTX-2.3 two-stage, LTX-2.0 19B distilled | D1f (§17); retired after its GPU check (§17.6; the script gated its arms from D1f); `ltx23` / `ltx2` skip on the EU volume |
@@ -80,17 +82,16 @@ dry run show what will run.
 | `serve-engine` | `serve-engine-{h3-turbo,ltx-turbo,fastwan21-1.3b}` | 6 | the serve engine's GPU check: h3-turbo, ltx-turbo and fastwan21-1.3b each generated by the CLI, then through `EngineService` + `CudaBackend` (`fv-gpucheck engine --reference`: frames byte-compared with the CLI's, a second job cancelled mid-run) | D1 S3 ([§22](../adr/0019-fv-lab.md)); `--tae-dir` dropped from the script's engine arms in lockstep; weights `volume+r2` (`fastwan21-1.3b` from R2), 150 GB; `FV_ENGINE_CELLS` refused (select by arm); retired after its GPU check (§22.12, §22.19) |
 | `sfstream` | `sfstream-rollout` | 2 | SF-Wan 1.3B's open-ended causal rollout (`fv-gpucheck wan stream`, TAEHV per block): `--parity` against the bounded 81-frame path, a 120 s rebased sink-15 run, keep / reset prompt switches (`sfstream-main`); a 600 s memory-growth run (`sfstream-10min`) | D1 S4 ([§22](../adr/0019-fv-lab.md)); its arms read `{tae}` without a TAE gate (Addition 16), the script's `export FASTVIDEO_TAE_DIR` moved into each arm's env in lockstep; weights `volume+r2` (`sfwan21-1.3b` from R2), 150 GB; `FV_SFSTREAM_RUNS`, `FV_SF_PROMPT`, `FV_SF_SWITCH` refused (the cell is their defaults); retired after its GPU check (§22.14, §22.19) |
 | `mmaudio` | `mmaudio-sidecar` | 3 | the MMAudio V2A sidecar (`wan gen --audio mmaudio`) on FastWan 1.3B DMD and SF-Wan 1.3B at 480x832x81 (`wan13-audio`, `sfwan13-audio`), then our port alone on the FastWan clip, timed (`ours-v2a`); no upstream parity | D1 S5 ([§22](../adr/0019-fv-lab.md)); the script's branch cut to these arms in lockstep (the upstream, inject and waveform arms gone; their results stand at `778c65e`), its `export`s moved into each Wan arm's env, composite gates (`fastwan21-1.3b-mmaudio`, `sfwan21-1.3b-mmaudio`); weights `volume+r2` (all three trees from R2), 180 GB; `FV_MMAUDIO_PROMPT` refused; retired after its GPU check (§22.16, §22.19) |
-| `wan` | `wan-fastwan21-1.3b`, `wan-wan21-t2v-14b`, `wan-wan22-ti2v-oracle`, `wan-wan22-ti2v-5b`, `wan-fastwan22-ti2v-oracle`, `wan-fastwan22-ti2v-5b` | 49 | the Wan family's kernel, decoder, cache and parity regression check: FastWan2.1 1.3B (VSA / dense, the kernel arms with lossy and exact gates, full VAE, no-cache identity, Sol, TeaCache), `kernels-wan` (ungated), SF-Wan 1.3B 81 frames, the TI2V-5B / T2V-14B kernel A/B, T2V-14B's caches and Sol at 50 steps, the TI2V-5B recipe, two module-parity oracle cells (`FV_ORACLE_URL`), fal's canvases, wan-turbo's CLI / engine pair | D1 S6 ([§22](../adr/0019-fv-lab.md)); its `export FASTVIDEO_TAE_DIR` moved into each gated arm's env and `engine-fw22`'s `--tae-dir` dropped in lockstep; weights `volume+r2` (every Wan tree from R2, eleven fetches in a full run, at most 80.41 GB at once), 210 GB, `min_ram_gb = 256`; `FV_SFWAN_CELLS` refused; branch kept until S8 (`sfwan` runs it; §22.18) |
+| `wan` | `wan-fastwan21-1.3b`, `wan-wan21-t2v-14b`, `wan-wan22-ti2v-oracle`, `wan-wan22-ti2v-5b`, `wan-fastwan22-ti2v-oracle`, `wan-fastwan22-ti2v-5b` | 49 | the Wan family's kernel, decoder, cache and parity regression check: FastWan2.1 1.3B (VSA / dense, the kernel arms with lossy and exact gates, full VAE, no-cache identity, Sol, TeaCache), `kernels-wan` (ungated), SF-Wan 1.3B 81 frames, the TI2V-5B / T2V-14B kernel A/B, T2V-14B's caches and Sol at 50 steps, the TI2V-5B recipe, two module-parity oracle cells (`FV_ORACLE_URL`), fal's canvases, wan-turbo's CLI / engine pair | D1 S6 ([§22](../adr/0019-fv-lab.md)); its `export FASTVIDEO_TAE_DIR` moved into each gated arm's env and `engine-fw22`'s `--tae-dir` dropped in lockstep; weights `volume+r2` (every Wan tree from R2, eleven fetches in a full run, at most 80.41 GB at once), 210 GB, `min_ram_gb = 256`; `FV_SFWAN_CELLS` refused; retired in S8 with `sfwan` (§22.18, §22.20) |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)); weights `volume+r2` ([below](#weights-from-the-volume-and-r2-volumer2)) |
 | `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`, deleted after the GPU check, §14.4), [below](#port-one-offs-the-experiment-tiers) |
 | `sol-bench-<set>` (22) | `sol-bench-<set>` | 57 in all | sol-engine's model cells on our stack, one tier per `FV_SOL_SET` of `sol-bench-pod.sh` (`a1` … `g2`), `volume` for `a1` / `a3` and `volume+r2` for the rest, no TAE, a 65-min cap | owner, 2026-10-28: was `scripts/gpu/sol-bench-pod.sh` (deleted after the GPU check, ADR-0019 §23.7, §23.10), [below](#port-one-offs-the-experiment-tiers) |
 
-All eleven above `precision-nvfp4`, `det-short` and `determinism`, `fuse`, `attn3` and `ltx`, and `hd`, `hd5`,
-`serve-engine`, `sfstream` and `mmaudio` are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019
-§10; `b4a` §11.6; `det-short`, `determinism` §15.10; `fuse`, `attn3`, `ltx` §17.6; the last five §22.19): their
-`runpod-matrix.sh` branches are deleted, and `runpod-matrix.sh <tier>` refuses them (exit 2). The script keeps three
-other families, `sfwan`, `wan` and `oracle` (the twenty retired with no tier went in D1g and §22's S1,
-[below](#retired-with-no-tier-d1g)).
+Every script tier of the table is **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019 §10;
+`b4a` §11.6; `det-short`, `determinism` §15.10; `fuse`, `attn3`, `ltx` §17.6; `hd`, `hd5`, `serve-engine`,
+`sfstream`, `mmaudio` §22.19; `wan`, `oracle`, `oracle-r2` §22.20): their `runpod-matrix.sh` branches are deleted, and
+with the last of them (S8) the script itself. The twenty-one families retired with no tier went in D1g, §22's S1 and
+S8 (`sfwan`, [below](#retired-with-no-tier-d1g)).
 ADR-0019 §9.1 says why for each and when its branch retires. An arm whose tree is not on the EU volume (`h3-8step`)
 is recorded as skipped (`weights incomplete`), as the script recorded it.
 
@@ -176,7 +177,8 @@ the deleting commit, as `h3-graphs-pod.sh`, and in a shallow clone keeps the fix
 `fv-lab pod up --sha <sha> --family <tier> --root <repo> [--cells …] [--baseline-sha …] [--extra-env …] [--lpips] --yes --wait`
 instead of its own pod, mapping `FV_CELLS`, `FV_BASELINE_SHA`, `FV_EXTRA_ENV`, `FV_LPIPS=1` and the tree fetch
 (`FV_FETCH_TREE=1` → `--fetch-tree`, `FV_FETCH_SKIP` → `--fetch-skip`, `FV_FETCH_MAX_MB` → `--fetch-max-mb`; `run` only) across; `plan [sha]
-[tag]` prints fv-lab's plan (no `--yes`). The other families keep the script path. `FV_POD_CAP_S` below the tier's
+[tag]` prints fv-lab's plan (no `--yes`). The script path is gone (ADR-0019 §22.20): `run` / `all` of a name that is
+no fv-lab tier are refused before any pod. `FV_POD_CAP_S` below the tier's
 `wall_cap_s` maps to `pod up --wall-cap-s` (a cap is lowered, never raised). Every other setting of the script path
 that fv-lab would not honour is refused, not dropped, unless fv-lab does the same thing anyway:
 
@@ -184,8 +186,9 @@ that fv-lab would not honour is refused, not dropped, unless fv-lab does the sam
   `FV_SEED`, `FV_AVOID_MACHINES`, `FV_CREATE_WAIT_S`, `RUNPOD_ALLOWED_CUDA`,
   `FV_KEEP_POD=1`, `RUNPOD_NO_VOLUME=1`, `FV_FETCH_SKIP` / `FV_FETCH_MAX_MB` without `FV_FETCH_TREE=1`, and the retired pair selectors `FV_TECH_CELLS`,
   `FV_B6_CELLS`, `FV_B4A_CELLS`, `FV_DET_CELLS`, arm pickers `FV_ATTN3_ARMS`, `FV_ATTN3_VSA` and group picker
-  `FV_ENGINE_CELLS` (select by arm with `FV_CELLS`), `FV_R2_TREES` (the script side's GPU-check form; fv-lab
-  fetches a `volume+r2` tier's trees itself), and an `FV_EXTRA_ENV` holding a
+  `FV_ENGINE_CELLS`, target and arm pickers `FV_ORACLE_TARGETS`, `FV_SFWAN_CELLS` (select by arm with `FV_CELLS`),
+  `FV_R2_TREES` (the script side's GPU-check form, gone with the script path, §22.20, and refused on every pod
+  command; fv-lab fetches a `volume+r2` tier's trees itself), and an `FV_EXTRA_ENV` holding a
   newline (it is read as one line; later entries would be dropped);
 - refused unless equal to the tier's value in `lab/tiers.toml`: `FV_GEN_TIMEOUT_S` (`cell_timeout_s`),
   `FV_CONTAINER_DISK_GB`, `RUNPOD_CLOUD_TYPE`, `RUNPOD_GPU_TYPE`, `FV_MIN_RAM_GB` (`min_ram_gb`; refused on a
@@ -196,8 +199,10 @@ that fv-lab would not honour is refused, not dropped, unless fv-lab does the sam
   `FV_PLAN_VOLUME` the EU volume, `RUNPOD_IMAGE` the commit's runtime image, `FV_POD_PREFIX` `fv-lab`;
 - `FV_EXTRA_ENV` entries no tier reads: the dropped modes' knobs (`FV_PRECISION_ARM`, `FV_NVFP4_WORKLOADS`,
   `FV_VAE_*`, `FV_LTXFPS*`, `FV_TECH_CELLS`, `FV_B6_CELLS`, `FV_B4A_CELLS`, `FV_DET_*`, `FV_ATTN3_*`,
-  `FV_ENGINE_CELLS`, `FV_SFSTREAM_RUNS`, `FV_SF_PROMPT`, `FV_SF_SWITCH`, `FV_MMAUDIO_PROMPT`), `hd`'s dropped post-script hook
-  (`FV_HD_POST_URL`, `FV_HD_POST_TIMEOUT_S`, ADR-0019 §22; refused on the script path too), `FV_PROMPTS` / `FV_PROMPT` / `FV_SEED`, and what the
+  `FV_ENGINE_CELLS`, `FV_SFSTREAM_RUNS`, `FV_SF_PROMPT`, `FV_SF_SWITCH`, `FV_MMAUDIO_PROMPT`, the oracle's
+  `FV_ORACLE_TARGETS`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`, `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT` and five
+  `FV_LTX_*_PROMPT`, `sfwan`'s `FV_SFWAN_CELLS`), `hd`'s dropped post-script hook
+  (`FV_HD_POST_URL`, `FV_HD_POST_TIMEOUT_S`, ADR-0019 §22; refused on the other pod commands too), `FV_PROMPTS` / `FV_PROMPT` / `FV_SEED`, and what the
   start command sets after them (`FV_WORK`, `FV_SCRATCH`, `FV_RUN_TAG`, `FV_CELLS`, `FV_GEN_TIMEOUT_S`). The two
   restored modes' settings name their tier: `FV_PRECISION_ARM=ltx-nvfp4` says `use FV_FAMILY=precision-nvfp4`,
   `FV_VAE_GEN=1` says `use FV_FAMILY=ltxvae-gen` (refused, not routed: the run would land under another run
@@ -206,8 +211,8 @@ that fv-lab would not honour is refused, not dropped, unless fv-lab does the sam
   <cell>-pr"`). A mode setting is answered before any other refusal, and one message lists every
   refused `FV_EXTRA_ENV` key. `fv-lab` itself refuses the same: `pod up --extra-env` this whole set, `fv-lab run`
   the mode knobs in its environment (its own inputs `FV_WORK`, … are not refused, and `FV_PROMPTS` / `FV_PROMPT` /
-  `FV_SEED` keep their warning); `runpod-matrix.sh precision` with `FV_PRECISION_ARM=ltx-nvfp4` (or `ltxvae` with
-  `FV_VAE_GEN=1`, or the tier's own name) names the tier.
+  `FV_SEED` keep their warning). `oracle` with `FV_ORACLE_TARGETS=sfwan13` names `oracle-r2`, as `hd` with
+  `prompts-hd5.json` names `hd5` (frozen siblings, §22.19, §22.20).
 
 `FV_CELLS` and `FV_EXTRA_ENV` are split on spaces (and `FV_CELLS` on commas) without globbing. `all` mode is refused
 (run `kernels`, then `run`), and `FV_FAMILY=gold` is refused for `run` / `all` (no script family: `fv-lab pod up
@@ -219,7 +224,7 @@ on `PATH`, else `./fv-lab` at the repository root ([Build](#build)); without one
 FV_DRY_RUN=1 FV_FAMILY=b6 FV_BASELINE_SHA=e93e357 bash scripts/gpu/runpod-http.sh run <7>   # prints the fv-lab command
 FV_DRY_RUN=1 FV_FAMILY=b4a FV_CELLS="b4a-h3-4step-tea-base b4a-h3-4step-tea-pr" FV_BASELINE_SHA=e93e357 \
   bash scripts/gpu/runpod-http.sh run <7>                           # b4a's GPU gate cell, through fv-lab
-FV_DRY_RUN=1 FV_FAMILY=wan bash scripts/gpu/runpod-http.sh run <7>    # a script family: says what it would run
+FV_DRY_RUN=1 FV_FAMILY=wan bash scripts/gpu/runpod-http.sh run <7>    # wan (retired in S8): prints the fv-lab command
 FV_DRY_RUN=1 FV_FAMILY=h3 bash scripts/gpu/runpod-http.sh run <7>     # retired with no tier: refused (exit 2), names rtx6000
 ```
 
@@ -323,8 +328,9 @@ by `fv-lab run`, `pod up --extra-env` and `runpod-http.sh`'s `FV_EXTRA_ENV`: sel
 
 ## Determinism and the oracle (D1d, second slice)
 
-[ADR-0019 §15](../adr/0019-fv-lab.md). Three tiers keep their `runpod-matrix.sh` branches until each one's GPU check
-through both runners (§15.7); their goldens come from the live branches (`fv-lab-goldens.sh`).
+[ADR-0019 §15](../adr/0019-fv-lab.md). Three tiers kept their `runpod-matrix.sh` branches until each one's GPU check
+through both runners (§15.7); all three are retired now (`det-short`, `determinism` §15.10; `oracle` §22.20) and their
+goldens frozen.
 
 - **`[repeats]`** (det-short, determinism): after each arm its frames are hashed (`hash = "arm"`: one hash per arm,
   `<arm>/hashes.json` and `<runs>/hashes.txt`; `hash = "run"`: one per prompt-set run, `<arm>/hashes.txt` and the
@@ -346,7 +352,8 @@ through both runners (§15.7); their goldens come from the live branches (`fv-la
 ./fv-lab run det-short --cells h3-r1,h3-r2,h3-r3,h3-timed   # was FV_DET_CELLS=h3
 ./fv-lab run determinism --cells h3-ab,h3-c,h3-timed     # was FV_DET_CELLS="h3-ab h3-c h3-timed"
 ./fv-lab gate artifacts/runpod/det-short/<tag> --check --out /tmp/regate   # determinism.txt again, and the verdicts
-# oracle: the upstream pods first (scripts/gpu/oracle.sh, or runpod-http.sh upstream with FV_KEEP_POD=1), then
+# oracle: fv-lab oracle makes the upstream references and runs this (ADR-0019 §19); by hand, the upstream pods first
+# (runpod-http.sh upstream with FV_KEEP_POD=1), then
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family oracle \
   --cells oracle-fasth3-4step-vsa,oracle-fasth3-4step-vsa-diff,oracle-fasth3-4step-vsa-f32,oracle-fasth3-4step-vsa-f32-diff,oracle-fasth3-4step-vsa-bf16-vs-f32 \
   --extra-env FV_ORACLE_URL=https://<upstream pod>-8000.proxy.runpod.net/upstream/<tag> --yes --wait
@@ -356,18 +363,15 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family oracle \
 H3 targets `-f32`, `-f32-diff`, `-bf16-vs-f32`; for Ref2VA `-cond`, `-cond-diff`). Refused by `fv-lab run` and `pod
 up --extra-env`: `FV_DET_CELLS`, `FV_DET_REPEATS`, `FV_DET_PROMPT`, `FV_DET_T2V_PROMPT`, `FV_DET_I2V_PROMPT` (also by
 `runpod-http.sh`'s `FV_EXTRA_ENV` since the two families retired, ADR-0019 §15.10), `FV_ORACLE_TARGETS`,
-`FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`, `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT` (the script's `oracle` branch still
-reads them), for `oracle` a `FASTVIDEO_DUMP_OPS` other than `0,1,24,47`, and for `determinism` an `FV_ORACLE_URL` (the
+`FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`, `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT` (also by `runpod-http.sh` since
+`oracle` retired, §22.20), for `oracle` a `FASTVIDEO_DUMP_OPS` other than `0,1,24,47`, and for `determinism` an `FV_ORACLE_URL` (the
 script ran the oracle first with it; the tier does not). `pod fetch`
 takes `determinism.txt`, `hashes.txt` and each arm's `hashes.txt` / `digests.txt`; `fv-lab-compare-runs.sh` compares
 the hashes files byte for byte and each arm's `compare-dumps` lines, except a `[repeats] controls` arm's (read from
-`lab/cells`), which are reported, not judged (ADR-0019 §15.7). Still in the script (§15.6): `sfwan13` until §21's
-check (it is the `oracle-r2` tier's cell since §21; the
-ten LTX clip-metric targets are the tier's extra cells since §20, below), `FV_ORACLE_OWN_TEXT=1`, and
-`runpod-http.sh upstream` (the reference pods; `fv-lab oracle`, below, brings them up as fv-lab pods for the
-targets that are cells). So the `oracle` branch stays
-whole and `oracle.sh` keeps driving it (`FV_ORACLE_TARGETS`, `FV_POD_FILE`, `FV_CREATE_WAIT_S`, which `fv-lab pod up`
-lacks); it retires once the driver and the clip-metric cells exist (ADR-0019 §15.10). det-short's opt-in `ltx-sol`
+`lab/cells`), which are reported, not judged (ADR-0019 §15.7). The `oracle` branch stayed whole (§15.6, §15.10)
+until `sfwan13` (the `oracle-r2` tier's cell, §21) and the ten LTX clip-metric targets (the tier's extra cells, §20)
+passed their checks and `fv-lab oracle` (below) drove the reference pods; it retired with the script in S8 (§22.20),
+and `scripts/gpu/oracle.sh` with it. `FV_ORACLE_OWN_TEXT=1` has no cell. det-short's opt-in `ltx-sol`
 group and other `FV_DET_REPEATS` went with its branch (a tier when wanted). The two retired families' script side is
 frozen for `tests/repeats_oracle.rs` at `0f63c56b` (`crates/fastvideo-lab/fixtures/det-script/`).
 
@@ -480,10 +484,10 @@ ffmpeg Lanczos upscale and its compares with the native 1080p clips, the `FV_HD_
 prune are gone (their findings are in `docs/serve/h3-1080p-and-upscaler.md`; their commands: `git show
 4f8822a0:scripts/gpu/runpod-matrix.sh`). `FV_HD_POST_URL` and `FV_HD_POST_TIMEOUT_S` are refused by fv-lab
 (`run`'s environment, `pod up --extra-env`) and `runpod-http.sh` (both paths). Both tiers are **retired from the
-script** since their GPU check passed (§22.10 on `d53ea62`; S7, §22.19): `runpod-matrix.sh hd` and `hd5` refuse (exit
-2), `FV_FAMILY=hd runpod-http.sh run` (or `FV_FAMILY=hd5`) runs `fv-lab pod up`, and the frozen sibling `hd5` keeps
+script** since their GPU check passed (§22.10 on `d53ea62`; S7, §22.19): `runpod-matrix.sh hd` and `hd5` refused (exit
+2) until the script went (§22.20), `FV_FAMILY=hd runpod-http.sh run` (or `FV_FAMILY=hd5`) runs `fv-lab pod up`, and the frozen sibling `hd5` keeps
 the fixtures the script wrote with `FV_PROMPTS=…/prompts-hd5.json` (`FV_LAB_RETIRED_SIBLINGS`, which carries that
-mode). That setting with `hd` is refused naming `hd5` (`runpod-matrix.sh`, `runpod-http.sh run` / `all` / `plan`
+mode). That setting with `hd` is refused naming `hd5` (`runpod-http.sh run` / `all` / `plan`
 from the host environment or `FV_EXTRA_ENV`, fv-lab's `--extra-env` and `run`): dropping it alone would run `hd`'s
 own prompt set under the same arm names. Use `FV_FAMILY=hd5` (`fv-lab pod up --family hd5`).
 
@@ -527,7 +531,7 @@ FV_FAMILY=serve-engine bash scripts/gpu/runpod-http.sh run <7>   # the same fv-l
 ```
 
 Retired from the script since its GPU check passed (§22.12 on `3bc6d03`; S7, §22.19): `runpod-matrix.sh
-serve-engine` refuses (exit 2), and `FV_ENGINE_CELLS` is refused by `runpod-http.sh` too (`FV_LAB_NOT_READ`, and in
+serve-engine` refused (exit 2) until the script went (§22.20), and `FV_ENGINE_CELLS` is refused by `runpod-http.sh` too (`FV_LAB_NOT_READ`, and in
 the host environment), with the arms to pass as `FV_CELLS`. The script side's GPU-check form (`FV_R2_TREES=…`, §22.12)
 is refused on the fv-lab route; its body stays a frozen fixture (`runpod-http-serve-engine-r2.json`).
 
@@ -558,7 +562,7 @@ FV_FAMILY=sfstream FV_CELLS=sfstream-main bash scripts/gpu/runpod-http.sh run <7
 ```
 
 Retired from the script since its GPU check passed (§22.14 on `b7ddf5f`; S7, §22.19): `runpod-matrix.sh sfstream`
-refuses (exit 2), and `FV_SFSTREAM_RUNS`, `FV_SF_PROMPT` and `FV_SF_SWITCH` are refused by `runpod-http.sh` too
+refused (exit 2) until the script went (§22.20), and `FV_SFSTREAM_RUNS`, `FV_SF_PROMPT` and `FV_SF_SWITCH` are refused by `runpod-http.sh` too
 (`FV_LAB_NOT_READ`). Its script-side GPU-check body stays a frozen fixture (`runpod-http-sfstream-r2.json`).
 
 `wan stream` writes no `<arm>/frames` (its report is `gpucheck-out/wan.json`, its window sheets `gpucheck-out/sheets/*.jpg`), so the runs'
@@ -600,7 +604,7 @@ FV_FAMILY=mmaudio FV_CELLS="wan13-audio ours-v2a" bash scripts/gpu/runpod-http.s
 ```
 
 Retired from the script since its GPU check passed (§22.16 on `9e6d09a`; S7, §22.19): `runpod-matrix.sh mmaudio`
-refuses (exit 2), and `FV_MMAUDIO_PROMPT` is refused by `runpod-http.sh` too (`FV_LAB_NOT_READ`). Its script-side
+refused (exit 2) until the script went (§22.20), and `FV_MMAUDIO_PROMPT` is refused by `runpod-http.sh` too (`FV_LAB_NOT_READ`). Its script-side
 GPU-check body stays a frozen fixture (`runpod-http-mmaudio-r2.json`).
 
 `wan13-audio` writes PNG frames, so `fv-lab-compare-runs.sh` compares them; `ours-v2a` writes none ("no frames").
@@ -625,18 +629,18 @@ with `after`); the two oracle blocks are `[reference]` cells (`wan22-ti2v`, `fas
 whether the distilled presets decoded with TAEHV or fell back to the Wan VAE. Every Wan tree is R2-only: fv-lab drops
 and fetches per arm (eleven fetches, 428.10 GB in a full run, at most 80.41 GB at once on 210 GB); `min_ram_gb = 256`
 for the 14B arms. `runpod.sh matrix` runs it through the image's fv-lab, so it needs an image whose `lab/` has the
-tier (`runpod.sh` ships only `scripts/gpu/`; an image from before S6 stops with fv-lab's "no tier or cell named", as `ltx` since §17.6). `sfwan` still runs the branch's SF-Wan arms
-(`FV_SFWAN_CELLS`, which fv-lab refuses: `--cells` on this tier).
+tier (`runpod.sh` ships only `scripts/gpu/`; an image from before S6 stops with fv-lab's "no tier or cell named", as `ltx` since §17.6).
+**Retired from the script** in S8 with `oracle` (ADR-0019 §22.18 "Then", §22.20): its branch is deleted, its fixtures
+(and the script side's GPU-check body `runpod-http-wan-r2.json`) frozen. `sfwan`, which ran the branch's SF-Wan arms
+(`FV_SFWAN_CELLS`), is retired with no tier: those arms are this tier's `--cells kernels-wan sfwan13-81f-flash
+sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae`, its oracle diff the `oracle-r2` tier's.
 
 ```sh
 ./fv-lab run wan --dry-run                      # the branch's 49 commands in its order (plus the R2 plan)
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family wan \
   --cells wan13-dmd,wan13-dmd-dense,kernels-wan,cli-fw22,engine-fw22 --wall-cap-s 3600 \
   --fetch-tree --fetch-skip '\.png$|\.cache$' --yes --wait
-# the script's side of the same run (until S8): the two trees those arms read, staged at once (53.41 GB + 120 GB)
-RUNPOD_API_KEY=… FV_FAMILY=wan FV_CELLS="wan13-dmd wan13-dmd-dense kernels-wan cli-fw22 engine-fw22" \
-  FV_R2_TREES="fastwan21-1.3b fastwan22-ti2v-5b" FV_CONTAINER_DISK_GB=174 FV_MIN_RAM_GB=256 FV_FETCH_TREE=1 \
-  FV_FETCH_SKIP='\.png$|\.cache$' bash scripts/gpu/runpod-http.sh run <7>
+# (the script's side of the GPU check, FV_R2_TREES on runpod-http.sh run, went with the script path in S8, §22.20)
 # the two oracle cells: one fastvideo upstream pod making both references (ADR-0019 §22.18)
 RUNPOD_API_KEY=… ./fv-lab oracle --family wan --sha <7> \
   --cells wan5b-oracle,wan5b-oracle-diff,wan5b-oracle-exact,wan5b-oracle-exact-diff,fw22-oracle,fw22-oracle-diff --yes
@@ -659,9 +663,9 @@ replaces each (`fv_script_retired_why`):
 | `identity` | the `det-short` / `determinism` tiers |
 | `h3attn` | nothing: its arms are recorded in `docs/techniques.md` "H3 attention arms", none open |
 
-They are not fv-lab tiers, so nothing routes them to fv-lab: `runpod-matrix.sh <family>`, `runpod-http.sh run` / `all`
-/ `plan` (dry run or not, before the key) and `runpod.sh gpu` / `matrix` / `plan` refuse them with exit 2 and that
-pointer. `runpod.sh gpu` starts `ltx` only now and `matrix` runs `ltx` then `wan`. Their branches are in
+They are not fv-lab tiers, so nothing routes them to fv-lab: `runpod-http.sh run` / `all` / `plan` (dry run or not,
+before the key) and `runpod.sh gpu` / `matrix` / `plan` refuse them with exit 2 and that pointer (`runpod-matrix.sh`
+did too until it went, §22.20). `runpod.sh gpu` starts `ltx` only now and `matrix` runs `ltx` then `wan`. Their branches are in
 `git show b019ccb2:scripts/gpu/runpod-matrix.sh`; `b4-verdict.sh` went with the B4 branches (`b4a`'s verdict is held
 to its frozen copy, `fixtures/b4a-script/`). `fv-lab-route.test.sh`, `runpod-plan.test.sh` and `tests/dry_run.rs` hold
 this.
@@ -679,6 +683,13 @@ lost; their commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
 | `eval` | `precision`'s f32act / bf16act pairs with lossy gates, `fuse`'s `exact` gates with an OFF arm, prompt sets in cells, `--lpips` on any run | the combination in one run, the `BF16_ACT=0` OFF-identity gate, the five-prompt LPIPS pairs, the LPIPS self-test on a pod (by hand: `fv-gpucheck lpips --weights <dir>`) |
 | `ltxoffload` | nothing: its numbers are in `docs/ports/ltx25.md`; `b6-ltx25-offload-cpu` still checks `--offload cpu` across builds | LTX `cpu`-against-resident identity, the 4K `cpu` peaks |
 | `solbench`, `sol-lingbot`, `sol-cosmos3` | the `sol-bench-<set>` tiers, which the sol-engine benchmark runs (`docs/perf/sol-bench.md`; they were `scripts/gpu/sol-bench-pod.sh`, ADR-0019 §23) | per-arm compares and lossy gates, `wan13-sol-easycache`, `wan13-sol-attn`, `a14b-sol-mxfp8`, LingBot on three prompts, LingBot's B200 `FV_LINGBOT_RESIDENCY=both` path (the tiers' LingBot arms pass `--residency swap`) (none ever recorded) |
+
+`sfwan` joined the list in S8 (ADR-0019 §22.6 item 1, §22.18 "Then" option 2, §22.20), when `oracle` and `wan`
+retired and `runpod-matrix.sh` went; its commands are in `git show 7e513f6a:scripts/gpu/runpod-matrix.sh`.
+
+| family | what replaces it | lost |
+|---|---|---|
+| `sfwan` | its two halves: the SF-Wan oracle diff is the `oracle-r2` tier's (`fv-lab oracle --family oracle-r2 --sha <sha> --yes`), the SF-Wan cells and causal kernel checks the `wan` tier's (`--cells kernels-wan sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae`) | the two on one pod |
 
 ## On a GPU box: `fv-lab run`
 
@@ -892,7 +903,7 @@ For every tier of `lab/tiers.toml`, the fixtures are the script's dry run (`<tie
 plan`'s pod body (`runpod-http-<tier>.json`); for a tier with `extra_cells`, the script's dry run and gates under
 their settings too (`<tier>-extra-dry-run.txt`, `<tier>-extra-gates.tsv`; `oracle`'s ten clip-metric targets, ADR-0019
 §20.6). For every stack of `lab/upstream.toml`, `runpod-http.sh
-plan-upstream`'s pod body with `oracle.sh`'s settings (`runpod-http-upstream-<stack>.json`, ADR-0019 §19.3;
+plan-upstream`'s pod body with the settings `oracle.sh` passed (until it went, §22.20) (`runpod-http-upstream-<stack>.json`, ADR-0019 §19.3;
 `tests/oracle_driver.rs`).
 
 **Frozen since the GPU gate.** Once a tier passed its GPU gate and its script branch is deleted (it is listed in

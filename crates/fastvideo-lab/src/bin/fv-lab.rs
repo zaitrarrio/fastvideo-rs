@@ -1056,7 +1056,7 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         let url = !urls.is_empty();
         if !url || so.cells.is_empty() {
             return Err(format!(
-                "tier `{}` reads upstream references: pass --extra-env FV_ORACLE_URL=<base URL>[,<base URL>] (the upstream pods, scripts/gpu/oracle.sh) and --cells with the arms of the targets they make (each missing reference is waited for up to FV_ORACLE_WAIT_S)",
+                "tier `{}` reads upstream references: pass --extra-env FV_ORACLE_URL=<base URL>[,<base URL>] (the upstream pods, fv-lab oracle) and --cells with the arms of the targets they make (each missing reference is waited for up to FV_ORACLE_WAIT_S)",
                 t.name
             ));
         }

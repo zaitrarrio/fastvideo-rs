@@ -97,8 +97,10 @@ fn experiment_tiers_are_tiers_without_a_script_family() {
         .lines()
         .find_map(|l| l.strip_prefix("FV_LAB_RETIRED=\""))
         .expect("FV_LAB_RETIRED");
+    // runpod-matrix.sh went with its last branch (ADR-0019 §22.20): read as
+    // empty if it is gone, so a restored script with such a branch still fails.
     let matrix = std::fs::read_to_string(repo_root().join("scripts/gpu/runpod-matrix.sh"))
-        .expect("runpod-matrix.sh");
+        .unwrap_or_default();
     for t in &experiments {
         assert!(lab.tier(t).is_some(), "{t}: a tier of lab/tiers.toml");
         assert!(

@@ -41,17 +41,28 @@ pub const RESTORED_MODES: [RestoredMode; 2] = [
 ];
 
 /// `FV_LAB_RETIRED_SIBLINGS` of `scripts/gpu/fv-lab-retired.sh`, in its
-/// order (ADR-0019 §22.19): a sibling tier frozen with its family, and the
-/// setting that made the family's run the tier's. `hd5` is `hd` with
+/// order (ADR-0019 §22.19, §22.20): a sibling tier frozen with its family, and
+/// the setting that made the family's run the tier's. `hd5` is `hd` with
 /// `FV_PROMPTS=…/prompts-hd5.json`; refusing that setting alone would send the
 /// caller to `hd`'s own prompt set under the same arm names, so it names the
-/// tier ([`retired_sibling_mode`]). A path value matches by its file name.
-pub const RETIRED_SIBLING_MODES: [RestoredMode; 1] = [RestoredMode {
-    tier: "hd5",
-    family: "hd",
-    key: "FV_PROMPTS",
-    value: "/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json",
-}];
+/// tier ([`retired_sibling_mode`]). `oracle-r2` is `oracle` with
+/// `FV_ORACLE_TARGETS=sfwan13` (its SF-Wan target, whose tree that tier
+/// fetches from R2), frozen with `oracle` in S8. A path value matches by its
+/// file name.
+pub const RETIRED_SIBLING_MODES: [RestoredMode; 2] = [
+    RestoredMode {
+        tier: "hd5",
+        family: "hd",
+        key: "FV_PROMPTS",
+        value: "/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json",
+    },
+    RestoredMode {
+        tier: "oracle-r2",
+        family: "oracle",
+        key: "FV_ORACLE_TARGETS",
+        value: "sfwan13",
+    },
+];
 
 /// The frozen sibling whose mode `key=value` is (by file name for a path).
 pub fn retired_sibling_mode(key: &str, value: &str) -> Option<&'static RestoredMode> {
@@ -73,8 +84,14 @@ pub fn retired_sibling_mode(key: &str, value: &str) -> Option<&'static RestoredM
 /// in §22's S7 (§22.19): `serve-engine`'s group picker `FV_ENGINE_CELLS` (the
 /// tier selects by arm), `sfstream`'s `FV_SFSTREAM_RUNS`, `FV_SF_PROMPT` and
 /// `FV_SF_SWITCH`, and `mmaudio`'s `FV_MMAUDIO_PROMPT` (each tier's cell is
-/// their defaults).
-pub const MODE_KNOBS: [&str; 23] = [
+/// their defaults). Eleven joined in §22's S8 (§22.20), when `oracle`'s and
+/// `wan`'s branches went with the script: the oracle's `FV_ORACLE_TARGETS`
+/// (the tier selects by arm), `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`,
+/// `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT` and the five prompts of the
+/// clip-metric targets (the tier's cells, extra cells included, are their
+/// defaults), and `sfwan`'s pick of `wan`'s arms `FV_SFWAN_CELLS` (`--cells`
+/// on the `wan` tier).
+pub const MODE_KNOBS: [&str; 34] = [
     "FV_PRECISION_ARM",
     "FV_NVFP4_WORKLOADS",
     "FV_VAE_GEN",
@@ -98,28 +115,6 @@ pub const MODE_KNOBS: [&str; 23] = [
     "FV_SF_PROMPT",
     "FV_SF_SWITCH",
     "FV_MMAUDIO_PROMPT",
-];
-
-/// The knobs of the tiers whose `runpod-matrix.sh` branch is still there:
-/// the script reads them, no tier does. fv-lab refuses them; `runpod-http.sh`'s
-/// `FV_LAB_NOT_READ` gains them in the PR that retires the branch (as the
-/// `FV_DET_*` knobs did with `det-short` and `determinism`, §15.10,
-/// `FV_ATTN3_*` with `attn3`, §17.6, and the knobs of `serve-engine`,
-/// `sfstream` and `mmaudio` with theirs, §22.19).
-///
-/// `oracle` (ADR-0019 §15), whose branch stays whole (§15.10: its
-/// clip-metric targets, `sfwan13` and `scripts/gpu/oracle.sh`'s runtime side
-/// still run there): `FV_ORACLE_*`, `FV_REF2VA_PROMPT`, and the prompts of
-/// the clip-metric targets (§20: the tier's extra cells are their defaults):
-/// `FV_LTX_REF_PROMPT`, `FV_LTX_A2V_PROMPT`, `FV_LTX_A2V_I2V_PROMPT`,
-/// `FV_LTX_RETAKE_PROMPT`, `FV_LTX_EXTEND_PROMPT`.
-///
-/// `wan` (ADR-0019 §22, S6), whose branch stays until S8 (§22.18 "Then"): its
-/// branch reads no knob of its own (`FV_CELLS` selects its arms, as fv-lab's
-/// `--cells` does); `FV_SFWAN_CELLS` is `sfwan`'s pick of `wan`'s arms
-/// (`runpod-matrix.sh sfwan`, which runs the branch with it as `FV_CELLS`),
-/// which on the `wan` tier is `--cells` itself.
-pub const SCRIPT_KNOBS: [&str; 11] = [
     "FV_ORACLE_TARGETS",
     "FV_ORACLE_F32",
     "FV_ORACLE_OWN_TEXT",
@@ -133,6 +128,19 @@ pub const SCRIPT_KNOBS: [&str; 11] = [
     "FV_SFWAN_CELLS",
 ];
 
+/// The knobs of the tiers whose `runpod-matrix.sh` branch was still there:
+/// the script read them, no tier did. fv-lab refused them; `runpod-http.sh`'s
+/// `FV_LAB_NOT_READ` gained them in the PR that retired the branch (as the
+/// `FV_DET_*` knobs did with `det-short` and `determinism`, §15.10,
+/// `FV_ATTN3_*` with `attn3`, §17.6, and the knobs of `serve-engine`,
+/// `sfstream` and `mmaudio` with theirs, §22.19).
+///
+/// None is left: `runpod-matrix.sh` had no branch left after §22's S8 and was
+/// deleted (ADR-0019 §22.20). The last ones, `oracle`'s (§15: `FV_ORACLE_*`,
+/// `FV_REF2VA_PROMPT`, the five clip-metric prompts) and `sfwan`'s
+/// `FV_SFWAN_CELLS` (its pick of `wan`'s arms), are [`MODE_KNOBS`] now.
+pub const SCRIPT_KNOBS: [&str; 0] = [];
+
 /// The knobs of a step dropped from a family's branch while it lived, which
 /// no tier reads: `hd`'s post-script hook (`FV_HD_POST_URL`, a script fetched
 /// and run on the pod, and its cap `FV_HD_POST_TIMEOUT_S`), dropped with the
@@ -140,6 +148,19 @@ pub const SCRIPT_KNOBS: [&str; 11] = [
 /// the branch itself went (§22.19). Refused everywhere, as runpod-http.sh's
 /// `FV_LAB_NOT_READ` (and its script path) refuses them.
 pub const DROPPED_KNOBS: [&str; 2] = ["FV_HD_POST_URL", "FV_HD_POST_TIMEOUT_S"];
+
+/// The oracle's knobs whose answer is the tier's defaults (ADR-0019 §15, §20):
+/// a script knob until the branch went in S8 (§22.20), the answer unchanged.
+const ORACLE_DEFAULT_KNOBS: [&str; 8] = [
+    "FV_ORACLE_F32",
+    "FV_ORACLE_OWN_TEXT",
+    "FV_REF2VA_PROMPT",
+    "FV_LTX_REF_PROMPT",
+    "FV_LTX_A2V_PROMPT",
+    "FV_LTX_A2V_I2V_PROMPT",
+    "FV_LTX_RETAKE_PROMPT",
+    "FV_LTX_EXTEND_PROMPT",
+];
 
 /// The blocks the oracle cells dump (`FASTVIDEO_DUMP_OPS` in every arm's
 /// `env`): the script's default. Another value for the `oracle` tier would be
@@ -221,7 +242,7 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
     }
     if key == "FV_ORACLE_URL" && tier == Some("determinism") {
         return Some(
-            "FV_ORACLE_URL: determinism no longer runs the oracle first; run the oracle on its own (scripts/gpu/oracle.sh; ADR-0019 §15.5, §15.10)"
+            "FV_ORACLE_URL: determinism no longer runs the oracle first; run the oracle on its own (fv-lab oracle; ADR-0019 §15.5, §15.10)"
                 .to_owned(),
         );
     }
@@ -249,7 +270,7 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
     }
     if key == "FV_SFWAN_CELLS" {
         return Some(
-            "FV_SFWAN_CELLS: no tier reads it (runpod-matrix.sh sfwan's pick of the wan family's arms, default kernels-wan and the four sfwan13-81f-* arms); on the wan tier select them with --cells (FV_CELLS): kernels-wan,sfwan13-81f-flash,sfwan13-81f-composed,sfwan13-81f-wholeclip,sfwan13-81f-fullvae (ADR-0019 §22, S6)"
+            "FV_SFWAN_CELLS: no tier reads it (runpod-matrix.sh sfwan's pick of the wan family's arms, default kernels-wan and the four sfwan13-81f-* arms); on the wan tier select them with --cells (FV_CELLS): kernels-wan,sfwan13-81f-flash,sfwan13-81f-composed,sfwan13-81f-wholeclip,sfwan13-81f-fullvae (ADR-0019 §22, S6, §22.20)"
                 .to_owned(),
         );
     }
@@ -264,7 +285,10 @@ fn why(tier: Option<&str>, key: &str, value: &str, start_set: bool) -> Option<St
                 .to_owned(),
         );
     }
-    if SCRIPT_KNOBS.contains(&key) || (key.starts_with("FV_DET_") && MODE_KNOBS.contains(&key)) {
+    if SCRIPT_KNOBS.contains(&key)
+        || (key.starts_with("FV_DET_") && MODE_KNOBS.contains(&key))
+        || ORACLE_DEFAULT_KNOBS.contains(&key)
+    {
         return Some(format!(
             "{key}: no tier reads it; the det-short, determinism and oracle tiers are the script's defaults (ADR-0019 §15)"
         ));
@@ -331,19 +355,29 @@ pub fn check_extra_env(tier: &str, entries: &[String]) -> Result<(), String> {
 
 /// `fv-lab run`: the [`MODE_KNOBS`], [`SCRIPT_KNOBS`] and [`DROPPED_KNOBS`] set (non-empty) in
 /// its environment, a frozen sibling's mode for its family or tier
-/// ([`RETIRED_SIBLING_MODES`]: `hd` or `hd5` with `FV_PROMPTS=…/prompts-hd5.json`;
-/// any other `FV_PROMPTS` only warns), the oracle's `FASTVIDEO_DUMP_OPS`, and `FV_ORACLE_URL`
+/// ([`RETIRED_SIBLING_MODES`]: `hd` or `hd5` with `FV_PROMPTS=…/prompts-hd5.json`,
+/// any other `FV_PROMPTS` only warning; `oracle` or `oracle-r2` with
+/// `FV_ORACLE_TARGETS=sfwan13`), each key once, the oracle's `FASTVIDEO_DUMP_OPS`, and `FV_ORACLE_URL`
 /// for `determinism` (which the script's branch read to run the oracle
 /// first; the tier does not, ADR-0019 §15.10). `get` reads one variable (the
 /// process environment in the binary).
 pub fn check_run_env(tier: &str, get: impl Fn(&str) -> Option<String>) -> Result<(), String> {
-    let found = MODE_KNOBS
+    // A sibling's key may be a mode knob too (FV_ORACLE_TARGETS): read once.
+    let mut keys: Vec<&str> = Vec::new();
+    for k in MODE_KNOBS
         .iter()
         .chain(&SCRIPT_KNOBS)
         .chain(&DROPPED_KNOBS)
         .chain(RETIRED_SIBLING_MODES.iter().map(|m| &m.key))
         .chain(&["FASTVIDEO_DUMP_OPS", "FV_ORACLE_URL"])
-        .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (*k, v)))
+    {
+        if !keys.contains(k) {
+            keys.push(k);
+        }
+    }
+    let found = keys
+        .into_iter()
+        .filter_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (k, v)))
         .filter_map(|(k, v)| {
             why(Some(tier), k, &v, false).map(|w| {
                 (
@@ -492,10 +526,64 @@ mod tests {
         let env = |k: &str| (k == "FV_ORACLE_PREFETCH").then(|| "0".to_owned());
         let e = check_run_env("oracle", env).unwrap_err();
         assert!(e.contains("always fetches"), "{e}");
-        // The script's oracle branch still reads them (ADR-0019 §15.10):
-        // runpod-http.sh's list gains them when it goes (tests/knobs.rs
-        // holds that list to not_read()).
-        assert!(SCRIPT_KNOBS.iter().all(|k| !not_read().any(|n| n == *k)));
+        // Retired with the branch (ADR-0019 §22.20): out of SCRIPT_KNOBS
+        // (empty now), into MODE_KNOBS, so runpod-http.sh's FV_LAB_NOT_READ
+        // refuses them too (tests/knobs.rs holds the two lists equal).
+        assert!(SCRIPT_KNOBS.is_empty());
+        for k in [
+            "FV_ORACLE_TARGETS",
+            "FV_ORACLE_F32",
+            "FV_ORACLE_OWN_TEXT",
+            "FV_ORACLE_PREFETCH",
+            "FV_REF2VA_PROMPT",
+            "FV_LTX_REF_PROMPT",
+            "FV_LTX_A2V_PROMPT",
+            "FV_LTX_A2V_I2V_PROMPT",
+            "FV_LTX_RETAKE_PROMPT",
+            "FV_LTX_EXTEND_PROMPT",
+        ] {
+            assert!(MODE_KNOBS.contains(&k), "{k}");
+            assert!(not_read().any(|n| n == k), "{k}");
+        }
+        // Their answers are unchanged: by arm for the targets, the tier's
+        // defaults for the others, in --extra-env and in fv-lab run's environment.
+        let e = check_extra_env("oracle", &["FV_ORACLE_TARGETS=ltx25-retake".into()]).unwrap_err();
+        assert!(e.contains("fv-lab selects by arm"), "{e}");
+        let env = |k: &str| (k == "FV_LTX_RETAKE_PROMPT").then(|| "a wave".to_owned());
+        let e = check_run_env("oracle", env).unwrap_err();
+        assert!(
+            e.contains("FV_LTX_RETAKE_PROMPT: no tier reads it; the det-short, determinism and oracle tiers are the script's defaults"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn the_oracle_sfwan13_target_names_the_oracle_r2_tier() {
+        // oracle with FV_ORACLE_TARGETS=sfwan13 is the frozen oracle-r2 tier
+        // (ADR-0019 §22.20): named, first; the tier with its own setting
+        // drops it; another target is the by-arm answer.
+        let e = check_extra_env(
+            "oracle",
+            &["FV_ORACLE_F32=1 FV_ORACLE_TARGETS=sfwan13".into()],
+        )
+        .unwrap_err();
+        let tier = e.find("it is the fv-lab tier oracle-r2 now");
+        let other = e.find("FV_ORACLE_F32:");
+        assert!(tier.is_some() && tier < other, "{e}");
+        let env = |k: &str| (k == "FV_ORACLE_TARGETS").then(|| "sfwan13".to_owned());
+        let e = check_run_env("oracle", env).unwrap_err();
+        assert!(e.contains("fv-lab run oracle-r2"), "{e}");
+        // Read once, though both a mode knob and the sibling's key.
+        assert_eq!(e.matches("FV_ORACLE_TARGETS=sfwan13").count(), 1, "{e}");
+        let e = check_run_env("oracle-r2", env).unwrap_err();
+        assert!(
+            e.contains("the tier oracle-r2 is the oracle family's FV_ORACLE_TARGETS mode already"),
+            "{e}"
+        );
+        let e =
+            check_extra_env("oracle", &["FV_ORACLE_TARGETS=fasth3-4step-vsa".into()]).unwrap_err();
+        assert!(!e.contains("oracle-r2"), "{e}");
+        assert!(e.contains("fv-lab selects by arm"), "{e}");
     }
 
     #[test]
@@ -607,8 +695,8 @@ mod tests {
     fn the_sfwan_cells_knob_is_refused_by_fv_lab_only() {
         // sfwan's pick of wan's arms (ADR-0019 §22, S6): refused by fv-lab
         // with the arms to pass as --cells, in --extra-env and in fv-lab
-        // run's environment; the script's sfwan branch still reads it, so
-        // runpod-http.sh's FV_LAB_NOT_READ does not (it goes with sfwan, S8).
+        // run's environment. sfwan retired with no tier in S8 (§22.20): in
+        // MODE_KNOBS, so runpod-http.sh's FV_LAB_NOT_READ refuses it too.
         let key = "FV_SFWAN_CELLS";
         for tier in ["wan", "rtx6000"] {
             let e = check_extra_env(tier, &[format!("{key}=kernels-wan")]).unwrap_err();
@@ -624,10 +712,10 @@ mod tests {
         let env = |k: &str| (k == key).then(|| "kernels-wan".to_owned());
         let e = check_run_env("wan", env).unwrap_err();
         assert!(e.contains(&format!("{key}: no tier reads it")), "{e}");
-        assert!(e.contains("ADR-0019 §22, S6"), "{e}");
-        assert!(SCRIPT_KNOBS.contains(&key));
-        assert!(!MODE_KNOBS.contains(&key));
-        assert!(!not_read().any(|k| k == key));
+        assert!(e.contains("ADR-0019 §22, S6, §22.20"), "{e}");
+        assert!(!SCRIPT_KNOBS.contains(&key));
+        assert!(MODE_KNOBS.contains(&key));
+        assert!(not_read().any(|k| k == key));
         // The wan branch's own selection stays fv-lab's input.
         assert!(check_run_env("wan", |k: &str| (k == "FV_CELLS")
             .then(|| "kernels-wan".to_owned()))
