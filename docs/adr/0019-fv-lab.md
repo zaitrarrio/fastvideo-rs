@@ -7356,8 +7356,8 @@ follows §23.8's list item by item, and the h3-graphs precedent (§14.4). Its la
   - `self-delete.test.sh` needs no change: it finds 120 inline copies, one fewer, against its floor of 34.
 - **Data:**
   - `lab/gold/wan22-ti2v-5b.toml`'s `prompt_set` names `lab/cells/sol-bench-a2.toml` as the prompt's source.
-  - The generated `lab/cells/gold-wan22-ti2v-5b.toml` note follows (`tests/gold_tier.rs`, `fv-lab gold cells
-    --check`).
+  - The generated `lab/cells/gold-wan22-ti2v-5b.toml` note follows (`tests/gold_tier.rs`
+    `committed_gold_cells_equal_their_generation`, the check `fv-lab gold cells --check` makes).
   - The 22 `lab/cells/sol-bench-*.toml` headers and `lab/tiers.toml`'s sol-bench comment say "was …, deleted after
     the GPU check of §23.7". Their `note` and `description` fields, which name the set's origin, are unchanged.
   - No dry run or pod body changes.
