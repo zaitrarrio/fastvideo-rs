@@ -1,0 +1,2684 @@
+{
+  "checks": [],
+  "context": {
+    "cuda_feature": true,
+    "dumps": [
+      {
+        "cosine": 0.997174069664142,
+        "max_abs": 1.7509765625,
+        "name": "a2v_audio_latent",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.07513628480082572
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "a2v_audio_wave",
+        "non_finite": 0,
+        "numel": 444676,
+        "ref_norm": 76.52497989477575,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_step01",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_step02",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_step03",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_step04",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_step05",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_step06",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_step07",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_step08",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_step00_in",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.999939972743043,
+        "max_abs": 0.08203125,
+        "name": "s1_audio_vel_step01",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 142.67688498192194,
+        "rel_l2": 0.01097861472492494
+      },
+      {
+        "cosine": 0.9999416210516202,
+        "max_abs": 0.078125,
+        "name": "s1_audio_vel_step02",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 142.63140192359444,
+        "rel_l2": 0.010831449867109915
+      },
+      {
+        "cosine": 0.9999417047797639,
+        "max_abs": 0.078125,
+        "name": "s1_audio_vel_step03",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 142.59112121769465,
+        "rel_l2": 0.010827888674189894
+      },
+      {
+        "cosine": 0.9999418545460683,
+        "max_abs": 0.078125,
+        "name": "s1_audio_vel_step04",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 142.61329093205535,
+        "rel_l2": 0.010794392933605177
+      },
+      {
+        "cosine": 0.9999397437807551,
+        "max_abs": 0.078125,
+        "name": "s1_audio_vel_step05",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 142.7049312370982,
+        "rel_l2": 0.011029170708228972
+      },
+      {
+        "cosine": 0.9999398185476515,
+        "max_abs": 0.078125,
+        "name": "s1_audio_vel_step06",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 143.01495332371584,
+        "rel_l2": 0.01097849691678439
+      },
+      {
+        "cosine": 0.9999380254317978,
+        "max_abs": 0.07421875,
+        "name": "s1_audio_vel_step07",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 143.2081233119698,
+        "rel_l2": 0.011184728234147021
+      },
+      {
+        "cosine": 0.9999395175578173,
+        "max_abs": 0.078125,
+        "name": "s1_audio_vel_step08",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 143.16825895260598,
+        "rel_l2": 0.011027633620272028
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_x0_step01",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_x0_step02",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_x0_step03",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_x0_step04",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_x0_step05",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_x0_step06",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_x0_step07",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_audio_x0_step08",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9998891572626757,
+        "max_abs": 0.06689453125,
+        "name": "s1_cond0_latent",
+        "non_finite": 0,
+        "numel": 12288,
+        "ref_norm": 86.42215719267902,
+        "rel_l2": 0.015298230314791727
+      },
+      {
+        "cosine": 0.9999303769732405,
+        "max_abs": 0.05859375,
+        "name": "s1_cond0_pixels",
+        "non_finite": 0,
+        "numel": 294912,
+        "ref_norm": 313.6632241805199,
+        "rel_l2": 0.011804743184180068
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_sigmas",
+        "non_finite": 0,
+        "numel": 9,
+        "ref_norm": 2.531153558509801,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9999937811487446,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_0",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12447.58678347124,
+        "rel_l2": 0.0035294078731586934
+      },
+      {
+        "cosine": 0.9999926466845744,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_1",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13718.273033269217,
+        "rel_l2": 0.0038357784973513855
+      },
+      {
+        "cosine": 0.9999906811159492,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_2",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13493.23184128791,
+        "rel_l2": 0.004317475053786501
+      },
+      {
+        "cosine": 0.9999900798252164,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_3",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 14032.130352199361,
+        "rel_l2": 0.004455346582603294
+      },
+      {
+        "cosine": 0.999986707354085,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_4",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12743.74784166423,
+        "rel_l2": 0.0051573219845983285
+      },
+      {
+        "cosine": 0.9999831261846465,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_5",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11934.61294857903,
+        "rel_l2": 0.005809986128395298
+      },
+      {
+        "cosine": 0.9999808922388375,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_6",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11878.966500163302,
+        "rel_l2": 0.006183547441368859
+      },
+      {
+        "cosine": 0.9999789336794994,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_7",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11864.552576390104,
+        "rel_l2": 0.006492032053358296
+      },
+      {
+        "cosine": 0.9999773896852476,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_8",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11730.083179385496,
+        "rel_l2": 0.0067247785603218
+      },
+      {
+        "cosine": 0.9999746044860136,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_9",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11628.588491669027,
+        "rel_l2": 0.007126944927609312
+      },
+      {
+        "cosine": 0.999973362544913,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_10",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11784.077637675868,
+        "rel_l2": 0.007298933135250677
+      },
+      {
+        "cosine": 0.999971494477308,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_11",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11824.306864652695,
+        "rel_l2": 0.007550516820587968
+      },
+      {
+        "cosine": 0.9999709508685017,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_12",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12043.767474417677,
+        "rel_l2": 0.007622178255951743
+      },
+      {
+        "cosine": 0.9999692688799571,
+        "max_abs": 9.0,
+        "name": "s1_step00_audio_block_13",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12108.943080567864,
+        "rel_l2": 0.00784034331567079
+      },
+      {
+        "cosine": 0.9999677877379847,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_14",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12272.898674819262,
+        "rel_l2": 0.008027129518549125
+      },
+      {
+        "cosine": 0.9999664293964234,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_15",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12323.622890737355,
+        "rel_l2": 0.008194112709869373
+      },
+      {
+        "cosine": 0.9999647620735346,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_16",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12331.23164357475,
+        "rel_l2": 0.008395417612052815
+      },
+      {
+        "cosine": 0.9999640789764598,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_17",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12298.882923479947,
+        "rel_l2": 0.008476241323190898
+      },
+      {
+        "cosine": 0.9999633852826015,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_18",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12419.545322585942,
+        "rel_l2": 0.008557668031575394
+      },
+      {
+        "cosine": 0.9999620089264416,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_19",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12400.431168866533,
+        "rel_l2": 0.00871677143015388
+      },
+      {
+        "cosine": 0.9999604412310067,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_20",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12367.728618723031,
+        "rel_l2": 0.008895380059191304
+      },
+      {
+        "cosine": 0.9999561877860859,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_21",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12063.516437848697,
+        "rel_l2": 0.009361022136995332
+      },
+      {
+        "cosine": 0.9999538379095491,
+        "max_abs": 8.0,
+        "name": "s1_step00_audio_block_22",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12065.293232053053,
+        "rel_l2": 0.009608712833703466
+      },
+      {
+        "cosine": 0.9999487602455659,
+        "max_abs": 10.0,
+        "name": "s1_step00_audio_block_23",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11653.337755218941,
+        "rel_l2": 0.010124846255985184
+      },
+      {
+        "cosine": 0.9999479783405979,
+        "max_abs": 10.0,
+        "name": "s1_step00_audio_block_24",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11761.806177074475,
+        "rel_l2": 0.01020287436889543
+      },
+      {
+        "cosine": 0.9999393707595015,
+        "max_abs": 10.0,
+        "name": "s1_step00_audio_block_25",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11206.282238403297,
+        "rel_l2": 0.01101688428349651
+      },
+      {
+        "cosine": 0.9999443349936966,
+        "max_abs": 10.0,
+        "name": "s1_step00_audio_block_26",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11767.410652260776,
+        "rel_l2": 0.010556375395459741
+      },
+      {
+        "cosine": 0.9999400337761031,
+        "max_abs": 10.0,
+        "name": "s1_step00_audio_block_27",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11574.101722115094,
+        "rel_l2": 0.010953941485322239
+      },
+      {
+        "cosine": 0.9999414498981465,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_28",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11963.833486618,
+        "rel_l2": 0.010824502974097256
+      },
+      {
+        "cosine": 0.999934983194802,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_29",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11479.243014510777,
+        "rel_l2": 0.011403494922268375
+      },
+      {
+        "cosine": 0.9999329378631836,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_30",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11615.70168643336,
+        "rel_l2": 0.011582579822093776
+      },
+      {
+        "cosine": 0.9999330121225855,
+        "max_abs": 16.0,
+        "name": "s1_step00_audio_block_31",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11742.832409493314,
+        "rel_l2": 0.011581327910635231
+      },
+      {
+        "cosine": 0.9999414450653937,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_32",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12396.929213753257,
+        "rel_l2": 0.010827692992163792
+      },
+      {
+        "cosine": 0.9999399536520476,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_33",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12366.761533646488,
+        "rel_l2": 0.010959623551153277
+      },
+      {
+        "cosine": 0.999942187535927,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_34",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12754.626729621543,
+        "rel_l2": 0.010755456499516307
+      },
+      {
+        "cosine": 0.9999445345189624,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_35",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13000.519767096708,
+        "rel_l2": 0.01053373144671204
+      },
+      {
+        "cosine": 0.9999457360014415,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_36",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13274.27403709309,
+        "rel_l2": 0.010423278975466407
+      },
+      {
+        "cosine": 0.9999387588088604,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_37",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12665.262358770156,
+        "rel_l2": 0.011067520677669607
+      },
+      {
+        "cosine": 0.9999435179664837,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_38",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13373.655903211531,
+        "rel_l2": 0.010629306598214362
+      },
+      {
+        "cosine": 0.9999334609552021,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_39",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12673.35627710397,
+        "rel_l2": 0.011539833514110313
+      },
+      {
+        "cosine": 0.9999317812037066,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_40",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13294.553495078417,
+        "rel_l2": 0.011683005499960632
+      },
+      {
+        "cosine": 0.999940155734154,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_41",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 14822.444459401331,
+        "rel_l2": 0.010940712632455704
+      },
+      {
+        "cosine": 0.9999377056186836,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_42",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 15264.528615036768,
+        "rel_l2": 0.011162588546883434
+      },
+      {
+        "cosine": 0.9999356838103164,
+        "max_abs": 12.0,
+        "name": "s1_step00_audio_block_43",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 15837.371224949544,
+        "rel_l2": 0.011342667873153871
+      },
+      {
+        "cosine": 0.9999418126613937,
+        "max_abs": 16.0,
+        "name": "s1_step00_audio_block_44",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 17836.39026531703,
+        "rel_l2": 0.010789606216598767
+      },
+      {
+        "cosine": 0.9999323854065143,
+        "max_abs": 16.0,
+        "name": "s1_step00_audio_block_45",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 17821.496588076978,
+        "rel_l2": 0.011628665789009208
+      },
+      {
+        "cosine": 0.9999626084798241,
+        "max_abs": 16.0,
+        "name": "s1_step00_audio_block_46",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 26132.338417963547,
+        "rel_l2": 0.008647992998868701
+      },
+      {
+        "cosine": 0.999986141471966,
+        "max_abs": 32.0,
+        "name": "s1_step00_audio_block_47",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 54551.81810896285,
+        "rel_l2": 0.0052678812733307784
+      },
+      {
+        "cosine": 0.9999999999948812,
+        "max_abs": 0.00390625,
+        "name": "s1_step00_audio_in",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 1262.5764578596354,
+        "rel_l2": 3.1996473406039447e-6
+      },
+      {
+        "cosine": 0.9999908039779749,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_0",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 783.6171372572377,
+        "rel_l2": 0.00448302286782781
+      },
+      {
+        "cosine": 0.9999955043966315,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_1",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2012.987926659669,
+        "rel_l2": 0.0030012925605302377
+      },
+      {
+        "cosine": 0.9999879516125377,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_2",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 1886.5620117625654,
+        "rel_l2": 0.004915700992415917
+      },
+      {
+        "cosine": 0.9999888336063072,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_3",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 1890.3275568511538,
+        "rel_l2": 0.004726394516233095
+      },
+      {
+        "cosine": 0.9999905371905152,
+        "max_abs": 4.0,
+        "name": "s1_step00_video_block_4",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2169.038143452065,
+        "rel_l2": 0.004407433194996033
+      },
+      {
+        "cosine": 0.9999889346116032,
+        "max_abs": 4.0,
+        "name": "s1_step00_video_block_5",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2024.9313292678605,
+        "rel_l2": 0.004713282309011978
+      },
+      {
+        "cosine": 0.999986237665125,
+        "max_abs": 4.0,
+        "name": "s1_step00_video_block_6",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 1857.9706660966099,
+        "rel_l2": 0.005253060812663975
+      },
+      {
+        "cosine": 0.9999882636415169,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_7",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 1903.8715653700876,
+        "rel_l2": 0.004845877007366982
+      },
+      {
+        "cosine": 0.999990726980046,
+        "max_abs": 1.0,
+        "name": "s1_step00_video_block_8",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2057.8500903046865,
+        "rel_l2": 0.004307299315180848
+      },
+      {
+        "cosine": 0.9999899699103105,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_9",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2064.9819715468952,
+        "rel_l2": 0.004505764945457727
+      },
+      {
+        "cosine": 0.9999903343917718,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_10",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2102.540863299968,
+        "rel_l2": 0.004396929073469902
+      },
+      {
+        "cosine": 0.9999894361942647,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_11",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2096.069757056695,
+        "rel_l2": 0.004600336034570809
+      },
+      {
+        "cosine": 0.9999872880776566,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_12",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2159.4098892010898,
+        "rel_l2": 0.005101350258336044
+      },
+      {
+        "cosine": 0.9999898968942955,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_13",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2312.3690995160246,
+        "rel_l2": 0.004579689854601702
+      },
+      {
+        "cosine": 0.9999887870155326,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_14",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2391.6757625572295,
+        "rel_l2": 0.004838669195379598
+      },
+      {
+        "cosine": 0.9999888648344197,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_15",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2380.946382204493,
+        "rel_l2": 0.004776402649638021
+      },
+      {
+        "cosine": 0.9999846980212771,
+        "max_abs": 4.0,
+        "name": "s1_step00_video_block_16",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2151.828056950621,
+        "rel_l2": 0.0055729769015437775
+      },
+      {
+        "cosine": 0.9999852680963388,
+        "max_abs": 4.0,
+        "name": "s1_step00_video_block_17",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2257.0836052616914,
+        "rel_l2": 0.005461411293044738
+      },
+      {
+        "cosine": 0.9999888971536222,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_18",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2285.9275549376034,
+        "rel_l2": 0.004713739189170512
+      },
+      {
+        "cosine": 0.9999884181729742,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_19",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2247.504443816033,
+        "rel_l2": 0.004813220427069309
+      },
+      {
+        "cosine": 0.9999860199790203,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_20",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2155.1157130061183,
+        "rel_l2": 0.00532559706235268
+      },
+      {
+        "cosine": 0.999984747363866,
+        "max_abs": 2.0,
+        "name": "s1_step00_video_block_21",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2156.7804836726887,
+        "rel_l2": 0.005531526047613911
+      },
+      {
+        "cosine": 0.9999790164163521,
+        "max_abs": 4.0,
+        "name": "s1_step00_video_block_22",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2149.5473162973276,
+        "rel_l2": 0.006479116982361903
+      },
+      {
+        "cosine": 0.9999791985294403,
+        "max_abs": 4.0,
+        "name": "s1_step00_video_block_23",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2355.9038274968325,
+        "rel_l2": 0.006470684711196901
+      },
+      {
+        "cosine": 0.9999712761050711,
+        "max_abs": 4.0,
+        "name": "s1_step00_video_block_24",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2176.9597964529776,
+        "rel_l2": 0.007587605497286831
+      },
+      {
+        "cosine": 0.999964208304347,
+        "max_abs": 6.0,
+        "name": "s1_step00_video_block_25",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2131.4844744218835,
+        "rel_l2": 0.008461849586247105
+      },
+      {
+        "cosine": 0.9999379888155994,
+        "max_abs": 7.0,
+        "name": "s1_step00_video_block_26",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2107.4061078333207,
+        "rel_l2": 0.01114322845663721
+      },
+      {
+        "cosine": 0.9999259167644587,
+        "max_abs": 10.0,
+        "name": "s1_step00_video_block_27",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2143.471842790311,
+        "rel_l2": 0.012172148593715045
+      },
+      {
+        "cosine": 0.9998939118066219,
+        "max_abs": 12.0,
+        "name": "s1_step00_video_block_28",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2162.731637891659,
+        "rel_l2": 0.014602210795211727
+      },
+      {
+        "cosine": 0.9998667574247726,
+        "max_abs": 16.0,
+        "name": "s1_step00_video_block_29",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2202.794121107406,
+        "rel_l2": 0.016326062388373412
+      },
+      {
+        "cosine": 0.9998858450688098,
+        "max_abs": 4.0,
+        "name": "s1_step00_video_block_30",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2394.0093214905246,
+        "rel_l2": 0.015113957569035575
+      },
+      {
+        "cosine": 0.9998214974606575,
+        "max_abs": 10.0,
+        "name": "s1_step00_video_block_31",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2222.2085278720015,
+        "rel_l2": 0.018898084827950242
+      },
+      {
+        "cosine": 0.9998259576399725,
+        "max_abs": 6.0,
+        "name": "s1_step00_video_block_32",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2286.2349934411754,
+        "rel_l2": 0.0186886273331982
+      },
+      {
+        "cosine": 0.9998096296003717,
+        "max_abs": 10.0,
+        "name": "s1_step00_video_block_33",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2373.6598025000244,
+        "rel_l2": 0.019516306370638708
+      },
+      {
+        "cosine": 0.9997917796828504,
+        "max_abs": 8.0,
+        "name": "s1_step00_video_block_34",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2239.3770714765164,
+        "rel_l2": 0.02046003597980111
+      },
+      {
+        "cosine": 0.9997820455089402,
+        "max_abs": 10.0,
+        "name": "s1_step00_video_block_35",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2204.5716006156586,
+        "rel_l2": 0.0209011104038912
+      },
+      {
+        "cosine": 0.9997636392754116,
+        "max_abs": 4.0,
+        "name": "s1_step00_video_block_36",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2201.8544230412103,
+        "rel_l2": 0.02174245159017153
+      },
+      {
+        "cosine": 0.9996969490022558,
+        "max_abs": 11.0,
+        "name": "s1_step00_video_block_37",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2160.565568767354,
+        "rel_l2": 0.024632300839652455
+      },
+      {
+        "cosine": 0.9996506665353196,
+        "max_abs": 8.0,
+        "name": "s1_step00_video_block_38",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2224.4294993711383,
+        "rel_l2": 0.026444080691849406
+      },
+      {
+        "cosine": 0.9995805581084979,
+        "max_abs": 12.0,
+        "name": "s1_step00_video_block_39",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2320.8753012888865,
+        "rel_l2": 0.028975039027854914
+      },
+      {
+        "cosine": 0.9994935759515361,
+        "max_abs": 18.0,
+        "name": "s1_step00_video_block_40",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2361.9990297744484,
+        "rel_l2": 0.03183144290963368
+      },
+      {
+        "cosine": 0.9994282936852538,
+        "max_abs": 20.0,
+        "name": "s1_step00_video_block_41",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2571.5332974000485,
+        "rel_l2": 0.03393973289889686
+      },
+      {
+        "cosine": 0.9991805534321255,
+        "max_abs": 16.0,
+        "name": "s1_step00_video_block_42",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2450.281520790105,
+        "rel_l2": 0.04053942121786222
+      },
+      {
+        "cosine": 0.9989891523161519,
+        "max_abs": 10.0,
+        "name": "s1_step00_video_block_43",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2394.733669492196,
+        "rel_l2": 0.044952022757026304
+      },
+      {
+        "cosine": 0.998399951250126,
+        "max_abs": 16.0,
+        "name": "s1_step00_video_block_44",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 2556.047010878748,
+        "rel_l2": 0.05655457263032412
+      },
+      {
+        "cosine": 0.9981938581621295,
+        "max_abs": 24.0,
+        "name": "s1_step00_video_block_45",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 3435.596289774121,
+        "rel_l2": 0.060110655809514836
+      },
+      {
+        "cosine": 0.9978953248766718,
+        "max_abs": 32.0,
+        "name": "s1_step00_video_block_46",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 4706.292017618952,
+        "rel_l2": 0.06490494059250786
+      },
+      {
+        "cosine": 0.9997709351512807,
+        "max_abs": 64.0,
+        "name": "s1_step00_video_block_47",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 17082.772691743347,
+        "rel_l2": 0.021439772149030117
+      },
+      {
+        "cosine": 0.9999962866225452,
+        "max_abs": 0.0625,
+        "name": "s1_step00_video_in",
+        "non_finite": 0,
+        "numel": 98304,
+        "ref_norm": 268.4214788889478,
+        "rel_l2": 0.002725723967208158
+      },
+      {
+        "cosine": 0.9999995178308637,
+        "max_abs": 0.015625,
+        "name": "s1_video_step01",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 434.2986230746336,
+        "rel_l2": 0.0009820075281479958
+      },
+      {
+        "cosine": 0.9999988793925257,
+        "max_abs": 0.015625,
+        "name": "s1_video_step02",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 433.37148824079003,
+        "rel_l2": 0.001497090731891062
+      },
+      {
+        "cosine": 0.9999981209525619,
+        "max_abs": 0.015625,
+        "name": "s1_video_step03",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 430.7616678513468,
+        "rel_l2": 0.0019385845507543763
+      },
+      {
+        "cosine": 0.999997108388704,
+        "max_abs": 0.03125,
+        "name": "s1_video_step04",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 427.33091475515994,
+        "rel_l2": 0.0024048775681988705
+      },
+      {
+        "cosine": 0.999973656944293,
+        "max_abs": 0.099609375,
+        "name": "s1_video_step05",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 402.21343817122056,
+        "rel_l2": 0.007258550721292724
+      },
+      {
+        "cosine": 0.9992604117116445,
+        "max_abs": 0.66015625,
+        "name": "s1_video_step06",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 340.7552371928756,
+        "rel_l2": 0.038457424087295584
+      },
+      {
+        "cosine": 0.9954355438972499,
+        "max_abs": 1.427734375,
+        "name": "s1_video_step07",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 292.115065278112,
+        "rel_l2": 0.0955242438992012
+      },
+      {
+        "cosine": 0.9900313327311371,
+        "max_abs": 2.41015625,
+        "name": "s1_video_step08",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 369.25883481576346,
+        "rel_l2": 0.14105032092265513
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s1_video_step00_in",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 437.6018532792236,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9990868655681351,
+        "max_abs": 0.8984375,
+        "name": "s1_video_vel_step01",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 530.7395243812674,
+        "rel_l2": 0.04273593481532256
+      },
+      {
+        "cosine": 0.9982727807523604,
+        "max_abs": 0.744140625,
+        "name": "s1_video_vel_step02",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 508.4017179287933,
+        "rel_l2": 0.05904068235840857
+      },
+      {
+        "cosine": 0.9979206855944145,
+        "max_abs": 1.24609375,
+        "name": "s1_video_vel_step03",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 515.1078977849967,
+        "rel_l2": 0.06448132722632631
+      },
+      {
+        "cosine": 0.9968180492458031,
+        "max_abs": 1.484375,
+        "name": "s1_video_vel_step04",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 527.0883826190399,
+        "rel_l2": 0.07971083432553691
+      },
+      {
+        "cosine": 0.997697071872547,
+        "max_abs": 1.296875,
+        "name": "s1_video_vel_step05",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 535.052154168495,
+        "rel_l2": 0.06783962198204001
+      },
+      {
+        "cosine": 0.9937330550316632,
+        "max_abs": 3.05078125,
+        "name": "s1_video_vel_step06",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 529.9662480486387,
+        "rel_l2": 0.11191743472519344
+      },
+      {
+        "cosine": 0.9925275501896691,
+        "max_abs": 2.9140625,
+        "name": "s1_video_vel_step07",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 525.8311283612135,
+        "rel_l2": 0.12234396516892079
+      },
+      {
+        "cosine": 0.9859030490152858,
+        "max_abs": 2.861328125,
+        "name": "s1_video_vel_step08",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 510.57002340676604,
+        "rel_l2": 0.16761081895187135
+      },
+      {
+        "cosine": 0.9979388704370366,
+        "max_abs": 0.8984375,
+        "name": "s1_video_x0_step01",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 352.1630641223648,
+        "rel_l2": 0.06422027509932893
+      },
+      {
+        "cosine": 0.9960436012878969,
+        "max_abs": 0.740234375,
+        "name": "s1_video_x0_step02",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 332.8612550440752,
+        "rel_l2": 0.08946947851826757
+      },
+      {
+        "cosine": 0.9953240783339524,
+        "max_abs": 1.2265625,
+        "name": "s1_video_x0_step03",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 338.8949976804706,
+        "rel_l2": 0.09664209427765538
+      },
+      {
+        "cosine": 0.9930314171650093,
+        "max_abs": 1.462890625,
+        "name": "s1_video_x0_step04",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 349.9353239945921,
+        "rel_l2": 0.11786158116658786
+      },
+      {
+        "cosine": 0.9951426645979539,
+        "max_abs": 1.267578125,
+        "name": "s1_video_x0_step05",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 358.78894376427445,
+        "rel_l2": 0.09850903988848826
+      },
+      {
+        "cosine": 0.9886285754762192,
+        "max_abs": 2.76953125,
+        "name": "s1_video_x0_step06",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 359.7044145352138,
+        "rel_l2": 0.15070793091662335
+      },
+      {
+        "cosine": 0.9899441010935696,
+        "max_abs": 2.578125,
+        "name": "s1_video_x0_step07",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 363.1937960284211,
+        "rel_l2": 0.14180169386817335
+      },
+      {
+        "cosine": 0.9900313327311371,
+        "max_abs": 2.41015625,
+        "name": "s1_video_x0_step08",
+        "non_finite": 0,
+        "numel": 196608,
+        "ref_norm": 369.25883481576346,
+        "rel_l2": 0.14105032092265513
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s2_audio_step01",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s2_audio_step02",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s2_audio_step03",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s2_audio_step00_in",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9999383201121199,
+        "max_abs": 0.0703125,
+        "name": "s2_audio_vel_step01",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 143.13954235320122,
+        "rel_l2": 0.011149865696262189
+      },
+      {
+        "cosine": 0.9999404453726287,
+        "max_abs": 0.078125,
+        "name": "s2_audio_vel_step02",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 143.30923358779276,
+        "rel_l2": 0.010941700747814715
+      },
+      {
+        "cosine": 0.9999392378082722,
+        "max_abs": 0.1171875,
+        "name": "s2_audio_vel_step03",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 143.4194104522761,
+        "rel_l2": 0.011035863308394504
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s2_audio_x0_step01",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s2_audio_x0_step02",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s2_audio_x0_step03",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.999868208311198,
+        "max_abs": 0.12646484375,
+        "name": "s2_cond0_latent",
+        "non_finite": 0,
+        "numel": 49152,
+        "ref_norm": 168.41415570394395,
+        "rel_l2": 0.01656409863316815
+      },
+      {
+        "cosine": 0.9999302387172171,
+        "max_abs": 0.0859375,
+        "name": "s2_cond0_pixels",
+        "non_finite": 0,
+        "numel": 1179648,
+        "ref_norm": 627.3652001881003,
+        "rel_l2": 0.011816273606389297
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s2_entry_audio",
+        "non_finite": 0,
+        "numel": 16128,
+        "ref_norm": 151.54552996770641,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9999271403993505,
+        "max_abs": 0.208740234375,
+        "name": "s2_entry_video",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 800.103394772247,
+        "rel_l2": 0.012071427570566015
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s2_sigmas",
+        "non_finite": 0,
+        "numel": 4,
+        "ref_norm": 1.2371606453900335,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9999937656805663,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_0",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12460.442674387012,
+        "rel_l2": 0.0035310904869143354
+      },
+      {
+        "cosine": 0.999992610848423,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_1",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13727.86850047267,
+        "rel_l2": 0.0038458490737411366
+      },
+      {
+        "cosine": 0.9999903854626018,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_2",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13507.759705023296,
+        "rel_l2": 0.004391521010157061
+      },
+      {
+        "cosine": 0.9999903209851395,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_3",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 14055.38274971615,
+        "rel_l2": 0.004408349003797175
+      },
+      {
+        "cosine": 0.9999863866596902,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_4",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12760.387101846942,
+        "rel_l2": 0.005221513826574986
+      },
+      {
+        "cosine": 0.9999824485390575,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_5",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11953.260158935307,
+        "rel_l2": 0.005927330116885195
+      },
+      {
+        "cosine": 0.9999804994456605,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_6",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11900.685928638259,
+        "rel_l2": 0.006248559952900823
+      },
+      {
+        "cosine": 0.9999790348099235,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_7",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11897.758632471718,
+        "rel_l2": 0.00647941260728961
+      },
+      {
+        "cosine": 0.9999770055251636,
+        "max_abs": 10.0,
+        "name": "s2_step00_audio_block_8",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11761.744308209285,
+        "rel_l2": 0.006784751762281996
+      },
+      {
+        "cosine": 0.9999745875963734,
+        "max_abs": 10.0,
+        "name": "s2_step00_audio_block_9",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11668.646690916314,
+        "rel_l2": 0.007130324540701759
+      },
+      {
+        "cosine": 0.999973218741111,
+        "max_abs": 10.0,
+        "name": "s2_step00_audio_block_10",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11841.241547004165,
+        "rel_l2": 0.007319670688098377
+      },
+      {
+        "cosine": 0.9999713419305081,
+        "max_abs": 10.0,
+        "name": "s2_step00_audio_block_11",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11885.778890918431,
+        "rel_l2": 0.007572792648627968
+      },
+      {
+        "cosine": 0.9999707681912242,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_12",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12097.875094673094,
+        "rel_l2": 0.007650243201755565
+      },
+      {
+        "cosine": 0.9999690811329903,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_13",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12152.869312196839,
+        "rel_l2": 0.007867027132856067
+      },
+      {
+        "cosine": 0.9999681105138335,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_14",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12322.855235419798,
+        "rel_l2": 0.007987670386688192
+      },
+      {
+        "cosine": 0.9999661619405595,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_15",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12384.858338410051,
+        "rel_l2": 0.008227252276524247
+      },
+      {
+        "cosine": 0.9999650398132001,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_16",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12398.837690933096,
+        "rel_l2": 0.008361919145631601
+      },
+      {
+        "cosine": 0.999964116079151,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_17",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12375.99187372184,
+        "rel_l2": 0.008472095692964351
+      },
+      {
+        "cosine": 0.9999635825571206,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_18",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12507.903802846968,
+        "rel_l2": 0.00853530495190159
+      },
+      {
+        "cosine": 0.9999621671517084,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_19",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12484.865842210138,
+        "rel_l2": 0.008698969416199569
+      },
+      {
+        "cosine": 0.9999607936582212,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_20",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12450.527327203039,
+        "rel_l2": 0.008856194582843679
+      },
+      {
+        "cosine": 0.9999566277058077,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_21",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12129.26259453339,
+        "rel_l2": 0.009314599538726636
+      },
+      {
+        "cosine": 0.9999548451840686,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_22",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12116.432367142876,
+        "rel_l2": 0.009503831355124722
+      },
+      {
+        "cosine": 0.9999494750792137,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_23",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11702.22240997261,
+        "rel_l2": 0.010053137581969364
+      },
+      {
+        "cosine": 0.9999487464191437,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_24",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11776.77891767951,
+        "rel_l2": 0.010125827817960335
+      },
+      {
+        "cosine": 0.9999400601779593,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_25",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11216.057163137753,
+        "rel_l2": 0.010951451024393684
+      },
+      {
+        "cosine": 0.9999452862291781,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_26",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11770.66036928742,
+        "rel_l2": 0.010461069650619407
+      },
+      {
+        "cosine": 0.9999422572331008,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_27",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11562.81780514245,
+        "rel_l2": 0.010746782139186442
+      },
+      {
+        "cosine": 0.9999436017753112,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_28",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11949.71251629872,
+        "rel_l2": 0.010623195872457764
+      },
+      {
+        "cosine": 0.9999372897842647,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_29",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11472.681529896858,
+        "rel_l2": 0.01120295233968602
+      },
+      {
+        "cosine": 0.999937580684124,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_30",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11595.364080526591,
+        "rel_l2": 0.011174711529780937
+      },
+      {
+        "cosine": 0.9999386352009556,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_31",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 11733.20324054805,
+        "rel_l2": 0.011081962070045675
+      },
+      {
+        "cosine": 0.999944669189703,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_32",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12374.076902632463,
+        "rel_l2": 0.010527568549149298
+      },
+      {
+        "cosine": 0.9999438335736915,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_33",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12360.523687113317,
+        "rel_l2": 0.010604126598938082
+      },
+      {
+        "cosine": 0.9999449523127614,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_34",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12732.480134099036,
+        "rel_l2": 0.010494165975775457
+      },
+      {
+        "cosine": 0.9999449470484197,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_35",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12982.449731330522,
+        "rel_l2": 0.010497061056536194
+      },
+      {
+        "cosine": 0.9999462766658995,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_36",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13268.74203931387,
+        "rel_l2": 0.01036924782432612
+      },
+      {
+        "cosine": 0.9999397672507249,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_37",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12644.01279766868,
+        "rel_l2": 0.010976621278066864
+      },
+      {
+        "cosine": 0.9999449784928116,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_38",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13366.694667296939,
+        "rel_l2": 0.010491052143745223
+      },
+      {
+        "cosine": 0.9999348380124073,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_39",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 12668.82578102844,
+        "rel_l2": 0.011418375574127948
+      },
+      {
+        "cosine": 0.9999326813537406,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_40",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 13286.23374663646,
+        "rel_l2": 0.011603457850797066
+      },
+      {
+        "cosine": 0.9999400664672002,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_41",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 14806.131229106744,
+        "rel_l2": 0.010948251428172729
+      },
+      {
+        "cosine": 0.9999381713981031,
+        "max_abs": 8.0,
+        "name": "s2_step00_audio_block_42",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 15252.31597946377,
+        "rel_l2": 0.011120184309196991
+      },
+      {
+        "cosine": 0.9999350402812583,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_43",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 15815.315834540324,
+        "rel_l2": 0.01139820694728466
+      },
+      {
+        "cosine": 0.9999419904985581,
+        "max_abs": 16.0,
+        "name": "s2_step00_audio_block_44",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 17807.765499359106,
+        "rel_l2": 0.010772285952230022
+      },
+      {
+        "cosine": 0.999931964838663,
+        "max_abs": 12.0,
+        "name": "s2_step00_audio_block_45",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 17803.044300908707,
+        "rel_l2": 0.011667195816967365
+      },
+      {
+        "cosine": 0.9999626876136017,
+        "max_abs": 16.0,
+        "name": "s2_step00_audio_block_46",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 26162.16907999517,
+        "rel_l2": 0.008638988802492923
+      },
+      {
+        "cosine": 0.9999865572109717,
+        "max_abs": 32.0,
+        "name": "s2_step00_audio_block_47",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 54322.24779536607,
+        "rel_l2": 0.005187190192195158
+      },
+      {
+        "cosine": 0.9999999999948812,
+        "max_abs": 0.00390625,
+        "name": "s2_step00_audio_in",
+        "non_finite": 0,
+        "numel": 258048,
+        "ref_norm": 1262.5764578596354,
+        "rel_l2": 3.1996473406039447e-6
+      },
+      {
+        "cosine": 0.999996632253142,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_0",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 1468.2011867049991,
+        "rel_l2": 0.0025959417697155826
+      },
+      {
+        "cosine": 0.9999958125487379,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_1",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 3926.4467285364267,
+        "rel_l2": 0.002899264974403946
+      },
+      {
+        "cosine": 0.9999899335677841,
+        "max_abs": 4.0,
+        "name": "s2_step00_video_block_2",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 3957.0817456367786,
+        "rel_l2": 0.004487662105764783
+      },
+      {
+        "cosine": 0.9999902583722092,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_3",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 3983.1411904537313,
+        "rel_l2": 0.004414143646637976
+      },
+      {
+        "cosine": 0.9999906480438723,
+        "max_abs": 4.0,
+        "name": "s2_step00_video_block_4",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4385.473788185607,
+        "rel_l2": 0.00434153428851913
+      },
+      {
+        "cosine": 0.9999895137970304,
+        "max_abs": 4.0,
+        "name": "s2_step00_video_block_5",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4116.229031330177,
+        "rel_l2": 0.004588784808041871
+      },
+      {
+        "cosine": 0.9999888134731262,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_6",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 3842.9701752763967,
+        "rel_l2": 0.004730010775021938
+      },
+      {
+        "cosine": 0.999988259525558,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_7",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 3909.8295852310102,
+        "rel_l2": 0.0048521268789563435
+      },
+      {
+        "cosine": 0.9999890462256372,
+        "max_abs": 2.5,
+        "name": "s2_step00_video_block_8",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4147.124219889252,
+        "rel_l2": 0.004687288077283439
+      },
+      {
+        "cosine": 0.9999895719420882,
+        "max_abs": 2.5,
+        "name": "s2_step00_video_block_9",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4166.380887187621,
+        "rel_l2": 0.004570868237612553
+      },
+      {
+        "cosine": 0.9999891708646494,
+        "max_abs": 2.5,
+        "name": "s2_step00_video_block_10",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4142.806636309237,
+        "rel_l2": 0.0046644975710574636
+      },
+      {
+        "cosine": 0.9999892720532069,
+        "max_abs": 2.5,
+        "name": "s2_step00_video_block_11",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4246.532319969574,
+        "rel_l2": 0.004648892467649637
+      },
+      {
+        "cosine": 0.9999885935776011,
+        "max_abs": 2.5,
+        "name": "s2_step00_video_block_12",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4264.181155986706,
+        "rel_l2": 0.004792709739933576
+      },
+      {
+        "cosine": 0.9999900574446469,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_13",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4522.119760037208,
+        "rel_l2": 0.004474943556168672
+      },
+      {
+        "cosine": 0.9999905576350102,
+        "max_abs": 4.0,
+        "name": "s2_step00_video_block_14",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4748.664924562884,
+        "rel_l2": 0.0043704504073201434
+      },
+      {
+        "cosine": 0.9999894997297681,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_15",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4395.75147755964,
+        "rel_l2": 0.004582989634812624
+      },
+      {
+        "cosine": 0.9999879584295058,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_16",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4135.8386531397055,
+        "rel_l2": 0.004907524880589105
+      },
+      {
+        "cosine": 0.9999884360199833,
+        "max_abs": 4.0,
+        "name": "s2_step00_video_block_17",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4532.77118246876,
+        "rel_l2": 0.0048198936724413695
+      },
+      {
+        "cosine": 0.9999881248342269,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_18",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4470.817231990217,
+        "rel_l2": 0.004874003833836638
+      },
+      {
+        "cosine": 0.9999876847605297,
+        "max_abs": 4.0,
+        "name": "s2_step00_video_block_19",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4248.333122587172,
+        "rel_l2": 0.004963026589341884
+      },
+      {
+        "cosine": 0.9999874506696984,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_20",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4267.291546045926,
+        "rel_l2": 0.00501034456094258
+      },
+      {
+        "cosine": 0.999986925626728,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_21",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4365.368183089997,
+        "rel_l2": 0.005113616830912445
+      },
+      {
+        "cosine": 0.9999862130715589,
+        "max_abs": 2.0,
+        "name": "s2_step00_video_block_22",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4266.461891631003,
+        "rel_l2": 0.005251206097386878
+      },
+      {
+        "cosine": 0.9999715490208457,
+        "max_abs": 20.0,
+        "name": "s2_step00_video_block_23",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4208.684085733775,
+        "rel_l2": 0.0075531885733953405
+      },
+      {
+        "cosine": 0.9998673485195281,
+        "max_abs": 60.0,
+        "name": "s2_step00_video_block_24",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4045.0233992774833,
+        "rel_l2": 0.01636775669424551
+      },
+      {
+        "cosine": 0.9999153495620939,
+        "max_abs": 44.0,
+        "name": "s2_step00_video_block_25",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4123.135186141747,
+        "rel_l2": 0.013011650617906658
+      },
+      {
+        "cosine": 0.9998599137715353,
+        "max_abs": 58.0,
+        "name": "s2_step00_video_block_26",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4074.9139662234725,
+        "rel_l2": 0.016738313561339722
+      },
+      {
+        "cosine": 0.9999318908642232,
+        "max_abs": 10.0,
+        "name": "s2_step00_video_block_27",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4092.3500364762285,
+        "rel_l2": 0.011678551306598802
+      },
+      {
+        "cosine": 0.9999177602915772,
+        "max_abs": 16.0,
+        "name": "s2_step00_video_block_28",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4185.6868699558745,
+        "rel_l2": 0.012833676959666675
+      },
+      {
+        "cosine": 0.9998984576647733,
+        "max_abs": 22.0,
+        "name": "s2_step00_video_block_29",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4312.526966881272,
+        "rel_l2": 0.014251488097391287
+      },
+      {
+        "cosine": 0.9999032498167783,
+        "max_abs": 14.0,
+        "name": "s2_step00_video_block_30",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4689.485302383948,
+        "rel_l2": 0.013913274667759743
+      },
+      {
+        "cosine": 0.9998552406773145,
+        "max_abs": 20.0,
+        "name": "s2_step00_video_block_31",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4457.0610854479955,
+        "rel_l2": 0.017015089152238032
+      },
+      {
+        "cosine": 0.9998372249101724,
+        "max_abs": 16.0,
+        "name": "s2_step00_video_block_32",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4433.190901628284,
+        "rel_l2": 0.01805967416662204
+      },
+      {
+        "cosine": 0.9998443872194519,
+        "max_abs": 12.0,
+        "name": "s2_step00_video_block_33",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4724.691975640373,
+        "rel_l2": 0.017640913758327017
+      },
+      {
+        "cosine": 0.999831216428979,
+        "max_abs": 10.0,
+        "name": "s2_step00_video_block_34",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4467.942160331492,
+        "rel_l2": 0.01837222508934338
+      },
+      {
+        "cosine": 0.9998197306920265,
+        "max_abs": 12.0,
+        "name": "s2_step00_video_block_35",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4266.870114566329,
+        "rel_l2": 0.01898758212507252
+      },
+      {
+        "cosine": 0.9998469946727104,
+        "max_abs": 8.0,
+        "name": "s2_step00_video_block_36",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4640.159383621955,
+        "rel_l2": 0.017497168727073062
+      },
+      {
+        "cosine": 0.9997958388649559,
+        "max_abs": 7.0,
+        "name": "s2_step00_video_block_37",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4264.550775329239,
+        "rel_l2": 0.0202060181243316
+      },
+      {
+        "cosine": 0.9997436508611101,
+        "max_abs": 14.0,
+        "name": "s2_step00_video_block_38",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4318.432992913774,
+        "rel_l2": 0.022654424483259654
+      },
+      {
+        "cosine": 0.9997013385191499,
+        "max_abs": 24.0,
+        "name": "s2_step00_video_block_39",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4458.498288940033,
+        "rel_l2": 0.024438434920326785
+      },
+      {
+        "cosine": 0.9996496043216697,
+        "max_abs": 20.0,
+        "name": "s2_step00_video_block_40",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4395.339501755451,
+        "rel_l2": 0.026470187882741605
+      },
+      {
+        "cosine": 0.9995382787787821,
+        "max_abs": 36.0,
+        "name": "s2_step00_video_block_41",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4612.16447451218,
+        "rel_l2": 0.030391042854066273
+      },
+      {
+        "cosine": 0.9994281837866038,
+        "max_abs": 42.0,
+        "name": "s2_step00_video_block_42",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4530.916714184317,
+        "rel_l2": 0.03382269016163697
+      },
+      {
+        "cosine": 0.9995146084978933,
+        "max_abs": 10.0,
+        "name": "s2_step00_video_block_43",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 4883.45331490119,
+        "rel_l2": 0.031153921107248225
+      },
+      {
+        "cosine": 0.9994739684252941,
+        "max_abs": 16.0,
+        "name": "s2_step00_video_block_44",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 5434.5281788510865,
+        "rel_l2": 0.03244370701630487
+      },
+      {
+        "cosine": 0.9995270232065718,
+        "max_abs": 12.0,
+        "name": "s2_step00_video_block_45",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 7237.9047945607035,
+        "rel_l2": 0.030760276422642622
+      },
+      {
+        "cosine": 0.9993564424917072,
+        "max_abs": 16.0,
+        "name": "s2_step00_video_block_46",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 9230.524470878783,
+        "rel_l2": 0.03587162668832685
+      },
+      {
+        "cosine": 0.9999463272106487,
+        "max_abs": 24.0,
+        "name": "s2_step00_video_block_47",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 36881.17459577733,
+        "rel_l2": 0.010360685284149945
+      },
+      {
+        "cosine": 0.9999963010628103,
+        "max_abs": 0.0625,
+        "name": "s2_step00_video_in",
+        "non_finite": 0,
+        "numel": 393216,
+        "ref_norm": 489.3122151341372,
+        "rel_l2": 0.0027199447172906394
+      },
+      {
+        "cosine": 0.99134272791434,
+        "max_abs": 0.85546875,
+        "name": "s2_upsampled",
+        "non_finite": 0,
+        "numel": 12288,
+        "ref_norm": 80.75441547404111,
+        "rel_l2": 0.13140094991825046
+      },
+      {
+        "cosine": 0.9999670257716561,
+        "max_abs": 0.234375,
+        "name": "s2_video_step01",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 687.1210547361213,
+        "rel_l2": 0.008120798569271304
+      },
+      {
+        "cosine": 0.9997394574995601,
+        "max_abs": 0.400146484375,
+        "name": "s2_video_step02",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 600.9364422174772,
+        "rel_l2": 0.022826188585924667
+      },
+      {
+        "cosine": 0.999231620155505,
+        "max_abs": 0.974609375,
+        "name": "s2_video_step03",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 749.3202355212962,
+        "rel_l2": 0.03920246261755036
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "s2_video_step00_in",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 800.103394772247,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9996039280085437,
+        "max_abs": 1.267578125,
+        "name": "s2_video_vel_step01",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 1037.4759115737488,
+        "rel_l2": 0.028151194334116066
+      },
+      {
+        "cosine": 0.9992808197369394,
+        "max_abs": 1.2421875,
+        "name": "s2_video_vel_step02",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 1047.1612248509362,
+        "rel_l2": 0.03792634483341382
+      },
+      {
+        "cosine": 0.9984763962177746,
+        "max_abs": 1.7216796875,
+        "name": "s2_video_vel_step03",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 1025.9615398740516,
+        "rel_l2": 0.05521385290010864
+      },
+      {
+        "cosine": 0.9992967866996196,
+        "max_abs": 1.154296875,
+        "name": "s2_video_x0_step01",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 707.2275262633459,
+        "rel_l2": 0.03750949605060687
+      },
+      {
+        "cosine": 0.9991687928241959,
+        "max_abs": 0.9208984375,
+        "name": "s2_video_x0_step02",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 729.5674047496183,
+        "rel_l2": 0.04077015409471427
+      },
+      {
+        "cosine": 0.9992316236072417,
+        "max_abs": 0.974609375,
+        "name": "s2_video_x0_step03",
+        "non_finite": 0,
+        "numel": 786432,
+        "ref_norm": 749.3204707735858,
+        "rel_l2": 0.03920237419519328
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "text_attention_mask",
+        "non_finite": 0,
+        "numel": 1024,
+        "ref_norm": 4.242640687119285,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9999913401203401,
+        "max_abs": 0.62890625,
+        "name": "text_audio_ctx",
+        "non_finite": 0,
+        "numel": 2097152,
+        "ref_norm": 1448.1553430920708,
+        "rel_l2": 0.004161714479542906
+      },
+      {
+        "cosine": 0.999991052984559,
+        "max_abs": 0.125,
+        "name": "text_audio_ctx_real",
+        "non_finite": 0,
+        "numel": 36864,
+        "ref_norm": 191.94604652601626,
+        "rel_l2": 0.004233931225904727
+      },
+      {
+        "cosine": 0.9999855635059359,
+        "max_abs": 0.25,
+        "name": "text_audio_feats",
+        "non_finite": 0,
+        "numel": 36864,
+        "ref_norm": 1293.2470157489797,
+        "rel_l2": 0.005375017955330754
+      },
+      {
+        "cosine": 0.9999986549150108,
+        "max_abs": 0.05859375,
+        "name": "text_hidden_0",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 276.8224372540876,
+        "rel_l2": 0.0016435850195019967
+      },
+      {
+        "cosine": 0.9999854786092179,
+        "max_abs": 0.31789207458496094,
+        "name": "text_hidden_1",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 378.5009138600703,
+        "rel_l2": 0.005389116779222489
+      },
+      {
+        "cosine": 0.999983907810389,
+        "max_abs": 0.1802196502685547,
+        "name": "text_hidden_2",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 301.4036375206163,
+        "rel_l2": 0.005683406406670077
+      },
+      {
+        "cosine": 0.9999618429555864,
+        "max_abs": 0.31285858154296875,
+        "name": "text_hidden_5",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 215.17963315970184,
+        "rel_l2": 0.008740771690028274
+      },
+      {
+        "cosine": 0.9999518476673792,
+        "max_abs": 0.1638805866241455,
+        "name": "text_hidden_6",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 295.8775107306314,
+        "rel_l2": 0.009840416411852014
+      },
+      {
+        "cosine": 0.9999360684380937,
+        "max_abs": 0.15854644775390625,
+        "name": "text_hidden_7",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 278.73814558976665,
+        "rel_l2": 0.011343116707594239
+      },
+      {
+        "cosine": 0.9999535337695484,
+        "max_abs": 0.18056678771972656,
+        "name": "text_hidden_12",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 150.05251515197725,
+        "rel_l2": 0.009644885433622876
+      },
+      {
+        "cosine": 0.9999834498048862,
+        "max_abs": 1.8313446044921875,
+        "name": "text_hidden_24",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 957.1105955079445,
+        "rel_l2": 0.005803445030196089
+      },
+      {
+        "cosine": 0.9999821697387363,
+        "max_abs": 1.2495880126953125,
+        "name": "text_hidden_36",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 853.9782837074725,
+        "rel_l2": 0.005971731769500701
+      },
+      {
+        "cosine": 0.9999874604281237,
+        "max_abs": 3.592193603515625,
+        "name": "text_hidden_47",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 1176.6294501082727,
+        "rel_l2": 0.0051368646197462245
+      },
+      {
+        "cosine": 0.999992127347477,
+        "max_abs": 20.68603515625,
+        "name": "text_hidden_48",
+        "non_finite": 0,
+        "numel": 69120,
+        "ref_norm": 12610.990890598932,
+        "rel_l2": 0.0039957200473639725
+      },
+      {
+        "cosine": 1.0,
+        "max_abs": 0.0,
+        "name": "text_input_ids",
+        "non_finite": 0,
+        "numel": 1024,
+        "ref_norm": 482733.63618045097,
+        "rel_l2": 0.0
+      },
+      {
+        "cosine": 0.9999909772610122,
+        "max_abs": 0.421875,
+        "name": "text_video_ctx",
+        "non_finite": 0,
+        "numel": 4194304,
+        "ref_norm": 2047.993729018434,
+        "rel_l2": 0.004247987994234933
+      },
+      {
+        "cosine": 0.9999721340424453,
+        "max_abs": 0.125,
+        "name": "text_video_ctx_real",
+        "non_finite": 0,
+        "numel": 73728,
+        "ref_norm": 271.5577936419409,
+        "rel_l2": 0.00746636970424971
+      },
+      {
+        "cosine": 0.9999825593445977,
+        "max_abs": 0.25,
+        "name": "text_video_feats",
+        "non_finite": 0,
+        "numel": 73728,
+        "ref_norm": 1629.35847059377,
+        "rel_l2": 0.005908890415810177
+      }
+    ],
+    "mode": "exact"
+  },
+  "elapsed_s": 0.222824417,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_DUMP_OPS": "0,1,24,47",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "compare-dumps",
+  "status": "pass"
+}

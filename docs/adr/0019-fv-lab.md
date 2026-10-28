@@ -29,12 +29,18 @@
   Hub token by Runpod secret reference (§20.7 "First attempt"). §20 (D1i, the coordinator's decisions on §19.9: a
   typed `[[metric]]` step in the cell, `metrics.txt` a report, the ten LTX clip-metric targets as the `oracle` tier's
   `extra_cells`) is proposed, CPU-tested; its GPU check is §20.7 (a first attempt on `664473b` compared nothing: the
-  upstream pod had no Hub token; to be re-run once the owner's secret `fv_hf_token` exists, §20.7 "First attempt").
+  upstream pod had no Hub token, §20.7 "First attempt"; the second, on `4902297` with the owner's secret
+  `fv_hf_token`, 2026-10-28, shows runner equality on all eight arms but does not meet the criterion as written:
+  `oracle-ltx25-retake` exits 2 on both sides because the reference is wrong (the rebuilt `sol-ltx25` image's unpinned
+  PyAV drops the fixture's first AAC frame), so the retake clip-vs-clip comparison is not yet measured, §20.7 "Second
+  attempt").
   `sfwan13` is a follow-up (§20.5), done in §21 (D1j: `sfwan13` as the `oracle-r2` tier, `weights = "volume+r2"`; its
   upstream tree fetched from R2 by a typed `r2` step of `lab/upstream.toml`; a `decode` measure, directory
   `[[compare]]`s and `after` anchors in the cell schema; the script runner's R2 trees, `runpod-http.sh run`
   `FV_R2_TREES`, §21.8, decided A), is accepted (coordinator, 2026-10-26): its GPU check passed on `4b4980b` (§21.7
-  "Results"). `oracle`'s branch stays whole until §20.7's re-run with the Hub token passes too (§21.9). §22 (the
+  "Results"). `oracle`'s branch stays whole: §20.7's second attempt shows runner equality, and the coordinator decided
+  (2026-10-28) that the retirement waits for the retake re-check on the pinned reference image, through both runners
+  with the four retake cells (§20.7 "Second attempt", §21.9). §22 (the
   fifteen other script families: eleven retired with no tier, `hd` and `serve-engine` tiers now, `wan`, `sfstream`
   and a small `mmaudio` tier after one cell addition, `{tae}` without a TAE gate) is accepted (coordinator,
   2026-10-26, FVID-2026-10-26-d1-remaining); its slices S1-S8 follow. S2 (§22.9: `hd` and its 1080P-gate sibling
@@ -3100,7 +3106,10 @@ whole.
 ### 20. D1i: the clip-metric targets as cells: `[[metric]]` and extra cells
 
 Status: proposed 2026-10-26 (draft PR from `claude/d1i-oracle-metrics`), CPU-tested; its GPU check is the
-coordinator's (§20.7). Decision-id FVID-2026-10-26-d1i-oracle-metrics. This is §19.9's slice: the ten LTX
+coordinator's (§20.7): run on `4902297` on 2026-10-28, runner equality on all eight arms, the criterion not met as
+written (the retake arm exits 2 on both sides: the reference is wrong, an unpinned PyAV in the rebuilt upstream
+image; §20.7 "Second attempt"); the coordinator's decision (2026-10-28): `oracle`'s retirement waits for the retake
+re-check on the pinned reference image. Decision-id FVID-2026-10-26-d1i-oracle-metrics. This is §19.9's slice: the ten LTX
 clip-metric targets of `runpod-matrix.sh oracle` become cells of the `oracle` tier. `sfwan13` does not (§20.5).
 Nothing is retired here.
 
@@ -3444,9 +3453,120 @@ the image, fv-lab and pods of §19.7's run, the commands above. Evidence (force-
   changes: an older fv-lab refuses `lab/upstream.toml`'s `hub_token`), and check the upstream `box.txt` reads
   `hf_token=env` and `steps.tsv` `weights:ltx25 0`.
 
+**Second attempt (2026-10-28): runner equality holds; the pass criterion is not met as written.** The Hub token
+reached the upstream pod and both references were served; both runners ran all eight arms and agree on every one,
+including the same failure: `oracle-ltx25-retake` (the retake arm that injects the reference) exits 2 on both sides,
+so the retake clip-vs-clip comparison is not yet measured. This is not a pass. `SHA=4902297` (main at `49022979`,
+after #232, which carries the first attempt's fixes), run from a worktree at that commit; the runtime image
+`ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-4902297` (digest `sha256:ecdeb6eff61a4112375b2e70f6283cfca9bc45662e45f6a2bdd39389ae551212`;
+both runtime pods' `box.txt` `image_build_id=8c4724d1cb42771e`, the build id of `tools-v0.1.84`, whose manifest
+names `source_commit` `49022979…`); fv-lab `0.1.84`, `tools-v0.1.84`'s, built at `49022979` (the manifest and the
+version as the coordinator's download showed them; not committed); the upstream image
+`fastvideo-rs-upstream-sol-ltx25:latest` pinned to `sha256:60893975f9765fcd1f8076c1ab93a5076da31fa7cbdc87af6974794deb16f181`;
+RTX PRO 6000 Blackwell Server Edition pods in EU-RO-1 at $2.49/hr. The commands are the block above as written (the
+eight cells, `--upstream-wall-cap-s 7200 --wall-cap-s 3600 --fetch-tree --fetch-skip '/frames/'`, the script side's
+`FV_GEN_TIMEOUT_S=5400 FV_POD_CAP_S=3600 FV_FETCH_TREE=1 FV_FETCH_SKIP='/frames/'` and `FV_EXTRA_ENV`), with the script
+side under the coordinator's retry wrapper (`oracle-script-4902297-metrics.log`: `exit=0 (attempt 1)`).
+
+- **Upstream readiness: seven pods missed fv-deploy's 600 s.** The rule: fv-deploy replaces an upstream pod that is
+  not ready 600 s after its create, for 3 cycles. Earlier on 2026-10-28 two runs of this command lost five pods to it,
+  each `not ready 600 s after creation (last: /upstream/ 404)`: `qzgvk8kzs0nabh`, `4qmb9ze3xzahkv` and
+  `u1x1ihyx5hrvsk` (the run ended `no instance became ready in 3 cycle(s) of 600 s`, both references missing, no
+  runtime pod; `oracle-lab-4902297-not-ready-1.log`), then `fkfk7kxjauc4pu` and `blchq23jrbjv40`
+  (`oracle-lab-4902297-not-ready-2.log`; that run's third pod, `3hwqsd53vhhtu4`, was deleted when the run was
+  interrupted: `deleted 3hwqsd53vhhtu4 (interrupted)`). After those five the owner chose to keep the 600 s rule and
+  retry later (the owner's decision of 2026-10-28, "Pause §20.7, retry later"). Each was pulling the 14.1 GB upstream image (40 layers, 14,110,131,535 bytes; three of them 2.4-3.6 GB;
+  `artifacts/runpod/upstream/sol-ltx25-layers-60893975.txt`). Runpod's pod system log
+  (`https://hapi.runpod.net/v1/pod/<id>/logs`; the coordinator's observation, not committed) showed the small layers done in
+  about 2 min and the three large layers (`1a8462756f5c` 3.5 GB, `316f71913ea6` 3.6 GB, `9782f44d15ec` 2.4 GB)
+  `Retrying` 5 times each; the same 3.5 GB blob downloaded from the coordinator's container in 133 s, about 27 MB/s
+  (the coordinator's measurement), so ghcr serves it. One attempt in between found no RTX PRO 6000 capacity and
+  created no pod (the coordinator's record; its driver log was not saved). In this run two more
+  missed 600 s, `7v6vcw220sevm8` (created 19:59:33Z, deleted `not-ready` 20:09:36Z) and `fohh8re6xmghrk` (20:09:39Z
+  to 20:19:41Z); the third, `7d43o9u6aja2hc`, created 20:19:43Z, was ready 279.7 s after its create
+  (`oracle-ledger-4902297.tsv`).
+- **The upstream pod** `7d43o9u6aja2hc` (tag `4902297-1028195929-7bc0`): `box.txt` `hf_token=env`, `r2_key=none`;
+  `steps.tsv` `info:box	0`, `weights:ltx25	0` (511 s, 20:24:22Z to 20:32:53Z; `steps.log`: the five packs rebuilt,
+  the text encoder and the DiT `SHA MISMATCH … accepted without repair`, the known accepted difference of
+  docs/oracle.md, `RECON_ACCEPT_MISMATCH=1`), `oracle:ltx25-a2v-i2v,ltx25-retake	0` (112 s); `cell.json` exit 0 for
+  both, a2v-i2v 68 s with a 290 MB dump, retake 39 s with 263 MB. Released `the runtime pod has every reference; the
+  hold is lifted`, fetched, deleted 20:45:32Z (`down`). So the secret `fv_hf_token` works, and the first attempt's
+  401 is gone.
+- **The driver's report** (`oracle-report-4902297-metrics.json`): `fv-lab oracle rc=0` (the script side `rc=0`,
+  `oracle-driver-4902297-metrics.log`), `"served": ["ltx25-a2v-i2v", "ltx25-retake"]`, `"missing": []`,
+  `"runtime_ok": true`, `"runtime_exit_code": 0`, `"problems": []`; one upstream entry, released, `"fetched": {"Ok":
+  null}`, `"deleted": {"Ok": null}`.
+- **The runtime pods.** fv-lab `7uqbn0s87484cj` (tag `4902297-1028195929-96c3`): created 20:35:03Z, ready 33.0 s,
+  arms to 20:44:48Z, `matrix_exit=0`, deleted 20:45:47Z (`done`). Script `hweh6ocepd90wr` (`4902297-10282035`, hard
+  cap 3600 s, on `bz0ofkfx45`): created 20:35:12Z, `matrix_exit=0`, destroyed 20:44:11Z. Per arm, the same on both
+  sides (`summary.json`): `oracle-ltx25-a2v-i2v` exit 0 (254 / 253 s), `-ownaud` exit 0 (142 / 136 s),
+  `oracle-ltx25-retake-ownenc` exit 0 (57 / 22 s), each 121 frames; the four `-diff` arms exit 0; and
+  `oracle-ltx25-retake` **exit 2** (84 / 15 s), its `stderr.log` on each side ending
+  `error: FASTVIDEO_INJECT_DIR: v2v_audio_wave: reference shape [2, 221152] (442304 values), ours needs 444416`.
+  `oracle-ltx25-retake-diff` then compares the reference with what that arm had dumped (its `stderr.log`: the noise
+  tensors and `v2v_region` `missing in candidate`, `v2v_audio_wave rel_l2 inf`), the same lines on both sides.
+- **The compare** (`compare-4902297-metrics.txt`): exit 0; `same oracle-ltx25-a2v-i2v-frames/metrics.txt`, `same
+  oracle-ltx25-retake-frames/metrics.txt`; "8 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 1
+  failed in both; 4 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict
+  file(s) the same, 2 metrics report(s), 0 difference(s)" (a2v-i2v, `-ownaud` and `-ownenc` 121 frames each
+  byte-identical; the retake arm `{"exit":2}` on both). The expected line reads 4 ran and 0 failed; the criterion's
+  allowance for failures in both covers the two a2v-i2v generation arms, not the retake arm.
+- **`metrics.txt`**, byte-identical on both sides. a2v-i2v meets every line of the criterion: 6 probe lines, 2
+  `ours vs reference clip`, 6 `<label> frame 0`, no `missing`, no empty value. Retake does not: `ours missing
+  …/oracle-ltx25-retake/frames/output.mp4`, then the probe lines of `ownenc` and `reference` (4, not 6) and their
+  `kept frames vs source` lines (4, not 6), and no `ours vs reference clip` line (0, not 2). Each `live.log` carries
+  31 prefixed lines, not the expected 36: a2v-i2v 22 (8 + 14), retake 9 (its 9 lines, not 14).
+- **Against the pass criterion:** item 1 met; item 2 met but for the summary line (3 ran, 1 failed in both);
+  item 3 met for a2v-i2v, not for retake; item 4: both `matrix_exit=0` and the ledger's created / deleted lines for
+  the upstream and the fv-lab runtime pod met; `fv-lab pod reap --account` was not run: instead the coordinator's
+  Runpod pod list showed no running pod after the run.
+- **What it shows.** Runner equality holds: fv-lab and the script ran the eight arms on one reference with the same
+  exits, byte-identical frames where frames were written, the same `compare-dumps` lines and byte-identical
+  `metrics.txt` reports, including the same failure. The retake failure is neither a runner one nor our port's: **the
+  reference is wrong.** LTX-2 `fd4ded7` lists `"av"` unpinned and `scripts/gpu/upstream/setup.sh`
+  `install_sol_ltx25` runs a plain `uv sync`, so the rebuilt `sol-ltx25` image (`sha256:60893975…`) picked up a
+  newer PyAV (very likely 19.x; UNVERIFIED which exactly: the image was not inspected). Under PyAV 19.0.2 (FFmpeg
+  9.0.2) upstream's `decode_audio_from_file` (`fd4ded7`
+  `packages/ltx-pipelines/src/ltx_pipelines/utils/media_io/decode.py:240-300`, `container.seek(0)` at `:262`) loses
+  the first AAC frame of the fixture (`scripts/gpu/fixtures/beach-push-768x512-24fps.mp4`: 44.1 kHz stereo AAC, 218
+  packets, pts −1024 priming with `skip_samples`, the last packet 992) and drops 32 end-padding samples: 221152 =
+  222208 − 1024 − 32 per channel, the wave shifted by exactly 1024 samples (23.2 ms late). PyAV 15.1 to 18.0 give
+  222208, which is ours (`crates/fastvideo-cudarc/src/ltx2/v2v.rs:707-715` → `a2v::decode_range`,
+  `a2v.rs:208-286`). The PyAV table is the coordinator's reproduction (that function body run on the fixture under
+  PyAV 15.1.0, 16.0.1, 17.0.0, 18.0.0 and 19.0.2), not a committed artifact. The September oracle compared
+  `v2v_audio_wave … n 444416` at rel_l2 7.021e-5 (`artifacts/runpod/oracle/4d4c347-09291047/oracle-ltx25-retake-diff/stderr.log`).
+  The same shift explains `oracle-ltx25-retake-ownenc-diff`'s `v2v_audio_latent` rel_l2 6.433e-1 here against
+  9.943e-2 in September (`4d4c347-09291047/oracle-ltx25-retake-ownenc-diff/stderr.log`). a2v-i2v was unaffected: its
+  FLAC input has no priming. The fix, PyAV pinned in `install_sol_ltx25`, is in a separate PR; until the reference
+  image is rebuilt with it and the retake cells re-run, the retake clip-vs-clip comparison (`ours vs reference clip`)
+  is not measured.
+- **Cost.** This run: the balance $36.98 before, $34.14 after, $2.84 for three upstream pods (two not ready) and two
+  runtime pods. Earlier on 2026-10-28, the five pods that were not ready: $42.27 → $39.85 by fv-deploy's balance
+  lines, $2.42 (`3hwqsd53vhhtu4`, created after the last of those lines and deleted on the interrupt, is not in it).
+  The $34.14 is Runpod's GraphQL `clientBalance`, read by the coordinator after the run.
+
+Evidence (force-added): fv-lab `artifacts/runpod/oracle/4902297-1028195929-96c3`, script
+`artifacts/runpod/oracle/4902297-10282035`, upstream `artifacts/runpod/upstream/4902297-1028195929-7bc0` (each whole:
+the clip copies, no frame PNGs, no dumps), with `compare-4902297-metrics.txt`, `oracle-report-4902297-metrics.json`,
+the driver's stderr `oracle-lab-4902297-metrics.log`, the script side's host log `oracle-script-4902297-metrics.log`,
+the exit codes `oracle-driver-4902297-metrics.log`, the earlier runs' driver stderr
+`oracle-lab-4902297-not-ready-{1,2}.log` and the ledger `oracle-ledger-4902297.tsv` under `artifacts/runpod/oracle/`,
+and the image's layer list `artifacts/runpod/upstream/sol-ltx25-layers-60893975.txt`. In the logs the coordinator's
+local paths read `<scratch>` and `<repo>`. No committed file holds a key or token (searched for this container's
+credential values, `hf_`, `rpa_`, `RUNPOD_API_KEY`, `RUNPOD_SECRET`, `Bearer`, `X-Amz-*` and long base64 strings:
+the only long strings are sha256 digests).
+
+**Then: the coordinator's decision (2026-10-28).** Runner equality is shown by this run for the clip-metric targets,
+as §19.7 and §21.7 showed it for the others. `oracle`'s retirement (S8, §20.8, §21.9) waits for the retake re-check on
+the pinned reference image, run through both runners with the four retake cells (`oracle-ltx25-retake`, `-diff`,
+`-ownenc`, `-ownenc-diff`); the script's `oracle` branch stays until then.
+
 #### 20.8 Then: the retirement of `oracle` (§15.10, §19.8)
 
-After §19.7's and this check pass, in the next D1 PR, `scripts/gpu/oracle.sh` runs `fv-lab oracle` for every
+(2026-10-28: §19.7 passed; this check's second attempt shows runner equality but not the retake arm's comparison,
+whose reference was wrong (an unpinned PyAV in the rebuilt upstream image, §20.7 "Second attempt"); the coordinator
+decided that the steps below wait for the retake re-check on the pinned reference image, through both runners with
+the four retake cells.) After §19.7's and this check pass, in the next D1 PR, `scripts/gpu/oracle.sh` runs `fv-lab oracle` for every
 target that is a cell (now nineteen: every default target and the ten here), mapping `ORACLE_TARGETS` to `--cells`
 (every arm of `oracle-<target>`), `FV_RUNTIME_STOCK_WAIT_S` to `--stock-wait-s`, `FV_POD_CAP_S` to the caps, and
 passing `--fetch-tree --fetch-skip '/frames/'`; it refuses `UP_AFTER`, `FV_ORACLE_RUN_MODE=all`,
@@ -3915,10 +4035,15 @@ volume may not hold), and for a family fv-lab runs, whose tier says where its tr
 #### 21.9 Then: the retirement of `oracle`
 
 After §21.7 passes (and §20.7's re-run with the Hub token), in the next D1 PR, as §20.8 with `sfwan13` included.
-§21.7 passed on `4b4980b` (2026-10-26, "Results"); §20.7's clip-metric re-run has not run: it is blocked on the owner
-creating the Runpod secret `fv_hf_token` (docs/ops/runpod-secrets.md). The retirement waits for it: `oracle` does not
-retire before every cell family it covers (the tensor-diff targets, checked on `fasth3-4step-vsa` in §15.7 and §19.7;
-the clip-metric targets, §20.7; `sfwan13`, §21.7) has passed its GPU check.
+§21.7 passed on `4b4980b` (2026-10-26, "Results"). §20.7's clip-metric re-run ran on `4902297` (2026-10-28, "Second
+attempt", with the owner's Runpod secret `fv_hf_token`): both runners agree on all eight arms, including the same
+failure, but the retake arm exits 2 on both sides (the reference is wrong: the rebuilt `sol-ltx25` image's unpinned
+PyAV loses the fixture's first AAC frame, so upstream's audio wave is 1056 samples per channel short; PyAV is pinned
+in a separate PR), so the retake clip-vs-clip comparison is not yet measured and the criterion is not met as written. `oracle` does not retire before every cell family it covers (the
+tensor-diff targets, checked on `fasth3-4step-vsa` in §15.7 and §19.7; the clip-metric targets, §20.7; `sfwan13`,
+§21.7) has passed its GPU check. The coordinator's decision (2026-10-28): runner equality is shown, but the
+retirement waits for the retake re-check on the pinned reference image, run through both runners with the four
+retake cells; the script's `oracle` branch stays until then.
 
 1. **Knobs.** `oracle` joins `FV_LAB_RETIRED`; `FV_ORACLE_TARGETS`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`,
    `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT` and the five `FV_LTX_*_PROMPT` move from `SCRIPT_KNOBS` to `MODE_KNOBS`;
@@ -3957,8 +4082,8 @@ its GPU check passed on `b7ddf5f` 2026-10-27, §22.13-§22.14; S5 is done, its G
 `hd`, `serve-engine`, `sfstream` and `mmaudio`, §22.19, `wan` waiting for S8), and a tier's branch leaves the script
 only after that tier's own check through both runners (§8).
 
-Fifteen `runpod-matrix.sh` families are left besides `oracle` (§18.3). `oracle` retires on its own once §20.7's re-run
-passes (§21.9), so this section leaves it out. For each family it gives:
+Fifteen `runpod-matrix.sh` families are left besides `oracle` (§18.3). `oracle` retires on its own after §20.7's re-run,
+after the retake re-check on the pinned reference image (the coordinator's decision, §20.7 "Second attempt", §21.9), so this section leaves it out. For each family it gives:
 - what the family measures and who reads the result;
 - when it last ran;
 - what keeps it from being a tier under the schema **as it is at `05d14444`**;
@@ -4546,7 +4671,7 @@ pods at a time keeps the Runpod balance guard ($8, CLAUDE.md) in reach, and the 
 | S5 | `mmaudio` as the small tier (`volume+r2`, 180 GB); the branch cut and its exports moved in lockstep | S4 | small | its arms: **~$1.66** |
 | S6 | `wan` as a tier (`volume+r2`, 210 GB); its two upstream targets; `runpod.sh matrix` through fv-lab | S4 | large | five arms: **~$2.65** (+ ~$2.60 for the oracle cells, if the balance allows) |
 | S7 | the branches of S2-S6 deleted after their checks; goldens frozen (`FV_LAB_RETIRED`, §10's way). **Partial, §22.19**: `hd` (with `hd5`), `serve-engine`, `sfstream`, `mmaudio` done; `wan` waits for S8 (`sfwan` runs its branch, §22.18 "Then") | S2-S6 checks | small each | none: $0 |
-| S8 | `sfwan` retired in `oracle`'s retirement PR (§21.9 item 5) | §20.7's re-run (blocked on the owner's `fv_hf_token`); S6 | small | none: $0 |
+| S8 | `sfwan` retired in `oracle`'s retirement PR (§21.9 item 5) | §20.7's re-run (run on `4902297` 2026-10-28: runner equality; the retake reference wrong (unpinned PyAV), so the retirement waits for the retake re-check on the pinned reference image, the coordinator's decision); S6 | small | none: $0 |
 
 S1 uses §18.2's mechanism:
 - `FV_SCRIPT_RETIRED`, with a pointer for each family;

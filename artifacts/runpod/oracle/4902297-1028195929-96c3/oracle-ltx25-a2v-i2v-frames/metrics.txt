@@ -1,0 +1,14 @@
+ours: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+ours: stream|codec_name=aac|codec_type=audio|sample_rate=44100|channels=2|r_frame_rate=0/0|nb_frames=219
+ownaud: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+ownaud: stream|codec_name=aac|codec_type=audio|sample_rate=44100|channels=2|r_frame_rate=0/0|nb_frames=219
+reference: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+reference: stream|codec_name=aac|codec_type=audio|sample_rate=44100|channels=2|r_frame_rate=0/0|nb_frames=219
+ours vs reference clip ssim: SSIM Y:0.985293 (18.324799) U:0.993488 (21.862891) V:0.993839 (22.103468) All:0.988083 (19.238426)
+ours vs reference clip psnr: PSNR y:43.780457 u:49.325248 v:49.995671 average:45.012516 min:41.096591 max:47.020297
+ours frame 0 ssim: SSIM Y:0.956528 (13.617920) U:0.988004 (19.209581) V:0.988749 (19.488178) All:0.967144 (14.833891)
+ours frame 0 psnr: PSNR y:37.965310 u:48.274573 v:48.307302 average:39.529293 min:39.529293 max:39.529293
+ownaud frame 0 ssim: SSIM Y:0.956692 (13.634297) U:0.987862 (19.158550) V:0.988752 (19.489215) All:0.967230 (14.845260)
+ownaud frame 0 psnr: PSNR y:38.065746 u:48.144609 v:48.259075 average:39.621134 min:39.621134 max:39.621134
+reference frame 0 ssim: SSIM Y:0.956097 (13.575043) U:0.986984 (18.855386) V:0.988234 (19.293650) All:0.966601 (14.762659)
+reference frame 0 psnr: PSNR y:37.769118 u:47.113691 v:48.047362 average:39.307722 min:39.307722 max:39.307722

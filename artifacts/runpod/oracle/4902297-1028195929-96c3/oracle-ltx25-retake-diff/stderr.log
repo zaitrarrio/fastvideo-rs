@@ -1,0 +1,190 @@
+compare-dumps noise_seed1024_000: missing in candidate
+compare-dumps noise_seed1024_001: missing in candidate
+compare-dumps noise_seed11024_000: missing in candidate
+compare-dumps noise_seed11024_001: missing in candidate
+compare-dumps noise_seed11024_002: missing in candidate
+compare-dumps noise_seed11024_003: missing in candidate
+compare-dumps noise_seed11024_004: missing in candidate
+compare-dumps noise_seed11024_005: missing in candidate
+compare-dumps noise_seed11024_006: missing in candidate
+compare-dumps noise_seed11024_007: missing in candidate
+compare-dumps noise_seed11024_008: missing in candidate
+compare-dumps noise_seed11024_009: missing in candidate
+compare-dumps noise_seed11024_010: missing in candidate
+compare-dumps noise_seed11024_011: missing in candidate
+compare-dumps noise_seed11024_012: missing in candidate
+compare-dumps noise_seed11024_013: missing in candidate
+compare-dumps s1_audio_step01: missing in candidate
+compare-dumps s1_audio_step02: missing in candidate
+compare-dumps s1_audio_step03: missing in candidate
+compare-dumps s1_audio_step04: missing in candidate
+compare-dumps s1_audio_step05: missing in candidate
+compare-dumps s1_audio_step06: missing in candidate
+compare-dumps s1_audio_step07: missing in candidate
+compare-dumps s1_audio_step08: missing in candidate
+compare-dumps s1_audio_step00_in: missing in candidate
+compare-dumps s1_audio_vel_step01: missing in candidate
+compare-dumps s1_audio_vel_step02: missing in candidate
+compare-dumps s1_audio_vel_step03: missing in candidate
+compare-dumps s1_audio_vel_step04: missing in candidate
+compare-dumps s1_audio_vel_step05: missing in candidate
+compare-dumps s1_audio_vel_step06: missing in candidate
+compare-dumps s1_audio_vel_step07: missing in candidate
+compare-dumps s1_audio_vel_step08: missing in candidate
+compare-dumps s1_audio_x0_step01: missing in candidate
+compare-dumps s1_audio_x0_step02: missing in candidate
+compare-dumps s1_audio_x0_step03: missing in candidate
+compare-dumps s1_audio_x0_step04: missing in candidate
+compare-dumps s1_audio_x0_step05: missing in candidate
+compare-dumps s1_audio_x0_step06: missing in candidate
+compare-dumps s1_audio_x0_step07: missing in candidate
+compare-dumps s1_audio_x0_step08: missing in candidate
+compare-dumps s1_sigmas: missing in candidate
+compare-dumps s1_step00_audio_block_0: missing in candidate
+compare-dumps s1_step00_audio_block_1: missing in candidate
+compare-dumps s1_step00_audio_block_2: missing in candidate
+compare-dumps s1_step00_audio_block_3: missing in candidate
+compare-dumps s1_step00_audio_block_4: missing in candidate
+compare-dumps s1_step00_audio_block_5: missing in candidate
+compare-dumps s1_step00_audio_block_6: missing in candidate
+compare-dumps s1_step00_audio_block_7: missing in candidate
+compare-dumps s1_step00_audio_block_8: missing in candidate
+compare-dumps s1_step00_audio_block_9: missing in candidate
+compare-dumps s1_step00_audio_block_10: missing in candidate
+compare-dumps s1_step00_audio_block_11: missing in candidate
+compare-dumps s1_step00_audio_block_12: missing in candidate
+compare-dumps s1_step00_audio_block_13: missing in candidate
+compare-dumps s1_step00_audio_block_14: missing in candidate
+compare-dumps s1_step00_audio_block_15: missing in candidate
+compare-dumps s1_step00_audio_block_16: missing in candidate
+compare-dumps s1_step00_audio_block_17: missing in candidate
+compare-dumps s1_step00_audio_block_18: missing in candidate
+compare-dumps s1_step00_audio_block_19: missing in candidate
+compare-dumps s1_step00_audio_block_20: missing in candidate
+compare-dumps s1_step00_audio_block_21: missing in candidate
+compare-dumps s1_step00_audio_block_22: missing in candidate
+compare-dumps s1_step00_audio_block_23: missing in candidate
+compare-dumps s1_step00_audio_block_24: missing in candidate
+compare-dumps s1_step00_audio_block_25: missing in candidate
+compare-dumps s1_step00_audio_block_26: missing in candidate
+compare-dumps s1_step00_audio_block_27: missing in candidate
+compare-dumps s1_step00_audio_block_28: missing in candidate
+compare-dumps s1_step00_audio_block_29: missing in candidate
+compare-dumps s1_step00_audio_block_30: missing in candidate
+compare-dumps s1_step00_audio_block_31: missing in candidate
+compare-dumps s1_step00_audio_block_32: missing in candidate
+compare-dumps s1_step00_audio_block_33: missing in candidate
+compare-dumps s1_step00_audio_block_34: missing in candidate
+compare-dumps s1_step00_audio_block_35: missing in candidate
+compare-dumps s1_step00_audio_block_36: missing in candidate
+compare-dumps s1_step00_audio_block_37: missing in candidate
+compare-dumps s1_step00_audio_block_38: missing in candidate
+compare-dumps s1_step00_audio_block_39: missing in candidate
+compare-dumps s1_step00_audio_block_40: missing in candidate
+compare-dumps s1_step00_audio_block_41: missing in candidate
+compare-dumps s1_step00_audio_block_42: missing in candidate
+compare-dumps s1_step00_audio_block_43: missing in candidate
+compare-dumps s1_step00_audio_block_44: missing in candidate
+compare-dumps s1_step00_audio_block_45: missing in candidate
+compare-dumps s1_step00_audio_block_46: missing in candidate
+compare-dumps s1_step00_audio_block_47: missing in candidate
+compare-dumps s1_step00_audio_in: missing in candidate
+compare-dumps s1_step00_video_block_0: missing in candidate
+compare-dumps s1_step00_video_block_1: missing in candidate
+compare-dumps s1_step00_video_block_2: missing in candidate
+compare-dumps s1_step00_video_block_3: missing in candidate
+compare-dumps s1_step00_video_block_4: missing in candidate
+compare-dumps s1_step00_video_block_5: missing in candidate
+compare-dumps s1_step00_video_block_6: missing in candidate
+compare-dumps s1_step00_video_block_7: missing in candidate
+compare-dumps s1_step00_video_block_8: missing in candidate
+compare-dumps s1_step00_video_block_9: missing in candidate
+compare-dumps s1_step00_video_block_10: missing in candidate
+compare-dumps s1_step00_video_block_11: missing in candidate
+compare-dumps s1_step00_video_block_12: missing in candidate
+compare-dumps s1_step00_video_block_13: missing in candidate
+compare-dumps s1_step00_video_block_14: missing in candidate
+compare-dumps s1_step00_video_block_15: missing in candidate
+compare-dumps s1_step00_video_block_16: missing in candidate
+compare-dumps s1_step00_video_block_17: missing in candidate
+compare-dumps s1_step00_video_block_18: missing in candidate
+compare-dumps s1_step00_video_block_19: missing in candidate
+compare-dumps s1_step00_video_block_20: missing in candidate
+compare-dumps s1_step00_video_block_21: missing in candidate
+compare-dumps s1_step00_video_block_22: missing in candidate
+compare-dumps s1_step00_video_block_23: missing in candidate
+compare-dumps s1_step00_video_block_24: missing in candidate
+compare-dumps s1_step00_video_block_25: missing in candidate
+compare-dumps s1_step00_video_block_26: missing in candidate
+compare-dumps s1_step00_video_block_27: missing in candidate
+compare-dumps s1_step00_video_block_28: missing in candidate
+compare-dumps s1_step00_video_block_29: missing in candidate
+compare-dumps s1_step00_video_block_30: missing in candidate
+compare-dumps s1_step00_video_block_31: missing in candidate
+compare-dumps s1_step00_video_block_32: missing in candidate
+compare-dumps s1_step00_video_block_33: missing in candidate
+compare-dumps s1_step00_video_block_34: missing in candidate
+compare-dumps s1_step00_video_block_35: missing in candidate
+compare-dumps s1_step00_video_block_36: missing in candidate
+compare-dumps s1_step00_video_block_37: missing in candidate
+compare-dumps s1_step00_video_block_38: missing in candidate
+compare-dumps s1_step00_video_block_39: missing in candidate
+compare-dumps s1_step00_video_block_40: missing in candidate
+compare-dumps s1_step00_video_block_41: missing in candidate
+compare-dumps s1_step00_video_block_42: missing in candidate
+compare-dumps s1_step00_video_block_43: missing in candidate
+compare-dumps s1_step00_video_block_44: missing in candidate
+compare-dumps s1_step00_video_block_45: missing in candidate
+compare-dumps s1_step00_video_block_46: missing in candidate
+compare-dumps s1_step00_video_block_47: missing in candidate
+compare-dumps s1_step00_video_in: missing in candidate
+compare-dumps s1_video_step01: missing in candidate
+compare-dumps s1_video_step02: missing in candidate
+compare-dumps s1_video_step03: missing in candidate
+compare-dumps s1_video_step04: missing in candidate
+compare-dumps s1_video_step05: missing in candidate
+compare-dumps s1_video_step06: missing in candidate
+compare-dumps s1_video_step07: missing in candidate
+compare-dumps s1_video_step08: missing in candidate
+compare-dumps s1_video_step00_in: missing in candidate
+compare-dumps s1_video_vel_step01: missing in candidate
+compare-dumps s1_video_vel_step02: missing in candidate
+compare-dumps s1_video_vel_step03: missing in candidate
+compare-dumps s1_video_vel_step04: missing in candidate
+compare-dumps s1_video_vel_step05: missing in candidate
+compare-dumps s1_video_vel_step06: missing in candidate
+compare-dumps s1_video_vel_step07: missing in candidate
+compare-dumps s1_video_vel_step08: missing in candidate
+compare-dumps s1_video_x0_step01: missing in candidate
+compare-dumps s1_video_x0_step02: missing in candidate
+compare-dumps s1_video_x0_step03: missing in candidate
+compare-dumps s1_video_x0_step04: missing in candidate
+compare-dumps s1_video_x0_step05: missing in candidate
+compare-dumps s1_video_x0_step06: missing in candidate
+compare-dumps s1_video_x0_step07: missing in candidate
+compare-dumps s1_video_x0_step08: missing in candidate
+compare-dumps text_attention_mask          rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 1024
+compare-dumps text_audio_ctx               rel_l2 5.873e-3  cosine 0.999983  max_abs 5.674e-1  n 2097152
+compare-dumps text_audio_ctx_real          rel_l2 4.449e-3  cosine 0.999990  max_abs 1.250e-1  n 53248
+compare-dumps text_audio_feats             rel_l2 5.828e-3  cosine 0.999983  max_abs 2.812e-1  n 53248
+compare-dumps text_hidden_0                rel_l2 1.671e-3  cosine 0.999999  max_abs 5.859e-2  n 99840
+compare-dumps text_hidden_1                rel_l2 5.347e-3  cosine 0.999986  max_abs 1.605e-1  n 99840
+compare-dumps text_hidden_2                rel_l2 6.031e-3  cosine 0.999982  max_abs 1.643e-1  n 99840
+compare-dumps text_hidden_5                rel_l2 9.328e-3  cosine 0.999957  max_abs 4.094e-1  n 99840
+compare-dumps text_hidden_6                rel_l2 1.024e-2  cosine 0.999948  max_abs 1.739e-1  n 99840
+compare-dumps text_hidden_7                rel_l2 1.127e-2  cosine 0.999936  max_abs 2.521e-1  n 99840
+compare-dumps text_hidden_12               rel_l2 1.279e-2  cosine 0.999919  max_abs 2.735e-1  n 99840
+compare-dumps text_hidden_24               rel_l2 9.713e-3  cosine 0.999954  max_abs 2.676e0  n 99840
+compare-dumps text_hidden_36               rel_l2 7.551e-3  cosine 0.999973  max_abs 2.269e0  n 99840
+compare-dumps text_hidden_47               rel_l2 4.129e-3  cosine 0.999992  max_abs 2.565e0  n 99840
+compare-dumps text_hidden_48               rel_l2 4.107e-3  cosine 0.999993  max_abs 2.811e1  n 99840
+compare-dumps text_input_ids               rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 1024
+compare-dumps text_video_ctx               rel_l2 4.533e-3  cosine 0.999990  max_abs 1.188e0  n 4194304
+compare-dumps text_video_ctx_real          rel_l2 7.131e-3  cosine 0.999975  max_abs 1.250e-1  n 106496
+compare-dumps text_video_feats             rel_l2 6.557e-3  cosine 0.999979  max_abs 2.500e-1  n 106496
+compare-dumps v2v_audio_latent: missing in candidate
+compare-dumps v2v_audio_wave               rel_l2 inf  cosine 0.000000  max_abs inf  n 442304
+compare-dumps v2v_frame0_pixels            rel_l2 3.254e-6  cosine 1.000000  max_abs 3.052e-5  n 1179648
+compare-dumps v2v_region: missing in candidate
+compare-dumps v2v_video_latent             rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+[PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.0s)

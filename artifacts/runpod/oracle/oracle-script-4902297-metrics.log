@@ -1,0 +1,19 @@
+[20:35:10] create pod gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition" image=ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-4902297 volume=bz0ofkfx45 dc=EU-RO-1 cloud=SECURE quoted=$2.49/hr
+[20:35:12] pod hweh6ocepd90wr  $2.49/hr  (hard cap 3600s)  ram=283GB vcpu=28
+[20:35:47] pod: [20:35:44] [oracle] ▶ oracle-ltx25-a2v-i2v  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/ltx25-a2v-i2v/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/4902297-10282035/oracle-ltx25-a2v-i2v-dump /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --dense-stage2 --audio /opt/fastvideo-rs/scripts/gpu/fixtures/speech-flite-44k.flac --image /opt/fastvideo-rs/scripts/gpu/fixtures/ti2v-beach-832x480.jpg --prompt A calm beach at golden hour, gentle waves rolling in, while a narrator speaks. --seed 1024 --two-stage --text streamed --clip /fvscratch/runs/oracle/4902297-10282035/oracle-ltx25-a2v-i2v/frames  (wall cap 5400s; 0=none)
+[20:40:06] pod: [20:40:00] [oracle] ▶ oracle-ltx25-a2v-i2v-ownaud  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/ltx25-a2v-i2v/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/4902297-10282035/oracle-ltx25-a2v-i2v-dump-ownaud FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --dense-stage2 --audio /opt/fastvideo-rs/scripts/gpu/fixtures/speech-flite-44k.flac --image /opt/fastvideo-rs/scripts/gpu/fixtures/ti2v-beach-832x480.jpg --prompt A calm beach at golden hour, gentle waves rolling in, while a narrator speaks. --seed 1024 --two-stage --text streamed --clip /fvscratch/runs/oracle/4902297-10282035/oracle-ltx25-a2v-i2v-ownaud/frames  (wall cap 5400s; 0=none)
+[20:42:17] pod: [oracle-ltx25-a2v-i2v-ownaud-diff] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.2s)
+[20:42:50] pod: [20:42:34] [oracle] ▶ oracle-ltx25-retake-ownenc  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/ltx25-retake/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/4902297-10282035/oracle-ltx25-retake-dump-ownenc FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --edit retake:/opt/fastvideo-rs/scripts/gpu/fixtures/beach-push-768x512-24fps.mp4:1.5:3.5:av --prompt A huge wave crashes over the dark rocks at golden hour, white spray bursting high into the air, a narrator speaks calmly. --seed 1024 --text streamed --clip /fvscratch/runs/oracle/4902297-10282035/oracle-ltx25-retake-ownenc/frames  (wall cap 5400s; 0=none)
+[20:44:11] results → <repo>/artifacts/runpod/oracle/4902297-10282035
+[20:44:11] destroy pod hweh6ocepd90wr
+  MISSING dir /workspace/weights/h3-8step/transformer
+  MISSING dir /workspace/weights/h3-8step/vae
+  MISSING dir /workspace/weights/h3-8step/audio_vae
+weights INCOMPLETE: fasth3-8step
+weights ok: fasth3-4step-vsa
+weights ok: fasth3-4step-dense
+weights ok: sol-h3
+weights ok: sol-h3-spark
+weights ok: ltx25-two-stage
+exit=1
+exit=0 (attempt 1)
