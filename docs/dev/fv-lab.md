@@ -149,6 +149,11 @@ the runner's cap for `timeout 2400`). The experiment's own scripts were deleted 
 `scripts/gpu/experiments/`); the goldens script reads `h3-graphs-pod.sh` from the parent of the deleting commit, and
 in a shallow clone keeps the fixtures as they are.
 
+`sol-bench-pod.sh` (`docs/perf/sol-bench.md`) is to become the next experiment tier (owner, 2026-10-28). It is not
+one yet: [ADR-0019 §23](../adr/0019-fv-lab.md) gives the rules a tier cannot keep exactly today, the two proposed
+cell additions (`estimate_s` / `budget_s`, `env -u`) and the owner's open questions. Until then, run it through
+`runpod-http.sh` `FV_POD_SCRIPT` as that doc says.
+
 ### `runpod-http.sh` for a retired tier
 
 `runpod-http.sh run [sha]` with `FV_FAMILY` (default `rtx6000`) set to a retired tier runs

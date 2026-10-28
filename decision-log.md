@@ -2277,3 +2277,40 @@ Project code: FVID
 - ADR: docs/adr/0019-fv-lab.md §22.19
 - Verification: dry runs before (`0ebddb0d`) and after: 55 forms byte-identical (`wan`, `sfwan`, `oracle` in every form, 42 existing refusals), `sfquality` / `speechtest` with the named pointer change only, the four families' 10 forms now refused (exit 2, a pointer; `hd` with the hd5 prompts naming `hd5`); `fv-lab-goldens.sh --check` and the other three goldens scripts; `fv-lab-route.test.sh`, `runpod-plan.test.sh`; `cargo test -p fastvideo-lab --features cli` on the build pod; shell and Rust mutations each caught (§22.19)
 - Open: S8: `wan`'s branch with `sfwan` in `oracle`'s retirement PR, after §20.7's re-run (blocked on the owner's `fv_hf_token`)
+
+### FVID · 2026-10-28 · FVID-2026-10-28-mmaudio-knob-stays
+- Trigger: ADR-0019 §22.6 owner question 1. The MMAudio checkpoints are CC-BY-NC 4.0 (`docs/serve/research-8gb-av.md:196`), and a user-facing knob runs them inside a served pipeline
+- Options: keep the knob offered; withdraw the `FASTVIDEO_WAN_AUDIO=mmaudio` catalog entry, the CLI's `--audio mmaudio` and GCP staging
+- Decision: **(owner) keep it offered**: the catalog entry, `--audio mmaudio` and GCP staging all stay. No code changes
+- Reason: the owner's answer to §22.6's question 1 (no further reason recorded)
+- Reversibility: cheap (withdrawing the knob later is a catalog and CLI change)
+- Executed by: owner (recorded by Claude, session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §22.6 ("Owner answers")
+- Verification: none needed (no change); `mmaudio`'s tier (§22.15) keeps checking the sidecar on a pod
+
+### FVID · 2026-10-28 · FVID-2026-10-28-sol-bench-to-fv-lab
+- Trigger: ADR-0019 §22.6 owner question 2
+- Options: keep `scripts/gpu/sol-bench-pod.sh` as it is; move it to an fv-lab experiment tier, as `h3-graphs` did (§14.3)
+- Decision: **(owner) move it to an fv-lab experiment tier**
+- Reason: the owner's answer to §22.6's question 2 (no further reason recorded)
+- Reversibility: high (the script stays until the tier's GPU check passes, §14.4's way)
+- Executed by: owner (recorded by Claude, session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §22.6, §23
+- Verification: see FVID-2026-10-28-d1-sol-bench-tier-stopped
+- Open: §23.6's questions
+
+### FVID · 2026-10-28 · FVID-2026-10-28-d1-sol-bench-tier-stopped
+- Trigger: the slice that carries out FVID-2026-10-28-sol-bench-to-fv-lab. Its brief: reproduce every set of `sol-bench-pod.sh` exactly, keep the owner's benchmark rules (`docs/perf/sol-bench.md:8-28`) exactly, and STOP on a rule that cannot be kept or on a needed schema change
+- Options: build the tier for the volume sets with intended differences; build it on `volume+r2` for every set; stop and propose
+- Decision: (agent, within the brief) **stop before any cell, golden or test, and propose (ADR-0019 §23)**. Three reasons:
+  - rule 18 (EUR-IS-1, `jg48s6o1w0`) cannot be kept by either runner, since the volume was deleted on 2026-10-13;
+  - rules 17 (a 64-min pod-side self-delete and a 65-min local backstop) and 20 (an image pinned by digest) cannot be kept exactly by a tier, which has one `wall_cap_s` and boots `:sha-<7>`;
+  - 49 of the script's 57 cell runs, the two open items among them, read R2-only trees, which rule 22 forbids, and the script's per-cell estimates / budget skip (and `a2`'s `env -u`) have no cell field.
+
+  Proposed: shape A (`a1` / `a3` on `volume`) or shape B (`g2` on `volume+r2`); Additions 17 (`estimate_s`, `budget_s`) and 18 (`env -u`); launch options for a digest and a separate host backstop. The cheapest GPU check (one H3 arm through both runners) is about $1.05
+- Reason: the brief's stop conditions; a schema change needs an ADR addition first
+- Reversibility: high (docs only)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §23
+- Verification: each claim cites the script, `run.rs` / `pod.rs` / `plan.rs`, `volumes.sh`, `weights-r2.tsv` and the committed runs `artifacts/runpod/sol-bench/2026-10-06/{a1-h3-ltx,a3-h3-bf16}/live.log`; `lint.sh`, the shell tests, the four goldens scripts with `--check` and the Python tests pass (docs only, no Rust changed)
+- Open: the owner's answers to §23.6, then the tier, its goldens and its GPU check

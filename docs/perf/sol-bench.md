@@ -27,6 +27,21 @@ rules allow and report the hardware next to each number.
   - The two Wan2.1-14B 720p cells run one request after load: a warm-up would double a ~30-min cell.
   - Every cell keeps its `output.mp4` as a sample.
 
+## Running it through fv-lab (decided 2026-10-28, not built yet)
+
+The owner decided on 2026-10-28 that `scripts/gpu/sol-bench-pod.sh` moves to an fv-lab experiment tier, as
+`h3-graphs` did. The tier is not built: ADR-0019 §23 explains why and asks the owner five questions first (§23.6).
+In short:
+- the rules above name the volume `jg48s6o1w0` in EUR-IS-1, which was deleted on 2026-10-13; runs now get
+  `bz0ofkfx45` in EU-RO-1;
+- an fv-lab tier has one wall cap for the pod's self-delete and the host's backstop, and boots `:sha-<7>`, not a
+  digest;
+- only the phase A sets `a1` and `a3` read trees on that volume. Every other set, the open items below among them,
+  needs R2 trees, which "weights from the volume only" forbids, for the script as much as for a tier.
+
+Until the owner answers and the tier passes its GPU check, the script and the launch below remain the way to run
+this benchmark. `fv-lab report table --kind sol-bench` already reads its run directories.
+
 ## Phase A run list (planned before renting)
 
 Stock on 2026-10-06 13:2x UTC (GraphQL `lowestPrice`, secure, EUR-IS-1):
