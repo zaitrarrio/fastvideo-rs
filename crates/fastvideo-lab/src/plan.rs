@@ -3101,8 +3101,8 @@ argv = ["wan", "gen"]
 name = "u-and-env"
 gate = "h3-base"
 trees = ["h3-base"]
-unset = ["FASTVIDEO_A", "FASTVIDEO_B"]
-env = ["FASTVIDEO_C=1"]
+unset = ["FASTVIDEO_TEST_A", "FASTVIDEO_TEST_B"]
+env = ["FASTVIDEO_TEST_C=1"]
 argv = ["wan", "gen"]
 
 [[arm]]
@@ -3130,10 +3130,10 @@ argv = ["wan", "gen"]
             [
                 "env",
                 "-u",
-                "FASTVIDEO_A",
+                "FASTVIDEO_TEST_A",
                 "-u",
-                "FASTVIDEO_B",
-                "FASTVIDEO_C=1",
+                "FASTVIDEO_TEST_B",
+                "FASTVIDEO_TEST_C=1",
                 "/bin/fv",
                 "wan",
                 "gen"
@@ -3161,7 +3161,7 @@ argv = ["wan", "gen"]
         );
         bad(
             "unset = [\"FASTVIDEO_WAN_SOL_CACHE\"]",
-            "unset = [\"FASTVIDEO_X=1\"]",
+            "unset = [\"FASTVIDEO_TEST_X=1\"]",
             "not a variable name",
         );
         bad(
@@ -3170,13 +3170,13 @@ argv = ["wan", "gen"]
             "not a variable name",
         );
         bad(
-            "unset = [\"FASTVIDEO_A\", \"FASTVIDEO_B\"]",
-            "unset = [\"FASTVIDEO_A\", \"FASTVIDEO_A\"]",
+            "unset = [\"FASTVIDEO_TEST_A\", \"FASTVIDEO_TEST_B\"]",
+            "unset = [\"FASTVIDEO_TEST_A\", \"FASTVIDEO_TEST_A\"]",
             "twice",
         );
         bad(
-            "unset = [\"FASTVIDEO_A\", \"FASTVIDEO_B\"]",
-            "unset = [\"FASTVIDEO_A\", \"FASTVIDEO_C\"]",
+            "unset = [\"FASTVIDEO_TEST_A\", \"FASTVIDEO_TEST_B\"]",
+            "unset = [\"FASTVIDEO_TEST_A\", \"FASTVIDEO_TEST_C\"]",
             "also set in env",
         );
     }
