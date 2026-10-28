@@ -61,8 +61,9 @@
   `sfwan` in S8. The script keeps `wan`, `sfwan` and `oracle`. The owner answered §22.6's questions 1 and 2 on
   2026-10-28: the `mmaudio` knob stays offered, and `sol-bench-pod.sh` moves to fv-lab. §23 (the owner's answers on its
   rules, 2026-10-28) is done CPU-side: the 22 sets are the experiment tiers `sol-bench-<set>`, `volume` for `a1` / `a3`
-  and `volume+r2` for the rest, held to the script word for word, with Addition 18 (`unset`, for `env -u`). Its GPU
-  check (§23.7, `h3-768p-fullopt` through both runners, about $1.05-$1.25) is the coordinator's; the script stays until then
+  and `volume+r2` for the rest, held to the script word for word, with Addition 18 (`unset`, for `env -u`). It is done
+  GPU-side too: its GPU check (§23.7, `h3-768p-fullopt` through both runners) passed on `21d70f6` (2026-10-28, §23.7
+  "Result": 248 frames byte-identical, eight `PASS`, no `FAIL`, `SAME 4`), so the script's deletion (§23.8) follows
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -4535,7 +4536,7 @@ After S7 and S8, `runpod-matrix.sh` has no branch left and goes, and with it `ru
 2. **`sol-bench-pod.sh` moves to fv-lab experiment tiers**, as `h3-graphs` did (§14.3): done CPU-side as §23, one
    tier per set. A first pass stopped on rules the tiers could not keep as written. The owner's further answers of the
    same day (region, R2 fetches, fv-lab's backstop / image tag / deadline accepted, the PRO 6000 only; §23.2) unblocked
-   it.
+   it. Its GPU check passed on `21d70f6` (§23.7 "Result").
 
 #### 22.7 What this section does not change
 
@@ -6854,16 +6855,17 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
   `sfwan` in `oracle`'s retirement PR (S8, §21.9 item 5), after §20.7's re-run; then `runpod-matrix.sh` has no
   branch left (§22.6).
 
-### 23. sol-bench as fv-lab experiment tiers (done, CPU-side)
+### 23. sol-bench as fv-lab experiment tiers (done, CPU-side and GPU-side)
 
-Status: done CPU-side. Its GPU check (§23.7) is the coordinator's. The owner made two decisions on 2026-10-28:
+Status: done CPU-side and GPU-side. Its GPU check (§23.7, the coordinator's) passed on `21d70f6` on 2026-10-28
+(§23.7 "Result"). The owner made two decisions on 2026-10-28:
 - `scripts/gpu/sol-bench-pod.sh` moves to fv-lab experiment tiers, as `h3-graphs` did (§22.6, question 2);
 - the owner answered this section's first draft's five questions (§23.2).
 
 A first pass of this slice stopped before building anything. Rules 17, 18 and 20 of `docs/perf/sol-bench.md` could not
 be kept as written, the open items read R2 trees that rule 22 forbade, and the script's `env -u` had no cell field.
-The owner's answers settle the rules. `env -u` became Addition 18 (§23.4). `sol-bench-pod.sh` stays until the GPU
-check passes; §23.8 lists what its deletion will touch.
+The owner's answers settle the rules. `env -u` became Addition 18 (§23.4). `sol-bench-pod.sh` stayed until the GPU
+check passed (it did, §23.7 "Result"); §23.8 lists what its deletion will touch.
 
 #### 23.1 What moved
 
@@ -7199,6 +7201,50 @@ launches checks the balance against $10 plus the caps of the pods about to start
 
 **Then:** record the result here. If it passes, the follow-up deletes `sol-bench-pod.sh` (§23.8), and the
 goldens script reads it from the parent of the deleting commit, as for `h3-graphs`.
+
+**Result (2026-10-28): pass.** `SHA=21d70f6` (main after #235) on both sides, launched in parallel by the coordinator
+with the commands above, word for word (`SKIP_F` / `SKIP_S` as written). Both pods ran the image
+`ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-21d70f6` (fv-lab's `pod.json`: digest
+`sha256:a960d3ee06118883286cb163867e1847fc686310bead9b78ca6cc89934fb3327`; build id `421fad28bd5d2153` in both
+`box.txt`). The local fv-lab was the image's own binary, `fv-lab 0.1.1`, with its tools compiled in the image. Each pod
+was an RTX PRO 6000 Blackwell Server Edition at $2.49/hr in EU-RO-1, with 94 GB RAM, 32 vCPUs and driver 595.91.07.
+The trees were on `bz0ofkfx45` (`volume`, no R2 fetch, as planned). The balance was $38.49 before
+(fv-deploy's `balance` line) and $37.28 after.
+
+- *fv-lab side*: pod `zgbgmxwsjhooim`, created 18:30:32Z, ready 264.0 s after create, deleted at the end (`done`,
+  18:43:38Z) → `artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d`. Its `live.log` has `matrix start` 18:34:46
+  and the arm 18:34:47-18:43:00 (`(wall cap 2141s; 0=none)`). The five other arms are `skip … (not in FV_CELLS)`,
+  then `matrix done` 18:43:01 and `matrix_exit=0`. `summary.json`: `exit` 0, 493 s, peak RAM 66163 of 89645 MiB, no
+  OOM kill. Arm gate `weights ok: h3-base`. The preflight `weights.log` is a report only (§23.1). It ends `exit=1`
+  for `fasth3-8step`, which is not on the 500 GB volume, and `weights ok` for every other cell.
+- *Script side*: pod `8sghqybfdpxjjh`, created 18:30:33Z (`hard cap 2400s`), on `bz0ofkfx45` →
+  `artifacts/runpod/sol-bench/21d70f6-10281830`. Its `live.log` has `set a1 budget 3300s cap 2340s` at 18:34:42 and
+  the arm from 18:34:43 (`est 720s, hard stop 3300s`) to `ok h3-768p-fullopt 495s exit=0`. The five others are
+  `skip … (not in FV_CELLS)`, then `set a1 done` at 18:42:58 (+496 s) and `matrix_exit=0`. Its tree was fetched with
+  the 248 PNGs, and the pod was destroyed at 18:48:41Z. The PNGs (about 270 MB) are not committed. Their digest is
+  in the compare file.
+- *The block* (`artifacts/runpod/sol-bench-a1/compare-21d70f6.txt`: the output, the digest and the stream hashes,
+  and both drivers' output) printed `PASS 0a`. Then came the compare's two lines exactly as expected
+  (`same h3-768p-fullopt: {"exit":0,"skipped":null}, 248 frames byte-identical` and `1 arm(s) the same … 0
+  difference(s)`, exit 0), `PASS 0`, `PASS 1`, `PASS 2` for each side, `PASS 2`, `PASS 3` for each side and `SAME 4`.
+  That is **eight `PASS`, no `FAIL`**, as the pass criterion asks. The script side's digest, by the script runner's
+  `frames_digest` into a copy, is byte-identical to fv-lab's `frames.sha256.json` (sha256 `8d0f3aeeb791…`). The two
+  sides' `live.log` command lines are equal with the run directory masked. Both `h3.json` are `pass` with `env`
+  `{"FASTVIDEO_H3_SOL_CACHE":"teacache"}`, and both have the four checks with limits
+  (`warm_text_is_a_cache_hit frames middle_frame_not_flat mp4_written`), all ok. Both `benchmark.json` have
+  `warmup_requests` 1, `includes_model_load` false and no `frames_sha256`. Item 4: the H.264 streams of `output.mp4`
+  and `cold/output.mp4` are the same on both sides (`SHA256=ee8663072cf9…`, all four).
+- *Timings* (`benchmark.json`, fv-lab / script): `load_s` 318.8 / 322.6, `inference_time_s` (the timed warm request)
+  86.5 / 85.3, `max_device_memory_used_mib` 63724 on both; arm 493 / 495 s. The 2026-10-06 run
+  (`artifacts/runpod/sol-bench/2026-10-06/a1-h3-ltx/h3-768p-fullopt`, on `jg48s6o1w0`) took 283 s, with `load_s`
+  105.7 and `inference_time_s` 88.2. The warm number is the same within 3 s. The arm is 210 s longer, and load grew
+  by 213 s. That is a finding about load on today's pods and volume (`bz0ofkfx45`), not about the runners, which load
+  alike. It was not investigated here. §23.6's plan uses the 283 s; with 493 s and the other arms unchanged, `a1`'s
+  six arms would end at about 42.9 of 45 min.
+- *Cost*: $38.49 → $37.28, **$1.21** (the estimate was $1.05-$1.25). That is about 13 + 18 pod-minutes, and no
+  other pod ran. No new tree and no R2 fetch.
+
+So `sol-bench-pod.sh` can go: its deletion (§23.8) is the follow-up, recorded in this section when it is done.
 
 #### 23.8 What the script's deletion will touch
 

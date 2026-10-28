@@ -1,0 +1,15 @@
+{
+  "id": "zgbgmxwsjhooim",
+  "name": "fv-lab-sol-bench-a1-21d70f6-1028183029-988d",
+  "family": "sol-bench-a1",
+  "tag": "21d70f6-1028183029-988d",
+  "sha": "21d70f6",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:a960d3ee06118883286cb163867e1847fc686310bead9b78ca6cc89934fb3327",
+  "url": "https://zgbgmxwsjhooim-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793212232.6933022,
+  "cap_s": 3600,
+  "memory_gb": 94.0,
+  "vcpus": 32.0
+}

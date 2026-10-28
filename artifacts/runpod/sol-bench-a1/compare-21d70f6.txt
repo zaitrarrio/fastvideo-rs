@@ -1,0 +1,91 @@
+# ADR-0019 §23.7 GPU check at 21d70f6 (main after #235; image ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-21d70f6,
+# build id 421fad28bd5d2153 in both box.txt). L = fv-lab side (fv-lab pod up, pod zgbgmxwsjhooim),
+# S = script side (runpod-http.sh run with sol-bench-pod.sh, pod 8sghqybfdpxjjh). The script side's 248 PNGs were
+# fetched for item 0a's digest and are not committed (about 270 MB); their digest, by the script runner's own
+# frames_digest into a copy, is byte-identical to L's h3-768p-fullopt/frames.sha256.json (below).
+
+# The §23.7 pass block as written at 21d70f6 (docs/adr/0019-fv-lab.md, the block after "Where each count comes from"),
+# with L and S set to the two run directories and the compare's output in a scratch file:
+$ L=artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d; S=artifacts/runpod/sol-bench/21d70f6-10281830
+PASS 0a
+same h3-768p-fullopt: {"exit":0,"skipped":null}, 248 frames byte-identical
+1 arm(s) the same (1 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+PASS 0
+PASS 1
+PASS 2 artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d
+PASS 2 artifacts/runpod/sol-bench/21d70f6-10281830
+PASS 2
+PASS 3 artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d
+PASS 3 artifacts/runpod/sol-bench/21d70f6-10281830
+SAME 4
+
+# Item 0a's digest (the script runner's frames_digest on a copy of S) against L's frames.sha256.json:
+$ sha256sum <copy of S>/h3-768p-fullopt/frames.sha256.json artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d/h3-768p-fullopt/frames.sha256.json
+8d0f3aeeb791de56ae73b515c7b3c8f6b562527b38e9cb4472819d2fb9f48fe7  <copy of S>/h3-768p-fullopt/frames.sha256.json
+8d0f3aeeb791de56ae73b515c7b3c8f6b562527b38e9cb4472819d2fb9f48fe7  artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d/h3-768p-fullopt/frames.sha256.json
+count: 248 / 248
+
+# Item 4's H.264 stream hashes (SAME 4):
+artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d/h3-768p-fullopt/frames/output.mp4 0,v,SHA256=ee8663072cf9ca55268d75af7647406722a585636209462935cfb32748a08165
+artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d/h3-768p-fullopt/frames/cold/output.mp4 0,v,SHA256=ee8663072cf9ca55268d75af7647406722a585636209462935cfb32748a08165
+artifacts/runpod/sol-bench/21d70f6-10281830/h3-768p-fullopt/frames/output.mp4 0,v,SHA256=ee8663072cf9ca55268d75af7647406722a585636209462935cfb32748a08165
+artifacts/runpod/sol-bench/21d70f6-10281830/h3-768p-fullopt/frames/cold/output.mp4 0,v,SHA256=ee8663072cf9ca55268d75af7647406722a585636209462935cfb32748a08165
+
+# The compare on its own, with its exit status:
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d <copy of S with the digest>
+same h3-768p-fullopt: {"exit":0,"skipped":null}, 248 frames byte-identical
+1 arm(s) the same (1 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)
+exit 0
+
+# The drivers' output (not in the run directories). fv-lab side, fv-lab 0.1.1 (the image's own binary):
+[fv-lab] fv-lab-sol-bench-a1-21d70f6-1028183029-988d on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:a960d3ee06118883286cb163867e1847fc686310bead9b78ca6cc89934fb3327 (ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-21d70f6)
+[fv-deploy] balance $38.49 (floor $8.00)
+[fv-deploy] backstop armed for zgbgmxwsjhooim (pid 1654): deleted at the latest 3600 s after create
+[fv-deploy] runpod-pod zgbgmxwsjhooim on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr ram=94GB vcpu=32
+[fv-deploy] zgbgmxwsjhooim ready 264.0 s after create
+[fv-deploy] keeping zgbgmxwsjhooim (the backstop deletes it 3600 s after create; `fv-deploy down zgbgmxwsjhooim` now)
+{
+  "name": "fv-lab-sol-bench-a1-21d70f6-1028183029-988d",
+  "provider": "runpod-pod",
+  "instance": {
+    "id": "zgbgmxwsjhooim",
+    "provider": "runpod-pod",
+    "name": "fv-lab-sol-bench-a1-21d70f6-1028183029-988d",
+    "state": "running",
+    "url": "https://zgbgmxwsjhooim-8000.proxy.runpod.net",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "data_center": "EU-RO-1",
+    "usd_per_hr": 2.49,
+    "created_at": 1793212232.6933022,
+    "memory_gb": 94.0,
+    "vcpus": 32.0
+  },
+  "cycles": [
+    {
+      "n": 1,
+      "instance": "zgbgmxwsjhooim",
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "usd_per_hr": 2.49,
+      "ready_after_s": 263.97236013412476,
+      "outcome": "ready"
+    }
+  ],
+  "smoke": null,
+  "deleted": false,
+  "ok": true
+}
+[fv-lab] pod zgbgmxwsjhooim runs `fv-lab run sol-bench-a1` (tag 21d70f6-1028183029-988d); results: fv-lab pod fetch zgbgmxwsjhooim --wait --down
+[fv-lab] pod: [18:34:47] [sol-bench-a1] ▶ h3-768p-fullopt  env FASTVIDEO_H3_SOL_CACHE=teacache /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe sol-h3-rtx --adaln-cache /fvscratch/runs/sol-bench-a1/21d70f6-1028183029-988d/h3-768p-adaln.cache --clip-dir /fvscratch/runs/sol-bench-a1/21d70f6-1028183029-988d/h3-768p-fullopt/frames --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder auto --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --warm  (wall cap 2141s; 0=none)
+[fv-lab] results -> /home/user/fastvideo-rs/artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d
+[fv-deploy] deleted zgbgmxwsjhooim (done)
+
+# Script side (runpod-http.sh run). Its closing `cat` of the run directory's weights.log finds none: under FV_POD_SCRIPT the
+# preflight is skipped (§23.3 difference 4) and sol-bench-pod.sh gates each cell into <cell>/weights.log:
+[18:30:31] create pod gpu="NVIDIA RTX PRO 6000 Blackwell Server Edition" image=ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-21d70f6 volume=bz0ofkfx45 dc=EU-RO-1 cloud=SECURE quoted=$2.49/hr
+[18:30:33] pod 8sghqybfdpxjjh  $2.49/hr  (hard cap 2400s)  ram=94GB vcpu=32
+[18:35:12] pod: [18:34:43] [a1 +1s] ▶ h3-768p-fullopt (est 720s, hard stop 3300s): env FASTVIDEO_H3_SOL_CACHE=teacache /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast h3 gen --weights /workspace/weights/h3-base --h3-recipe sol-h3-rtx --adaln-cache /fvscratch/runs/sol-bench/21d70f6-10281830/h3-768p-adaln.cache --clip-dir /fvscratch/runs/sol-bench/21d70f6-10281830/h3-768p-fullopt/frames --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seconds 5 --seed 1024 --text-encoder auto --text-cache /fvscratch/h3-text-cache --text-weights /workspace/weights/h3-base --warm
+[18:48:41] results → /home/user/fastvideo-rs/artifacts/runpod/sol-bench/21d70f6-10281830
+[18:48:41] destroy pod 8sghqybfdpxjjh
+cat: /home/user/fastvideo-rs/artifacts/runpod/sol-bench/21d70f6-10281830/weights.log: No such file or directory
+
+# Both driver processes exited 0: fv-lab at 18:43:38Z, the script at 18:48:41Z.
