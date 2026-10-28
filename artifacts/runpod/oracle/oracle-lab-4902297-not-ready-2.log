@@ -1,0 +1,19 @@
+[fv-lab oracle] upstream pod (sol-ltx25): info:box weights:ltx25 oracle:ltx25-a2v-i2v,ltx25-retake on ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25:latest
+[fv-lab oracle] fv-lab-upstream-4902297-1028162458-5976 on NVIDIA RTX PRO 6000 Blackwell Server Edition: image ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25@sha256:60893975f9765fcd1f8076c1ab93a5076da31fa7cbdc87af6974794deb16f181 (ghcr.io/zaitrarrio/fastvideo-rs-upstream-sol-ltx25:latest)
+[fv-deploy] balance $40.90 (floor $8.00)
+[fv-deploy] backstop armed for fkfk7kxjauc4pu (pid 17759): deleted at the latest 7200 s after create
+[fv-deploy] runpod-pod fkfk7kxjauc4pu on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr ram=283GB vcpu=28
+[fv-deploy] fkfk7kxjauc4pu not ready 600 s after creation (last: /upstream/ 404): replacing (2 instance(s) left of 3)
+[fv-deploy] deleted fkfk7kxjauc4pu (not-ready)
+[fv-deploy] balance $40.44 (floor $8.00)
+[fv-deploy] backstop armed for blchq23jrbjv40 (pid 29012): deleted at the latest 7200 s after create
+[fv-deploy] runpod-pod blchq23jrbjv40 on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr ram=283GB vcpu=28
+[fv-deploy] blchq23jrbjv40 not ready 600 s after creation (last: /upstream/ 404): replacing (1 instance(s) left of 3)
+[fv-deploy] deleted blchq23jrbjv40 (not-ready)
+[fv-deploy] balance $39.85 (floor $8.00)
+[fv-deploy] backstop armed for 3hwqsd53vhhtu4 (pid 802): deleted at the latest 7200 s after create
+[fv-deploy] runpod-pod 3hwqsd53vhhtu4 on NVIDIA RTX PRO 6000 Blackwell Server Edition at $2.490/hr ram=283GB vcpu=28
+[fv-lab] interrupted: deleting what this run created (again to quit now)
+[fv-deploy] deleted 3hwqsd53vhhtu4 (interrupted)
+[fv-lab oracle] upstream pod (sol-ltx25) did not come up: interrupted
+[fv-lab oracle] results: <repo>/artifacts/runpod/oracle/4902297-1028162458-85f6 and artifacts/runpod/upstream/<tag> ()

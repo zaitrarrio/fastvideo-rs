@@ -1,0 +1,15 @@
+{
+  "id": "7uqbn0s87484cj",
+  "name": "fv-lab-oracle-4902297-1028195929-96c3",
+  "family": "oracle",
+  "tag": "4902297-1028195929-96c3",
+  "sha": "4902297",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:ecdeb6eff61a4112375b2e70f6283cfca9bc45662e45f6a2bdd39389ae551212",
+  "url": "https://7uqbn0s87484cj-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.49,
+  "created_at": 1793219703.6225488,
+  "cap_s": 3600,
+  "memory_gb": 94.0,
+  "vcpus": 32.0
+}
