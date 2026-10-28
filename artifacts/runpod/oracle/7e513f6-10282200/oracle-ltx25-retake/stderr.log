@@ -1,0 +1,116 @@
+ltx2 ltx2 techniques: none [attention_backend from recipe]
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 94.3 GiB free before load)
+[fastvideo] ltx2 dit: loaded block 8/48 (88.5 GiB free)
+[fastvideo] ltx2 dit: loaded block 16/48 (82.8 GiB free)
+[fastvideo] ltx2 dit: loaded block 24/48 (77.0 GiB free)
+[fastvideo] ltx2 dit: loaded block 32/48 (71.2 GiB free)
+[fastvideo] ltx2 dit: loaded block 40/48 (65.4 GiB free)
+[fastvideo] ltx2 dit: loaded block 48/48 (59.7 GiB free)
+[fastvideo] ltx2 dit: 48 blocks resident
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":118.78,"viewed_gb":39.11,"prefetch_read_gb":39.11,"prefetch_skipped_gb":0.00,"prefetch_busy_s":1813.3,"viewed_gbps":0.33,"window_wait_s":0.0,"fill_s":0.7,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":110.8,"fetch_wait_s":0.0,"mem_mode":false,"prefetch":true}
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 35.72s, upload wait 0.13s, compute starved 35.68s
+[fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+[fastvideo] inject: text_video_ctx [1, 1024, 4096] from the reference
+[fastvideo] inject: text_audio_ctx [1, 1024, 2048] from the reference
+[fastvideo] ltx2 memory text: peak 43.56 GiB used, 43.59 GiB reserved; 37.55 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 6.06 | pool_reserved 0.04 | non_pool 0.69 | total 44.24 GiB
+[fastvideo] inject: v2v_video_latent [6144, 128] from the reference
+[fastvideo] inject: v2v_video_latent (reference)
+[fastvideo] ltx2 edit: video 768x512 121 frames at 24.000 fps, window 0+121 of /opt/fastvideo-rs/scripts/gpu/fixtures/beach-push-768x512-24fps.mp4, region [1.500, 3.500) s, 7/16 latent frames regenerated, encoded in 5.97s
+[fastvideo] inject: v2v_audio_wave [2, 222208] from the reference
+[fastvideo] inject: v2v_audio_wave (reference)
+[fastvideo] inject: v2v_audio_latent [126, 128] from the reference
+[fastvideo] inject: v2v_audio_latent (reference)
+[fastvideo] ltx2 edit: audio 44100 Hz, 5.039s → 126 of 126 tokens
+[fastvideo] ltx2 memory edit_encode: peak 45.64 GiB used, 46.66 GiB reserved; 38.42 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 8.15 | pool_reserved 1.01 | non_pool 0.69 | total 46.33 GiB
+[fastvideo] inject: noise_seed1024_000 [1, 6144, 128] from the reference
+[fastvideo] inject: noise_seed1024_001 [1, 126, 128] from the reference
+[fastvideo] inject: noise_seed11024_000 [1, 6144, 128] from the reference
+[fastvideo] inject: noise_seed11024_001 [1, 126, 128] from the reference
+[fastvideo] ltx2 ancestral step 1/8 sigma 1.000000 (2.76s)
+[fastvideo] inject: noise_seed11024_002 [1, 6144, 128] from the reference
+[fastvideo] inject: noise_seed11024_003 [1, 126, 128] from the reference
+[fastvideo] ltx2 ancestral step 2/8 sigma 0.993750 (0.78s)
+[fastvideo] inject: noise_seed11024_004 [1, 6144, 128] from the reference
+[fastvideo] inject: noise_seed11024_005 [1, 126, 128] from the reference
+[fastvideo] ltx2 ancestral step 3/8 sigma 0.987500 (0.78s)
+[fastvideo] inject: noise_seed11024_006 [1, 6144, 128] from the reference
+[fastvideo] inject: noise_seed11024_007 [1, 126, 128] from the reference
+[fastvideo] ltx2 ancestral step 4/8 sigma 0.981250 (0.78s)
+[fastvideo] inject: noise_seed11024_008 [1, 6144, 128] from the reference
+[fastvideo] inject: noise_seed11024_009 [1, 126, 128] from the reference
+[fastvideo] ltx2 ancestral step 5/8 sigma 0.975000 (0.78s)
+[fastvideo] inject: noise_seed11024_010 [1, 6144, 128] from the reference
+[fastvideo] inject: noise_seed11024_011 [1, 126, 128] from the reference
+[fastvideo] ltx2 ancestral step 6/8 sigma 0.909375 (0.78s)
+[fastvideo] inject: noise_seed11024_012 [1, 6144, 128] from the reference
+[fastvideo] inject: noise_seed11024_013 [1, 126, 128] from the reference
+[fastvideo] ltx2 ancestral step 7/8 sigma 0.725000 (0.78s)
+[fastvideo] ltx2 ancestral step 8/8 sigma 0.421875 (0.78s)
+[fastvideo] ltx2 memory stage1: peak 39.18 GiB used, 39.53 GiB reserved; 38.42 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 1.68 | pool_reserved 0.35 | non_pool 0.69 | total 39.87 GiB
+[fastvideo] ltx vae: channels-last bf16 decoder (0.01s to convert weights)
+[fastvideo] ltx2 video decode 0.50s: vae 0.46s, rgb 0.04s, push 0.08s, wait 0.25s
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.07s, 0.05 GiB, synced), ffmpeg feed blocked 0.17s, mp4 tail 0.07s, buffered peak 0.13 GiB of 43.31
+[fastvideo] ltx2 video decode + mp4 0.57s (mp4 tail 0.07s); png frames after it 0.07s
+[fastvideo] ltx2 memory decode: peak 40.93 GiB used, 41.56 GiB reserved; 39.15 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 3.43 | pool_reserved 0.63 | non_pool 0.69 | total 41.62 GiB
+ltx2 memory load: 37.50 GiB live after load
+ltx2 memory     text: peak  43.56 GiB used,  43.59 GiB reserved,  37.55 GiB live after
+ltx2 memory edit_encode: peak  45.64 GiB used,  46.66 GiB reserved,  38.42 GiB live after
+ltx2 memory   stage1: peak  39.18 GiB used,  39.53 GiB reserved,  38.42 GiB live after
+ltx2 memory   decode: peak  40.93 GiB used,  41.56 GiB reserved,  39.15 GiB live after
+[PASS] ltx2/gen.mp4_frames_and_rate {"audio":{"channels":2,"codec_name":"aac","duration":"5.010000","sample_rate":"48000"},"avg_frame_rate":"24/1","ffprobe":true,"has_audio":true,"height":512,"path":"/fvscratch/runs/oracle/7e513f6-10282200/oracle-ltx25-retake/frames/output.mp4","r_frame_rate":"24/1","video_duration_s":5.041667,"video_frames":121,"width":768} (limits {"has_audio":true,"r_frame_rate":"24/1","video_frames":121})
+[PASS] ltx2/gen.latents_finite {"steps":8} (limits {"non_finite":0,"steps":8})
+[PASS] ltx2/gen.frames {"frames":121} (limits {"frames":121})
+[PASS] ltx2/gen.wav {"bytes":961964} (limits {"channels":2,"sample_rate":48000,"samples_per_channel":240480})
+[PASS] ltx2/gen.mp4 {"bytes":496161,"path":"/fvscratch/runs/oracle/7e513f6-10282200/oracle-ltx25-retake/frames/output.mp4"} (limits {"bytes_min":1})
+benchmark.json → /fvscratch/runs/oracle/7e513f6-10282200/oracle-ltx25-retake/benchmark.json
+[PASS] stage ltx2 → gpucheck-out/ltx2.json (231.2s)

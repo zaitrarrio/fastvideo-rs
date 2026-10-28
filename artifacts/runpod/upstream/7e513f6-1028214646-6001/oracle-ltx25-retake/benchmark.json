@@ -1,0 +1,30 @@
+{
+  "pipeline": "bf16",
+  "stage_1_seconds": 26.163776237983257,
+  "stage_2_seconds": 0,
+  "video_vae_seconds": 1.1886794470483437,
+  "e2e_seconds": 48.135071858996525,
+  "peak_allocated_gib": 7.738775730133057,
+  "peak_reserved_gib": 7.857421875,
+  "attention": {
+    "label": "LTX25-Stage2-Sol(SDPA[CUDNN_ATTENTION>FLASH_ATTENTION>EFFICIENT_ATTENTION>MATH])",
+    "video_calls": 0,
+    "sol_calls": 0,
+    "dense_video_calls": 0,
+    "tau_calls": {
+      "1.0": 0,
+      "1.25": 0,
+      "1.5": 0
+    },
+    "kernel": {
+      "dispatch_calls": 0,
+      "kernel_calls": 0,
+      "hunyuan_calls": 0,
+      "dense_guard_calls": 0
+    }
+  },
+  "exact_adaln": null,
+  "nvfp4_embedding_key": null,
+  "torch_version": "2.13.0+cu132",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+}

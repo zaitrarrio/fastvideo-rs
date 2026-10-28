@@ -1,0 +1,422 @@
+[22:01:26] [oracle] matrix start image=73d46aa3da21af2f
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-3c7bb6c2-e821-3f81-b259-04e94f23b83d)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+[22:01:26] [oracle] pod memory: cgroup v2 /sys/fs/cgroup, limit 179290 MiB, oom_kills 0
+[22:01:26] [oracle] skip oracle-fasth3-8step (no arm in FV_CELLS)
+[22:01:26] [oracle] skip oracle-fasth3-8step-vsa0 (no arm in FV_CELLS)
+[22:01:26] [oracle] skip oracle-fasth3-4step-vsa (no arm in FV_CELLS)
+[22:01:26] [oracle] skip oracle-fasth3-4step-dense (no arm in FV_CELLS)
+[22:01:26] [oracle] skip oracle-h3-ref2va-4step (no arm in FV_CELLS)
+[22:01:26] [oracle] skip oracle-ltx25-512p (no arm in FV_CELLS)
+[22:01:26] [oracle] skip oracle-ltx25-512p-dense (no arm in FV_CELLS)
+[22:01:26] [oracle] skip oracle-ltx25-4k (no arm in FV_CELLS)
+[22:01:26] [oracle] skip oracle-ltx25-4k-dense (no arm in FV_CELLS)
+[22:01:27] [oracle] oracle: fetching https://7fpuddmdzvss20-8000.proxy.runpod.net/upstream/7e513f6-1028214646-6001/oracle-ltx25-retake/oracle-dump.tar
+[22:01:29] [oracle] oracle: ltx25-retake reference 263M
+[22:01:30] [oracle] ▶ oracle-ltx25-retake  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/ltx25-retake/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/7e513f6-1028214646-8346/oracle-ltx25-retake-dump /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --edit retake:/opt/fastvideo-rs/scripts/gpu/fixtures/beach-push-768x512-24fps.mp4:1.5:3.5:av --prompt A huge wave crashes over the dark rocks at golden hour, white spray bursting high into the air, a narrator speaks calmly. --seed 1024 --text streamed --clip /fvscratch/runs/oracle/7e513f6-1028214646-8346/oracle-ltx25-retake/frames  (wall cap 2352s; 0=none)
+[22:05:36] [oracle] ok oracle-ltx25-retake  246s  
+[22:05:36] [oracle] ram oracle-ltx25-retake: ram 36379 MiB of 179290 MiB, oom_kills 0
+[22:05:37] [oracle] ▶ oracle-ltx25-retake-diff  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/oracle-ref/ltx25-retake/dump --candidate /fvscratch/runs/oracle/7e513f6-1028214646-8346/oracle-ltx25-retake-dump  (wall cap 2105s; 0=none)
+[22:05:37] [oracle] ok oracle-ltx25-retake-diff  0s  
+[22:05:37] [oracle] ram oracle-ltx25-retake-diff: ram 5 MiB of 179290 MiB, oom_kills 0
+[oracle-ltx25-retake-diff] compare-dumps noise_seed1024_000: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed1024_001: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_000: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_001: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_002: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_003: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_004: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_005: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_006: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_007: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_008: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_009: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_010: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_011: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_012: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps noise_seed11024_013: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_step01              rel_l2 3.624e-4  cosine 1.000000  max_abs 1.562e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_step02              rel_l2 5.554e-4  cosine 1.000000  max_abs 1.562e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_step03              rel_l2 6.206e-4  cosine 1.000000  max_abs 1.562e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_step04              rel_l2 6.810e-4  cosine 1.000000  max_abs 1.562e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_step05              rel_l2 1.207e-3  cosine 0.999999  max_abs 1.562e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_step06              rel_l2 3.069e-3  cosine 0.999995  max_abs 3.125e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_step07              rel_l2 1.121e-2  cosine 0.999937  max_abs 2.148e-1  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_step08              rel_l2 2.359e-2  cosine 0.999722  max_abs 6.719e-1  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_step00_in           rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_vel_step01          rel_l2 9.875e-3  cosine 0.999952  max_abs 7.812e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_vel_step02          rel_l2 1.270e-2  cosine 0.999927  max_abs 9.375e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_vel_step03          rel_l2 9.462e-3  cosine 0.999956  max_abs 7.422e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_vel_step04          rel_l2 1.015e-2  cosine 0.999949  max_abs 7.031e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_vel_step05          rel_l2 9.774e-3  cosine 0.999954  max_abs 8.203e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_vel_step06          rel_l2 1.080e-2  cosine 0.999942  max_abs 1.289e-1  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_vel_step07          rel_l2 2.313e-2  cosine 0.999733  max_abs 5.586e-1  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_vel_step08          rel_l2 4.230e-2  cosine 0.999106  max_abs 1.109e0  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_x0_step01           rel_l2 8.371e-3  cosine 0.999966  max_abs 7.812e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_x0_step02           rel_l2 1.206e-2  cosine 0.999941  max_abs 9.375e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_x0_step03           rel_l2 7.473e-3  cosine 0.999974  max_abs 6.250e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_x0_step04           rel_l2 8.601e-3  cosine 0.999964  max_abs 7.031e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_x0_step05           rel_l2 8.248e-3  cosine 0.999968  max_abs 6.250e-2  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_x0_step06           rel_l2 9.092e-3  cosine 0.999959  max_abs 1.172e-1  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_x0_step07           rel_l2 1.753e-2  cosine 0.999846  max_abs 4.102e-1  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_audio_x0_step08           rel_l2 2.359e-2  cosine 0.999722  max_abs 6.719e-1  n 16128
+[oracle-ltx25-retake-diff] compare-dumps s1_sigmas                    rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 9
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_0      rel_l2 3.163e-3  cosine 0.999995  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_1      rel_l2 3.516e-3  cosine 0.999994  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_2      rel_l2 3.915e-3  cosine 0.999992  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_3      rel_l2 4.191e-3  cosine 0.999991  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_4      rel_l2 4.794e-3  cosine 0.999989  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_5      rel_l2 5.374e-3  cosine 0.999986  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_6      rel_l2 5.702e-3  cosine 0.999984  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_7      rel_l2 5.934e-3  cosine 0.999982  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_8      rel_l2 6.206e-3  cosine 0.999981  max_abs 1.000e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_9      rel_l2 6.542e-3  cosine 0.999979  max_abs 1.000e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_10     rel_l2 6.794e-3  cosine 0.999977  max_abs 1.000e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_11     rel_l2 6.925e-3  cosine 0.999976  max_abs 1.000e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_12     rel_l2 7.050e-3  cosine 0.999975  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_13     rel_l2 7.164e-3  cosine 0.999974  max_abs 6.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_14     rel_l2 7.237e-3  cosine 0.999974  max_abs 6.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_15     rel_l2 7.376e-3  cosine 0.999973  max_abs 6.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_16     rel_l2 7.592e-3  cosine 0.999971  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_17     rel_l2 7.835e-3  cosine 0.999969  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_18     rel_l2 7.955e-3  cosine 0.999968  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_19     rel_l2 8.155e-3  cosine 0.999967  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_20     rel_l2 8.363e-3  cosine 0.999965  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_21     rel_l2 8.738e-3  cosine 0.999962  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_22     rel_l2 8.933e-3  cosine 0.999960  max_abs 1.200e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_23     rel_l2 9.347e-3  cosine 0.999956  max_abs 1.200e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_24     rel_l2 9.347e-3  cosine 0.999956  max_abs 1.200e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_25     rel_l2 9.922e-3  cosine 0.999951  max_abs 1.200e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_26     rel_l2 9.685e-3  cosine 0.999953  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_27     rel_l2 9.993e-3  cosine 0.999950  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_28     rel_l2 9.809e-3  cosine 0.999952  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_29     rel_l2 1.037e-2  cosine 0.999946  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_30     rel_l2 1.081e-2  cosine 0.999942  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_31     rel_l2 1.088e-2  cosine 0.999941  max_abs 2.000e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_32     rel_l2 1.030e-2  cosine 0.999947  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_33     rel_l2 1.055e-2  cosine 0.999944  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_34     rel_l2 1.032e-2  cosine 0.999947  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_35     rel_l2 1.028e-2  cosine 0.999947  max_abs 2.000e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_36     rel_l2 1.022e-2  cosine 0.999948  max_abs 2.000e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_37     rel_l2 1.039e-2  cosine 0.999946  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_38     rel_l2 1.015e-2  cosine 0.999949  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_39     rel_l2 1.055e-2  cosine 0.999944  max_abs 1.200e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_40     rel_l2 1.074e-2  cosine 0.999942  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_41     rel_l2 1.038e-2  cosine 0.999946  max_abs 8.000e0  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_42     rel_l2 1.068e-2  cosine 0.999943  max_abs 1.200e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_43     rel_l2 1.098e-2  cosine 0.999940  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_44     rel_l2 1.043e-2  cosine 0.999946  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_45     rel_l2 1.021e-2  cosine 0.999948  max_abs 1.200e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_46     rel_l2 8.287e-3  cosine 0.999966  max_abs 1.600e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_block_47     rel_l2 5.128e-3  cosine 0.999987  max_abs 3.200e1  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_audio_in           rel_l2 1.660e-5  cosine 1.000000  max_abs 1.562e-2  n 258048
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_0      rel_l2 1.768e-3  cosine 0.999998  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_1      rel_l2 3.089e-3  cosine 0.999995  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_2      rel_l2 4.239e-3  cosine 0.999991  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_3      rel_l2 4.250e-3  cosine 0.999991  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_4      rel_l2 3.799e-3  cosine 0.999993  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_5      rel_l2 4.261e-3  cosine 0.999991  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_6      rel_l2 4.790e-3  cosine 0.999989  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_7      rel_l2 4.972e-3  cosine 0.999988  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_8      rel_l2 5.187e-3  cosine 0.999987  max_abs 3.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_9      rel_l2 4.922e-3  cosine 0.999988  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_10     rel_l2 5.018e-3  cosine 0.999987  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_11     rel_l2 5.105e-3  cosine 0.999987  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_12     rel_l2 5.397e-3  cosine 0.999985  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_13     rel_l2 5.561e-3  cosine 0.999985  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_14     rel_l2 5.031e-3  cosine 0.999987  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_15     rel_l2 6.151e-3  cosine 0.999981  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_16     rel_l2 6.028e-3  cosine 0.999982  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_17     rel_l2 5.136e-3  cosine 0.999987  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_18     rel_l2 5.492e-3  cosine 0.999985  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_19     rel_l2 5.891e-3  cosine 0.999983  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_20     rel_l2 6.089e-3  cosine 0.999981  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_21     rel_l2 5.844e-3  cosine 0.999983  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_22     rel_l2 6.742e-3  cosine 0.999977  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_23     rel_l2 7.255e-3  cosine 0.999974  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_24     rel_l2 8.946e-3  cosine 0.999960  max_abs 1.000e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_25     rel_l2 1.141e-2  cosine 0.999935  max_abs 2.000e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_26     rel_l2 1.521e-2  cosine 0.999884  max_abs 3.400e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_27     rel_l2 1.656e-2  cosine 0.999863  max_abs 3.400e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_28     rel_l2 1.774e-2  cosine 0.999843  max_abs 3.600e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_29     rel_l2 1.763e-2  cosine 0.999845  max_abs 3.200e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_30     rel_l2 1.721e-2  cosine 0.999852  max_abs 2.200e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_31     rel_l2 1.843e-2  cosine 0.999830  max_abs 2.000e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_32     rel_l2 1.851e-2  cosine 0.999829  max_abs 2.000e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_33     rel_l2 1.673e-2  cosine 0.999860  max_abs 1.200e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_34     rel_l2 1.715e-2  cosine 0.999853  max_abs 2.600e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_35     rel_l2 1.581e-2  cosine 0.999875  max_abs 1.000e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_36     rel_l2 1.480e-2  cosine 0.999891  max_abs 1.600e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_37     rel_l2 1.679e-2  cosine 0.999859  max_abs 1.800e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_38     rel_l2 1.831e-2  cosine 0.999832  max_abs 1.200e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_39     rel_l2 1.959e-2  cosine 0.999808  max_abs 1.200e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_40     rel_l2 2.100e-2  cosine 0.999779  max_abs 1.600e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_41     rel_l2 2.299e-2  cosine 0.999736  max_abs 3.000e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_42     rel_l2 2.596e-2  cosine 0.999663  max_abs 2.600e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_43     rel_l2 2.421e-2  cosine 0.999707  max_abs 1.400e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_44     rel_l2 2.307e-2  cosine 0.999734  max_abs 1.600e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_45     rel_l2 2.059e-2  cosine 0.999788  max_abs 1.600e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_46     rel_l2 2.287e-2  cosine 0.999738  max_abs 1.600e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_block_47     rel_l2 9.306e-3  cosine 0.999957  max_abs 3.200e1  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_step00_video_in           rel_l2 2.720e-3  cosine 0.999996  max_abs 6.250e-2  n 393216
+[oracle-ltx25-retake-diff] compare-dumps s1_video_step01              rel_l2 3.698e-4  cosine 1.000000  max_abs 1.562e-2  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_step02              rel_l2 5.256e-4  cosine 1.000000  max_abs 3.125e-2  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_step03              rel_l2 6.626e-4  cosine 1.000000  max_abs 3.125e-2  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_step04              rel_l2 7.719e-4  cosine 1.000000  max_abs 2.344e-2  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_step05              rel_l2 1.391e-3  cosine 0.999999  max_abs 1.562e-2  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_step06              rel_l2 2.850e-3  cosine 0.999996  max_abs 5.371e-2  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_step07              rel_l2 5.120e-3  cosine 0.999987  max_abs 1.602e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_step08              rel_l2 7.474e-3  cosine 0.999972  max_abs 1.469e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_step00_in           rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_vel_step01          rel_l2 1.287e-2  cosine 0.999917  max_abs 2.910e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_vel_step02          rel_l2 1.254e-2  cosine 0.999921  max_abs 2.305e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_vel_step03          rel_l2 1.340e-2  cosine 0.999910  max_abs 6.250e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_vel_step04          rel_l2 1.300e-2  cosine 0.999916  max_abs 2.969e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_vel_step05          rel_l2 1.275e-2  cosine 0.999919  max_abs 2.578e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_vel_step06          rel_l2 1.323e-2  cosine 0.999912  max_abs 2.461e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_vel_step07          rel_l2 1.372e-2  cosine 0.999906  max_abs 4.336e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_vel_step08          rel_l2 1.745e-2  cosine 0.999848  max_abs 3.125e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_x0_step01           rel_l2 1.000e-2  cosine 0.999950  max_abs 2.910e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_x0_step02           rel_l2 9.482e-3  cosine 0.999955  max_abs 1.406e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_x0_step03           rel_l2 9.879e-3  cosine 0.999951  max_abs 1.318e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_x0_step04           rel_l2 9.480e-3  cosine 0.999955  max_abs 2.031e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_x0_step05           rel_l2 9.376e-3  cosine 0.999956  max_abs 1.392e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_x0_step06           rel_l2 9.799e-3  cosine 0.999952  max_abs 2.246e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_x0_step07           rel_l2 8.636e-3  cosine 0.999963  max_abs 3.164e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps s1_video_x0_step08           rel_l2 7.474e-3  cosine 0.999972  max_abs 1.469e-1  n 786432
+[oracle-ltx25-retake-diff] compare-dumps text_attention_mask          rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 1024
+[oracle-ltx25-retake-diff] compare-dumps text_audio_ctx               rel_l2 5.873e-3  cosine 0.999983  max_abs 5.674e-1  n 2097152
+[oracle-ltx25-retake-diff] compare-dumps text_audio_ctx_real          rel_l2 4.449e-3  cosine 0.999990  max_abs 1.250e-1  n 53248
+[oracle-ltx25-retake-diff] compare-dumps text_audio_feats             rel_l2 5.828e-3  cosine 0.999983  max_abs 2.812e-1  n 53248
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_0                rel_l2 1.671e-3  cosine 0.999999  max_abs 5.859e-2  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_1                rel_l2 5.347e-3  cosine 0.999986  max_abs 1.605e-1  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_2                rel_l2 6.031e-3  cosine 0.999982  max_abs 1.643e-1  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_5                rel_l2 9.328e-3  cosine 0.999957  max_abs 4.094e-1  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_6                rel_l2 1.024e-2  cosine 0.999948  max_abs 1.739e-1  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_7                rel_l2 1.127e-2  cosine 0.999936  max_abs 2.521e-1  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_12               rel_l2 1.279e-2  cosine 0.999919  max_abs 2.735e-1  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_24               rel_l2 9.713e-3  cosine 0.999954  max_abs 2.676e0  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_36               rel_l2 7.551e-3  cosine 0.999973  max_abs 2.269e0  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_47               rel_l2 4.129e-3  cosine 0.999992  max_abs 2.565e0  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_hidden_48               rel_l2 4.107e-3  cosine 0.999993  max_abs 2.811e1  n 99840
+[oracle-ltx25-retake-diff] compare-dumps text_input_ids               rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 1024
+[oracle-ltx25-retake-diff] compare-dumps text_video_ctx               rel_l2 4.533e-3  cosine 0.999990  max_abs 1.188e0  n 4194304
+[oracle-ltx25-retake-diff] compare-dumps text_video_ctx_real          rel_l2 7.131e-3  cosine 0.999975  max_abs 1.250e-1  n 106496
+[oracle-ltx25-retake-diff] compare-dumps text_video_feats             rel_l2 6.557e-3  cosine 0.999979  max_abs 2.500e-1  n 106496
+[oracle-ltx25-retake-diff] compare-dumps v2v_audio_latent             rel_l2 7.806e-2  cosine 0.996953  max_abs 1.959e0  n 16128
+[oracle-ltx25-retake-diff] compare-dumps v2v_audio_wave               rel_l2 7.021e-5  cosine 1.000000  max_abs 3.747e-4  n 444416
+[oracle-ltx25-retake-diff] compare-dumps v2v_frame0_pixels            rel_l2 3.254e-6  cosine 1.000000  max_abs 3.052e-5  n 1179648
+[oracle-ltx25-retake-diff] compare-dumps v2v_region: missing in candidate
+[oracle-ltx25-retake-diff] compare-dumps v2v_video_latent             rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-diff] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.2s)
+[22:05:38] [oracle] ▶ oracle-ltx25-retake-ownenc  env FASTVIDEO_INJECT_DIR=/fvscratch/oracle-ref/ltx25-retake/dump FASTVIDEO_DUMP_OPS=0,1,24,47 FASTVIDEO_H3_QUANT=off FASTVIDEO_DUMP_DIR=/fvscratch/runs/oracle/7e513f6-1028214646-8346/oracle-ltx25-retake-dump-ownenc FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --height 512 --width 768 --num-frames 121 --edit retake:/opt/fastvideo-rs/scripts/gpu/fixtures/beach-push-768x512-24fps.mp4:1.5:3.5:av --prompt A huge wave crashes over the dark rocks at golden hour, white spray bursting high into the air, a narrator speaks calmly. --seed 1024 --text streamed --clip /fvscratch/runs/oracle/7e513f6-1028214646-8346/oracle-ltx25-retake-ownenc/frames  (wall cap 2104s; 0=none)
+[22:06:29] [oracle] ok oracle-ltx25-retake-ownenc  50s  
+[22:06:29] [oracle] ram oracle-ltx25-retake-ownenc: ram 25827 MiB of 179290 MiB, oom_kills 0
+[22:06:29] [oracle] ▶ oracle-ltx25-retake-ownenc-diff  /opt/fastvideo-rs/target/release/fv-gpucheck compare-dumps --baseline /fvscratch/oracle-ref/ltx25-retake/dump --candidate /fvscratch/runs/oracle/7e513f6-1028214646-8346/oracle-ltx25-retake-dump-ownenc  (wall cap 2053s; 0=none)
+[22:06:29] [oracle] ok oracle-ltx25-retake-ownenc-diff  0s  
+[22:06:29] [oracle] ram oracle-ltx25-retake-ownenc-diff: ram 5 MiB of 179290 MiB, oom_kills 0
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed1024_000: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed1024_001: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_000: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_001: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_002: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_003: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_004: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_005: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_006: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_007: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_008: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_009: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_010: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_011: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_012: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps noise_seed11024_013: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_step01              rel_l2 8.844e-2  cosine 0.996092  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_step02              rel_l2 8.878e-2  cosine 0.996062  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_step03              rel_l2 8.883e-2  cosine 0.996058  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_step04              rel_l2 8.909e-2  cosine 0.996034  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_step05              rel_l2 9.081e-2  cosine 0.995880  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_step06              rel_l2 9.375e-2  cosine 0.995611  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_step07              rel_l2 9.909e-2  cosine 0.995102  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_step08              rel_l2 1.045e-1  cosine 0.994573  max_abs 1.707e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_step00_in           rel_l2 8.815e-2  cosine 0.996117  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_vel_step01          rel_l2 1.052e-1  cosine 0.994518  max_abs 4.256e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_vel_step02          rel_l2 1.036e-1  cosine 0.994685  max_abs 4.236e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_vel_step03          rel_l2 1.015e-1  cosine 0.994863  max_abs 4.266e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_vel_step04          rel_l2 1.008e-1  cosine 0.994939  max_abs 4.264e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_vel_step05          rel_l2 9.749e-2  cosine 0.995252  max_abs 4.188e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_vel_step06          rel_l2 1.009e-1  cosine 0.994904  max_abs 4.260e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_vel_step07          rel_l2 1.278e-1  cosine 0.991856  max_abs 4.076e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_vel_step08          rel_l2 1.397e-1  cosine 0.990297  max_abs 4.002e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_x0_step01           rel_l2 9.133e-2  cosine 0.995966  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_x0_step02           rel_l2 8.996e-2  cosine 0.996073  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_x0_step03           rel_l2 8.704e-2  cosine 0.996259  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_x0_step04           rel_l2 8.673e-2  cosine 0.996289  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_x0_step05           rel_l2 8.336e-2  cosine 0.996558  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_x0_step06           rel_l2 8.585e-2  cosine 0.996331  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_x0_step07           rel_l2 1.020e-1  cosine 0.994820  max_abs 1.664e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_audio_x0_step08           rel_l2 1.045e-1  cosine 0.994573  max_abs 1.707e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_sigmas                    rel_l2 0.000e0  cosine 1.000000  max_abs 0.000e0  n 9
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_0      rel_l2 8.919e-2  cosine 0.996023  max_abs 1.162e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_1      rel_l2 9.462e-2  cosine 0.995525  max_abs 1.378e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_2      rel_l2 9.706e-2  cosine 0.995286  max_abs 1.482e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_3      rel_l2 9.337e-2  cosine 0.995639  max_abs 1.498e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_4      rel_l2 1.047e-1  cosine 0.994520  max_abs 1.625e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_5      rel_l2 1.107e-1  cosine 0.993877  max_abs 1.690e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_6      rel_l2 1.128e-1  cosine 0.993638  max_abs 1.740e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_7      rel_l2 1.140e-1  cosine 0.993504  max_abs 1.745e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_8      rel_l2 1.154e-1  cosine 0.993348  max_abs 1.775e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_9      rel_l2 1.172e-1  cosine 0.993138  max_abs 1.815e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_10     rel_l2 1.181e-1  cosine 0.993033  max_abs 1.825e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_11     rel_l2 1.181e-1  cosine 0.993026  max_abs 1.845e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_12     rel_l2 1.181e-1  cosine 0.993026  max_abs 1.870e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_13     rel_l2 1.186e-1  cosine 0.992971  max_abs 1.875e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_14     rel_l2 1.177e-1  cosine 0.993081  max_abs 1.870e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_15     rel_l2 1.165e-1  cosine 0.993228  max_abs 1.885e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_16     rel_l2 1.174e-1  cosine 0.993113  max_abs 1.900e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_17     rel_l2 1.201e-1  cosine 0.992799  max_abs 1.895e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_18     rel_l2 1.199e-1  cosine 0.992813  max_abs 1.905e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_19     rel_l2 1.210e-1  cosine 0.992687  max_abs 1.910e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_20     rel_l2 1.217e-1  cosine 0.992601  max_abs 1.925e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_21     rel_l2 1.238e-1  cosine 0.992332  max_abs 1.940e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_22     rel_l2 1.231e-1  cosine 0.992425  max_abs 1.955e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_23     rel_l2 1.267e-1  cosine 0.991969  max_abs 1.970e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_24     rel_l2 1.246e-1  cosine 0.992239  max_abs 1.970e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_25     rel_l2 1.286e-1  cosine 0.991735  max_abs 1.980e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_26     rel_l2 1.226e-1  cosine 0.992495  max_abs 1.978e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_27     rel_l2 1.239e-1  cosine 0.992322  max_abs 1.978e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_28     rel_l2 1.185e-1  cosine 0.992986  max_abs 1.962e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_29     rel_l2 1.235e-1  cosine 0.992372  max_abs 1.952e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_30     rel_l2 1.236e-1  cosine 0.992369  max_abs 1.954e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_31     rel_l2 1.243e-1  cosine 0.992282  max_abs 1.965e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_32     rel_l2 1.184e-1  cosine 0.993001  max_abs 1.976e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_33     rel_l2 1.190e-1  cosine 0.992917  max_abs 1.985e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_34     rel_l2 1.156e-1  cosine 0.993320  max_abs 2.010e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_35     rel_l2 1.138e-1  cosine 0.993527  max_abs 2.040e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_36     rel_l2 1.131e-1  cosine 0.993605  max_abs 2.064e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_37     rel_l2 1.161e-1  cosine 0.993273  max_abs 2.090e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_38     rel_l2 1.140e-1  cosine 0.993511  max_abs 2.114e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_39     rel_l2 1.194e-1  cosine 0.992888  max_abs 2.130e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_40     rel_l2 1.200e-1  cosine 0.992808  max_abs 2.275e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_41     rel_l2 1.152e-1  cosine 0.993367  max_abs 2.365e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_42     rel_l2 1.157e-1  cosine 0.993317  max_abs 2.530e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_43     rel_l2 1.160e-1  cosine 0.993283  max_abs 2.575e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_44     rel_l2 1.109e-1  cosine 0.993858  max_abs 2.850e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_45     rel_l2 1.038e-1  cosine 0.994617  max_abs 2.870e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_46     rel_l2 8.076e-2  cosine 0.996734  max_abs 2.575e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_block_47     rel_l2 4.148e-2  cosine 0.999140  max_abs 2.405e2  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_audio_in           rel_l2 6.846e-2  cosine 0.997655  max_abs 1.175e1  n 258048
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_0      rel_l2 2.996e-3  cosine 0.999996  max_abs 2.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_1      rel_l2 8.412e-3  cosine 0.999965  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_2      rel_l2 1.234e-2  cosine 0.999924  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_3      rel_l2 1.239e-2  cosine 0.999923  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_4      rel_l2 1.069e-2  cosine 0.999943  max_abs 8.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_5      rel_l2 1.190e-2  cosine 0.999929  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_6      rel_l2 1.348e-2  cosine 0.999909  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_7      rel_l2 1.361e-2  cosine 0.999907  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_8      rel_l2 1.401e-2  cosine 0.999902  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_9      rel_l2 1.355e-2  cosine 0.999908  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_10     rel_l2 1.348e-2  cosine 0.999909  max_abs 6.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_11     rel_l2 1.355e-2  cosine 0.999908  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_12     rel_l2 1.406e-2  cosine 0.999901  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_13     rel_l2 1.434e-2  cosine 0.999897  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_14     rel_l2 1.248e-2  cosine 0.999922  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_15     rel_l2 1.560e-2  cosine 0.999878  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_16     rel_l2 1.516e-2  cosine 0.999885  max_abs 4.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_17     rel_l2 1.281e-2  cosine 0.999918  max_abs 4.500e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_18     rel_l2 1.372e-2  cosine 0.999906  max_abs 4.500e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_19     rel_l2 1.469e-2  cosine 0.999892  max_abs 5.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_20     rel_l2 1.512e-2  cosine 0.999886  max_abs 6.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_21     rel_l2 1.411e-2  cosine 0.999900  max_abs 6.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_22     rel_l2 1.649e-2  cosine 0.999864  max_abs 6.000e0  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_23     rel_l2 1.965e-2  cosine 0.999807  max_abs 3.600e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_24     rel_l2 2.337e-2  cosine 0.999727  max_abs 4.500e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_25     rel_l2 4.357e-2  cosine 0.999056  max_abs 1.560e2  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_26     rel_l2 6.304e-2  cosine 0.998025  max_abs 2.340e2  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_27     rel_l2 6.144e-2  cosine 0.998125  max_abs 2.040e2  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_28     rel_l2 6.037e-2  cosine 0.998190  max_abs 2.020e2  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_29     rel_l2 5.928e-2  cosine 0.998253  max_abs 2.000e2  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_30     rel_l2 6.093e-2  cosine 0.998169  max_abs 1.860e2  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_31     rel_l2 7.705e-2  cosine 0.997077  max_abs 2.520e2  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_32     rel_l2 5.423e-2  cosine 0.998534  max_abs 1.040e2  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_33     rel_l2 5.232e-2  cosine 0.998635  max_abs 8.800e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_34     rel_l2 4.746e-2  cosine 0.998874  max_abs 6.600e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_35     rel_l2 4.439e-2  cosine 0.999015  max_abs 3.200e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_36     rel_l2 4.156e-2  cosine 0.999136  max_abs 4.600e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_37     rel_l2 4.582e-2  cosine 0.998950  max_abs 4.700e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_38     rel_l2 4.899e-2  cosine 0.998800  max_abs 2.000e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_39     rel_l2 5.053e-2  cosine 0.998724  max_abs 3.400e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_40     rel_l2 5.245e-2  cosine 0.998625  max_abs 2.000e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_41     rel_l2 5.359e-2  cosine 0.998564  max_abs 2.600e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_42     rel_l2 6.050e-2  cosine 0.998168  max_abs 5.800e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_43     rel_l2 5.704e-2  cosine 0.998372  max_abs 5.600e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_44     rel_l2 5.353e-2  cosine 0.998566  max_abs 4.000e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_45     rel_l2 4.519e-2  cosine 0.998980  max_abs 3.200e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_46     rel_l2 4.565e-2  cosine 0.998958  max_abs 1.784e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_block_47     rel_l2 1.740e-2  cosine 0.999849  max_abs 6.400e1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_step00_video_in           rel_l2 1.045e-2  cosine 0.999945  max_abs 2.109e-1  n 393216
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_step01              rel_l2 1.264e-2  cosine 0.999920  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_step02              rel_l2 1.270e-2  cosine 0.999920  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_step03              rel_l2 1.276e-2  cosine 0.999919  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_step04              rel_l2 1.280e-2  cosine 0.999918  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_step05              rel_l2 1.333e-2  cosine 0.999911  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_step06              rel_l2 1.501e-2  cosine 0.999888  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_step07              rel_l2 1.777e-2  cosine 0.999843  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_step08              rel_l2 1.983e-2  cosine 0.999804  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_step00_in           rel_l2 1.259e-2  cosine 0.999921  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_vel_step01          rel_l2 2.305e-2  cosine 0.999734  max_abs 5.000e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_vel_step02          rel_l2 2.361e-2  cosine 0.999721  max_abs 4.688e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_vel_step03          rel_l2 2.390e-2  cosine 0.999714  max_abs 5.234e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_vel_step04          rel_l2 2.360e-2  cosine 0.999722  max_abs 4.609e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_vel_step05          rel_l2 2.345e-2  cosine 0.999725  max_abs 4.688e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_vel_step06          rel_l2 2.405e-2  cosine 0.999711  max_abs 4.688e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_vel_step07          rel_l2 2.444e-2  cosine 0.999701  max_abs 4.512e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_vel_step08          rel_l2 2.940e-2  cosine 0.999568  max_abs 6.328e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_x0_step01           rel_l2 2.116e-2  cosine 0.999777  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_x0_step02           rel_l2 2.142e-2  cosine 0.999771  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_x0_step03           rel_l2 2.160e-2  cosine 0.999767  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_x0_step04           rel_l2 2.105e-2  cosine 0.999779  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_x0_step05           rel_l2 2.098e-2  cosine 0.999780  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_x0_step06           rel_l2 2.141e-2  cosine 0.999771  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_x0_step07           rel_l2 2.045e-2  cosine 0.999792  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps s1_video_x0_step08           rel_l2 1.983e-2  cosine 0.999804  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_attention_mask: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_audio_ctx               rel_l2 5.873e-3  cosine 0.999983  max_abs 5.674e-1  n 2097152
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_audio_ctx_real: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_audio_feats: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_0: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_1: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_2: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_5: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_6: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_7: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_12: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_24: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_36: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_47: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_hidden_48: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_input_ids: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_video_ctx               rel_l2 4.533e-3  cosine 0.999990  max_abs 1.188e0  n 4194304
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_video_ctx_real: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps text_video_feats: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps v2v_audio_latent             rel_l2 9.943e-2  cosine 0.995058  max_abs 1.961e0  n 16128
+[oracle-ltx25-retake-ownenc-diff] compare-dumps v2v_audio_wave               rel_l2 7.021e-5  cosine 1.000000  max_abs 3.747e-4  n 444416
+[oracle-ltx25-retake-ownenc-diff] compare-dumps v2v_frame0_pixels            rel_l2 3.254e-6  cosine 1.000000  max_abs 3.052e-5  n 1179648
+[oracle-ltx25-retake-ownenc-diff] compare-dumps v2v_region: missing in candidate
+[oracle-ltx25-retake-ownenc-diff] compare-dumps v2v_video_latent             rel_l2 1.790e-2  cosine 0.999840  max_abs 4.243e-1  n 786432
+[oracle-ltx25-retake-ownenc-diff] [PASS] stage compare-dumps → gpucheck-out/compare-dumps.json (0.2s)
+[ltx25-retake-frames] ours: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-frames] ours: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-frames] ours kept frames vs source ssim: SSIM Y:0.974139 (15.873533) U:0.990748 (20.337453) V:0.991265 (20.587162) All:0.979761 (16.938175)
+[ltx25-retake-frames] ours kept frames vs source psnr: PSNR y:41.500335 u:49.545301 v:49.894717 average:42.945559 min:40.502057 max:44.107331
+[ltx25-retake-frames] ownenc: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-frames] ownenc: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-frames] ownenc kept frames vs source ssim: SSIM Y:0.974056 (15.859587) U:0.990781 (20.352944) V:0.991253 (20.581353) All:0.979709 (16.927050)
+[ltx25-retake-frames] ownenc kept frames vs source psnr: PSNR y:41.595356 u:49.571811 v:49.877775 average:43.034251 min:40.362528 max:44.290390
+[ltx25-retake-frames] reference: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+[ltx25-retake-frames] reference: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+[ltx25-retake-frames] reference kept frames vs source ssim: SSIM Y:0.973738 (15.806718) U:0.990030 (20.013149) V:0.990710 (20.319970) All:0.979282 (16.836536)
+[ltx25-retake-frames] reference kept frames vs source psnr: PSNR y:41.094395 u:48.068375 v:48.931804 average:42.475806 min:40.268195 max:43.521301
+[ltx25-retake-frames] ours vs reference clip ssim: SSIM Y:0.986863 (18.815022) U:0.993860 (22.118290) V:0.994167 (22.340935) All:0.989246 (19.684473)
+[ltx25-retake-frames] ours vs reference clip psnr: PSNR y:44.942038 u:49.686418 v:50.297237 average:46.070750 min:45.194115 max:46.782676
+[22:06:30] [oracle] matrix done

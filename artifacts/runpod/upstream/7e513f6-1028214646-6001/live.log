@@ -1,0 +1,11 @@
+[21:50:13] pod.sh start steps: info:box weights:ltx25 oracle:ltx25-retake
+[21:50:13] ▶ step info:box
+[21:50:13] ok step info:box  0s
+[21:50:13] ▶ step weights:ltx25
+[21:59:34] ok step weights:ltx25  561s
+[21:59:34] ▶ step oracle:ltx25-retake
+[21:59:38] ▶ cell oracle-ltx25-retake
+[22:00:33] ok oracle-ltx25-retake 55s peak 8887MiB ram 38068 MiB of 89645 MiB
+263M	/root/runs/upstream/7e513f6-1028214646-6001/oracle-ltx25-retake/dump
+[22:00:33] ok step oracle:ltx25-retake  59s
+[22:00:34] pod.sh done
