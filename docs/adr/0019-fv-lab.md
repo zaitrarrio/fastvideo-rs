@@ -59,10 +59,10 @@
   `hd5`), `serve-engine`, `sfstream` and `mmaudio` are retired from the script (`FV_LAB_RETIRED`, branches deleted,
   goldens frozen, their knobs in `FV_LAB_NOT_READ`); partial, since `wan`'s branch, which `sfwan` runs, goes with
   `sfwan` in S8. The script keeps `wan`, `sfwan` and `oracle`. The owner answered §22.6's questions 1 and 2 on
-  2026-10-28: the `mmaudio` knob stays offered, and `sol-bench-pod.sh` moves to an fv-lab experiment tier. §23, that
-  tier, is proposed but not built: three of the benchmark's rules cannot be kept exactly by a tier today (the deleted
-  volume, the 64 / 65 min backstops, the digest pin), the open items need R2 trees the rules forbid, and two schema
-  additions are proposed; it waits for the owner's answers in §23.6
+  2026-10-28: the `mmaudio` knob stays offered, and `sol-bench-pod.sh` moves to fv-lab. §23 (the owner's answers on its
+  rules, 2026-10-28) is done CPU-side: the 22 sets are the experiment tiers `sol-bench-<set>`, `volume` for `a1` / `a3`
+  and `volume+r2` for the rest, held to the script word for word, with Addition 18 (`unset`, for `env -u`). Its GPU
+  check (§23.7, `h3-768p-fullopt` through both runners, about $1.05) is the coordinator's; the script stays until then
 - Date: 2026-10-24
 - Decision-id: FVID-2026-10-24-fv-lab
 - Code: `crates/fastvideo-lab/src/{plan,run,pod,quote}.rs`, D1c `src/{summary,table,experiments,pyfmt}.rs` (§13), `src/bin/fv-lab.rs` (feature `cli`), `src/pod-start.sh.in`;
@@ -4532,11 +4532,10 @@ After S7 and S8, `runpod-matrix.sh` has no branch left and goes, and with it `ru
 1. **The `mmaudio` knob stays offered**: the `FASTVIDEO_WAN_AUDIO=mmaudio` catalog entry, the CLI's `--audio mmaudio`
    and GCP staging all stay, with the MMAudio checkpoints CC-BY-NC 4.0 as stated above. No code changes. `mmaudio`'s
    tier (§22.15) keeps checking it.
-2. **`sol-bench-pod.sh` moves to an fv-lab experiment tier**, as `h3-graphs` did (§14.3). The slice that tried it
-   stopped before building the tier: under the owner's benchmark rules, an fv-lab tier today can run only the two
-   volume sets, `a1` and `a3`, and no open item depends on them. Three of the rules cannot be kept exactly as
-   written, and the sets with open items need the R2 trees that the rules forbid. §23 gives the gaps and the
-   proposal; it needs the owner's answers to §23.6 first.
+2. **`sol-bench-pod.sh` moves to fv-lab experiment tiers**, as `h3-graphs` did (§14.3): done CPU-side as §23, one
+   tier per set. A first pass stopped on rules the tiers could not keep as written. The owner's further answers of the
+   same day (region, R2 fetches, fv-lab's backstop / image tag / deadline accepted, the PRO 6000 only; §23.2) unblocked
+   it.
 
 #### 22.7 What this section does not change
 
@@ -6855,199 +6854,347 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
   `sfwan` in `oracle`'s retirement PR (S8, §21.9 item 5), after §20.7's re-run; then `runpod-matrix.sh` has no
   branch left (§22.6).
 
-### 23. sol-bench as an fv-lab experiment tier (proposed; blocked on the owner's answers, §23.6)
+### 23. sol-bench as fv-lab experiment tiers (done, CPU-side)
 
-Status: **proposed, not built**. The owner decided on 2026-10-28 that `scripts/gpu/sol-bench-pod.sh` moves to an fv-lab
-experiment tier, as `h3-graphs` did (§22.6, question 2). This slice was to build the tier with §14.3's method:
-commands cut from the pod script and held equal by experiment goldens. It stopped before any cell, golden or test,
-for two reasons. First, three of the owner's rules for this benchmark (`docs/perf/sol-bench.md:8-28`) cannot be kept
-exactly by an fv-lab tier as written, and one of those cannot be kept by either runner. Second, the sets that still
-have an open item read trees that only R2 holds, and the rules forbid downloads. Nothing here changes code, a tier,
-a cell, a golden or a schema. `sol-bench-pod.sh` stays as it is.
+Status: done CPU-side. Its GPU check (§23.7) is the coordinator's. The owner made two decisions on 2026-10-28:
+- `scripts/gpu/sol-bench-pod.sh` moves to fv-lab experiment tiers, as `h3-graphs` did (§22.6, question 2);
+- the owner answered this section's first draft's five questions (§23.2).
 
-#### 23.1 What the script runs
+A first pass of this slice stopped before building anything. Rules 17, 18 and 20 of `docs/perf/sol-bench.md` could not
+be kept as written, the open items read R2 trees that rule 22 forbade, and the script's `env -u` had no cell field.
+The owner's answers settle the rules. `env -u` became Addition 18 (§23.4). `sol-bench-pod.sh` stays until the GPU
+check passes; §23.8 lists what its deletion will touch.
 
-`sol-bench-pod.sh` (366 lines, at `f5f19eb2`) has 22 sets: `a1 a3 a2 b1 b2 b2r b3 b4 b5 b6 c1 c2 c3 c4 c6 d1 d2 e1 f1
-f2 g1 g2`. Together they make 57 cell runs into 31 run-directory names. Several names come back with other arguments
-or estimates: `wan5b-opt` runs without the Wan reference pins in `a2` and with them in `f2` / `g1`, and `a14b-sol-base`
-gets `FASTVIDEO_PREFETCH=0` in `b2r`.
+#### 23.1 What moved
 
-Each `cell` does the following:
-- it skips with `{"skipped":"budget"}` when its **estimate** exceeds the time left in a 3300 s budget, counted from
-  container start (`/proc/1`);
-- it gates on one composite `verify-weights.sh` cell, read from `$FV_WORK/weights`;
-- it runs under `timeout <left>`;
-- it writes `summary.json` (`cell`, `exit`, `seconds`, `estimate_s`, `ended`).
+**One tier per set.** `lab/tiers.toml` has `sol-bench-<set>` for each of the script's 22 `FV_SOL_SET`s, in its order:
+`a1 a3 a2 b1 b2 b2r b3 b4 b5 b6 c1 c2 c3 c4 c6 d1 d2 e1 f1 f2 g1 g2`.
+- Each tier has one cell, `lab/cells/sol-bench-<set>.toml`. Its arms are the set's cells in the script's order, 57
+  in all.
+- Arm names are the script's run-directory names, so `fv-lab report table --kind sol-bench` (§13) reads an fv-lab run
+  unchanged.
+- The tiers have to be siblings: arm names are unique within a tier, and several cells come back in several sets with
+  other arguments. `a14b-sol-base` is in `b2`, `b2r` (with `FASTVIDEO_PREFETCH=0`), `c1` and `c6`; `wan5b-opt` runs
+  unpinned in `a2` and pinned in `f2` / `g1`.
+- The tier names are what phase A ran as (`FV_FAMILY=sol-bench-a1`, its run directory `runs/sol-bench-a1/…`).
+- All 22 are in `FV_LAB_EXPERIMENTS`.
 
-The pod deletes itself at 3840 s of uptime. `sol_bench_mirror.py` runs on the host, not the pod (it copies finished
-cells from the pod's file server), so it is not part of a cell.
+Each arm gates on the script's `verify-weights.sh` cell and names that cell's trees:
+- `h3-base`: `h3-base`;
+- `ltx25-two-stage`: `ltx25`;
+- `ltx23-hq`: `ltx23`, `ltx23-dev`;
+- `lingbot-moe`: `lingbot-video-moe-30b-a3b`;
+- the Wan, SANA and Cosmos3 cells: their one tree each.
 
-| sets | trees (`verify-weights.sh` cell) | where the trees are now |
+`pisa-parity` (`kernels --groups pisa`) reads no tree, but the script gates it on `wan22-ti2v-5b`, so its arm does too.
+On a `volume+r2` tier that fetches 34.20 GB before the kernel check, as the script's `FV_R2_TREES` run would.
+
+| | `a1`, `a3` | the other 20 sets |
 |---|---|---|
-| `a1` (6 cells), `a3` (2) | `h3-base`, `ltx25-two-stage` | the EU volume `bz0ofkfx45` (`volumes.sh:26-28`) |
-| `a2` (5) | `wan22-ti2v-5b` 34.20 GB, `wan21-t2v-14b` 80.41 GB | R2 only (`weights-r2.tsv:69, 67`) |
-| `b1` (4) | `sana-video-2b-480p` 14.00 GB, `wan21-t2v-1.3b` 28.93 GB | R2 only (61, 66) |
-| `b2 b2r c1 c6`, and `a14b-*` of `e1 g2` | `wan22-t2v-a14b` 126.20 GB | R2 only (68) |
-| `b3 c2 c4 e1 g1` `ltx23-*` | `ltx23-hq` (`ltx23` 71.60 + `ltx23-dev` 54.75 GB) | R2 only (54, 55) |
-| `b3 b4 c2 c3 d1 f1 f2 g2` `lingbot-*` | `lingbot-moe` 129.95 GB | R2 only (41) |
-| `b5 b6 c4 d2` | `cosmos3-super` 129.47 GB | R2 only (20) |
-| `e1 g1` `pisa-parity` | gated on `wan22-ti2v-5b`, reads none (`kernels --groups pisa`) | R2 only |
+| trees | `h3-base`, `ltx25`: on `bz0ofkfx45` | at least one R2-only tree each (`weights-r2.tsv`) |
+| `weights` | `volume` (rule 22: no fetch at all) | `volume+r2`: each arm's R2 trees fetched and sha-verified onto the container disk before it (§16) |
+| `container_disk_gb` | 120 (no tree on the disk; the volume tiers' size) | the largest arm's R2 trees plus the 120 GB every tier keeps (`weights::DISK_RESERVE_GB`), up to the next 10 GB. `a2` 210: `wan21-t2v-14b` 80.41 GB. `b1` 150: `wan21-t2v-1.3b` 28.93 GB. Every other set 250: its largest tree, `lingbot-video-moe-30b-a3b` 129.95, `cosmos3-super` 129.47, `wan22-t2v-a14b` 126.20 or `ltx23` + `ltx23-dev` 126.35 GB. A fetch drops the fetched trees the arm does not read (`run.rs` `stage_r2`), so one model's trees are on the disk at a time |
+| `min_ram_gb` | none (the `rtx6000` / `ltx` tiers run H3 and LTX-2.5 without a floor) | 188: every 2026-10-06/07 sol-bench pod had 188 GB of container RAM, and every committed cell ran in it (`docs/perf/sol-bench.md`). `b2`'s A14B was OOM-killed at 188 GB only before the lazy expert load (`c1`). A floor the runs prove, not a measured peak: those pods recorded no host peak (UNVERIFIED as a minimum) |
 
-So 8 of the 57 runs (`a1`, `a3`) read only the volume, and the other 49 skip on their gate on today's volume. That
-includes the script: it reads `/workspace/weights` unless it is given `runpod-http.sh run` `FV_R2_TREES` (§21.8),
-which downloads. The open items (`docs/perf/sol-bench.md:568-575`) are `lingbot-fullopt` and the quality-valid
-`a14b-sol-fullopt` rerun, which is set `g2`. Both read R2-only trees.
+Every tier has:
+- the RTX PRO 6000;
+- `wall_cap_s = 3900` (65 min: the cap both backstops use, rule 17);
+- `cell_timeout_s = 3300` (the script's budget: the most any of its cells could get);
+- `tae = false` (no TAE or LPIPS fetch, rule 22);
+- every tier's standard `preflight`. It is a report only; the script's pods skipped it under `FV_POD_SCRIPT`, which is
+  intended difference 4.
 
-#### 23.2 The owner's rules against an fv-lab tier
+#### 23.2 The owner's answers (2026-10-28) and the rules as they read now
 
-| rule (`docs/perf/sol-bench.md`) | the script runner today | an fv-lab tier today |
-|---|---|---|
-| GPU per published number: an RTX 5090 for the H3 / LTX-2.5 cells (`a1`, `a3`) if one can be had, else an RTX PRO 6000; everything else a PRO 6000 (lines 10-14) | `RUNPOD_GPU_TYPE`, chosen at launch after a stock check | one `gpu` per tier, no override at launch. A 5090 twin tier that shares the cells needs only a named exception in `tests/lab_files.rs` `every_cell_file_belongs_to_exactly_one_tier`, as `hd5` and `ltxvae-gen` have, and no schema change. Whether EU-RO-1 has 5090 stock is UNVERIFIED |
-| at most 2 pods in parallel, each with at most 1 h of benchmark wall clock (16) | the operator; the budget of 3300 s | the operator; `wall_cap_s` and the runner's deadline: **kept** |
-| backstops: a local timer at 65 min and a pod-side self-delete at 64 min (17) | `FV_POD_CAP_S=3900` on the host, `FV_SOL_CAP_S=3840` on the pod | **one** `wall_cap_s` drives both the pod's self-delete (`pod-start.sh.in`, `@CAP_S@`) and the driver's backstop, so it cannot be 64 and 65 min at once. 3840 s puts the local one at 64 min (earlier), and 3900 s puts the pod's at 65 min (later) |
-| EUR-IS-1 with the volume `jg48s6o1w0` (18) | **impossible**: that volume was deleted on 2026-10-13 (owner, CLAUDE.md); runs now get `bz0ofkfx45` in EU-RO-1 | **impossible**, for the same reason; `bz0ofkfx45` is the only volume fv-deploy's guard allows |
-| the image is the CI runtime image **pinned by digest** (20) | `RUNPOD_IMAGE=…@sha256:…` | `fastvideo-rs-runtime:sha-<7>`, a tag, with no digest option (`ImageFlavour::image`) |
-| the pod script comes from the branch through `FV_POD_SCRIPT` (21) | yes | superseded by the decision of 2026-10-28 |
-| weights from the volume only; no downloads; no TAE or LPIPS fetch (19, 22) | kept for `a1` / `a3`; the other 20 sets skip | `weights = "volume"`, `tae = false`, no `--lpips`: **kept**, with the same 20 sets skipping. A `volume+r2` tier downloads, which breaks the rule |
-| stop before the balance would drop below $10 (23) | the operator (`runpod-http.sh` has no balance guard) | fv-deploy's guard stops at $8 (`guard::MIN_BALANCE_USD`), so the $10 is the operator's check, as before |
-| warm numbers exclude load; `--warm` cells run one untimed generation first; the 14B 720p cells run one request; every cell keeps its `output.mp4` (24-28) | argv | argv, and a `--fetch-skip` that keeps `*.mp4`: **kept** |
+The first draft asked the owner five questions. These are the answers, and `docs/perf/sol-bench.md` "Rules" now says
+the same:
+1. **Rule 18, the region and volume:** EU-RO-1 with `bz0ofkfx45`, the volume of the owner's 2026-10-13 decision
+   (CLAUDE.md). `jg48s6o1w0` is gone. Both runners use it: fv-deploy's guard allows no other volume.
+2. **Rule 22, the weights:** sol-bench may fetch R2 trees onto the container disk, sha-verified as every `volume+r2`
+   tier does. Hub downloads stay forbidden, and TAE and LPIPS stay off. So the whole script moves, its open items
+   included (`lingbot-fullopt`, and set `g2`'s `a14b-sol-fullopt` rerun).
+3. **Rules 17, 20 and the budget:** fv-lab's behaviour is accepted, as intended differences 1-3 below. There is no
+   Addition 17 and no launch option.
+4. **Rule 1, the GPU:** the RTX PRO 6000 only, with no 5090 twin tier. The rule already names the PRO 6000 as the
+   fallback.
 
-#### 23.3 The script's features against the cell schema
+These rules still hold:
+- at most 2 pods in parallel, each with at most 1 h of benchmark wall clock;
+- the doc's own $10 balance floor, stricter than CLAUDE.md's $8 (fv-deploy's guard checks $8; the $10 is the
+  operator's check, as it was for the script);
+- the methodology: warm numbers exclude load, `--warm` runs one untimed generation first, the 14B 720p cells take one
+  request after load, and every cell keeps its `output.mp4`, which the fetch keeps (it skips `\.png$`, never `.mp4`).
 
-Restricted to `a1` and `a3`, the only sets that the rules let run, every command maps to an existing field:
-- `env`, `argv` and `gate` / `trees` (`h3-base`, `ltx25-two-stage`);
-- `{runs}/h3-768p-adaln.cache` (shared by the four H3 cells, as the script shares it; inert for `sol-h3-rtx`, which
-  carries the adapter, §22.2);
-- `{scratch}/h3-text-cache`;
-- `{weights}/h3-base`, `{weights}/ltx25`;
-- `--clip-dir` / `--clip {runs}/<arm>/frames`.
+#### 23.3 Differences from the script, and why
 
-`a3`'s `--no-text-cache` is a literal argument. The two features below have no field:
+| | `sol-bench-pod.sh` | the tiers | why |
+|---|---|---|---|
+| 1. backstops (rule 17) | a pod-side self-delete at 3840 s of container uptime (`FV_SOL_CAP_S`) and the driver's 65-min backstop | one `wall_cap_s`, 3900 s, for both the pod's self-delete (`pod-start.sh.in`) and the driver's backstop | owner, 2026-10-28 |
+| 2. image (rule 20) | the CI runtime image pinned by digest (`RUNPOD_IMAGE=…@sha256:…`) | `fastvideo-rs-runtime:sha-<7>`, by tag. CI pushes each tag once, for that commit's image, and pushes it again only when that commit's own CI re-runs | owner, 2026-10-28 |
+| 3. budget and hard stop | a cell is skipped (`skipped: "budget"`) when its estimate exceeds what is left of 3300 s from container start; it runs under `timeout <left>` | the runner's deadline: pod create + cap − 1200 s (`pod::RUN_DEADLINE_RESERVE_S`); an arm is skipped (`wall cap near`) when less than its fetch at 250 MB/s plus 600 s is left (`run.rs` `deadline_skip`), and runs under `min(cell_timeout_s, left)`. The estimates are gone; each cell's header comment keeps them | owner, 2026-10-28. At the 3900 s cap the arms have about 45 min after create (about 40 after boot), against the script's 55 after container start, so §23.6 plans pods by measured times |
+| 4. preflight | skipped under `FV_POD_SCRIPT` | the standard `verify-weights.sh` preflight into `weights.log`, a report | every tier's pod body is the same (the payload goldens) |
+| 5. records | `summary.json` with `estimate_s`; no `frames.sha256.json` | `summary.json` with `family` and memory fields; `frames.sha256.json` after each arm | the runner's records (§8); `fv-lab-compare-runs.sh` and `report table` read `exit` and `skipped` |
+| 6. the A14B / LingBot / Cosmos3 trees | read from the volume (gone) | fetched from R2 per arm | rule 22 as now read |
 
-- **G1, per-cell estimates and the budget.** The script skips a cell whose estimate exceeds the budget left, records
-  `skipped: "budget"` and `estimate_s`, and gives the cell exactly the budget left as its hard stop. fv-lab's runner
-  works differently:
-  - its deadline is `FV_RUN_DEADLINE` = pod create + `wall_cap_s` − 1200 s (`pod.rs` `RUN_DEADLINE_RESERVE_S`: the
-    900 s fetch reserve plus 300 s);
-  - it skips an arm only when less than 600 s is left (`run.rs` `MIN_ARM_S`, recorded `wall cap near`);
-  - each arm's cap is `min(cell_timeout_s, left)`.
+The commands themselves are equal, word for word (§23.5). The arm runs in its run directory (`cd "$RUNS/<cell>"` in
+the script, `current_dir` in `run.rs` `exec`), so `gpucheck-out/` and `benchmark.json` land where `report table` reads
+them.
 
-  At the 64-min cap the runner has 2640 s from create, against the script's 3300 s from container start. `report
-  table --kind sol-bench` would print "not run: wall cap near" where it printed "not run: budget".
+#### 23.4 Addition 18: `unset` (cell v1, additive), for `env -u`
 
-  With the times measured on 2026-10-06, both runners run all of `a1` and `a3`:
-  - `a1` took 2088 s of cells, `h3-768p-dense` starting at +1597 s, which leaves about 740 s against fv-lab's 600 s
-    floor if boot takes about 300 s;
-  - `a3` took 992 s.
+The script runs two `a2` cells (`wan5b-base`, `wan14-720p-base-s15`) as `env -u FASTVIDEO_WAN_SOL_CACHE <bin> …`.
 
-  On a slower pod, or a build with slower cells, the two runners would skip different cells. That is no reason to
-  stop by itself; §14.3 mapped `timeout 2400` to the runner's cap as an intended difference. But the task asked for
-  the timeouts exactly, so it is listed with its proposal (Addition 17, §23.5).
-- **G2, `env -u NAME`** (`a2`: `wan5b-base`, `wan14-720p-base-s15`). §22.2 records it as open: `env` entries must be
-  `K=V` (`plan.rs` `CellFile::validate`). It matters only if the R2 sets are brought in (§23.6, question 2).
+**Option (a), with existing features, is not possible.** An arm's `env` entries must be `K=V`
+(`CellFile::validate`). The runner's children inherit its environment, less only `FASTVIDEO_LTX2_WEIGHTS` and the R2
+key (`run.rs` `Runner::cmd`). `FASTVIDEO_WAN_SOL_CACHE=` (empty) is a setting, not an unset, and a different command
+line. Dropping `-u` would be a no-op only while no caller sets the variable, and the goldens could not hold it.
 
-Both are schema changes, so each needs an ADR addition before it is implemented. This slice did not implement them.
+**Option (b), chosen.** `Arm::unset`, a list of variable names (`[A-Z_][A-Z0-9_]*`), each once and none also set in
+`env`. It renders `env -u NAME …` before the `env` settings, and starts the command with `env` whether `env` is set or
+not (`CellFile::command`). An arm without it serializes without the key, so cell v1 stays v1 and every existing cell
+and golden is unchanged. `schemas/cell.v1.json` gains the optional field. Tests:
+`plan::tests::unset_renders_env_dash_u_before_the_settings` covers the rendering with and without `env`, and the
+refusals (not a name, `K=V`, empty, twice, also set in `env`). `tests/experiment_tiers.rs` finds exactly `a2`'s two
+arms using it.
 
-#### 23.4 What the tier would be once the owner answers (as proposed)
+#### 23.5 Equality: goldens and tests
 
-Per §14.1, a kept experiment must measure something an open item depends on. Two shapes follow.
+`scripts/gpu/tests/fv-lab-experiment-goldens.sh [--check]` (CI: `control.yml`) cuts from `sol-bench-pod.sh`:
+- its `PROMPT` and `SEED` defaults;
+- its cell definitions (from `# ---- cell definitions` to the set's `log` line);
+- its `case "$SET"` block.
 
-- **(A) The volume sets only, `weights = "volume"`** (as `h3-graphs` kept only its volume cells). The tier
-  `sol-bench` would have the cells `sol-bench-a1` (6 arms) and `sol-bench-a3` (2 arms). Arm names are the script's
-  run-directory names, so `report table --kind sol-bench` reads them unchanged. Every rule of §23.2 would be kept except
-  the region / volume rule (superseded in fact), the twin backstop, the digest and, without the twin tier below, the
-  5090 preference.
-  - Settings: `tae = false`, `container_disk_gb = 120` (no tree on the disk; the volume tiers' default for frames
-    and mp4s), no `min_ram_gb` (the `rtx6000` / `ltx` tiers run these pipelines without a floor), `wall_cap_s =
-    3840`, `cell_timeout_s = 3300`.
-  - Optionally a `sol-bench-5090` twin tier with the same cells.
-  - It measures nothing that is open; it would re-measure the phase A table on today's build.
-- **(B) The open items too, `weights = "volume+r2"`.** This needs the owner to allow R2 fetches for this benchmark
-  (question 2).
-  - `g2` as a cell: `a14b-sol-fullopt` and `lingbot-fullopt`.
-  - Settings: `container_disk_gb = 250`. The runner removes a fetched tree before an arm that does not read it
-    (`run.rs` `stage_r2`), so the peak is the larger tree, `lingbot-video-moe-30b-a3b` at 129.95 GB, plus the 120 GB
-    the volume tiers keep for outputs: the figure §22.3 gave `sol-lingbot`.
-  - `min_ram_gb = 192`: the A14B arms ran on 188 GB pods only after the lazy expert load (`c1`), so this floor is a
-    proposal to be checked, not a derived need. UNVERIFIED.
-  - Its estimates are 1300 + 1800 s, plus about 4.5 min of fetch per tree at the 29 GB/min of §21.7, about 61 min
-    of arms. That is over one pod's hour (rule 16), so it would be two pods, one cell each.
+It runs every set under `env -i` with `cell` stood in by a recorder. `SOL_IN` points at `scripts/gpu/sol`, so the
+`$(cat …)` Cosmos3 prompts read the committed files. The result is `fixtures/experiments/sol-bench-script.txt`: per
+cell, `== <set> <cell> <weight cell> <estimate>`, then its command one argument per line. There are 22 sets and 57
+cells. The script's `cell` adds only the gate, the budget and the timeout, which the runner replaces (difference 3).
 
-The goldens would be §14.3's: `fv-lab-experiment-goldens.sh` cuts `cell`, `h3`, `ltx` and the `a1` / `a3` case
-arms out of `sol-bench-pod.sh` and runs them with `env(1)` and the binary stood in. `tests/experiment_tiers.rs` then
-holds each arm to its line word for word, after a path mapping: `$RUNS` to `{runs}`, `$SCRATCH` to `{scratch}`,
-`$W` to `{weights}`, and `timeout <left>` to the runner's cap. `FV_LAB_EXPERIMENTS` gains `sol-bench`, so
-`runpod-http.sh run` / `all` refuse it.
+The same script also runs the script's own `cell` under `FV_CELLS`, on stubs. An unselected cell is logged
+`skip <cell> (not in FV_CELLS)` and leaves no directory; a selected one runs; with none set, all run.
 
-#### 23.5 Proposed additions (each its own ADR text, tests and schema text, if the owner wants them)
+`tests/experiment_tiers.rs` holds the tiers to it:
+- `sol_bench_tiers_run_the_pod_scripts_commands`: each tier's arms are the set's cells, with the same names, order and
+  gates, and each command is the fixture's word for word. The only mapping is `$W` to the tier's weight root:
+  `/workspace/weights`, or `/fvscratch/weights` for a `volume+r2` tier, as the script's `FV_R2_TREES` run makes it
+  (§21.8).
+- `sol_bench_dry_runs_are_their_goldens`: `fixtures/sol-bench-<set>-dry-run.txt`, fv-lab's own, frozen from the start
+  as `h3-graphs`' was.
+- `sol_bench_tiers_keep_the_owners_rules`: the GPU, the cap, the cell cap, `tae = false`, the volume / `volume+r2`
+  split by where the trees are, each disk against `WeightsPlan`'s peak, and the RAM floor.
+- `sol_bench_run_plan_covers_every_arm_once`: §23.6's plan as `lab/tiers.toml`'s `# Set <s>:` lines, each set's
+  `--cells` groups covering its arms once, in order (35 pods).
 
-- **Addition 17 (cell v1 and tiers v1, additive): estimates and a budget.**
-  - An arm `estimate_s` (an optional positive integer).
-  - A tier `budget_s` (optional), counted from container start as `sol-bench-pod.sh` counts it.
-  - The runner skips an arm whose `estimate_s` exceeds the budget left, records `skipped: "budget"` and `estimate_s`
-    in its `summary.json`, and caps it at `min(cell_timeout_s, budget left, deadline left)`.
-  - Without `budget_s` nothing changes.
-  - `budget_s` must leave the driver its fetch: for a 3840 s cap, `budget_s` ≤ 3840 − 1200 = 2640, not the script's
-    3300. Either the owner accepts the shorter budget, or the 1200 s reserve becomes the tier's to set.
-- **Addition 18 (cell v1, additive): `-u NAME` in `env`**, rendered `env -u NAME …` in order, as `cold` /
-  `ltxoffload` needed (§22.2). Only for the R2 sets.
-- **Launch options, not schema:**
-  - `pod up --image <ref>`, limited to `ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:…`, for the digest rule;
-  - a host backstop separate from `wall_cap_s` (for example cap + 60 s), for the 64 / 65 min pair.
+`fv-lab-goldens.sh` writes the 22 pod bodies (`runpod-http-sol-bench-<set>.json`, held by `tests/payload_golden.rs`).
+For experiment and gold tiers it now passes the tier's `wall_cap_s` / `cell_timeout_s` as `FV_POD_CAP_S` /
+`FV_GEN_TIMEOUT_S` (14400 / 3600 for `gold` and `h3-graphs`, runpod-http.sh's defaults, so their fixtures are
+unchanged), and `FV_SKIP_TAE=1` for a `tae = false` tier.
 
-#### 23.6 Questions for the owner
+**In lockstep, in the script:** `cell` honours `FV_CELLS`, which `runpod-http.sh` already passes to a pod script. With
+it unset nothing changes. It lets the GPU check's script side run one cell (§23.7).
 
-1. **The rules' volume and region**: is rule 18 now "EU-RO-1 with `bz0ofkfx45`", as your 2026-10-13 decision made it
-   in fact?
-2. **Downloads**: may a sol-bench tier fetch R2 trees onto the container disk (rule 22)? Without that, only `a1` /
-   `a3` can move (shape A), and the two open items stay with the script, which would need `FV_R2_TREES` and so the
-   same exception.
-3. **Backstops and image**: does one 64-min cap for both backstops and a `sha-<7>` tag satisfy rules 17 and 20, or
-   should the launch options of §23.5 come first?
-4. **Budget**: is fv-lab's deadline (about 44 min of cells at a 64-min cap) acceptable as an intended difference, or
-   is Addition 17 wanted?
-5. **The 5090 rule**: a twin tier, or PRO 6000 only, since the volume region's stock decides?
+#### 23.6 The run plan: which `--cells` go to which pod
 
-#### 23.7 The GPU check (once built; the coordinator's)
+These are pods of at most 1 h, at most two at once. The model behind the table:
+- the deadline is 2700 s after create (cap 3900 − 1200);
+- boot is about 300 s (§22.1);
+- an R2 pod's first fetch is preceded by about 60 s of `apt-get python3` (capped at 600);
+- fetches take about 29 GB/min (§21.7);
+- an arm starts only with its fetch at 250 MB/s plus 600 s left;
+- arm times are the committed runs' cell seconds (`artifacts/runpod/sol-bench/2026-10-06*/`), the phase B3 pods'
+  (`docs/perf/sol-bench.md`), or the script's estimate (`est`).
 
-The cheapest arms that prove runner equality for shape A are **one H3 arm**, `h3-768p-fullopt` (283 s on
-2026-10-06). An LTX arm writes 481 1080p frames at `1080p20s`, which is too many to fetch from the script side.
+All are estimates; the image is newer than every source. A set with one group runs as `fv-lab pod up --family
+sol-bench-<set>`; a split set runs one pod per group with `--cells "<group>"`.
 
-The script writes no `frames.sha256.json`, so `fv-lab-compare-runs.sh` fails both sides by construction on that file
-(its header: "frames.sha256.json is byte-identical … or absent in both"). The records that stand in:
-- `sha256sum` of the script side's fetched 124 PNGs (`h3-768p-fullopt/frames/*.png`, about 0.2 GB) against fv-lab's
-  `frames.sha256.json`;
-- the H.264 stream of each side's `output.mp4` (§22.16 item 3);
-- `summary.json` `exit` 0 on both.
+| set | pod | `--cells` | arms (s: source) | R2 fetched | arms end (min after create) |
+|---|---|---|---|---:|---:|
+| a1 | 1 | (all) | `h3-768p-fullopt` 283: a1, `ltx25-4k5s-sol-bf16` 370: a1, `ltx25-1080p20s-sol-bf16` 308: a1, `ltx25-4k5s-sol-nvfp4` 330: a1, `ltx25-1080p20s-sol-nvfp4` 282: a1, `h3-768p-dense` 491: a1 | 0.0 GB | 39.4 |
+| a3 | 1 | (all) | `h3-768p-fullopt-bf16` 416: a3, `h3-768p-dense-bf16` 566: a3 | 0.0 GB | 21.4 |
+| a2 | 1 | `wan5b-base wan5b-easycache wan5b-opt` | `wan5b-base` 416: a2, `wan5b-easycache` 296: a2, `wan5b-opt` 330: est | 34.2 GB | 24.5 |
+| a2 | 2 | `wan14-720p-fullstack wan14-720p-base-s15` | `wan14-720p-fullstack` 697: a2, `wan14-720p-base-s15` 714: a2 | 80.4 GB | 32.3 |
+| b1 | 1 | (all) | `sana-baseline` 417: b1, `sana-full` 220: b1, `wan13-sol-base` 669: b1, `wan13-sol-fullstack` 317: b1 | 42.9 GB | 34.5 |
+| b2 | 1 | `a14b-sol-base` | `a14b-sol-base` 1769: c6 | 126.2 GB | 39.8 |
+| b2 | 2 | `a14b-sol-fullopt` | `a14b-sol-fullopt` 1100: e1 | 126.2 GB | 28.7 |
+| b2r | 1 | `a14b-sol-base` | `a14b-sol-base` 1769: c6 | 126.2 GB | 39.8 |
+| b2r | 2 | `a14b-sol-fullopt` | `a14b-sol-fullopt` 1100: e1 | 126.2 GB | 28.7 |
+| b3 | 1 | `ltx23-hq-base ltx23-hq-fullopt` | `ltx23-hq-base` 525: c4, `ltx23-hq-fullopt` 600: est | 126.3 GB | 29.1 |
+| b3 | 2 | `lingbot-router lingbot-fullopt` | `lingbot-router` 1: c3, `lingbot-fullopt` 1800: est | 130.0 GB | 40.5 |
+| b4 | 1 | (all) | `lingbot-baseline` 3600: doc | 130.0 GB | 45.0 (lingbot-baseline cut at the deadline) |
+| b5 | 1 | (all) | `cosmos3-baseline` 1956: c4 | 129.5 GB | 43.1 |
+| b6 | 1 | `cosmos3-teacache-fp8` | `cosmos3-teacache-fp8` 1349: b6 | 129.5 GB | 32.9 |
+| b6 | 2 | `cosmos3-baseline-fp8` | `cosmos3-baseline-fp8` 1500: est | 129.5 GB | 35.5 |
+| c1 | 1 | `a14b-sol-base` | `a14b-sol-base` 1769: c6 | 126.2 GB | 39.8 |
+| c1 | 2 | `a14b-sol-fullopt` | `a14b-sol-fullopt` 1100: e1 | 126.2 GB | 28.7 |
+| c2 | 1 | `ltx23-hq-base ltx23-hq-fullopt` | `ltx23-hq-base` 525: c4, `ltx23-hq-fullopt` 600: est | 126.3 GB | 29.1 |
+| c2 | 2 | `lingbot-router lingbot-fullopt` | `lingbot-router` 1: c3, `lingbot-fullopt` 1800: est | 130.0 GB | 40.5 |
+| c3 | 1 | `lingbot-router lingbot-baseline` | `lingbot-router` 1: c3, `lingbot-baseline` 3600: doc | 130.0 GB | 45.0 (lingbot-baseline cut at the deadline) |
+| c3 | 2 | `lingbot-fullopt` | `lingbot-fullopt` 1800: est | 130.0 GB | 40.5 |
+| c4 | 1 | `ltx23-hq-base cosmos3-teacache` | `ltx23-hq-base` 525: c4, `cosmos3-teacache` 840: d2 | 255.8 GB | 37.6 |
+| c4 | 2 | `cosmos3-baseline` | `cosmos3-baseline` 1956: c4 | 129.5 GB | 43.1 |
+| c6 | 1 | (all) | `a14b-sol-base` 1769: c6 | 126.2 GB | 39.8 |
+| d1 | 1 | (all) | `lingbot-router` 1: c3, `lingbot-baseline-rs3` 1600: f1 | 130.0 GB | 37.2 |
+| d2 | 1 | (all) | `cosmos3-teacache` 840: d2 | 129.5 GB | 24.5 |
+| e1 | 1 | `pisa-parity ltx23-hq-fullopt` | `pisa-parity` 240: est, `ltx23-hq-fullopt` 600: est | 160.6 GB | 25.5 |
+| e1 | 2 | `a14b-sol-fullopt` | `a14b-sol-fullopt` 1100: e1 | 126.2 GB | 28.7 |
+| f1 | 1 | (all) | `lingbot-baseline-rs3` 1600: f1 | 130.0 GB | 37.1 |
+| f2 | 1 | `wan5b-opt` | `wan5b-opt` 330: est | 34.2 GB | 12.7 |
+| f2 | 2 | `lingbot-fullopt` | `lingbot-fullopt` 1800: est | 130.0 GB | 40.5 |
+| g1 | 1 | `pisa-parity ltx23-hq-fullopt ltx23-hq-fullopt-zeroth` | `pisa-parity` 240: est, `ltx23-hq-fullopt` 600: est, `ltx23-hq-fullopt-zeroth` 600: est | 160.6 GB | 35.5 |
+| g1 | 2 | `wan5b-opt` | `wan5b-opt` 330: est | 34.2 GB | 12.7 |
+| g2 | 1 | `a14b-sol-fullopt` | `a14b-sol-fullopt` 1100: e1 | 126.2 GB | 28.7 |
+| g2 | 2 | `lingbot-fullopt` | `lingbot-fullopt` 1800: est | 130.0 GB | 40.5 |
 
-The H3 `benchmark.json` carried no `frames_sha256` in the 2026-10-06 image. Whether today's does is UNVERIFIED; only
-`wan_stage.rs` and `engine_stage.rs` write it.
+That is 35 pods for every set. Four sets are tight against the deadline: `a1` (39.4 of 45 min), `b5` and `c4`'s
+Cosmos3 baseline (43.1), and `b2` / `b2r` / `c1` / `c6`'s A14B base (39.8). There the deadline skips or cuts the last
+arm, as the script's budget did. The full LingBot baseline (`b4`, `c3`'s second arm: load, base and all eight dense
+refiner steps, about 3.6k s) cannot finish in one pod, as the script's 55 min could not; `d1` / `f1` measure it with
+`--refiner-steps 1`. The open items are `g2`'s two pods.
 
-The commands and the exact pass block are written when the owner has answered §23.6, because the tier's
-`wall_cap_s`, its skip records and the script side's launch depend on those answers.
+#### 23.7 The GPU check (the coordinator's)
 
-Cost: two RTX PRO 6000 pods in EU-RO-1 at $2.49/hr, each about 5 min of boot, about 5 min of arm and about 2 min of
-fetch: **about 25 pod-minutes, about $1.05**, bounded by 2 × 3840 s at $5.31. At a balance of about $14.9 that
-leaves about $13.8 (at worst about $9.6), so it fits the $13 start and the $8 floor.
+The cheapest arm that proves runner equality is **`h3-768p-fullopt` of `sol-bench-a1`** on both runners. It is volume
+only, so no fetch is needed. It ran in 283 s on 2026-10-06. It exercises a `--warm` cell, a cell `env`, the shared
+AdaLN and text caches, the clip directory and the report paths. Both sides run one commit `SHA`: this PR's head or its
+merge, with `fastvideo-rs-runtime:sha-<7>` published, and the local checkout at that commit, because the script side
+ships the local `sol-bench-pod.sh` with its `FV_CELLS` filter.
 
-Shape B's check cannot be afforded now: `g2` through both runners is four pods of about an hour, about $10, which
-would take the balance below $8.
+Both pods run with a 2400 s cap. That leaves fv-lab's runner 1200 s from create, enough for boot and one arm. It also
+keeps the worst case within the balance.
 
-#### 23.8 What the script's later deletion will touch
+The script side is the script's own launch (`docs/perf/sol-bench.md`) as `FV_FAMILY=sol-bench`:
+- `sol-bench-a1` is an experiment tier, which `runpod-http.sh run` refuses; `sol-bench` is the script's default family
+  and no tier;
+- its run directory is `runs/sol-bench/<tag>`, with the same arm names.
 
-When the tier's GPU check passes, `sol-bench-pod.sh` is deleted as §14.4 did. These are the callers and mentions at
-`f5f19eb2`; nothing else uses `FV_POD_SCRIPT`:
-- **`scripts/gpu/runpod-http.sh`**: the `FV_POD_FILES` / `FV_POD_SCRIPT` usage text (lines 73-75 and 91-93), the
-  tarball in `env` (487-498), and the pod start's `${FV_POD_SCRIPT:+…}` (378, 398). `hd-upscaler.sh` no longer ships
-  by it: `FV_HD_POST_URL` is refused since S2 (`hd-upscaler.sh:3-8`, `runpod-http.sh:709-713`).
-- **Kept, as §22.19 kept it**: the `FV_POD_FILES` comment in the pod start command (`runpod-http.sh:348-351`, its
-  example `FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh`). It is in all 34 `runpod-http-*.json` goldens and
-  in fv-lab's `pod-start.sh.in`, so removing the knob's code would not edit it.
-- **The fv-lab route's refusals**: `runpod-http.sh:804` and `fv-lab-route.test.sh:77` refuse `FV_POD_FILES` /
-  `FV_POD_SCRIPT` for fv-lab families. They stay, or go with the knob.
-- **`docs/perf/sol-bench.md`**: lines 21, 200-203 and the phase B "Arguments" paragraph; `docs/dev/fv-lab.md:162`;
-  this ADR (§7's table, line 315; §14.6; §22.3; this section).
-- **`scripts/gpu/sol_bench_mirror.py`**: its `base` URL names the script's run directory `sol-bench-<set>/`. It is
-  kept for the committed runs or deleted, since `pod fetch --fetch-tree` replaces it.
-- **The goldens script** reads `sol-bench-pod.sh` from the parent of the deleting commit (`source_of`, as for
-  `h3-graphs`).
+The script writes no `frames.sha256.json`, so its side's PNGs are fetched (skip only caches and WAVs), and the pass
+block writes their digest into a copy with the script runner's own `frames_digest` (`runpod-matrix.sh`, byte-identical
+to fv-lab's, `tests/frames_digest.rs`). `benchmark.json` carries no `frames_sha256` for H3: only `wan_stage.rs` and
+`engine_stage.rs` write it. Item 3 checks that.
+
+Where each count comes from:
+- `h3 gen --warm` writes the untimed request's clip to `<clip-dir>/cold` (`h3_stage.rs:1825`) and the timed one to the
+  clip directory, 124 frames each at 1344x768 for `--seconds 5`. That is `out.geometry.num_frames`, the `frames`
+  check's `expected`, 124 in the 2026-10-06 report. Each pass writes PNGs and an `output.mp4` (its `video writer: 124
+  frames, png deferred … 124 after the mp4` lines, twice per cell). So 248 PNGs, and `frames_digest` counts 248
+  (recursive).
+- The checks with limits for one prompt, `--warm` and the mp4 on are `h3_stage.rs:2018-2052`:
+  `warm_text_is_a_cache_hit` (the first prompt of a `--warm` run), `frames`, `middle_frame_not_flat`, `mp4_written`.
+  That is four.
+- The report is `gpucheck-out/h3.json` (the global `--out` default); `benchmark.json` is beside the clip directory.
+
+```sh
+SHA=<7>
+SKIP_F='\.png$|\.cache$|text-cache'          # fv-lab side: no PNG (frames.sha256.json stands for them)
+SKIP_S='\.cache$|text-cache|\.wav$'          # script side: the PNGs, for their digest
+D=$PWD/sol-bench-script-driver.log
+# fv-lab side
+RUNPOD_API_KEY=… ./fv-lab pod up --sha $SHA --family sol-bench-a1 --cells h3-768p-fullopt --wall-cap-s 2400 \
+  --fetch-tree --fetch-skip "$SKIP_F" --yes --wait
+# script side (the same commit checked out: FV_POD_FILES ships the local script)
+RUNPOD_API_KEY=… FV_FAMILY=sol-bench FV_POD_FILES=$PWD/scripts/gpu/sol-bench-pod.sh FV_POD_SCRIPT=sol-bench-pod.sh \
+  FV_EXTRA_ENV="FV_SOL_SET=a1 FV_SOL_CAP_S=2340" FV_CELLS=h3-768p-fullopt FV_SKIP_TAE=1 FV_POD_CAP_S=2400 \
+  FV_FETCH_TREE=1 FV_FETCH_SKIP="$SKIP_S" bash scripts/gpu/runpod-http.sh run $SHA 2>&1 | tee $D
+L=artifacts/runpod/sol-bench-a1/$SHA-<MMDDHHMMSS>-<hex>; S=artifacts/runpod/sol-bench/$SHA-<MMDDHHMM>
+A=h3-768p-fullopt
+# 0. The script side's frames digest, by the script runner's own function, into a copy; then the runners' compare:
+#    exit 0 and exactly these two lines (248 PNGs: 124 timed, 124 of the untimed --warm request under frames/cold/).
+C=$(mktemp -d)/script && cp -r "$S" "$C"
+frames_digest() {
+  local cell="$1" name="$2" n=0 sep="" p
+  [[ -d "$cell/frames" ]] || return 0
+  {
+    printf '{"arm":"%s","frames":[' "$name"
+    while IFS= read -r p; do
+      printf '%s\n{"path":"%s","sha256":"%s"}' "$sep" "$p" "$(sha256sum "$cell/frames/$p" 2>/dev/null | cut -d' ' -f1)"
+      sep=","
+      n=$((n + 1))
+    done < <(cd "$cell/frames" && find . -type f -name '*.png' -printf '%P\n' | LC_ALL=C sort)
+    printf '\n],"count":%s}\n' "$n"
+  } >"$cell/frames.sha256.json" 2>/dev/null || true
+  return 0
+}
+[ "$(find "$C/$A/frames" -type f -name '*.png' | wc -l)" = 248 ] && frames_digest "$C/$A" $A \
+  && [ "$(jq .count "$C/$A/frames.sha256.json")" = 248 ] && [ "$(jq .count "$L/$A/frames.sha256.json")" = 248 ] \
+  && echo "PASS 0a" || echo "FAIL 0a"
+bash scripts/gpu/fv-lab-compare-runs.sh "$L" "$C" >/tmp/sb-cmp.txt; rc=$?; cat /tmp/sb-cmp.txt
+[ "$rc" = 0 ] && [ "$(wc -l </tmp/sb-cmp.txt)" = 2 ] \
+  && [ "$(sed -n 1p /tmp/sb-cmp.txt)" = 'same h3-768p-fullopt: {"exit":0,"skipped":null}, 248 frames byte-identical' ] \
+  && [ "$(sed -n 2p /tmp/sb-cmp.txt)" = '1 arm(s) the same (1 ran with byte-identical frames, 0 skipped in both, 0 failed in both; 0 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 0 metrics report(s), 0 difference(s)' ] \
+  && echo "PASS 0" || echo "FAIL 0"
+# 1. The same command on both sides: each runner's `▶ h3-768p-fullopt` line in live.log, the run directory
+#    (family and tag) masked; fv-lab's `(wall cap …)` suffix and the script's `(est …, hard stop …):` cut.
+cmdl() { grep -a "▶ $A" "$1/live.log" | head -1 | sed -E -e 's/^\[[^]]*\] (\[[^]]*\] )?//' -e "s/^▶ $A( \(est [^)]*\): |  )//" \
+  -e 's/  \(wall cap [0-9]+s; 0=none\)$//' -e 's#/fvscratch/runs/[^/ ]+/[^/ ]+/#/fvscratch/runs/<run>/#g'; }
+CL=$(cmdl $L) && CS=$(cmdl $S) && [ -n "$CL" ] && [ "$CL" = "$CS" ] && grep -q ' --warm' <<<"$CL" \
+  && echo "PASS 1" || { echo "FAIL 1"; diff <(echo "$CL") <(echo "$CS"); }
+# 2. The report on each side passed with the cell's env and exactly these four checks with limits, all ok; the same
+#    on both sides.
+R=$A/gpucheck-out/h3.json
+chk() { jq -ce '[.checks[] | select(.limits != {}) | {name, ok}]' "$1/$R"; }
+for X in $L $S; do jq -e '.status == "pass" and .env.FASTVIDEO_H3_SOL_CACHE == "teacache"' "$X/$R" >/dev/null \
+  && jq -e '.exit == 0' "$X/$A/summary.json" >/dev/null && echo "PASS 2 $X" || echo "FAIL 2 $X"; done
+K=$(chk $L) && [ "$K" = "$(chk $S)" ] && [ "$(jq -cS .env "$L/$R")" = "$(jq -cS .env "$S/$R")" ] \
+  && [ "$(jq -r 'map(.name) | join(" ")' <<<"$K")" = "warm_text_is_a_cache_hit frames middle_frame_not_flat mp4_written" ] \
+  && jq -e 'all(.ok)' <<<"$K" >/dev/null && echo "PASS 2" || echo "FAIL 2"
+# 3. benchmark.json on each side: one untimed request first, load excluded, and no frames_sha256 (H3 writes none).
+for X in $L $S; do jq -e '.warmup_requests == 1 and .includes_model_load == false and (has("frames_sha256") | not)' \
+  "$X/$A/benchmark.json" >/dev/null && echo "PASS 3 $X" || echo "FAIL 3 $X"; done
+# 4. The mp4s' H.264 streams (libx264's threads follow the pod's CPUs, §20.6): SAME or DIFF reported, not judged;
+#    a missing or unreadable mp4 on either side is FAIL.
+vs() { (cd "$1/$A/frames" && for f in output.mp4 cold/output.mp4; do
+  h=$(ffmpeg -nostdin -v error -i "$f" -map 0:v:0 -c copy -f streamhash -) && [ -n "$h" ] || exit 1; echo "$f $h"; done); }
+if VL=$(vs $L) && VS=$(vs $S); then [ "$VL" = "$VS" ] && echo "SAME 4" || { echo "DIFF 4"; diff <(echo "$VL") <(echo "$VS"); }
+else echo "FAIL 4"; fi
+```
+
+The script side's pod body was checked with `runpod-http.sh plan`, which creates nothing, under the settings above.
+Its runner line is `env FV_SOL_SET=a1 FV_SOL_CAP_S=2340 FV_WORK=/workspace … FV_CELLS="h3-768p-fullopt" … bash
+/fvscratch/files/sol-bench-pod.sh sol-bench`. It also has the TAE fetch skipped, the self-delete at 2400 s, the volume
+`bz0ofkfx45`, and `FV_POD_FILES_TGZ` in `env`.
+
+**Pass:** both sides end `DONE` / `matrix_exit=0`, and the block prints exactly eight `PASS` lines (0a, 0, 1, 2 for
+each side, 2, 3 for each side) and no `FAIL`. It was rehearsed on fake run directories in both runners' formats: it
+passed, and printed `FAIL` for a changed frame, a changed command word or env, a missing PNG, a failed check and a
+`frames_sha256` field. Item 4 is recorded, `SAME` or `DIFF`. A `FAIL 0` with byte-different frames on an equal
+command (item 1) is a determinism finding about H3 TeaCache across pods, not a runner difference: report it, and keep
+the script.
+
+**Cost:** two RTX PRO 6000 pods in EU-RO-1 at about $2.49/hr. Each is about 5 min of boot, about 5 min of arm (283 s
+on 2026-10-06; today's build is UNVERIFIED) and about 2 min of fetch (the script side's 248 PNGs, about 0.3 GB): **about
+25 pod-minutes, about $1.05**. The two 2400 s caps bound it at **$3.32**. Against the doc's $10 floor the balance must
+be at least **$13.32** at the start: the worst case keeps $10, and the expected case leaves about $12.30 from $13.32,
+or about $13.85 from $14.90. The build pod is stopped first. No new tree, and no R2 fetch.
+
+**Then:** record the result here. If it passes, the follow-up deletes `sol-bench-pod.sh` (§23.8), and the
+goldens script reads it from the parent of the deleting commit, as for `h3-graphs`.
+
+#### 23.8 What the script's deletion will touch
+
+These are the callers and mentions now; nothing else uses `FV_POD_SCRIPT`:
+- **`scripts/gpu/runpod-http.sh`**: the `FV_POD_FILES` / `FV_POD_SCRIPT` usage text (lines 73-75, 91-93), the tarball
+  in `env` (487-498) and the start command's `${FV_POD_SCRIPT:+…}` (378, 398). `hd-upscaler.sh` no longer ships by it:
+  `FV_HD_POST_URL` has been refused since S2 (`hd-upscaler.sh:3-8`, `runpod-http.sh:709-713`).
+- **Kept, as §22.19 kept it**: the `FV_POD_FILES` comment in the pod start command (`runpod-http.sh:348-351`), which is
+  in every `runpod-http-*.json` golden and in `pod-start.sh.in`.
+- **The fv-lab route's refusals** of `FV_POD_FILES` / `FV_POD_SCRIPT` (`runpod-http.sh:804`, `fv-lab-route.test.sh:77`)
+  stay, or go with the knob.
+- **`fv-lab-experiment-goldens.sh`** reads the script and its two Cosmos3 inputs from the history (`source_of`; its
+  `FV_CELLS` check then runs on that copy), and keeps the fixture in a shallow clone.
+- **`scripts/gpu/sol_bench_mirror.py`** names the script's run directory. `pod fetch --fetch-tree` replaces it: delete
+  it, or keep it for the committed runs.
+- **The docs**: `docs/perf/sol-bench.md` (its launch section), `docs/dev/fv-lab.md` (`FV_POD_SCRIPT` refused), and §7's
+  table (line 315), §14.6 and §22.3 here.
+
+#### 23.9 Code and tests
+
+- **Code**: `crates/fastvideo-lab/src/plan.rs` (`Arm::unset`, `is_env_name`, `CellFile::command`); `src/goldcell.rs`;
+  `schemas/cell.v1.json`.
+- **Data**: `lab/tiers.toml` (22 tiers), `lab/cells/sol-bench-*.toml` (22).
+- **Scripts**: `scripts/gpu/fv-lab-retired.sh` (`FV_LAB_EXPERIMENTS`), `scripts/gpu/sol-bench-pod.sh` (`FV_CELLS`),
+  `scripts/gpu/tests/{fv-lab-experiment-goldens,fv-lab-goldens}.sh`.
+- **Fixtures**: `experiments/sol-bench-script.txt`, `sol-bench-<set>-dry-run.txt` (22), `runpod-http-sol-bench-<set>.json`
+  (22).
+- **Tests**: `tests/experiment_tiers.rs` (four sol-bench tests, the experiment list), `tests/payload_golden.rs` (the
+  sol-bench bodies: TAE skipped, the 3900 s cap, the 3300 s cell cap, the 80-min idle limit, disk and floor; 26 `volume+r2`
+  tiers, 22 floors), `plan::tests::
+  unset_renders_env_dash_u_before_the_settings`, and `tests/schema.rs` for the regenerated schema.

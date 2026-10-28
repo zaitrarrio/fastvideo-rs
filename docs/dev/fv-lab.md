@@ -83,6 +83,7 @@ dry run show what will run.
 | `wan` | `wan-fastwan21-1.3b`, `wan-wan21-t2v-14b`, `wan-wan22-ti2v-oracle`, `wan-wan22-ti2v-5b`, `wan-fastwan22-ti2v-oracle`, `wan-fastwan22-ti2v-5b` | 49 | the Wan family's kernel, decoder, cache and parity regression check: FastWan2.1 1.3B (VSA / dense, the kernel arms with lossy and exact gates, full VAE, no-cache identity, Sol, TeaCache), `kernels-wan` (ungated), SF-Wan 1.3B 81 frames, the TI2V-5B / T2V-14B kernel A/B, T2V-14B's caches and Sol at 50 steps, the TI2V-5B recipe, two module-parity oracle cells (`FV_ORACLE_URL`), fal's canvases, wan-turbo's CLI / engine pair | D1 S6 ([§22](../adr/0019-fv-lab.md)); its `export FASTVIDEO_TAE_DIR` moved into each gated arm's env and `engine-fw22`'s `--tae-dir` dropped in lockstep; weights `volume+r2` (every Wan tree from R2, eleven fetches in a full run, at most 80.41 GB at once), 210 GB, `min_ram_gb = 256`; `FV_SFWAN_CELLS` refused; branch kept until S8 (`sfwan` runs it; §22.18) |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)); weights `volume+r2` ([below](#weights-from-the-volume-and-r2-volumer2)) |
 | `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`, deleted after the GPU check, §14.4), [below](#port-one-offs-the-experiment-tiers) |
+| `sol-bench-<set>` (22) | `sol-bench-<set>` | 57 in all | sol-engine's model cells on our stack, one tier per `FV_SOL_SET` of `sol-bench-pod.sh` (`a1` … `g2`), `volume` for `a1` / `a3` and `volume+r2` for the rest, no TAE, a 65-min cap | owner, 2026-10-28: was `scripts/gpu/sol-bench-pod.sh` (kept until its GPU check, ADR-0019 §23.7), [below](#port-one-offs-the-experiment-tiers) |
 
 All eleven above `precision-nvfp4`, `det-short` and `determinism`, `fuse`, `attn3` and `ltx`, and `hd`, `hd5`,
 `serve-engine`, `sfstream` and `mmaudio` are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019
@@ -149,10 +150,24 @@ the runner's cap for `timeout 2400`). The experiment's own scripts were deleted 
 `scripts/gpu/experiments/`); the goldens script reads `h3-graphs-pod.sh` from the parent of the deleting commit, and
 in a shallow clone keeps the fixtures as they are.
 
-`sol-bench-pod.sh` (`docs/perf/sol-bench.md`) is to become the next experiment tier (owner, 2026-10-28). It is not
-one yet: [ADR-0019 §23](../adr/0019-fv-lab.md) gives the rules a tier cannot keep exactly today, the two proposed
-cell additions (`estimate_s` / `budget_s`, `env -u`) and the owner's open questions. Until then, run it through
-`runpod-http.sh` `FV_POD_SCRIPT` as that doc says.
+**sol-bench** (owner, 2026-10-28; [ADR-0019 §23](../adr/0019-fv-lab.md)): each `FV_SOL_SET` of
+`scripts/gpu/sol-bench-pod.sh` is the experiment tier `sol-bench-<set>` (22, in `FV_LAB_EXPERIMENTS`). Its one cell
+holds the set's cells, word for word, named as the script's run directories (`report table --kind sol-bench` reads
+them).
+- `a1` / `a3` are `volume` tiers; the other 20 are `volume+r2`.
+- Every tier has `tae = false` and a 65-min `wall_cap_s`, whose deadline replaces the script's estimates.
+- `env -u` is the cell field `unset` (Addition 18).
+
+```sh
+bash scripts/gpu/tests/fv-lab-experiment-goldens.sh [--check]   # also cut from sol-bench-pod.sh: fixtures/experiments/sol-bench-script.txt
+./fv-lab run sol-bench-a1 --dry-run                              # fv-lab's own golden: fixtures/sol-bench-a1-dry-run.txt
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family sol-bench-g2 --cells lingbot-fullopt --fetch-tree --fetch-skip '\.png$|\.cache$|text-cache|\.wav$' --yes --wait
+```
+
+A set whose arms do not fit one pod runs one pod per `--cells` group: `lab/tiers.toml`'s `# Set <s>:` lines, checked by
+`tests/experiment_tiers.rs`, with the timings in §23.6. `sol-bench-pod.sh` stays the other runner until the GPU check
+(§23.7) passes; it is run as `FV_FAMILY=sol-bench`, since `runpod-http.sh run` refuses the experiment tiers, and it
+honours `FV_CELLS` for one cell.
 
 ### `runpod-http.sh` for a retired tier
 

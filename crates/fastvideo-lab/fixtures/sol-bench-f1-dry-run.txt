@@ -1,0 +1,5 @@
+[sol-bench-f1] matrix start image=unknown
+[sol-bench-f1] dry-run weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees (129.95 GB) fetched before the arms that read them, at most 129.95 GB on the container disk at once
+[sol-bench-f1] dry-run r2 lingbot-baseline-rs3: fetch lingbot-video-moe-30b-a3b@f2e538f64afe00cc4ae674db2aeb52e2945edfd5 (129.95 GB) into /fvscratch/weights
+[sol-bench-f1] dry-run lingbot-baseline-rs3: /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sol lingbot-gen --weights /fvscratch/weights/lingbot-video-moe-30b-a3b --prompts /opt/fastvideo-rs/scripts/gpu/sol/lingbot-t2v-val3.txt --num-prompts 1 --arm baseline --residency swap --seed 42 --clip /fvscratch/runs/sol-bench-f1/1234567-10241200/lingbot-baseline-rs3/clips --refiner-steps 1 
+[sol-bench-f1] matrix done

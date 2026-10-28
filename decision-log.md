@@ -2314,3 +2314,37 @@ Project code: FVID
 - ADR: docs/adr/0019-fv-lab.md §23
 - Verification: each claim cites the script, `run.rs` / `pod.rs` / `plan.rs`, `volumes.sh`, `weights-r2.tsv` and the committed runs `artifacts/runpod/sol-bench/2026-10-06/{a1-h3-ltx,a3-h3-bf16}/live.log`; `lint.sh`, the shell tests, the four goldens scripts with `--check` and the Python tests pass (docs only, no Rust changed)
 - Open: the owner's answers to §23.6, then the tier, its goldens and its GPU check
+
+### FVID · 2026-10-28 · FVID-2026-10-28-sol-bench-rules-answers
+- Trigger: the first pass of the sol-bench tier slice stopped on three rules of `docs/perf/sol-bench.md` an fv-lab tier could not keep as written, and on the R2-only trees of the open items, and asked the owner five questions (ADR-0019 §23, first draft)
+- Options: per question, keep the rule as written (and add launch options / a schema addition for it) or accept fv-lab's behaviour
+- Decision: **(owner)**
+  1. rule 18 reads "EU-RO-1 with `bz0ofkfx45`" (the volume of the 2026-10-13 decision);
+  2. rule 22: sol-bench may fetch R2 trees onto the container disk, sha-verified as every `volume+r2` tier does; Hub downloads stay forbidden, TAE and LPIPS stay off, so the whole script moves, the open items included;
+  3. fv-lab's behaviour is accepted as intended differences: one wall cap drives both backstops (rule 17), images boot by the `:sha-<7>` tag (rule 20; CI pushes each tag once, for that commit's image, and again only when that commit's own CI re-runs), and the runner's deadline (create + cap − 1200 s, skipped under 600 s) replaces the script's estimates and 3300 s budget; no Addition 17, no launch options;
+  4. GPU: the RTX PRO 6000 only, no 5090 twin tier.
+
+  These rules still hold: 2 pods at most in parallel, at most 1 h of benchmark wall clock per pod, the doc's $10 floor, and the warm / one-request / `output.mp4` methodology
+- Reason: the owner's answers (no further reason recorded)
+- Reversibility: cheap (rules text; tier fields)
+- Executed by: owner (recorded by Claude, session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §23.2, §23.3
+- Verification: `docs/perf/sol-bench.md` "Rules" amended; `tests/experiment_tiers.rs` `sol_bench_tiers_keep_the_owners_rules`
+
+### FVID · 2026-10-28 · FVID-2026-10-28-d1-sol-bench-tiers
+- Trigger: FVID-2026-10-28-sol-bench-to-fv-lab with FVID-2026-10-28-sol-bench-rules-answers; the coordinator's instruction to build the tiers, with `env -u` as option (a) existing features or (b) a small Addition 18
+- Options:
+  - shape: one tier with every set (arm names must be unique in a tier, and cells repeat across sets with other arguments) or one tier per set;
+  - `env -u`: (a) existing features, (b) `unset`;
+  - the GPU check's script side: all of set `a1`, or one cell through an `FV_CELLS` filter in the script
+- Decision: (agent, within the owner's and coordinator's decisions)
+  - 22 sibling experiment tiers `sol-bench-<set>`, one cell each, arms named as the script's run directories. `volume` for `a1` / `a3`; `volume+r2` for the rest: disk the largest arm's R2 trees + 120 GB (150 / 210 / 250), `min_ram_gb = 188` (the 2026-10-06/07 pods' RAM). `wall_cap_s = 3900`, `cell_timeout_s = 3300`, `tae = false`;
+  - `env -u`: **(b)**, Addition 18, `Arm::unset`. Option (a) is impossible: `env` takes `K=V` only, and the runner removes only `FASTVIDEO_LTX2_WEIGHTS` and the R2 key (`run.rs` `Runner::cmd`); an empty value is not an unset and changes the command line;
+  - the script's `cell` honours `FV_CELLS` (lockstep, a no-op unset), so the GPU check runs one cell, `h3-768p-fullopt`, on both sides (about $1.05, bounded at $3.32 by two 2400 s caps; start at $13.32 or more for the $10 floor);
+  - a run plan of 35 pods (`lab/tiers.toml` `# Set` lines, ADR-0019 §23.6)
+- Reason: word-for-word equality held by the script's own cut (§14.3's method); the owner's rules; the cheapest equality check
+- Reversibility: high (data, an additive cell field, a no-op script filter; the script stays until the GPU check)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §23
+- Verification: `fv-lab-experiment-goldens.sh --check` (22 sets, 57 cells; the `FV_CELLS` filter on the script's own `cell`); `tests/experiment_tiers.rs` (4 sol-bench tests); `plan::tests::unset_renders_env_dash_u_before_the_settings`; `fv-lab-goldens.sh --check` (22 pod bodies); the GPU-check pass block rehearsed on fake run directories; mutations, each caught
+- Open: the GPU check (ADR-0019 §23.7), then the script's deletion (§23.8)

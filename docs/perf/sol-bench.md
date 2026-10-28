@@ -5,42 +5,74 @@ NVlabs published for it (NVlabs/Sana, branch `sol-engine`, `models/` at
 670482d). This is **not apples to apples**: we run on the GPU the owner's
 rules allow and report the hardware next to each number.
 
-## Rules (owner, 2026-10-06)
+## Rules (owner, 2026-10-06; amended 2026-10-28)
 
 - **GPU per published number.**
   - Where upstream published RTX 5090 numbers: an RTX 5090 if one can be had, else an RTX PRO 6000.
   - Where upstream published H100 numbers: an H100 if one can be had, else an RTX PRO 6000.
   - Everything else: RTX PRO 6000.
   - No other GPU type is ever rented.
+  - Through fv-lab (owner, 2026-10-28): the RTX PRO 6000 only, the rule's own fallback; there is no 5090 tier.
 - **Pods.**
   - At most 2 pods in parallel, each with at most 1 hour of benchmark wall clock.
-  - Each pod is backstopped at 65 min: a local timer, plus a pod-side self-delete at 64 min.
-  - Pods run in EUR-IS-1 with the EU weight volume `jg48s6o1w0` mounted.
-- **No compile and no downloads on a pod.**
-  - The image is the CI runtime image pinned by digest. The binary was built by CI from main.
-  - The pod script comes from this branch: `scripts/gpu/sol-bench-pod.sh`, shipped through `runpod-http.sh FV_POD_SCRIPT`.
-  - Weights are read from the volume only. TAE and LPIPS fetches are off (`FV_SKIP_TAE=1`, no `FV_LPIPS`).
+  - Each pod is backstopped at 65 min. The script used a local timer plus a pod-side self-delete at 64 min. Through
+    fv-lab (owner, 2026-10-28) one wall cap of 65 min (`wall_cap_s = 3900`) drives both the pod's self-delete and the
+    driver's backstop.
+  - Pods run in EU-RO-1 with the EU weight volume `bz0ofkfx45` mounted (owner, 2026-10-28). It replaced `jg48s6o1w0`
+    (EUR-IS-1), which was deleted on 2026-10-13 on the owner's decision (CLAUDE.md, "EU volume: 500 GB, H3 + LTX
+    only"). The 2026-10-06/07 runs below were on `jg48s6o1w0`.
+- **No compile and no Hub downloads on a pod.**
+  - The image is the CI runtime image built by CI from main. The script pinned it by digest. fv-lab boots it by its
+    `:sha-<7>` tag (owner, 2026-10-28): CI pushes each tag once, for that commit's image, and pushes it again only when
+    that commit's own CI re-runs.
+  - The pod script was `scripts/gpu/sol-bench-pod.sh`, shipped through `runpod-http.sh FV_POD_SCRIPT`. Since
+    2026-10-28 its sets are the fv-lab experiment tiers `sol-bench-<set>` (below; ADR-0019 §23). The script stays
+    until their GPU check passes.
+  - Weights come from the volume, or from the R2 weights store onto the container disk, sha-verified, as every fv-lab
+    `volume+r2` tier fetches them (owner, 2026-10-28: the volume holds only H3 and LTX now). Hub downloads stay
+    forbidden. TAE and LPIPS fetches are off (`tae = false`; the script's `FV_SKIP_TAE=1`, no `FV_LPIPS`).
 - **Budget.** Stop before the Runpod balance would drop below $10. The account is shared with other agents.
+  fv-deploy's guard enforces $8 (CLAUDE.md); the $10 is checked by whoever launches.
 - **Methodology.**
   - Warm numbers exclude load, as sol-engine's `benchmark.json` does. Load is reported separately.
   - A `--warm` cell runs one untimed generation first.
   - The two Wan2.1-14B 720p cells run one request after load: a warm-up would double a ~30-min cell.
   - Every cell keeps its `output.mp4` as a sample.
+  - The script skipped a cell whose estimate no longer fit a 3300 s budget from container start, and ran each cell
+    under the budget left. Through fv-lab (owner, 2026-10-28) the runner's deadline replaces both. The deadline is pod
+    create + cap − 1200 s, about 45 min after create at the 65-min cap. An arm is skipped (`wall cap near`) when less
+    than its R2 fetch at 250 MB/s plus 600 s is left, and runs under the time left.
 
-## Running it through fv-lab (decided 2026-10-28, not built yet)
+## Running through fv-lab
 
-The owner decided on 2026-10-28 that `scripts/gpu/sol-bench-pod.sh` moves to an fv-lab experiment tier, as
-`h3-graphs` did. The tier is not built: ADR-0019 §23 explains why and asks the owner five questions first (§23.6).
-In short:
-- the rules above name the volume `jg48s6o1w0` in EUR-IS-1, which was deleted on 2026-10-13; runs now get
-  `bz0ofkfx45` in EU-RO-1;
-- an fv-lab tier has one wall cap for the pod's self-delete and the host's backstop, and boots `:sha-<7>`, not a
-  digest;
-- only the phase A sets `a1` and `a3` read trees on that volume. Every other set, the open items below among them,
-  needs R2 trees, which "weights from the volume only" forbids, for the script as much as for a tier.
+Each `FV_SOL_SET` of `sol-bench-pod.sh` is an fv-lab tier, `sol-bench-<set>` (`lab/tiers.toml`, `lab/cells/sol-bench-<set>.toml`; ADR-0019 §23):
+- Its arms are the set's cells, word for word, named as the script's run directories.
+- `a1` and `a3` read the volume only.
+- The other sets fetch their R2 trees before the arms that read them, on a 150-250 GB container disk with a 188 GB
+  RAM floor.
 
-Until the owner answers and the tier passes its GPU check, the script and the launch below remain the way to run
-this benchmark. `fv-lab report table --kind sol-bench` already reads its run directories.
+A set whose arms do not fit one pod's deadline runs as several pods, one `--cells` group each. `lab/tiers.toml`'s
+`# Set <s>:` lines are the plan; ADR-0019 §23.6 gives the timings behind it.
+
+```bash
+# one pod, the whole set (a1, a3, b1, b4, b5, c6, d1, d2, f1)
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family sol-bench-a1 \
+  --fetch-tree --fetch-skip '\.png$|\.cache$|text-cache|\.wav$' --yes --wait
+# a split set: one pod per group, at most two at once
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family sol-bench-g2 --cells a14b-sol-fullopt \
+  --fetch-tree --fetch-skip '\.png$|\.cache$|text-cache|\.wav$' --yes --wait
+RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family sol-bench-g2 --cells lingbot-fullopt \
+  --fetch-tree --fetch-skip '\.png$|\.cache$|text-cache|\.wav$' --yes --wait
+fv-lab report table --kind sol-bench artifacts/runpod/sol-bench-g2/*
+```
+
+- The fetch skip keeps every `output.mp4`, which is the methodology's sample. The `.wav` skip drops only the H3
+  soundtrack files, as the script runs' skip did.
+- `./fv-lab run sol-bench-<set> --dry-run` prints a set's commands.
+- The open items below are `sol-bench-g2`'s two pods.
+- Cost: about $2.49/hr per pod, each at most 65 min ($2.70). The plan's 35 pods are the whole benchmark; nobody runs
+  them all at once.
+- Before each pod, check the balance against the $10 floor plus that pod's cap.
 
 ## Phase A run list (planned before renting)
 

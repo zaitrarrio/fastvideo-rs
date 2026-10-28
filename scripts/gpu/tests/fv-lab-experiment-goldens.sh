@@ -25,6 +25,23 @@
 # run onto the script's turbo lines (the mapping is ADR-0019 §14.3's table)
 # and finds them equal.
 #
+# sol-bench (scripts/gpu/sol-bench-pod.sh, docs/perf/sol-bench.md; ADR-0019 §23):
+#   crates/fastvideo-lab/fixtures/experiments/sol-bench-script.txt
+#       every command each of the script's sets (FV_SOL_SET, every label of its
+#       `case "$SET"`, in the script's order) hands its `cell`, in order: a
+#       line `== <set> <cell> <verify-weights.sh cell> <estimate s>`, then the
+#       command (what the script runs under `timeout`), one argument per line
+#       (none is empty or holds a newline; checked). The script's paths are
+#       its own for FAMILY=sol-bench-<set> (the tier's name, as phase A ran
+#       it) and run tag 1234567-10241200: $RUNS
+#       /fvscratch/runs/sol-bench-<set>/1234567-10241200, $SCRATCH /fvscratch,
+#       $W /workspace/weights (no FV_R2_TREES), the image's fv-gpucheck and
+#       scripts/gpu/sol.
+# crates/fastvideo-lab/tests/experiment_tiers.rs finds each sol-bench-<set>
+# tier's arms equal to its set's commands, word for word; the one mapping is
+# $W to the tier's weight root (/fvscratch/weights for a volume+r2 tier: the
+# script's run under runpod-http.sh FV_R2_TREES, ADR-0019 §21.8).
+#
 # How: the script's `COMMON`, `ARMS`, `CKS`, `arm_env`, `ck_args`, `gen`, the
 # prep Python and its `trace` / `cells` blocks are cut out of it (sed, between
 # their first and last lines) and run under `env -i` with `step` running its
@@ -32,6 +49,14 @@
 # (no hash step: no frame exists), the h3-turbo trees present, and `env` on
 # PATH a stand-in that prints its arguments instead of running them. So the
 # command lines are the script's, not a copy of them.
+#
+# sol-bench's cell definitions (from `# ---- cell definitions` up to the
+# set's `log "set …"` line), its PROMPT and SEED defaults and its `case "$SET"`
+# block are cut the same way and run once per set under `env -i`, with `cell`
+# a stand-in that writes its arguments instead of gating, timing and running
+# them (the script's own `cell` adds only the weight gate, the budget and the
+# timeout, which the runner replaces, ADR-0019 §23). SOL_IN points at
+# scripts/gpu/sol so its `$(cat …)` prompts read the committed files.
 #
 # After the pod script is deleted (once its tier's GPU check has passed), it
 # is read from the parent of the commit that deleted it when the history holds
@@ -94,22 +119,31 @@ cut_block() {
   printf '%s\n' "$out"
 }
 
-POD=scripts/gpu/experiments/h3-graphs-pod.sh
-if ! src="$(source_of "$POD")"; then
-  for f in "$OUT/h3-graphs-script.txt" "$ROOT/scripts/gpu/prompts-h3-graphs-768.json" \
-    "$ROOT/scripts/gpu/prompts-h3-graphs-trace-768p.json"; do
+# frozen <script> <fixture…>: the script is in neither the tree nor the
+# history (a shallow clone): its fixtures must exist, and are not regenerated.
+frozen() {
+  local pod="$1" f
+  shift
+  for f in "$@"; do
     [[ -s "$f" ]] || { echo "fv-lab-experiment-goldens: frozen fixture ${f#"$ROOT"/} is missing" >&2; fail=1; }
   done
-  echo "fv-lab-experiment-goldens: $POD is neither in the tree nor in the history (shallow clone): its fixtures are kept as frozen, not regenerated" >&2
-  exit "$fail"
-fi
+  echo "fv-lab-experiment-goldens: $pod is neither in the tree nor in the history (shallow clone): its fixtures are kept as frozen, not regenerated" >&2
+}
+mkdir -p "$TMP/new"
+NEW=()   # the fixtures regenerated here, compared or written in step 3
+
+POD=scripts/gpu/experiments/h3-graphs-pod.sh
+if ! src="$(source_of "$POD")"; then
+  frozen "$POD" "$OUT/h3-graphs-script.txt" "$ROOT/scripts/gpu/prompts-h3-graphs-768.json" \
+    "$ROOT/scripts/gpu/prompts-h3-graphs-trace-768p.json"
+else
 
 # 1. The prep step's prompt sets: its own Python, on its own input. Once the
 #    pod script is read from the history, its input is too (from the same
 #    commit, the deleting commit's parent), so a later edit of
 #    prompts-hd5.json cannot pair with the old script; CI's shallow clone keeps
 #    the fixtures instead, so both agree.
-mkdir -p "$TMP/fvw" "$TMP/srv" "$TMP/stub" "$TMP/new"
+mkdir -p "$TMP/fvw" "$TMP/srv" "$TMP/stub"
 HD5="$ROOT/scripts/gpu/prompts-hd5.json"
 if [[ ! -f "$ROOT/$POD" ]]; then
   del="$(deleted_in "$POD")"
@@ -171,17 +205,128 @@ import sys
 tmp, src, dst = sys.argv[1:]
 text = open(src).read().replace(tmp + "/srv", "/srv").replace(tmp + "/fvw", "/fvw")
 open(dst, "w").write(text)' "$TMP" "$TMP/calls.txt" "$TMP/new/h3-graphs-script.txt"
+NEW+=(h3-graphs-script.txt prompts-h3-graphs-768.json prompts-h3-graphs-trace-768p.json)
+fi
+
+# 2b. sol-bench: every set's commands (ADR-0019 §23).
+SOL=scripts/gpu/sol-bench-pod.sh
+SOL_INPUTS=(scripts/gpu/sol/cosmos3-default.txt scripts/gpu/sol/cosmos3-negative.txt)
+if ! sol_src="$(source_of "$SOL")"; then
+  frozen "$SOL" "$OUT/sol-bench-script.txt"
+else
+  # Its inputs from the same commit as the script (the deleting commit's
+  # parent once it is deleted), as h3-graphs' prompts-hd5.json.
+  SOLDIR="$TMP/sol-in"
+  mkdir -p "$SOLDIR"
+  for f in "${SOL_INPUTS[@]}"; do
+    if [[ -f "$ROOT/$SOL" ]]; then
+      cp "$ROOT/$f" "$SOLDIR/"
+    else
+      git -C "$ROOT" show "$(deleted_in "$SOL")^:$f" >"$SOLDIR/$(basename "$f")" \
+        || { echo "fv-lab-experiment-goldens: no $f beside $SOL in the history" >&2; exit 2; }
+    fi
+  done
+  {
+    echo 'set -u'
+    cut_block "$sol_src" 'PROMPT="${FV_PROMPT:-' line
+    cut_block "$sol_src" 'SEED="${FV_SEED:-' line
+    # The definitions: from their banner up to the set's first log line.
+    SOL_START='# ---- cell definitions' SOL_END='log "set $SET budget' awk '
+      BEGIN { a = ENVIRON["SOL_START"]; b = ENVIRON["SOL_END"] }
+      go == 0 && substr($0, 1, length(a)) == a { go = 1 }
+      go == 1 && substr($0, 1, length(b)) == b { exit }
+      go == 1 { print }' "$sol_src"
+    cut_block "$sol_src" 'case "$SET" in' exact 'esac'
+  } >"$TMP/sol.sh"
+  # SOL_IN to the inputs (its `$(cat …)` prompts), named back below.
+  python3 -I -c '
+import sys
+path, soldir = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+line = "SOL_IN=/opt/fastvideo-rs/scripts/gpu/sol\n"
+if text.count(line) != 1:
+    sys.exit("fv-lab-experiment-goldens: SOL_IN=/opt/fastvideo-rs/scripts/gpu/sol is not one line of the cut")
+open(path, "w", encoding="utf-8").write(text.replace(line, "SOL_IN=" + soldir + "\n"))' "$TMP/sol.sh" "$SOLDIR"
+  grep -q '^cosmos3() {' "$TMP/sol.sh" && grep -q '^esac$' "$TMP/sol.sh" \
+    || { echo "fv-lab-experiment-goldens: the sol-bench cut lacks its definitions or its case block" >&2; exit 2; }
+  # The sets, in the script's order: every `  <label>)` of the case block but `*)`.
+  mapfile -t SETS < <(cut_block "$sol_src" 'case "$SET" in' exact 'esac' \
+    | awk '/^  [a-z0-9]+\)/ { sub(/^  /, ""); sub(/\).*/, ""); print }')
+  (( ${#SETS[@]} > 0 )) || { echo "fv-lab-experiment-goldens: no set in $SOL" >&2; exit 2; }
+  : >"$TMP/sol-calls.txt"
+  for set in "${SETS[@]}"; do
+    env -i PATH="/usr/local/bin:/usr/bin:/bin" HOME="$TMP" LC_ALL=C SET="$set" NL=$'\n' \
+      RUNS="/fvscratch/runs/sol-bench-$set/1234567-10241200" SCRATCH=/fvscratch W=/workspace/weights \
+      BIN=/opt/fastvideo-rs/target/release/fv-gpucheck bash -c '
+        log() { :; }
+        cell() {
+          local name="$1" wcell="$2" est="$3" a
+          shift 3
+          printf "== %s %s %s %s\n" "$SET" "$name" "$wcell" "$est"
+          for a in "$@"; do
+            [[ -n "$a" && "$a" != *"$NL"* ]] || { echo "an empty or multi-line argument in $name" >&2; exit 3; }
+            printf "%s\n" "$a"
+          done
+        }
+        . "$1"' _ "$TMP/sol.sh" >>"$TMP/sol-calls.txt" \
+      || { echo "fv-lab-experiment-goldens: sol-bench set $set failed in the cut" >&2; exit 2; }
+  done
+  n="$(grep -c '^== ' "$TMP/sol-calls.txt" || true)"
+  (( n > 0 )) || { echo "fv-lab-experiment-goldens: the sol-bench sets started no cell" >&2; exit 2; }
+  python3 -I -c '
+import sys
+soldir, src, dst = sys.argv[1:]
+text = open(src, encoding="utf-8").read().replace(soldir, "/opt/fastvideo-rs/scripts/gpu/sol")
+open(dst, "w", encoding="utf-8").write(text)' "$SOLDIR" "$TMP/sol-calls.txt" "$TMP/new/sol-bench-script.txt"
+  NEW+=(sol-bench-script.txt)
+
+  # The script's own `cell` under FV_CELLS (the GPU check runs one cell on the
+  # script side, ADR-0019 §23.7): an unselected cell is logged and leaves no
+  # directory, as fv-lab's --cells; a selected one runs; none set runs all.
+  # Its weight gate, GPU wait and clock are stood in.
+  cut_block "$sol_src" 'cell() {' exact '}' >"$TMP/cell.sh"
+  printf 'exit 0\n' >"$TMP/verify-ok.sh"
+  cells_check() { # <FV_CELLS or -> <want dirs…>
+    local sel="$1" d got
+    local -a fvc=()
+    shift
+    [[ "$sel" == - ]] || fvc=("FV_CELLS=$sel")
+    rm -rf "$TMP/cells-runs" && mkdir -p "$TMP/cells-runs"
+    env -i PATH="/usr/local/bin:/usr/bin:/bin" HOME="$TMP" LC_ALL=C RUNS="$TMP/cells-runs" BUDGET_S=100000 \
+      VERIFY="$TMP/verify-ok.sh" W=/nonexistent ${fvc[@]+"${fvc[@]}"} bash -c '
+        log() { printf "%s\n" "$*" >>"$RUNS/live.log"; }
+        uptime_s() { echo 0; }
+        gpu_clean() { return 0; }
+        . "$1"
+        cell one h3-base 1 true
+        cell two h3-base 1 true
+        cell three h3-base 1 true' _ "$TMP/cell.sh" >/dev/null 2>&1 \
+      || { echo "fv-lab-experiment-goldens: sol-bench-pod.sh cell failed under FV_CELLS=$sel" >&2; exit 2; }
+    got="$(cd "$TMP/cells-runs" && for d in */summary.json; do [[ -f "$d" ]] && dirname "$d"; done | LC_ALL=C sort | tr '\n' ' ')"
+    [[ "$got" == "$* " ]] || { echo "fv-lab-experiment-goldens: sol-bench-pod.sh cell under FV_CELLS=$sel ran [$got], want [$* ]" >&2; exit 2; }
+    for d in one two three; do
+      [[ " $* " == *" $d "* ]] && continue
+      [[ ! -e "$TMP/cells-runs/$d" ]] || { echo "fv-lab-experiment-goldens: unselected cell $d left a directory" >&2; exit 2; }
+      grep -qxF "skip $d (not in FV_CELLS)" "$TMP/cells-runs/live.log" \
+        || { echo "fv-lab-experiment-goldens: unselected cell $d not logged as skipped" >&2; exit 2; }
+    done
+  }
+  cells_check - one three two
+  cells_check two two
+  cells_check "one,three" one three
+  cells_check "three one" one three
+fi
 
 # 3. Write or compare.
 mkdir -p "$OUT"
-for f in h3-graphs-script.txt prompts-h3-graphs-768.json prompts-h3-graphs-trace-768p.json; do
+for f in ${NEW[@]+"${NEW[@]}"}; do
   case "$f" in
     prompts-*) dest="$ROOT/scripts/gpu/$f" ;;
     *) dest="$OUT/$f" ;;
   esac
   if [[ "$CHECK" == 1 ]]; then
     if ! diff -u "$dest" "$TMP/new/$f"; then
-      echo "fv-lab-experiment-goldens: ${dest#"$ROOT"/} differs from what $POD does (rerun without --check, then make the cells match)" >&2
+      echo "fv-lab-experiment-goldens: ${dest#"$ROOT"/} differs from what its pod script does (rerun without --check, then make the cells match)" >&2
       fail=1
     fi
   else

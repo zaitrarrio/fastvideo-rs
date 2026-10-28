@@ -194,6 +194,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "unset": {
+          "description": "Names removed from the arm's environment, in order: `env -u NAME …`\nbefore the `env` settings (ADR-0019 §23, Addition 18; `sol-bench-pod.sh`'s\n`env -u FASTVIDEO_WAN_SOL_CACHE`). With it the command starts with\n`env` whether `env` is set or not. A name may not also be set in `env`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false,

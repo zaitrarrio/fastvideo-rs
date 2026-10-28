@@ -1,0 +1,5 @@
+[sol-bench-d2] matrix start image=unknown
+[sol-bench-d2] dry-run weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees (129.47 GB) fetched before the arms that read them, at most 129.47 GB on the container disk at once
+[sol-bench-d2] dry-run r2 cosmos3-teacache: fetch cosmos3-super@f543c56225b2e04d0ad141e29655be3a45d9c455 (129.47 GB) into /fvscratch/weights
+[sol-bench-d2] dry-run cosmos3-teacache: env /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sol cosmos3-gen --weights /fvscratch/weights/cosmos3-super --prompt A\ serene\ mountain\ lake\ at\ sunrise\,\ mist\ rising\ off\ the\ still\ water\,\ pine\ trees\ reflected\ on\ the\ surface\,\ a\ small\ wooden\ boat\ drifting\ slowly\,\ cinematic\,\ high\ detail --negative-prompt blurry\,\ distorted\,\ low\ quality\,\ flickering\,\ overexposed\,\ underexposed\,\ low\ contrast\,\ text\ artifacts\,\ unstable\ motion --seed 42 --warm --arm teacache --clip /fvscratch/runs/sol-bench-d2/1234567-10241200/cosmos3-teacache/clip 
+[sol-bench-d2] matrix done

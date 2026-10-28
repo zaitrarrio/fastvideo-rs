@@ -865,6 +865,12 @@ pub struct Arm {
     /// word for word).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<Vec<String>>,
+    /// Names removed from the arm's environment, in order: `env -u NAME …`
+    /// before the `env` settings (ADR-0019 §23, Addition 18; `sol-bench-pod.sh`'s
+    /// `env -u FASTVIDEO_WAN_SOL_CACHE`). With it the command starts with
+    /// `env` whether `env` is set or not. A name may not also be set in `env`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unset: Vec<String>,
     /// fv-gpucheck's arguments (the binary is the runner's).
     pub argv: Vec<String>,
     /// Paths under `{runs}/` removed before the arm (selected or not), as the
@@ -990,6 +996,16 @@ pub struct Paths {
     /// (`<scratch>/baseline-<sha>/fv-gpucheck`); `None` without a baseline
     /// commit, and such an arm does not render.
     pub baseline: Option<PathBuf>,
+}
+
+/// An `env` key or an `unset` name: `[A-Z_][A-Z0-9_]*`.
+fn is_env_name(key: &str) -> bool {
+    key.bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_uppercase() || b == b'_')
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
 }
 
 const PATH_KEYS: [&str; 8] = [
@@ -1172,16 +1188,35 @@ impl CellFile {
             }
             for e in arm.env_entries() {
                 let key = e.split_once('=').map(|(k, _)| k).unwrap_or("");
-                let ok = !key.is_empty()
-                    && key
-                        .bytes()
-                        .next()
-                        .is_some_and(|b| b.is_ascii_uppercase() || b == b'_')
-                    && key
-                        .bytes()
-                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+                let ok = is_env_name(key);
                 if !ok {
                     return Err(field(file, at("env"), format!("`{e}` is not K=V")));
+                }
+            }
+            // Addition 18 (ADR-0019 §23): `env -u NAME`, each name once, a
+            // variable name, and not also set by the arm's own `env`.
+            let mut unset_seen = BTreeSet::new();
+            for u in &arm.unset {
+                if !is_env_name(u) {
+                    return Err(field(
+                        file,
+                        at("unset"),
+                        format!("`{u}` is not a variable name"),
+                    ));
+                }
+                if !unset_seen.insert(u.as_str()) {
+                    return Err(field(file, at("unset"), format!("`{u}` twice")));
+                }
+                if arm
+                    .env_entries()
+                    .iter()
+                    .any(|e| e.split_once('=').map(|(k, _)| k) == Some(u.as_str()))
+                {
+                    return Err(field(
+                        file,
+                        at("unset"),
+                        format!("`{u}` is also set in env"),
+                    ));
                 }
             }
             for a in &arm.argv {
@@ -2003,13 +2038,17 @@ impl CellFile {
     }
 
     /// An arm's full command line, as `runpod-matrix.sh` passes it to
-    /// `run_cell`: `[env K=V …] <bin> <args…>`; `bin` is the image's
+    /// `run_cell`: `[env [-u NAME …] K=V …] <bin> <args…>`; `bin` is the image's
     /// fv-gpucheck, a `baseline` arm's is `p.baseline`.
     pub fn command(&self, arm: &Arm, bin: &Path, p: &Paths) -> Result<Vec<String>, String> {
         let mut cmd = Vec::new();
-        if let Some(env) = &arm.env {
+        if arm.env.is_some() || !arm.unset.is_empty() {
             cmd.push("env".to_owned());
-            for e in env {
+            for u in &arm.unset {
+                cmd.push("-u".to_owned());
+                cmd.push(u.clone());
+            }
+            for e in arm.env_entries() {
                 cmd.push(self.render(e, &arm.name, p)?);
             }
         }
@@ -3037,6 +3076,110 @@ candidate = "x-tae"
 baseline = "x-pr"
 candidate = "x-tae"
 "#;
+
+    /// Addition 18 (ADR-0019 §23): `unset` renders `env -u NAME …` before the
+    /// `env` settings, with or without `env`, and is refused when a name is
+    /// not a variable name, comes twice, or is also set in `env`.
+    #[test]
+    fn unset_renders_env_dash_u_before_the_settings() {
+        const UNSET: &str = r#"
+schema = 1
+name = "u1"
+description = "env -u"
+
+[workload]
+model = "wan"
+
+[[arm]]
+name = "u-only"
+gate = "h3-base"
+trees = ["h3-base"]
+unset = ["FASTVIDEO_WAN_SOL_CACHE"]
+argv = ["wan", "gen"]
+
+[[arm]]
+name = "u-and-env"
+gate = "h3-base"
+trees = ["h3-base"]
+unset = ["FASTVIDEO_A", "FASTVIDEO_B"]
+env = ["FASTVIDEO_C=1"]
+argv = ["wan", "gen"]
+
+[[arm]]
+name = "plain"
+gate = "h3-base"
+trees = ["h3-base"]
+argv = ["wan", "gen"]
+"#;
+        let c = CellFile::parse(UNSET, "u1.toml").unwrap();
+        let p = paths();
+        let bin = Path::new("/bin/fv");
+        assert_eq!(
+            c.command(&c.arms[0], bin, &p).unwrap(),
+            [
+                "env",
+                "-u",
+                "FASTVIDEO_WAN_SOL_CACHE",
+                "/bin/fv",
+                "wan",
+                "gen"
+            ]
+        );
+        assert_eq!(
+            c.command(&c.arms[1], bin, &p).unwrap(),
+            [
+                "env",
+                "-u",
+                "FASTVIDEO_A",
+                "-u",
+                "FASTVIDEO_B",
+                "FASTVIDEO_C=1",
+                "/bin/fv",
+                "wan",
+                "gen"
+            ]
+        );
+        assert_eq!(
+            c.command(&c.arms[2], bin, &p).unwrap(),
+            ["/bin/fv", "wan", "gen"]
+        );
+        // An arm without `unset` serializes without the key (cell v1 unchanged).
+        assert!(!toml::to_string(&c.arms[2]).unwrap().contains("unset"));
+        let bad = |from: &str, to: &str, want: &str| {
+            let text = UNSET.replacen(from, to, 1);
+            assert_ne!(text, UNSET, "{from}");
+            let e = CellFile::parse(&text, "u1.toml").unwrap_err().to_string();
+            assert!(
+                e.contains(want) && e.contains("unset"),
+                "{from} -> {to}: {e}"
+            );
+        };
+        bad(
+            "unset = [\"FASTVIDEO_WAN_SOL_CACHE\"]",
+            "unset = [\"lower\"]",
+            "not a variable name",
+        );
+        bad(
+            "unset = [\"FASTVIDEO_WAN_SOL_CACHE\"]",
+            "unset = [\"FASTVIDEO_X=1\"]",
+            "not a variable name",
+        );
+        bad(
+            "unset = [\"FASTVIDEO_WAN_SOL_CACHE\"]",
+            "unset = [\"\"]",
+            "not a variable name",
+        );
+        bad(
+            "unset = [\"FASTVIDEO_A\", \"FASTVIDEO_B\"]",
+            "unset = [\"FASTVIDEO_A\", \"FASTVIDEO_A\"]",
+            "twice",
+        );
+        bad(
+            "unset = [\"FASTVIDEO_A\", \"FASTVIDEO_B\"]",
+            "unset = [\"FASTVIDEO_A\", \"FASTVIDEO_C\"]",
+            "also set in env",
+        );
+    }
 
     #[test]
     fn baseline_arms_bare_env_tae_and_paired_gates() {

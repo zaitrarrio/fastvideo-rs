@@ -1,0 +1,204 @@
+# sol-bench set a1 (scripts/gpu/sol-bench-pod.sh FV_SOL_SET=a1; docs/perf/sol-bench.md; docs/adr/0019-fv-lab.md §23):
+# Phase A, instance 1: MiniMax-H3 1344x768 fullopt and dense, LTX-2.5 distilled two-stage at 4k5s and 1080p20s, Sol stage 2 BF16 and NVFP4.
+# The commands are the pod script's, word for word (tests/experiment_tiers.rs against
+# fixtures/experiments/sol-bench-script.txt, which scripts/gpu/tests/fv-lab-experiment-goldens.sh cuts from the
+# script); the arms are its cells, in its order, named as its run directories so `fv-lab report table --kind
+# sol-bench` reads them. The script's per-cell estimates (seconds) were h3-768p-fullopt 720, ltx25-4k5s-sol-bf16 480, ltx25-1080p20s-sol-bf16 420, ltx25-4k5s-sol-nvfp4 480, ltx25-1080p20s-sol-nvfp4 420, h3-768p-dense 690;
+# the runner's deadline replaces them (§23, intended difference 3).
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "sol-bench-a1"
+description = "Phase A, instance 1: MiniMax-H3 1344x768 fullopt and dense, LTX-2.5 distilled two-stage at 4k5s and 1080p20s, Sol stage 2 BF16 and NVFP4"
+
+[workload]
+model = "h3 ltx2"
+note = "Set a1 of sol-bench-pod.sh. Sol-engine's RTX 5090 cells (ours on the RTX PRO 6000); dense last, the owner's lowest priority."
+
+[[arm]]
+name = "h3-768p-fullopt"
+gate = "h3-base"
+trees = ["h3-base"]
+env = ["FASTVIDEO_H3_SOL_CACHE=teacache"]
+argv = [
+  "--mode",
+  "fast",
+  "h3",
+  "gen",
+  "--weights",
+  "{weights}/h3-base",
+  "--h3-recipe",
+  "sol-h3-rtx",
+  "--adaln-cache",
+  "{runs}/h3-768p-adaln.cache",
+  "--clip-dir",
+  "{runs}/{arm}/frames",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--seconds",
+  "5",
+  "--seed",
+  "1024",
+  "--text-encoder",
+  "auto",
+  "--text-cache",
+  "{scratch}/h3-text-cache",
+  "--text-weights",
+  "{weights}/h3-base",
+  "--warm",
+]
+
+[[arm]]
+name = "ltx25-4k5s-sol-bf16"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = [
+  "--techniques",
+  "ltx2/ltx25_distill_sol",
+  "--mode",
+  "fast",
+  "ltx2",
+  "gen",
+  "--model-version",
+  "2.5",
+  "--weights",
+  "{weights}/ltx25",
+  "--dit",
+  "{weights}/ltx25",
+  "--workload",
+  "4k5s",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--seed",
+  "1024",
+  "--two-stage",
+  "--text",
+  "streamed",
+  "--warm",
+  "--clip",
+  "{runs}/{arm}/frames",
+]
+
+[[arm]]
+name = "ltx25-1080p20s-sol-bf16"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = [
+  "--techniques",
+  "ltx2/ltx25_distill_sol",
+  "--mode",
+  "fast",
+  "ltx2",
+  "gen",
+  "--model-version",
+  "2.5",
+  "--weights",
+  "{weights}/ltx25",
+  "--dit",
+  "{weights}/ltx25",
+  "--workload",
+  "1080p20s",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--seed",
+  "1024",
+  "--two-stage",
+  "--text",
+  "streamed",
+  "--warm",
+  "--clip",
+  "{runs}/{arm}/frames",
+]
+
+[[arm]]
+name = "ltx25-4k5s-sol-nvfp4"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = [
+  "--techniques",
+  "ltx2/ltx25_distill_sol_nvfp4",
+  "--mode",
+  "fast",
+  "ltx2",
+  "gen",
+  "--model-version",
+  "2.5",
+  "--weights",
+  "{weights}/ltx25",
+  "--dit",
+  "{weights}/ltx25",
+  "--workload",
+  "4k5s",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--seed",
+  "1024",
+  "--two-stage",
+  "--text",
+  "streamed",
+  "--warm",
+  "--clip",
+  "{runs}/{arm}/frames",
+]
+
+[[arm]]
+name = "ltx25-1080p20s-sol-nvfp4"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+argv = [
+  "--techniques",
+  "ltx2/ltx25_distill_sol_nvfp4",
+  "--mode",
+  "fast",
+  "ltx2",
+  "gen",
+  "--model-version",
+  "2.5",
+  "--weights",
+  "{weights}/ltx25",
+  "--dit",
+  "{weights}/ltx25",
+  "--workload",
+  "1080p20s",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--seed",
+  "1024",
+  "--two-stage",
+  "--text",
+  "streamed",
+  "--warm",
+  "--clip",
+  "{runs}/{arm}/frames",
+]
+
+[[arm]]
+name = "h3-768p-dense"
+gate = "h3-base"
+trees = ["h3-base"]
+env = ["FASTVIDEO_H3_SOL_ATTN=off"]
+argv = [
+  "--mode",
+  "fast",
+  "h3",
+  "gen",
+  "--weights",
+  "{weights}/h3-base",
+  "--h3-recipe",
+  "sol-h3-rtx",
+  "--adaln-cache",
+  "{runs}/h3-768p-adaln.cache",
+  "--clip-dir",
+  "{runs}/{arm}/frames",
+  "--prompt",
+  "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+  "--seconds",
+  "5",
+  "--seed",
+  "1024",
+  "--text-encoder",
+  "auto",
+  "--text-cache",
+  "{scratch}/h3-text-cache",
+  "--text-weights",
+  "{weights}/h3-base",
+]
