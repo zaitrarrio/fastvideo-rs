@@ -83,7 +83,7 @@ dry run show what will run.
 | `wan` | `wan-fastwan21-1.3b`, `wan-wan21-t2v-14b`, `wan-wan22-ti2v-oracle`, `wan-wan22-ti2v-5b`, `wan-fastwan22-ti2v-oracle`, `wan-fastwan22-ti2v-5b` | 49 | the Wan family's kernel, decoder, cache and parity regression check: FastWan2.1 1.3B (VSA / dense, the kernel arms with lossy and exact gates, full VAE, no-cache identity, Sol, TeaCache), `kernels-wan` (ungated), SF-Wan 1.3B 81 frames, the TI2V-5B / T2V-14B kernel A/B, T2V-14B's caches and Sol at 50 steps, the TI2V-5B recipe, two module-parity oracle cells (`FV_ORACLE_URL`), fal's canvases, wan-turbo's CLI / engine pair | D1 S6 ([§22](../adr/0019-fv-lab.md)); its `export FASTVIDEO_TAE_DIR` moved into each gated arm's env and `engine-fw22`'s `--tae-dir` dropped in lockstep; weights `volume+r2` (every Wan tree from R2, eleven fetches in a full run, at most 80.41 GB at once), 210 GB, `min_ram_gb = 256`; `FV_SFWAN_CELLS` refused; branch kept until S8 (`sfwan` runs it; §22.18) |
 | `gold` | `gold-*` (32) | 32 | every gold variant's canonical cell: the served variant through the serve engine at its gold canvas | fv-lab's own, generated from `lab/gold/` ([below](#the-gold-files-ci-and-the-tier-table)); weights `volume+r2` ([below](#weights-from-the-volume-and-r2-volumer2)) |
 | `h3-graphs` | `h3-graphs-turbo{-trace,}` | 4 | h3-turbo at 768p: a traced process with the step graphs on, then per-step sync, the lazy step clock and CUDA graphs of the steps, timed warm, `--off-identity` against lazy | D1e: was `scripts/gpu/experiments/h3-graphs-*.sh` (`FV_CKS=turbo`, deleted after the GPU check, §14.4), [below](#port-one-offs-the-experiment-tiers) |
-| `sol-bench-<set>` (22) | `sol-bench-<set>` | 57 in all | sol-engine's model cells on our stack, one tier per `FV_SOL_SET` of `sol-bench-pod.sh` (`a1` … `g2`), `volume` for `a1` / `a3` and `volume+r2` for the rest, no TAE, a 65-min cap | owner, 2026-10-28: was `scripts/gpu/sol-bench-pod.sh` (kept until its GPU check, ADR-0019 §23.7), [below](#port-one-offs-the-experiment-tiers) |
+| `sol-bench-<set>` (22) | `sol-bench-<set>` | 57 in all | sol-engine's model cells on our stack, one tier per `FV_SOL_SET` of `sol-bench-pod.sh` (`a1` … `g2`), `volume` for `a1` / `a3` and `volume+r2` for the rest, no TAE, a 65-min cap | owner, 2026-10-28: was `scripts/gpu/sol-bench-pod.sh` (deleted after the GPU check, ADR-0019 §23.7, §23.10), [below](#port-one-offs-the-experiment-tiers) |
 
 All eleven above `precision-nvfp4`, `det-short` and `determinism`, `fuse`, `attn3` and `ltx`, and `hd`, `hd5`,
 `serve-engine`, `sfstream` and `mmaudio` are **retired from the script** (`scripts/gpu/fv-lab-retired.sh`, ADR-0019
@@ -151,7 +151,7 @@ the runner's cap for `timeout 2400`). The experiment's own scripts were deleted 
 in a shallow clone keeps the fixtures as they are.
 
 **sol-bench** (owner, 2026-10-28; [ADR-0019 §23](../adr/0019-fv-lab.md)): each `FV_SOL_SET` of
-`scripts/gpu/sol-bench-pod.sh` is the experiment tier `sol-bench-<set>` (22, in `FV_LAB_EXPERIMENTS`). Its one cell
+`scripts/gpu/sol-bench-pod.sh` (deleted after the GPU check, §23.7, §23.10) is the experiment tier `sol-bench-<set>` (22, in `FV_LAB_EXPERIMENTS`). Its one cell
 holds the set's cells, word for word, named as the script's run directories (`report table --kind sol-bench` reads
 them).
 - `a1` / `a3` are `volume` tiers; the other 20 are `volume+r2`.
@@ -159,15 +159,16 @@ them).
 - `env -u` is the cell field `unset` (Addition 18).
 
 ```sh
-bash scripts/gpu/tests/fv-lab-experiment-goldens.sh [--check]   # also cut from sol-bench-pod.sh: fixtures/experiments/sol-bench-script.txt
+bash scripts/gpu/tests/fv-lab-experiment-goldens.sh [--check]   # also cut from sol-bench-pod.sh (from the history): fixtures/experiments/sol-bench-script.txt
 ./fv-lab run sol-bench-a1 --dry-run                              # fv-lab's own golden: fixtures/sol-bench-a1-dry-run.txt
 RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family sol-bench-g2 --cells lingbot-fullopt --fetch-tree --fetch-skip '\.png$|\.cache$|text-cache|\.wav$' --yes --wait
 ```
 
 A set whose arms do not fit one pod runs one pod per `--cells` group: `lab/tiers.toml`'s `# Set <s>:` lines, checked by
-`tests/experiment_tiers.rs`, with the timings in §23.6. `sol-bench-pod.sh` stays the other runner until the GPU check
-(§23.7) passes; it is run as `FV_FAMILY=sol-bench`, since `runpod-http.sh run` refuses the experiment tiers, and it
-honours `FV_CELLS` for one cell.
+`tests/experiment_tiers.rs`, with the timings in §23.6. `sol-bench-pod.sh` was the other runner until the GPU check
+(§23.7) passed on `21d70f6`; it is deleted (§23.10), and with it `runpod-http.sh`'s `FV_POD_FILES` / `FV_POD_SCRIPT`,
+which only it used: set, either is refused before any lookup or pod (`down`, `status` and `attach` still work). The goldens script reads the script from the parent of
+the deleting commit, as `h3-graphs-pod.sh`, and in a shallow clone keeps the fixture as it is.
 
 ### `runpod-http.sh` for a retired tier
 
@@ -179,7 +180,7 @@ instead of its own pod, mapping `FV_CELLS`, `FV_BASELINE_SHA`, `FV_EXTRA_ENV`, `
 `wall_cap_s` maps to `pod up --wall-cap-s` (a cap is lowered, never raised). Every other setting of the script path
 that fv-lab would not honour is refused, not dropped, unless fv-lab does the same thing anyway:
 
-- no equivalent, refused when set: `FV_POD_FILES`, `FV_POD_SCRIPT`, `FV_POD_FILE`, `FV_PROMPTS`, `FV_PROMPT`,
+- no equivalent, refused when set: `FV_POD_FILE`, `FV_PROMPTS`, `FV_PROMPT`,
   `FV_SEED`, `FV_AVOID_MACHINES`, `FV_CREATE_WAIT_S`, `RUNPOD_ALLOWED_CUDA`,
   `FV_KEEP_POD=1`, `RUNPOD_NO_VOLUME=1`, `FV_FETCH_SKIP` / `FV_FETCH_MAX_MB` without `FV_FETCH_TREE=1`, and the retired pair selectors `FV_TECH_CELLS`,
   `FV_B6_CELLS`, `FV_B4A_CELLS`, `FV_DET_CELLS`, arm pickers `FV_ATTN3_ARMS`, `FV_ATTN3_VSA` and group picker
@@ -677,7 +678,7 @@ lost; their commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
 | `cold` | nothing: no result was recorded | the page-cache-cold end-to-end time with load included (sol-engine's e2e) |
 | `eval` | `precision`'s f32act / bf16act pairs with lossy gates, `fuse`'s `exact` gates with an OFF arm, prompt sets in cells, `--lpips` on any run | the combination in one run, the `BF16_ACT=0` OFF-identity gate, the five-prompt LPIPS pairs, the LPIPS self-test on a pod (by hand: `fv-gpucheck lpips --weights <dir>`) |
 | `ltxoffload` | nothing: its numbers are in `docs/ports/ltx25.md`; `b6-ltx25-offload-cpu` still checks `--offload cpu` across builds | LTX `cpu`-against-resident identity, the 4K `cpu` peaks |
-| `solbench`, `sol-lingbot`, `sol-cosmos3` | `scripts/gpu/sol-bench-pod.sh`, which the sol-engine benchmark runs (`docs/perf/sol-bench.md`) | per-arm compares and lossy gates, `wan13-sol-easycache`, `wan13-sol-attn`, `a14b-sol-mxfp8`, LingBot on three prompts, LingBot's B200 `FV_LINGBOT_RESIDENCY=both` path (`sol-bench-pod.sh` hard-codes `--residency swap`) (none ever recorded) |
+| `solbench`, `sol-lingbot`, `sol-cosmos3` | the `sol-bench-<set>` tiers, which the sol-engine benchmark runs (`docs/perf/sol-bench.md`; they were `scripts/gpu/sol-bench-pod.sh`, ADR-0019 §23) | per-arm compares and lossy gates, `wan13-sol-easycache`, `wan13-sol-attn`, `a14b-sol-mxfp8`, LingBot on three prompts, LingBot's B200 `FV_LINGBOT_RESIDENCY=both` path (the tiers' LingBot arms pass `--residency swap`) (none ever recorded) |
 
 ## On a GPU box: `fv-lab run`
 

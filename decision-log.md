@@ -2364,3 +2364,18 @@ Project code: FVID
 - ADR: docs/adr/0019-fv-lab.md §23.5, §23.7, §23.8
 - Verification: `fv-lab-experiment-goldens.sh --check` (six mutants refused, each with its own message); the gates on the build pod
 - Result (2026-10-28, coordinator): the GPU check of FVID-2026-10-28-d1-sol-bench-tiers (ADR-0019 §23.7) passed on `21d70f6` (main after #235; image `sha-21d70f6`, build id `421fad28bd5d2153`; the local fv-lab the image's `fv-lab 0.1.1`). Two pods ran in parallel, RTX PRO 6000 in EU-RO-1, $2.49/hr: fv-lab `zgbgmxwsjhooim` (`--wall-cap-s 3600`, ready 264.0 s, deleted `done` 18:43:38Z) and script `8sghqybfdpxjjh` (`FV_POD_CAP_S=2400`, `FV_SOL_CAP_S=2340`, `bz0ofkfx45`, destroyed 18:48:41Z). Both `matrix_exit=0`, and `h3-768p-fullopt` exit 0 on each (493 / 495 s). The pass block printed eight `PASS` and no `FAIL`: 248 frames byte-identical, the compare's two lines exactly, equal commands, both reports `pass` with the same env and four limit checks, both `benchmark.json` warm with load excluded and no `frames_sha256`. It also printed `SAME 4` (the H.264 streams). Evidence: `artifacts/runpod/sol-bench-a1/21d70f6-1028183029-988d`, `artifacts/runpod/sol-bench/21d70f6-10281830` (its PNGs not committed) and `artifacts/runpod/sol-bench-a1/compare-21d70f6.txt`. Load was 318.8 / 322.6 s, against 105.7 s on 2026-10-06, not investigated. $1.21 (balance $38.49 → $37.28). Next: the script's deletion (§23.8)
+
+### FVID · 2026-10-28 · FVID-2026-10-28-d1-sol-bench-retire
+- Trigger: the GPU check of FVID-2026-10-28-d1-sol-bench-tiers passed on `21d70f6` (ADR-0019 §23.7 "Result"); §23.8 lists what the script's deletion touches
+- Options: per §23.8's open choices: the fv-lab route's refusal of `FV_POD_FILES` / `FV_POD_SCRIPT` stays, or goes with the knob; `sol_bench_mirror.py` deleted, or kept for the committed runs
+- Decision: (agent, within the coordinator's instruction and §23.8)
+  - `scripts/gpu/sol-bench-pod.sh` and `scripts/gpu/sol_bench_mirror.py` are deleted. `fv-lab pod fetch --fetch-tree` replaces the mirror;
+  - `runpod-http.sh` loses the knobs' code but keeps every pod body byte for byte. Setting either knob is refused before any lookup or pod, on every command that builds or creates one (`down`, `status` and `attach` let through, so a pod can still be deleted by hand), naming the `sol-bench-<set>` tiers, so a caller never silently gets `runpod-matrix.sh`; the route's own refusal goes with the knob;
+  - `fv-lab-retired.sh`'s three pointers name the tiers holding each family's arms, and `sana-video`'s names `sol-bench-b1`. The route test checks every named set against the tiers' arms;
+  - the experiment goldens read the script from the history;
+  - the gold prompt source is `sol-bench-a2`'s cell
+- Reason: the owner's decision (FVID-2026-10-28-sol-bench-to-fv-lab) once the check passed; refused, not dropped, as the S2 knobs were (§22)
+- Reversibility: high (`git show 21d70f63:scripts/gpu/sol-bench-pod.sh`)
+- Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
+- ADR: docs/adr/0019-fv-lab.md §23.10
+- Verification: `fv-lab-experiment-goldens.sh --check` from the history, plus the other three goldens `--check`; `fv-lab-route.test.sh` (369 → 384 ok: six refusal cases, six not-refused cases for `down` / `status` / `attach`, four pointer-to-tier checks and their self-check); every `*.test.sh`; `tests/payload_golden.rs`, `tests/experiment_tiers.rs`, `tests/gold_tier.rs` on the build pod

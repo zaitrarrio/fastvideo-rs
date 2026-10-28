@@ -69,8 +69,8 @@ on:
       - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
       - "scripts/gpu/prompts-hd5.json"
       - "scripts/gpu/prompts-h3-graphs-*.json"
-      # ADR-0019 §23: the sol-bench tiers' goldens, cut from sol-bench-pod.sh and its Cosmos3 prompt files
-      - "scripts/gpu/sol-bench-pod.sh"
+      # ADR-0019 §23: the sol-bench tiers' goldens, cut from sol-bench-pod.sh (deleted, §23.10: read from the
+      # history) and its Cosmos3 prompt files; scripts/gpu/sol/ stays, the LingBot arms read lingbot-t2v-val3.txt
       - "scripts/gpu/sol/**"
       - "scripts/gpu/hd_report.py"
       - "scripts/gpu/timings.sh"
@@ -158,8 +158,8 @@ on:
       - "scripts/gpu/tests/fv-lab-experiment-goldens.sh"
       - "scripts/gpu/prompts-hd5.json"
       - "scripts/gpu/prompts-h3-graphs-*.json"
-      # ADR-0019 §23: the sol-bench tiers' goldens, cut from sol-bench-pod.sh and its Cosmos3 prompt files
-      - "scripts/gpu/sol-bench-pod.sh"
+      # ADR-0019 §23: the sol-bench tiers' goldens, cut from sol-bench-pod.sh (deleted, §23.10: read from the
+      # history) and its Cosmos3 prompt files; scripts/gpu/sol/ stays, the LingBot arms read lingbot-t2v-val3.txt
       - "scripts/gpu/sol/**"
       - "scripts/gpu/hd_report.py"
       - "scripts/gpu/timings.sh"
