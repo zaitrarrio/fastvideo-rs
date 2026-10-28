@@ -1,0 +1,8 @@
+[20:24:22] pod.sh start steps: info:box weights:ltx25 oracle:ltx25-a2v-i2v,ltx25-retake
+[20:24:22] ▶ step info:box
+[20:24:22] ok step info:box  0s
+[20:24:22] ▶ step weights:ltx25
+[20:32:53] ok step weights:ltx25  511s
+[20:32:53] ▶ step oracle:ltx25-a2v-i2v,ltx25-retake
+[20:34:45] ok step oracle:ltx25-a2v-i2v,ltx25-retake  112s
+[20:34:45] pod.sh done

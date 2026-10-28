@@ -1,0 +1,64 @@
+{
+  "checks": [],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "diff_vae": false,
+    "edit": {
+      "kind": "Retake { start_s: 1.5, end_s: 3.5, video: true, audio: true }",
+      "region": [
+        1.5,
+        3.5
+      ],
+      "source": "/opt/fastvideo-rs/scripts/gpu/fixtures/beach-push-768x512-24fps.mp4",
+      "source_audio": true,
+      "source_fps": 24.0,
+      "window_frames": 121
+    },
+    "guided": null,
+    "hq": null,
+    "mode": "fast",
+    "model_version": "2.5",
+    "request": {
+      "cond_images": [],
+      "diff_vae": false,
+      "frame_rate": 24.0,
+      "height": 512,
+      "image": null,
+      "num_frames": 121,
+      "pisa_stage2": false,
+      "prompt": "A huge wave crashes over the dark rocks at golden hour, white spray bursting high into the air, a narrator speaks calmly.",
+      "prompt_set": null,
+      "seed": 1024,
+      "sol_stage2": false,
+      "two_stage": false,
+      "width": 768
+    },
+    "sink_check": false,
+    "skip_audio_decode": false,
+    "two_stage": false,
+    "video_vae": {
+      "decoder": "conv_vae"
+    }
+  },
+  "elapsed_s": 84.301447327,
+  "env": {
+    "FASTVIDEO_DUMP_DIR": "/fvscratch/runs/oracle/4902297-1028195929-96c3/oracle-ltx25-retake-dump",
+    "FASTVIDEO_DUMP_OPS": "0,1,24,47",
+    "FASTVIDEO_H3_QUANT": "off",
+    "FASTVIDEO_INJECT_DIR": "/fvscratch/oracle-ref/ltx25-retake/dump"
+  },
+  "error": "error: FASTVIDEO_INJECT_DIR: v2v_audio_wave: reference shape [2, 221152] (442304 values), ours needs 444416",
+  "git_sha": null,
+  "stage": "ltx2",
+  "status": "error"
+}

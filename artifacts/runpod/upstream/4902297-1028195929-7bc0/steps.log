@@ -1,0 +1,22 @@
+uv 0.13.1 (x86_64-unknown-linux-gnu)
+[20:24:22] 72 source tensors
+[20:24:28] latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors: ok (1.0 GB, 6.1 s)
+[20:24:28] 1/1 files verified
+[20:24:28] 170 source tensors
+[20:24:42] vae/ltx-2.5-video-vae-conv-bf16.safetensors: ok (1.5 GB, 13.0 s)
+[20:24:42] 1/1 files verified
+[20:24:42] 1329 source tensors
+[20:24:49] vae/ltx-2.5-audio-vae-bf16.safetensors: ok (0.4 GB, 6.9 s)
+[20:24:49] 1/1 files verified
+[20:24:49] 939 source tensors
+[20:26:57] text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors: SHA MISMATCH 3952c4e4e600c7da5218155af4535e008f42e5da5bfe125fe6af9d1d8f3633f7 != ef7243612fdae7a75cb4d5cee9433e81380675fb6c213bd98ae74a9cd16561d1; accepted without repair
+[20:26:57] 1/1 files verified
+[20:26:58] 4353 source tensors
+[20:32:52] diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors: SHA MISMATCH c3dd7a79b1a9e82e5f6016a08e47ced5bc797e9b860a5fb1ab4a0406208f2d7c != 31eb3cad89b9e54e99dd3baf286f70825ac4f6c660a70d9184d895be76d7bff4; accepted without repair
+[20:32:52] 1/1 files verified
+[20:32:58] ▶ cell oracle-ltx25-a2v-i2v
+[20:34:06] ok oracle-ltx25-a2v-i2v 68s peak 8859MiB ram 38058 MiB of 89645 MiB
+290M	/root/runs/upstream/4902297-1028195929-7bc0/oracle-ltx25-a2v-i2v/dump
+[20:34:06] ▶ cell oracle-ltx25-retake
+[20:34:45] ok oracle-ltx25-retake 39s peak 8887MiB ram 38056 MiB of 89645 MiB
+263M	/root/runs/upstream/4902297-1028195929-7bc0/oracle-ltx25-retake/dump

@@ -1,0 +1,9 @@
+ours missing /fvscratch/runs/oracle/4902297-10282035/oracle-ltx25-retake/frames/output.mp4
+ownenc: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+ownenc: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+ownenc kept frames vs source ssim: SSIM Y:0.974056 (15.859587) U:0.990781 (20.352944) V:0.991253 (20.581353) All:0.979709 (16.927050)
+ownenc kept frames vs source psnr: PSNR y:41.595356 u:49.571811 v:49.877775 average:43.034251 min:40.362528 max:44.290390
+reference: stream|codec_name=h264|codec_type=video|width=768|height=512|r_frame_rate=24/1|nb_frames=121
+reference: stream|codec_name=aac|codec_type=audio|sample_rate=48000|channels=2|r_frame_rate=0/0|nb_frames=236
+reference kept frames vs source ssim: SSIM Y:0.973699 (15.800298) U:0.989956 (19.980802) V:0.990725 (20.326994) All:0.979246 (16.829034)
+reference kept frames vs source psnr: PSNR y:41.088138 u:48.017048 v:48.926907 average:42.467517 min:40.255253 max:43.583609

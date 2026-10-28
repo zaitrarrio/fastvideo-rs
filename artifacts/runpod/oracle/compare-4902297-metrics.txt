@@ -1,0 +1,13 @@
+$ bash scripts/gpu/fv-lab-compare-runs.sh artifacts/runpod/oracle/4902297-1028195929-96c3 artifacts/runpod/oracle/4902297-10282035
+same oracle-ltx25-a2v-i2v: {"exit":0,"skipped":null}, 121 frames byte-identical
+same oracle-ltx25-a2v-i2v-diff: {"exit":0,"skipped":null}, no frames
+same oracle-ltx25-a2v-i2v-ownaud: {"exit":0,"skipped":null}, 121 frames byte-identical
+same oracle-ltx25-a2v-i2v-ownaud-diff: {"exit":0,"skipped":null}, no frames
+same oracle-ltx25-retake: {"exit":2,"skipped":null}, no frames
+same oracle-ltx25-retake-diff: {"exit":0,"skipped":null}, no frames
+same oracle-ltx25-retake-ownenc: {"exit":0,"skipped":null}, 121 frames byte-identical
+same oracle-ltx25-retake-ownenc-diff: {"exit":0,"skipped":null}, no frames
+same oracle-ltx25-a2v-i2v-frames/metrics.txt
+same oracle-ltx25-retake-frames/metrics.txt
+8 arm(s) the same (3 ran with byte-identical frames, 0 skipped in both, 1 failed in both; 4 with the same compare-dumps lines), 0 control arm(s) reported, 0 report(s) the same, 0 verdict file(s) the same, 2 metrics report(s), 0 difference(s)
+exit 0

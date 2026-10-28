@@ -1,0 +1,5 @@
+tae ok (volume copy /workspace/weights/auxiliary/tae/taeh3.safetensors): /fvscratch/tae/taeh3.safetensors
+tae ok (volume copy /workspace/weights/auxiliary/tae/taeltx2_3_wide.safetensors): /fvscratch/tae/taeltx2_3_wide.safetensors
+tae ok (volume copy /workspace/weights/auxiliary/tae/taew2_1.safetensors): /fvscratch/tae/taew2_1.safetensors
+tae ok (volume copy /workspace/weights/auxiliary/tae/taew2_2.safetensors): /fvscratch/tae/taew2_2.safetensors
+exit=0
