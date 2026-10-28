@@ -2370,12 +2370,12 @@ Project code: FVID
 - Options: per §23.8's open choices: the fv-lab route's refusal of `FV_POD_FILES` / `FV_POD_SCRIPT` stays, or goes with the knob; `sol_bench_mirror.py` deleted, or kept for the committed runs
 - Decision: (agent, within the coordinator's instruction and §23.8)
   - `scripts/gpu/sol-bench-pod.sh` and `scripts/gpu/sol_bench_mirror.py` are deleted. `fv-lab pod fetch --fetch-tree` replaces the mirror;
-  - `runpod-http.sh` loses the knobs' code but keeps every pod body byte for byte. Setting either knob is refused before anything else, on every path, naming the `sol-bench-<set>` tiers, so a caller never silently gets `runpod-matrix.sh`; the route's own refusal goes with the knob;
-  - `fv-lab-retired.sh`'s three pointers name the tiers;
+  - `runpod-http.sh` loses the knobs' code but keeps every pod body byte for byte. Setting either knob is refused before any lookup or pod, on every command that builds or creates one (`down`, `status` and `attach` let through, so a pod can still be deleted by hand), naming the `sol-bench-<set>` tiers, so a caller never silently gets `runpod-matrix.sh`; the route's own refusal goes with the knob;
+  - `fv-lab-retired.sh`'s three pointers name the tiers holding each family's arms, and `sana-video`'s names `sol-bench-b1`. The route test checks every named set against the tiers' arms;
   - the experiment goldens read the script from the history;
   - the gold prompt source is `sol-bench-a2`'s cell
 - Reason: the owner's decision (FVID-2026-10-28-sol-bench-to-fv-lab) once the check passed; refused, not dropped, as the S2 knobs were (§22)
 - Reversibility: high (`git show 21d70f63:scripts/gpu/sol-bench-pod.sh`)
 - Executed by: Claude (session_01JVv1ZmGZ9cVZ8hArQVp3MZ)
 - ADR: docs/adr/0019-fv-lab.md §23.10
-- Verification: `fv-lab-experiment-goldens.sh --check` from the history, plus the other three goldens `--check`; `fv-lab-route.test.sh` (369 → 373 ok: six refusal cases); every `*.test.sh`; `tests/payload_golden.rs`, `tests/experiment_tiers.rs`, `tests/gold_tier.rs` on the build pod
+- Verification: `fv-lab-experiment-goldens.sh --check` from the history, plus the other three goldens `--check`; `fv-lab-route.test.sh` (369 → 384 ok: six refusal cases, six not-refused cases for `down` / `status` / `attach`, four pointer-to-tier checks and their self-check); every `*.test.sh`; `tests/payload_golden.rs`, `tests/experiment_tiers.rs`, `tests/gold_tier.rs` on the build pod

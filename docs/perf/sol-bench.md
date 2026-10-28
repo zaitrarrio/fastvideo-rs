@@ -244,9 +244,10 @@ Pairing (two pods in parallel):
 
 Each cell writes a `benchmark.json` (`total_s` excludes load) and an `output.mp4`. Generate the table with `fv-lab report table --kind sol-bench` (it replaced `scripts/gpu/sol_bench_table.py` in D1c) after adding each cell's published number to its `PUBLISHED` map (`crates/fastvideo-lab/src/table.rs`). Cost bound: about $2.26 per pod-hour cap.
 
-Launch, one line per pod, from a host that reaches `*.runpod.io` over HTTPS. Look up the current main image digest with the GHCR manifest API first. This was the script's launch: since ADR-0019 §23.10 the script is gone and `runpod-http.sh` refuses `FV_POD_FILES` / `FV_POD_SCRIPT`; a set runs as `fv-lab pod up --family sol-bench-<set>` ([Running through fv-lab](#running-through-fv-lab)), on `bz0ofkfx45` in EU-RO-1 (the rules above).
+**Historical, do not run.** Phase B launched one line per pod from a host that reaches `*.runpod.io` over HTTPS, with the current main image digest looked up from the GHCR manifest API first. The record below was that launch. It cannot run now: the script is gone (ADR-0019 §23.10), `runpod-http.sh` refuses `FV_POD_FILES` / `FV_POD_SCRIPT`, and the volume `jg48s6o1w0` was deleted on 2026-10-13. A set runs as `fv-lab pod up --family sol-bench-<set>` ([Running through fv-lab](#running-through-fv-lab)), on `bz0ofkfx45` in EU-RO-1 (the rules above).
 
-```bash
+```text
+# historical (phase B, 2026-10-06): the script's launch, no longer valid
 RUNPOD_IMAGE=ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:<digest of sha-<main>> \
 RUNPOD_VOLUME_ID=jg48s6o1w0 FV_FAMILY=sol-bench-b1 \
 FV_POD_FILES=$PWD/scripts/gpu/sol-bench-pod.sh FV_POD_SCRIPT=sol-bench-pod.sh \

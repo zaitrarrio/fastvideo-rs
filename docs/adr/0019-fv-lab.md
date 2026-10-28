@@ -7325,18 +7325,35 @@ follows §23.8's list item by item, and the h3-graphs precedent (§14.4). Its la
       comment. They are in every `runpod-http-*.json` golden and in `pod-start.sh.in`. Every golden is byte for byte
       what it was (`fv-lab-goldens.sh --check`, `tests/payload_golden.rs`). `start_cmd`'s header says why.
     - **Refused, not dropped:** a caller that sets either knob would otherwise get `runpod-matrix.sh` silently. So
-      either one is refused before anything else runs, on every path (`run`, `plan`, the fv-lab route), naming the
-      `sol-bench-<set>` tiers. The fv-lab route's own refusal of the two ("go with the knob", §23.8) is dropped from
-      its list, since nothing reaches it now.
-    - `fv-lab-route.test.sh` drops the two from the route's refusal loop. It adds six cases (each knob on the route,
-      the script path and `plan`) and the usage header's new last line: 369 → 373 `ok`.
-    - `hd-upscaler.sh`'s history comment is unchanged.
+      either one is refused, naming the `sol-bench-<set>` tiers. The refusal comes before any lookup or pod, on
+      every command that builds or creates a pod (`run`, `weights`, `kernels`, `all`, `upstream`, `plan`,
+      `plan-upstream`, the fv-lab route). `down`, `status` and `attach` act on a pod that exists, so they are let
+      through: a shell that still exports a knob can delete a pod by hand. The fv-lab route's own refusal of the
+      two ("go with the knob", §23.8) is dropped from its list, since nothing reaches it now.
+    - `fv-lab-route.test.sh` drops the two from the route's refusal loop. It adds:
+      - six refusal cases (each knob on the route, the script path and `plan`);
+      - six cases where `down` / `status` / `attach` are not refused, against a stand-in curl;
+      - the usage header's new last line.
+    - `hd-upscaler.sh`'s history comment adds that a re-run also needs `runpod-http.sh` from `21d70f63`.
   - `scripts/gpu/fv-lab-retired.sh`:
     - The `solbench`, `sol-lingbot` and `sol-cosmos3` pointers now name the `sol-bench-<set>` tiers, the sets that
       hold each family's arms, and `fv-lab pod up --family sol-bench-<set>`. "The arms sol-bench-pod.sh lacks" and
-      "hard-codes `--residency swap`" now say "those tiers lack" and "the tiers' LingBot arms pass".
-    - `fv-lab-route.test.sh` and `runpod-plan.test.sh` compare against the function's output, so they follow it
-      unchanged (113 `ok` in `runpod-plan`, as before).
+      "hard-codes `--residency swap`" now say "those tiers lack" and "the tiers' LingBot arms pass". The sets per
+      family:
+      - `solbench` (Wan2.1-1.3B, Wan2.2-A14B, LTX-2.3 HQ: `wan13-sol-*`, `a14b-sol-*`, `ltx23-hq-*`): `b1 b2 b2r b3
+        c1 c2 c4 c6 e1 g1 g2`;
+      - `sol-lingbot` (`lingbot-*`): `b3 b4 c2 c3 d1 f1 f2 g2`;
+      - `sol-cosmos3` (`cosmos3-*`): `b5 b6 c4 d2`.
+    - `sana-video`'s pointer said "nothing runs it". `sol-bench-b1` runs its two arms (`sana-baseline`,
+      `sana-full`) with the same prompt, seed and `--warm`, so the pointer now names that tier, and the arms'
+      compare as lost.
+    - `fv-lab-route.test.sh` and `runpod-plan.test.sh` compare the refusals against the function's output, so they
+      follow it unchanged (113 `ok` in `runpod-plan`, as before).
+    - **A new check** in `fv-lab-route.test.sh` catches a wrong set list. For each of the four pointers, the sets it
+      names (`sol-bench-b1, -b2, …`) must equal the `lab/cells/sol-bench-*.toml` tiers holding an arm with the
+      family's name prefixes (the retired branches' cells), and each must be a tier of `lab/tiers.toml`. A
+      self-check covers the parser. The first draft of the `solbench` pointer named `a2` / `f2`, which hold no
+      solbench arm, and missed `b3` / `c2` / `c4`; the check fails on that text.
     - The comments at `FV_LAB_EXPERIMENTS` and `FV_SCRIPT_RETIRED` say the script is deleted.
   - `scripts/gpu/tests/fv-lab-experiment-goldens.sh` already read a deleted pod script and its inputs from the
     parent of the deleting commit (`source_of`, `deleted_in`). Its header now says so for sol-bench.
@@ -7346,7 +7363,11 @@ follows §23.8's list item by item, and the h3-graphs precedent (§14.4). Its la
   - `.github/workflows/control.yml`: both path filters drop the script's line, and `scripts/gpu/sol/**` stays.
   - `scripts/gpu/sol_bench_mirror.py` is deleted. `fv-lab pod fetch --fetch-tree` fetches a tier's run directory,
     and the mirror is `git show 21d70f63:scripts/gpu/sol_bench_mirror.py`.
-  - Kept as §23.8 says: `pod-start.sh.in` (lines 58-61, 87) and `tests/payload_golden.rs`'s header (difference 2).
+  - Kept as §23.8 says: `pod-start.sh.in` (lines 58-61, 87).
+  - `tests/payload_golden.rs`'s header (difference 2), which §23.8 listed as kept, now says what is true: the script
+    sends `env` only for the Hub token's or the R2 key's secret references. That is a comment, and no golden changes.
+  - `scripts/gpu/sol/README.md` says who reads each file now. The Cosmos3 `.txt` files are provenance only: the
+    cells inline the prompts, and the goldens read the files from the history with the script.
   - Unchanged historical mentions that §23.8 did not list, all of which describe Addition 18's origin:
     - `src/plan.rs`'s `Arm::unset` doc and the generated `schemas/cell.v1.json` (`sol-bench-pod.sh`'s
       `env -u …`);

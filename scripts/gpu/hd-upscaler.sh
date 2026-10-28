@@ -5,7 +5,9 @@
 # now), and it reads that step's turbo-768p-lanczos baselines. To re-run it,
 # use the hd branch of `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`, which
 # ran it ON the pod after the hd cells, before their PNG frames were pruned
-# (FV_HD_POST_URL; runpod-http.sh FV_POD_FILES shipped it as a file:// URL):
+# (FV_HD_POST_URL; runpod-http.sh FV_POD_FILES shipped it as a file:// URL; that
+# knob went with sol-bench-pod.sh, ADR-0019 §23.10, so a re-run also needs
+# runpod-http.sh from before it: `git show 21d70f63:scripts/gpu/runpod-http.sh`):
 #   bash hd-upscaler.sh <RUNS>        (FV_BIN, FV_LPIPS_ARGS from runpod-matrix.sh)
 # It ran as the matrix cell `upscaler`: with FV_CELLS set, list it there
 # (e.g. FV_CELLS="turbo-768p turbo-1080p upscaler").

@@ -196,10 +196,15 @@ die() { echo "runpod-http: $*" >&2; exit 1; }
 # Checked before anything else runs, so a bad value never reaches jq or the API.
 # FV_POD_FILES / FV_POD_SCRIPT shipped scripts/gpu/sol-bench-pod.sh, their only
 # user, which went after its tiers' GPU check (docs/adr/0019-fv-lab.md §23.10):
-# refused, not silently dropped, on every path.
+# refused, not silently dropped, before any lookup or pod on every command that
+# builds or creates one (run, weights, kernels, all, upstream, plan,
+# plan-upstream, the fv-lab route). `down`, `status` and `attach` act on a pod
+# that exists, so a shell that still exports them can delete one by hand.
+case "${1:-}" in down | status | attach) ;; *)
 for v in FV_POD_FILES FV_POD_SCRIPT; do
   [[ -z "${!v:-}" ]] || die "$v went with scripts/gpu/sol-bench-pod.sh, its only user (docs/adr/0019-fv-lab.md §23.10): the benchmark's sets are the fv-lab tiers sol-bench-<set>: fv-lab pod up --sha <sha> --family sol-bench-<set> --yes --wait (docs/perf/sol-bench.md)"
-done
+done ;;
+esac
 [[ -z "${UP_HUB_TOKEN:-}" || "$UP_HUB_TOKEN" == 0 || "$UP_HUB_TOKEN" == 1 ]] \
   || die "UP_HUB_TOKEN is 1 (pass the Hub token's secret reference), 0 (do not) or unset (for weights:ltx25* steps), not '$UP_HUB_TOKEN'"
 [[ -z "${FV_MIN_RAM_GB:-}" || "$FV_MIN_RAM_GB" =~ ^[1-9][0-9]*$ ]] \

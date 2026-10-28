@@ -167,7 +167,7 @@ RUNPOD_API_KEY=… ./fv-lab pod up --sha <7> --family sol-bench-g2 --cells lingb
 A set whose arms do not fit one pod runs one pod per `--cells` group: `lab/tiers.toml`'s `# Set <s>:` lines, checked by
 `tests/experiment_tiers.rs`, with the timings in §23.6. `sol-bench-pod.sh` was the other runner until the GPU check
 (§23.7) passed on `21d70f6`; it is deleted (§23.10), and with it `runpod-http.sh`'s `FV_POD_FILES` / `FV_POD_SCRIPT`,
-which only it used: set, either is refused on every path. The goldens script reads the script from the parent of
+which only it used: set, either is refused before any lookup or pod (`down`, `status` and `attach` still work). The goldens script reads the script from the parent of
 the deleting commit, as `h3-graphs-pod.sh`, and in a shallow clone keeps the fixture as it is.
 
 ### `runpod-http.sh` for a retired tier

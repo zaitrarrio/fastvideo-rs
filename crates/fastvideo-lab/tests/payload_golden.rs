@@ -7,7 +7,9 @@
 //! 1. the start command runs `fv-lab run` where the script ran
 //!    `bash …/runpod-matrix.sh` (the one changed line);
 //! 2. the body carries `env: {}` (fv-deploy's `create_body` always sends it;
-//!    the script sends `env` only with FV_POD_FILES, which fv-lab has not);
+//!    the script sends `env` only for the Hub token's or the R2 key's secret
+//!    references, `upstream` / `FV_R2_TREES`, and FV_POD_FILES went with
+//!    sol-bench-pod.sh, ADR-0019 §23.10);
 //!    a `weights = "volume+r2"` tier's (`gold`, ADR-0019 §16) holds the R2
 //!    key as Runpod secret references and nothing else
 //!    (`weights::r2_env_refs`), which the script has no way to send;

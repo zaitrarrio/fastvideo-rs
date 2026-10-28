@@ -90,6 +90,29 @@ for kv in FV_POD_FILES=x FV_POD_SCRIPT=sol-bench-pod.sh; do
   expect "refused (gone): $kv, plan" 1 "$why" -- RUNPOD_API_KEY=t FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_FAMILY=wan \
     "$kv" bash "$HTTP" plan abc1234 abc1234-10261200
 done
+# ... but not for `down`, `status` and `attach`, which act on a pod that exists:
+# a shell that still exports them can delete one by hand. A stand-in curl
+# answers every request (the pod's DONE marker for its tag, `{}` otherwise);
+# `attach` fetches into artifacts/runpod/<family>/, so a family of this test's
+# own, removed after.
+mkdir -p "$TMP/podcurl"
+cat >"$TMP/podcurl/curl" <<'EOF2'
+#!/bin/bash
+for a in "$@"; do [[ "$a" == */DONE ]] && { echo "done abc1234-10261200"; exit 0; }; done
+echo '{}'
+EOF2
+chmod +x "$TMP/podcurl/curl"
+for kv in FV_POD_FILES=x FV_POD_SCRIPT=sol-bench-pod.sh; do
+  for c in "down p1" "status p1" "attach p1 abc1234-10261200"; do
+    out="$(cd "$TMP" && clean PATH="$TMP/podcurl:$PATH" RUNPOD_API_KEY=t FV_FAMILY=fv-lab-route-test "$kv" \
+      timeout 60 bash "$HTTP" $c 2>&1)" && rc=0 || rc=$?
+    rm -rf "$ROOT/artifacts/runpod/fv-lab-route-test"
+    want=""
+    case "$c" in down*) want="deleted p1" ;; status*) want="{}" ;; attach*) want="destroy pod p1" ;; esac
+    [[ "$rc" == 0 && "$out" == *"$want"* && "$out" != *"went with scripts/gpu/sol-bench-pod.sh"* ]] \
+      && ok "not refused: $kv, ${c%% *}" || bad "$kv, ${c%% *}: exit $rc, output: $out"
+  done
+done
 # A tier without a floor: FV_MIN_RAM_GB refused, naming the tier's min_ram_gb
 # (ADR-0019 §16.10).
 dry "refused: FV_MIN_RAM_GB names the tier's min_ram_gb" 1 "a pod's host-RAM floor is its tier's min_ram_gb in lab/tiers.toml" \
@@ -489,6 +512,40 @@ for kv in "sfquality sfstream" "speechtest mmaudio"; do
   [[ "$why" == *"he $tier tier (fv-lab run $tier) keeps"* && "$why" != *"$tier family"* ]] \
     && ok "$fam: its pointer names the $tier tier" || bad "$fam: $why"
 done
+
+# The pointers of the sol-engine families that name sol-bench-<set> tiers
+# (ADR-0019 §23.10): each names exactly the tiers whose cell holds one of the
+# family's arms, every one a tier of lab/tiers.toml. The arm-name prefixes are
+# the retired branches' cells (git show 4f8822a0:scripts/gpu/runpod-matrix.sh
+# solbench / sol-lingbot / sol-cosmos3, b019ccb2 for sana-video); the tiers'
+# arms are read from lab/cells/sol-bench-*.toml. Sets are named in full
+# (sol-bench-b1) or, after the first, as "-b2".
+sb_arms() { # the sol-bench sets holding an arm whose name starts with one of $@
+  local f set
+  for f in "$ROOT"/lab/cells/sol-bench-*.toml; do
+    set="$(basename "$f" .toml)"; set="${set#sol-bench-}"
+    awk '/^\[\[arm\]\]/ { a = 1; next } a && /^name = "/ { gsub(/^name = "|"$/, ""); print; a = 0 }' "$f" \
+      | while read -r arm; do for p in "$@"; do if [[ "$arm" == "$p"* ]]; then echo "$set"; fi; done; done
+  done | LC_ALL=C sort -u | tr '\n' ' '
+}
+sb_named() { # the sets a pointer names
+  { grep -oE '(sol-bench-|[ ,]-)[a-z][0-9][a-z0-9]*' <<<"$1" || true; } | sed -E 's/^(sol-bench-|[ ,]-)//' | LC_ALL=C sort -u | tr '\n' ' '
+}
+for kv in "solbench wan13-sol- a14b-sol- ltx23-hq-" "sol-lingbot lingbot-" "sol-cosmos3 cosmos3-" "sana-video sana-"; do
+  read -r fam prefixes <<<"$kv"
+  # shellcheck disable=SC2086
+  want="$(sb_arms $prefixes)"
+  got="$(sb_named "$(fv_script_retired_why "$fam")")"
+  missing=""
+  for set in $got; do grep -qx "sol-bench-$set" <<<"$tiers" || missing+=" sol-bench-$set"; done
+  [[ -n "$want" && "$got" == "$want" && -z "$missing" ]] \
+    && ok "$fam: its pointer names exactly the sol-bench tiers holding its arms ($got)" \
+    || bad "$fam: its pointer names [$got], the tiers holding its arms ($prefixes) are [$want]; not tiers:${missing:- none}"
+done
+# The check itself: a pointer naming a set without the family's arm, or
+# missing one, fails it.
+[[ "$(sb_named "x in sol-bench-a2, -b1 and -g2: y")" == "a2 b1 g2 " && "$(sb_arms cosmos3-)" != "$(sb_arms cosmos3- wan5b-)" ]] \
+  && ok "the pointer check parses set lists and tells the families apart" || bad "the pointer check: sb_named / sb_arms"
 
 # A script family's dry run creates nothing.
 dry "script family: dry run" 0 "on the script path, nothing created" FV_FAMILY=wan
