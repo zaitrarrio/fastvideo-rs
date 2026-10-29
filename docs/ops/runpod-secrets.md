@@ -8,15 +8,16 @@ goldens and the fetched run directories hold only the reference.
 
 | Secret | Pod env | Used by | What it holds |
 |---|---|---|---|
-| `fv_r2_access_key_id`, `fv_r2_secret_access_key` | `FV_WEIGHTS_R2_ACCESS_KEY_ID`, `FV_WEIGHTS_R2_SECRET_ACCESS_KEY` | `fv-lab pod up` for a `weights = "volume+r2"` tier (docs/dev/fv-lab.md, ADR-0019 §16); the upstream reference pods when a selected target has an `r2` tree (`fv-lab oracle`, `lab/upstream.toml`: `sfwan13`) or `UP_STEPS` has an `r2:<tree>` step (`runpod-http.sh upstream`; `scripts/gpu/upstream/pod.sh` hands the key to the plan step alone, ADR-0019 §21); `runpod-http.sh run` with `FV_R2_TREES` (the script runner's merged weight root, `scripts/gpu/r2-stage.sh`, ADR-0019 §21.8) | the R2 weights store's read key (docs/ops/r2-weights.md) |
+| `fv_r2_access_key_id`, `fv_r2_secret_access_key` | `FV_WEIGHTS_R2_ACCESS_KEY_ID`, `FV_WEIGHTS_R2_SECRET_ACCESS_KEY` | `fv-lab pod up` for a `weights = "volume+r2"` tier (docs/dev/fv-lab.md, ADR-0019 §16); the upstream reference pods when a selected target has an `r2` tree (`fv-lab oracle`, `lab/upstream.toml`: `sfwan13`) or `UP_STEPS` has an `r2:<tree>` step (`runpod-http.sh upstream`; `scripts/gpu/upstream/pod.sh` hands the key to the plan step alone, ADR-0019 §21); (`runpod-http.sh run` with `FV_R2_TREES`, the script runner's merged weight root, `scripts/gpu/r2-stage.sh`, ADR-0019 §21.8, went with the script path, §22.20) | the R2 weights store's read key (docs/ops/r2-weights.md) |
 | `fv_hf_token` | `HF_TOKEN` | the upstream reference pods: `fv-lab oracle` for a stack with `hub_token = true` (`lab/upstream.toml`: `sol-ltx25`), and `runpod-http.sh upstream` when `UP_STEPS` has a `weights:ltx25*` step (or `UP_HUB_TOKEN=1`) | a Hugging Face read token of an account that has accepted the Lightricks LTX-2.5 licence |
 
 ## What a pod does with the value, and what it cannot hide
 
 Runpod starts the container with the value in its environment. The scripts
-that take the R2 key (`runpod-http.sh`'s start commands for `FV_R2_TREES` and
-for an upstream `r2:<tree>` step, fv-lab's upstream start command,
-`upstream/pod.sh`, `r2-stage.sh`) copy it into shell variables and `unset` it
+that take the R2 key (`runpod-http.sh`'s start command for an upstream
+`r2:<tree>` step, fv-lab's upstream start command, `upstream/pod.sh`; and
+`FV_R2_TREES`'s start command with `r2-stage.sh` until they went, ADR-0019
+§22.20) copy it into shell variables and `unset` it
 on their first line, and hand it back to the one command that needs it (the
 `r2-weights.py plan` step) as an env prefix. What that achieves, exactly:
 

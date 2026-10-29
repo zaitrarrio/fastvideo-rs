@@ -7,20 +7,20 @@
 #   - the lists are `gpu` (ltx) and `matrix` (ltx wan): h3 and hunyuan left
 #     them when they retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED,
 #     §18), and no family of that list (§18's and §22's) is in them;
-#   - a family retired to fv-lab (fv-lab-retired.sh, here ltx) runs the
-#     image's `fv-lab run <tier>` and never runpod-matrix.sh, which refuses it;
-#     so does wan since S6 (docs/adr/0019-fv-lab.md §22.17: a tier whose
-#     branch stays until S8, §22.19), with FV_SCRATCH on the container disk and its
-#     runs in /workspace/runs/wan, as a volume+r2 tier needs; `matrix` gives
-#     both the tier's per-arm cap (no FV_GEN_TIMEOUT_S=300) and starts
-#     runpod-matrix.sh for neither;
+#   - a family retired to fv-lab (fv-lab-retired.sh: ltx, and wan since S8,
+#     docs/adr/0019-fv-lab.md §22.20, which runpod.sh ran as its tier from S6)
+#     runs the image's `fv-lab run <tier>`; runpod-matrix.sh is gone and no
+#     recorded command names it or copies it to the pod; wan with FV_SCRATCH
+#     on the container disk and its runs in /workspace/runs/wan, as a
+#     volume+r2 tier needs; `matrix` gives both the tier's per-arm cap (no
+#     FV_GEN_TIMEOUT_S=300);
 #   - `gpu` creates one pod per family of its list and starts each;
 #   - `plan gpu|matrix` prints those commands, and fails on a family nothing
 #     can run;
 #   - such a family (one retired with no tier, an experiment tier, gold, an
 #     unknown name) stops `gpu` / `matrix` before the key is read or a pod is
-#     created, and no recorded command starts runpod-matrix.sh for any retired
-#     family; `runpod.sh b200` is refused (exit 2) without a key;
+#     created (sfwan among those retired with no tier since S8); `runpod.sh
+#     b200` is refused (exit 2) without a key;
 #   - so do the families S7 retired (§22.19: hd, hd5, serve-engine, sfstream,
 #     mmaudio) when put in either list, the volume+r2 ones as wan;
 #   - the ltx command, as the pod's shell runs it, calls fv-lab as `run ltx`
@@ -81,10 +81,10 @@ drive() {
   ' >"$d/out" 2>&1
 }
 
-# A recorded line that starts runpod-matrix.sh for a retired family (any
-# quoting, braces or local / remote): none may exist.
-matrix_call() { # matrix_call <file> <family>
-  grep -E "runpod-matrix\.sh[\"'}]*[[:space:]]+[\"'{]*$2([\"'}[:space:]]|$)" "$1" || true
+# A recorded line that names runpod-matrix.sh (a start for any family, or the
+# copy to the pod runpod.sh made until the script went, §22.20): none may exist.
+matrix_call() { # matrix_call <file>
+  grep -F "runpod-matrix" "$1" || true
 }
 
 # 1. gpu: the real cmd_gpu.
@@ -104,8 +104,6 @@ for fam in ltx; do
     else
       bad "gpu: $fam starts: $line"
     fi
-  elif [[ "$line" == "nohup bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $fam > /workspace/runs/$fam/driver.log 2>&1 & echo \$! > /workspace/runs/$fam/pid" ]]; then
-    ok "gpu: $fam starts runpod-matrix.sh $fam as before"
   else
     bad "gpu: $fam starts: $line"
   fi
@@ -118,29 +116,20 @@ if [[ "$rc" == 0 ]]; then ok "matrix: cmd_matrix runs to the end on the stubs"; 
 for fam in ltx wan; do
   line="$(grep -F 'export FV_WORK=/workspace' "$d/ssh.log" | cut -f2- \
     | grep -E "(runpod-matrix\.sh $fam|run $fam')\$" || true)"
-  if fv_lab_retired "$fam" || [[ "$fam" == wan ]]; then
-    if [[ "$line" == *"\"\$lab\" run $fam'" && "$line" != *runpod-matrix.sh* && "$line" != *FV_GEN_TIMEOUT_S* ]]; then
-      ok "matrix: $fam runs fv-lab run $fam, the tier's per-arm cap"
-    else
-      bad "matrix: $fam runs: $line"
-    fi
-  elif [[ "$line" == *"FV_GEN_TIMEOUT_S=300 "*"bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $fam" ]]; then
-    ok "matrix: $fam runs runpod-matrix.sh $fam with FV_GEN_TIMEOUT_S=300 as before"
+  if fv_lab_retired "$fam" && [[ "$line" == *"\"\$lab\" run $fam'" && "$line" != *runpod-matrix.sh* && "$line" != *FV_GEN_TIMEOUT_S* ]]; then
+    ok "matrix: $fam (retired) runs fv-lab run $fam, the tier's per-arm cap"
   else
     bad "matrix: $fam runs: $line"
   fi
 done
 
-# 3. No recorded command, remote or local, starts runpod-matrix.sh for a
-#    retired family (to fv-lab or with no tier) or for wan (fv-lab since S6),
-#    and neither list holds a family retired with no tier.
+# 3. No recorded command, remote or local, names runpod-matrix.sh (gone,
+#    §22.20): no start, no copy to the pod.
+[[ ! -e "$ROOT/scripts/gpu/runpod-matrix.sh" ]] && ok "runpod-matrix.sh is gone" || bad "runpod-matrix.sh is back"
 for mode in gpu matrix; do
-  hits=""
-  for fam in $FV_LAB_RETIRED $FV_SCRIPT_RETIRED wan; do
-    hits+="$(matrix_call "$TMP/$mode/ssh.log" "$fam")$(matrix_call "$TMP/$mode/local.log" "$fam")"
-  done
-  [[ -z "$hits" ]] && ok "$mode: no runpod-matrix.sh start of a retired family, over ssh or locally" \
-    || bad "$mode: runpod-matrix.sh started for a retired family: $hits"
+  hits="$(matrix_call "$TMP/$mode/ssh.log")$(matrix_call "$TMP/$mode/local.log")"
+  [[ -z "$hits" ]] && ok "$mode: no command names runpod-matrix.sh, over ssh or locally" \
+    || bad "$mode: runpod-matrix.sh named: $hits"
 done
 
 # 4. plan prints the same commands; a family nothing can run fails it.
@@ -160,7 +149,7 @@ for mode in gpu matrix; do
   fi
 done
 rc=0; drive plan-bad 'RP_GPU_FAMILIES=(ltx nope); cmd_plan gpu' || rc=$?
-if [[ "$rc" != 0 && "$(cat "$TMP/plan-bad/out")" == *"FATAL: nope is neither"* && "$(cat "$TMP/plan-bad/out")" != *$'nope\t'* ]]; then
+if [[ "$rc" != 0 && "$(cat "$TMP/plan-bad/out")" == *"FATAL: nope is no family retired to fv-lab"* && "$(cat "$TMP/plan-bad/out")" != *$'nope\t'* ]]; then
   ok "plan: an unknown family fails it (exit $rc), nothing printed for it"
 else
   bad "plan with an unknown family: exit $rc: $(cat "$TMP/plan-bad/out")"
@@ -193,7 +182,7 @@ for mode in gpu matrix; do
 done
 rc=0; drive s7-matrix "RP_MATRIX_FAMILIES=($s7); cmd_matrix" || rc=$?
 hits=""
-for fam in $s7; do hits+="$(matrix_call "$TMP/s7-matrix/ssh.log" "$fam")$(matrix_call "$TMP/s7-matrix/local.log" "$fam")"; done
+hits="$(matrix_call "$TMP/s7-matrix/ssh.log")$(matrix_call "$TMP/s7-matrix/local.log")"
 n="$(grep -c "\"\$lab\" run " "$TMP/s7-matrix/ssh.log" || true)"
 if [[ "$rc" == 0 && -z "$hits" && "$n" == 5 ]] && ! grep -q 'FV_GEN_TIMEOUT_S=300' "$TMP/s7-matrix/ssh.log"; then
   ok "matrix: the S7 families run fv-lab run each, the tier's per-arm cap, no runpod-matrix.sh"
@@ -208,7 +197,7 @@ fi
 #    list, so one dropped from FV_SCRIPT_RETIRED fails (it would be refused as
 #    unknown, without its pointer).
 no_tier="h3 hunyuan sana-video b200 writer precision-debug identity b4b b4c b4c2 h3attn"
-no_tier+=" sfquality headline speechtest cold eval ltxoffload solbench sol-lingbot sol-cosmos3"
+no_tier+=" sfquality headline speechtest cold eval ltxoffload solbench sol-lingbot sol-cosmos3 sfwan"
 [[ "$FV_SCRIPT_RETIRED" == "$no_tier" ]] && ok "FV_SCRIPT_RETIRED: the families named here" \
   || bad "FV_SCRIPT_RETIRED: $FV_SCRIPT_RETIRED"
 for mode in gpu matrix plan-gpu plan-matrix; do
@@ -217,7 +206,7 @@ for mode in gpu matrix plan-gpu plan-matrix; do
   for fam in gold h3-graphs nope $no_tier; do
     rc=0; drive "$mode-$fam" "$v=(ltx $fam); $run" || rc=$?
     d="$TMP/$mode-$fam"
-    want="FATAL: $fam is neither a runpod-matrix.sh family nor a retired one"
+    want="FATAL: $fam is no family retired to fv-lab (fv-lab-retired.sh), and runpod-matrix.sh is gone"
     [[ " $no_tier " == *" $fam "* ]] && want="FATAL: $fam is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18, §22): nothing runs it on the pod; $(fv_script_retired_why "$fam")"
     if [[ "$rc" == 2 && "$(cat "$d/out")" == *"$want"* && "$(cat "$d/out")" != *$'\t'* \
       && ! -s "$d/pods.log" && ! -s "$d/ssh.log" && ! -s "$d/local.log" ]]; then
@@ -273,7 +262,7 @@ else
   bad "wan on the pod: exit $rc, fv-lab saw: $(cat "$TMP/fake.log" 2>/dev/null)"
 fi
 rc=0; env -i PATH="$PATH" bash -c "${wan//$LAB/$TMP/none}" >"$TMP/wan.out" 2>&1 || rc=$?
-if [[ "$rc" == 2 && "$(cat "$TMP/wan.out")" == *"FATAL: no fv-lab in this image ($TMP/none): runpod.sh runs wan as its fv-lab tier; fv-lab pod up --family wan"* ]]; then
+if [[ "$rc" == 2 && "$(cat "$TMP/wan.out")" == *"FATAL: no fv-lab in this image ($TMP/none): wan is fv-lab only; fv-lab pod up --family wan"* ]]; then
   ok "wan on the pod without fv-lab: exit 2, fv-lab pod up named"
 else
   bad "wan on the pod without fv-lab: exit $rc, $(cat "$TMP/wan.out")"

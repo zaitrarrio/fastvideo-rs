@@ -451,6 +451,45 @@ fn branch_labels_are_read_as_bash_reads_them() {
     assert!(!has_branch("  trace)\n", "trace"), "outside the case");
 }
 
+/// `scripts/gpu/runpod-matrix.sh`, empty since it went with its last branch
+/// (ADR-0019 §22.6, §22.20): no family has a branch, and it must stay gone.
+fn matrix_script() -> String {
+    let p = repo_root().join("scripts/gpu/runpod-matrix.sh");
+    assert!(
+        !p.exists(),
+        "{}: deleted with its last branch (ADR-0019 §22.20); every family is a frozen tier or retired with no tier",
+        p.display()
+    );
+    String::new()
+}
+
+#[test]
+fn runpod_matrix_sh_is_gone() {
+    assert!(matrix_script().is_empty());
+    // The script path's oracle driver and R2 staging went with it (§22.20).
+    for f in ["scripts/gpu/oracle.sh", "scripts/gpu/r2-stage.sh"] {
+        assert!(
+            !repo_root().join(f).exists(),
+            "{f}: deleted with the script path"
+        );
+    }
+    assert!(
+        repo_root().join("scripts/gpu/upstream/oracle.sh").is_file(),
+        "the reference side stays"
+    );
+    // The oracle's frozen copy (§20.8 item 3) is what repeats_oracle.rs runs.
+    let frozen = repo_root().join("crates/fastvideo-lab/fixtures/oracle-script/runpod-matrix.sh");
+    let t = std::fs::read_to_string(&frozen).expect("fixtures/oracle-script/runpod-matrix.sh");
+    assert!(
+        has_branch(&t, "oracle"),
+        "the frozen copy has the oracle branch"
+    );
+    assert!(
+        !has_branch(&t, "wan") && !has_branch(&t, "sfwan"),
+        "the frozen copy is cut to the oracle branch"
+    );
+}
+
 #[test]
 fn families_retired_with_no_tier_have_no_branch_and_no_tier() {
     // D1g (ADR-0019 §18): h3 (§17.4), the B4 families (§17.3 option (b)) and
@@ -458,10 +497,10 @@ fn families_retired_with_no_tier_have_no_branch_and_no_tier() {
     // (FVID-2026-10-26-d1-remaining): no branch, no family-specific code left
     // in the script (eval's prompt and LPIPS defaults), no tier of
     // lab/tiers.toml, no fixtures, and in neither FV_LAB_RETIRED nor
-    // FV_LAB_EXPERIMENTS (runpod-http.sh refuses them instead of routing).
+    // FV_LAB_EXPERIMENTS (runpod-http.sh refuses them instead of routing);
+    // then sfwan in S8 (§22.20), when the script itself went.
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
-    let matrix = std::fs::read_to_string(repo_root().join("scripts/gpu/runpod-matrix.sh"))
-        .expect("runpod-matrix.sh");
+    let matrix = matrix_script();
     let gone = script_retired();
     assert_eq!(
         gone,
@@ -486,6 +525,7 @@ fn families_retired_with_no_tier_have_no_branch_and_no_tier() {
             "solbench",
             "sol-lingbot",
             "sol-cosmos3",
+            "sfwan",
         ]
     );
     let tiers: Vec<&str> = lab.tiers.tiers.iter().map(|t| t.name.as_str()).collect();
@@ -521,11 +561,11 @@ fn families_retired_with_no_tier_have_no_branch_and_no_tier() {
 #[test]
 fn retired_families_are_frozen_tiers_without_a_branch() {
     // The families whose GPU gate passed (ADR-0019 §10): each a tier with its
-    // three fixtures, no `case` branch left in runpod-matrix.sh; every other
-    // script tier still has its branch (fv-lab-goldens.sh checks the same).
+    // three fixtures, no `case` branch left in runpod-matrix.sh; since S8
+    // (§22.20) every script tier is one of them and the script is gone
+    // (fv-lab-goldens.sh checks the same).
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
-    let matrix = std::fs::read_to_string(repo_root().join("scripts/gpu/runpod-matrix.sh"))
-        .expect("runpod-matrix.sh");
+    let matrix = matrix_script();
     let branch = |f: &str| has_branch(&matrix, f);
     let retired = retired();
     for f in [
@@ -557,8 +597,17 @@ fn retired_families_are_frozen_tiers_without_a_branch() {
         "serve-engine",
         "sfstream",
         "mmaudio",
+        // §22's S8 (§22.20): wan, oracle and its sibling oracle-r2, frozen
+        // with it.
+        "wan",
+        "oracle",
+        "oracle-r2",
     ] {
         assert!(retired.iter().any(|r| r == f), "{f} retired");
+    }
+    // The oracle tier's extra cells' fixtures froze with it (§20.3, §22.20).
+    for fx in ["oracle-extra-dry-run.txt", "oracle-extra-gates.tsv"] {
+        assert!(!fixture(fx).trim().is_empty(), "{fx}: frozen, not empty");
     }
     // A sibling frozen with its family (FV_LAB_RETIRED_SIBLINGS, §22.19): both
     // retired, neither with a branch, and no longer a live sibling.
@@ -568,7 +617,7 @@ fn retired_families_are_frozen_tiers_without_a_branch() {
             .iter()
             .map(|s| (s.tier.as_str(), s.family.as_str()))
             .collect::<Vec<_>>(),
-        [("hd5", "hd")]
+        [("hd5", "hd"), ("oracle-r2", "oracle")]
     );
     for s in &frozen {
         assert!(retired.contains(&s.tier), "{}: in FV_LAB_RETIRED", s.tier);
@@ -614,21 +663,10 @@ fn retired_families_are_frozen_tiers_without_a_branch() {
             assert!(!fixture(&fx).trim().is_empty(), "{fx}: frozen, not empty");
         }
     }
-    for f in fams.iter().filter(|f| !retired.contains(f)) {
-        // A sibling tier (FV_LAB_SIBLINGS) is its family's branch, and has
-        // none of its own.
-        match common::sibling_tier(f) {
-            Some(s) => {
-                assert!(
-                    branch(&s.family),
-                    "{f}: its family {} has a branch",
-                    s.family
-                );
-                assert!(!branch(f), "{f}: a sibling tier has no branch of its own");
-            }
-            None => assert!(branch(f), "{f}: no branch and not in fv-lab-retired.sh"),
-        }
-    }
+    // No script tier is left outside the list, and no live sibling (§22.20).
+    let live: Vec<&String> = fams.iter().filter(|f| !retired.contains(f)).collect();
+    assert!(live.is_empty(), "script tiers not retired: {live:?}");
+    assert!(common::siblings().is_empty(), "FV_LAB_SIBLINGS is empty");
 }
 
 /// The `oracle-r2` tier (ADR-0019 §20.5, §21): `fv-lab run oracle-r2

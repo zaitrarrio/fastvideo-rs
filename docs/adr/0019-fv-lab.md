@@ -65,7 +65,10 @@
   in S8 (§22.18 "Then", §22.19). S7 (§22.19) is done for four families, after their GPU checks: `hd` (with its sibling
   `hd5`), `serve-engine`, `sfstream` and `mmaudio` are retired from the script (`FV_LAB_RETIRED`, branches deleted,
   goldens frozen, their knobs in `FV_LAB_NOT_READ`); partial, since `wan`'s branch, which `sfwan` runs, goes with
-  `sfwan` in S8. The script keeps `wan`, `sfwan` and `oracle`. The owner answered §22.6's questions 1 and 2 on
+  `sfwan` in S8. S8 (§22.20) is done, CPU only, after §20.7's retake re-check: `wan`, `oracle` and its sibling
+  `oracle-r2` are retired to fv-lab (frozen goldens, `fixtures/oracle-script/` for the oracle tests), `sfwan` with no
+  tier, and `runpod-matrix.sh` is deleted with `runpod-http.sh run`'s script path (`FV_R2_TREES`, `r2-stage.sh`) and
+  `scripts/gpu/oracle.sh`; every pod golden byte-identical. The owner answered §22.6's questions 1 and 2 on
   2026-10-28: the `mmaudio` knob stays offered, and `sol-bench-pod.sh` moves to fv-lab. §23 (the owner's answers on its
   rules, 2026-10-28) is done CPU-side: the 22 sets are the experiment tiers `sol-bench-<set>`, `volume` for `a1` / `a3`
   and `volume+r2` for the rest, held to the script word for word, with Addition 18 (`unset`, for `env -u`). It is done
@@ -110,6 +113,11 @@
 - §22.19 (S7): `scripts/gpu/fv-lab-retired.sh` (`FV_LAB_RETIRED`, `FV_LAB_RETIRED_SIBLINGS`), `runpod-matrix.sh`
   (four branches deleted), `runpod-http.sh` (`FV_LAB_NOT_READ`, the knobs' answers), `knobs::MODE_KNOBS`; tests
   `tests/{dry_run,knobs}.rs`, `tests/common` (`retired_siblings`), `scripts/gpu/tests/{fv-lab-goldens,fv-lab-route.test,runpod-plan.test}.sh`
+- §22.20 (S8): `scripts/gpu/fv-lab-retired.sh` (`FV_LAB_RETIRED`, `FV_LAB_RETIRED_SIBLINGS`, `FV_SCRIPT_RETIRED`
+  `sfwan`), `runpod-matrix.sh`, `oracle.sh`, `r2-stage.sh` deleted, `runpod-http.sh` (the script path, `FV_R2_TREES`
+  refused, `FV_LAB_NOT_READ`), `runpod.sh`, `knobs::{MODE_KNOBS, RETIRED_SIBLING_MODES, check_run_env}`; fixtures
+  `oracle-script/`; tests `tests/{dry_run,repeats_oracle,experiment_tiers}.rs`, `knobs::tests`,
+  `scripts/gpu/tests/{fv-lab-goldens,fv-lab-route.test,runpod-plan.test,upstream-r2.test}.sh`
 - Plan: D1 (`docs/plan/2026-10-23-execution-plan.md`); review `docs/gaps/2026-10-22-architecture-review.md` §7.5
 
 ## Context
@@ -1529,14 +1537,14 @@ Not deleted: it still has callers. At this commit:
 
 | mode | callers | after |
 |---|---|---|
-| `run` (script path) | every family with a `runpod-matrix.sh` branch: `mmaudio`, `speechtest`, `sfwan`, `sfstream`, `sfquality`, `headline`, `cold`, `wan`, `eval`, `oracle`, `ltxoffload`, `solbench`, `hd`, `serve-engine`, `sol-lingbot`, `sol-cosmos3` (16; `determinism` and `det-short` left with §15.10, `fuse`, `attn3` and `ltx` with §17.6, and eleven retired with no tier with §18: `h3`, `hunyuan`, `sana-video`, `b200`, `writer`, `precision-debug`, `identity`, `b4b`, `b4c`, `b4c2`, `h3attn`); `oracle.sh` (`FV_FAMILY=oracle`, `FV_ORACLE_RUN_MODE`, `FV_KEEP_POD`, `FV_POD_FILE`); `FV_POD_FILES` / `FV_POD_SCRIPT=sol-bench-pod.sh` (`docs/perf/sol-bench.md`; `hd-upscaler.sh` ships by it; both knobs gone with the script, refused since §23.10) | goes with `runpod-matrix.sh` (each family a tier or retired) and the sol-bench pod script (gone, §23.10) |
+| `run` (script path) | every family with a `runpod-matrix.sh` branch: `mmaudio`, `speechtest`, `sfwan`, `sfstream`, `sfquality`, `headline`, `cold`, `wan`, `eval`, `oracle`, `ltxoffload`, `solbench`, `hd`, `serve-engine`, `sol-lingbot`, `sol-cosmos3` (16; `determinism` and `det-short` left with §15.10, `fuse`, `attn3` and `ltx` with §17.6, and eleven retired with no tier with §18: `h3`, `hunyuan`, `sana-video`, `b200`, `writer`, `precision-debug`, `identity`, `b4b`, `b4c`, `b4c2`, `h3attn`); `oracle.sh` (`FV_FAMILY=oracle`, `FV_ORACLE_RUN_MODE`, `FV_KEEP_POD`, `FV_POD_FILE`); `FV_POD_FILES` / `FV_POD_SCRIPT=sol-bench-pod.sh` (`docs/perf/sol-bench.md`; `hd-upscaler.sh` ships by it; both knobs gone with the script, refused since §23.10) | goes with `runpod-matrix.sh` (each family a tier or retired) and the sol-bench pod script (gone, §23.10). **Done in S8 (§22.20)**: `runpod-matrix.sh` deleted with `oracle.sh`, `FV_R2_TREES` and `r2-stage.sh`; `run` / `all` / `plan` of a name that is no tier, gold or an experiment tier are refused |
 | `run` (fv-lab route, §10) | the 18 retired tiers (13, then `det-short` and `determinism`, §15.10, then `fuse`, `attn3` and `ltx`, §17.6); the Taskfile's `rtx6000` task | the Taskfile calls `fv-lab pod up` directly |
 | `run` / `all` refused | `gold`, the experiment tiers (§14.3); `run` / `all` / `plan` (exit 2) the families retired with no tier (§18) | — |
 | `plan` | `fv-lab-goldens.sh` (every script family's, `gold`'s and `h3-graphs`'s pod body: `fixtures/runpod-http-*.json`), `fv-lab-restored-goldens.sh` (at `5987e6a4`), the route test | the bodies freeze as the families' fixtures did (§10 item 3) |
 | `kernels`, `all` | by hand (`README.md`; `kernels.rs`'s `FV_EXTRA_ENV` groups) | an fv-lab kernels tier once an arm may have no weight gate (§9.1) |
 | `weights` | by hand | `fv-lab pod up` of any tier writes `weights.log` |
-| `upstream` | `oracle.sh` (the reference pods, `UP_IMAGE_TARGET`), `scripts/gpu/upstream/pod.sh` (its start command) | moves with D1d's `oracle` |
-| `attach`, `status`, `down` | `oracle.sh` (`down` of its reference pods); by hand | `fv-lab pod status` / `down` for fv-lab pods |
+| `upstream` | `scripts/gpu/upstream/pod.sh` (its start command); the upstream benchmarks by hand (`UP_STEPS=cells:…`, `bench:*`, §19.8 item 3); `oracle.sh` until it went (§22.20) | `fv-lab oracle` makes the reference pods (§19); stays for the benchmarks |
+| `attach`, `status`, `down` | by hand (`oracle.sh`'s `down` of its reference pods until it went, §22.20) | `fv-lab pod status` / `down` for fv-lab pods |
 
 Its functions are read by tests: `tests/fetch_tree.rs` (cuts `proxy` and `fetch_tree`), `tests/knobs.rs`
 (`FV_LAB_NOT_READ`), `self-delete.test.sh` (its start command's self-delete), `fv-lab-route.test.sh`; its usage text by
@@ -3648,7 +3656,8 @@ the second attempt, `ltx25-retake` on this re-check. `oracle`'s retirement (S8, 
 (2026-10-28: §19.7 passed; this check's second attempt showed runner equality but not the retake arm's comparison,
 whose reference was wrong (an unpinned PyAV in the rebuilt upstream image, §20.7 "Second attempt"); the retake
 re-check on the pinned reference image passed on `7e513f6` (§20.7 "Re-check"), so §20.7 passes, and the coordinator
-decided that the steps below proceed, in S8.) After §19.7's and this check pass, in the next D1 PR, `scripts/gpu/oracle.sh` runs `fv-lab oracle` for every
+decided that the steps below proceed, in S8. Done: §22.20, `oracle.sh` deleted with a pointer, item 4's second
+option.) After §19.7's and this check pass, in the next D1 PR, `scripts/gpu/oracle.sh` runs `fv-lab oracle` for every
 target that is a cell (now nineteen: every default target and the ten here), mapping `ORACLE_TARGETS` to `--cells`
 (every arm of `oracle-<target>`), `FV_RUNTIME_STOCK_WAIT_S` to `--stock-wait-s`, `FV_POD_CAP_S` to the caps, and
 passing `--fetch-tree --fetch-skip '/frames/'`; it refuses `UP_AFTER`, `FV_ORACLE_RUN_MODE=all`,
@@ -4133,6 +4142,8 @@ retirement waits for the retake re-check on the pinned reference image, run thro
 retake cells; the script's `oracle` branch stays until then. The re-check passed on `7e513f6` (2026-10-28, §20.7
 "Re-check": both runners the same on the four retake cells, `ours vs reference clip` measured), so every cell family
 `oracle` covers has passed its GPU check, and the coordinator decided (2026-10-28) that the retirement proceeds (S8).
+**Done** in S8 (§22.20): items 1-4 as written (item 4: `oracle.sh` deleted with a pointer in docs/oracle.md); item
+5: `sfwan` retired with no tier (§22.6 item 1, §22.18 "Then" option 2), so no prelude is left.
 
 1. **Knobs.** `oracle` joins `FV_LAB_RETIRED`; `FV_ORACLE_TARGETS`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`,
    `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT` and the five `FV_LTX_*_PROMPT` move from `SCRIPT_KNOBS` to `MODE_KNOBS`;
@@ -4760,7 +4771,7 @@ pods at a time keeps the Runpod balance guard ($8, CLAUDE.md) in reach, and the 
 | S5 | `mmaudio` as the small tier (`volume+r2`, 180 GB); the branch cut and its exports moved in lockstep | S4 | small | its arms: **~$1.66** |
 | S6 | `wan` as a tier (`volume+r2`, 210 GB); its two upstream targets; `runpod.sh matrix` through fv-lab | S4 | large | five arms: **~$2.65** (+ ~$2.60 for the oracle cells, if the balance allows) |
 | S7 | the branches of S2-S6 deleted after their checks; goldens frozen (`FV_LAB_RETIRED`, §10's way). **Partial, §22.19**: `hd` (with `hd5`), `serve-engine`, `sfstream`, `mmaudio` done; `wan` waits for S8 (`sfwan` runs its branch, §22.18 "Then") | S2-S6 checks | small each | none: $0 |
-| S8 | `sfwan` retired in `oracle`'s retirement PR (§21.9 item 5) | §20.7's re-run (run on `4902297` 2026-10-28: runner equality; the retake reference wrong (unpinned PyAV)); the retake re-check on the pinned reference image (**passed** on `7e513f6` 2026-10-28, §20.7 "Re-check"; the coordinator's decision: the retirement proceeds); S6 | small | none: $0 |
+| S8 | `sfwan` retired in `oracle`'s retirement PR (§21.9 item 5). **Done, §22.20**: `wan`, `oracle`, `oracle-r2` retired to fv-lab, `sfwan` with no tier, `runpod-matrix.sh` deleted | §20.7's re-run (run on `4902297` 2026-10-28: runner equality; the retake reference wrong (unpinned PyAV)); the retake re-check on the pinned reference image (**passed** on `7e513f6` 2026-10-28, §20.7 "Re-check"; the coordinator's decision: the retirement proceeds); S6 | small | none: $0 |
 
 S1 uses §18.2's mechanism:
 - `FV_SCRIPT_RETIRED`, with a pointer for each family;
@@ -7110,7 +7121,169 @@ not retired here. `sfwan` runs its branch (`bash runpod-matrix.sh wan` with `FV_
     reproduction (§22.9 item 1). A host-side comment above `start_cmd` says so.
 - **Left in the script**: `wan`, `sfwan` and `oracle`, and the `*)` branch (the refusals). `wan`'s branch goes with
   `sfwan` in `oracle`'s retirement PR (S8, §21.9 item 5), after §20.7's re-run; then `runpod-matrix.sh` has no
-  branch left (§22.6).
+  branch left (§22.6). Done in S8 (§22.20).
+
+#### 22.20 S8: `oracle` (with `oracle-r2`) and `wan` retired, `sfwan` with no tier, `runpod-matrix.sh` deleted
+
+Done 2026-10-28 on `claude/d1-s8-retire-oracle` (from main `c8d27080`, with #240 merged). The ADR's lists were
+applied as written: §20.8 and §21.9 items 1-5, §22.18 "Then", and §22.6 ("after S7 and S8, `runpod-matrix.sh` has no
+branch left and goes, and with it `runpod-http.sh run`'s script path", §14.6). The coordinator decided on 2026-10-28
+that the retirement proceeds, after §20.7's retake re-check passed on `7e513f6` (§20.7 "Re-check"). This slice is CPU
+only and cost $0. Every cell family `oracle` covers has passed its GPU check:
+
+- the tensor-diff targets (§15.7, §19.7);
+- the clip-metric targets (§20.7);
+- `sfwan13` (§21.7).
+
+`wan`'s GPU check passed in §22.18.
+
+- **The lists** (`scripts/gpu/fv-lab-retired.sh`):
+  - `FV_LAB_RETIRED` gains `wan oracle oracle-r2`, 26 tiers in all.
+  - `oracle-r2` leaves `FV_LAB_SIBLINGS`, which is now empty: no family is left to be its sibling (§21.9 item 1). It
+    joins `FV_LAB_RETIRED_SIBLINGS` with its mode, `oracle-r2:oracle:FV_ORACLE_TARGETS=sfwan13`. This follows the
+    rule the file states ("a sibling of a family that retires is frozen with it … and moves to
+    FV_LAB_RETIRED_SIBLINGS"), as `hd5` did in §22.19.
+  - So `oracle` with `FV_ORACLE_TARGETS=sfwan13` is refused naming `oracle-r2`, in `runpod-http.sh run` / `all` /
+    `plan` (host environment or `FV_EXTRA_ENV`), `fv-lab pod up --extra-env` and `fv-lab run`
+    (`knobs::RETIRED_SIBLING_MODES`, held equal by `tests/knobs.rs`). `oracle-r2` with its own setting is told to
+    drop it.
+  - `sfwan` joins `FV_SCRIPT_RETIRED`, as §22.6 item 1 ("`sfwan` retires with `oracle`") and §22.18 "Then" option 2
+    describe. It is refused (exit 2) with a pointer to its two halves: `fv-lab oracle --family oracle-r2` for the
+    oracle diff, and the `wan` tier with `--cells kernels-wan sfwan13-81f-flash sfwan13-81f-composed
+    sfwan13-81f-wholeclip sfwan13-81f-fullvae` for the cells. It is named in `fv_script_retired_why`, with the loss:
+    the two no longer run on one pod.
+  - §21.9 item 5's other reading, the prelude kept as `fv-lab run oracle-r2`, has no family left to live in.
+- **Knobs** (§20.8 item 1, §22.18 "Then"):
+  - `FV_ORACLE_TARGETS`, `FV_ORACLE_F32`, `FV_ORACLE_OWN_TEXT`, `FV_ORACLE_PREFETCH`, `FV_REF2VA_PROMPT`, the five
+    `FV_LTX_*_PROMPT` and `FV_SFWAN_CELLS` move from `knobs::SCRIPT_KNOBS` (now empty, `[&str; 0]`) to `MODE_KNOBS`
+    (34). They are therefore in `runpod-http.sh`'s `FV_LAB_NOT_READ`; `tests/knobs.rs` holds the two equal.
+  - fv-lab's answers are unchanged: by arm for the targets, the tier's defaults for the rest; `FV_SFWAN_CELLS` adds
+    "§22.20".
+  - `runpod-http.sh` gives `FV_ORACLE_TARGETS` and `FV_SFWAN_CELLS` their own `FV_EXTRA_ENV` answers (`FV_CELLS`
+    with the arms). It also refuses both in the host environment, as `FV_ENGINE_CELLS` (§22.19).
+  - `fv-lab run`'s environment check reads each key once (`FV_ORACLE_TARGETS` is both a mode knob and a sibling's
+    key).
+  - determinism's `FV_ORACLE_URL` answer, and fv-lab's "reads upstream references" message, now name `fv-lab oracle`
+    in place of `scripts/gpu/oracle.sh`. This is a named text change.
+- **Fixtures frozen** (§20.8 item 2, §21.9 item 2, §22.18 "Then"): 13 files, each unchanged byte for byte.
+  `fv-lab-goldens.sh` no longer writes them and checks each is present and non-empty.
+  - The tiers: `{wan,oracle,oracle-r2}-{dry-run.txt,gates.tsv}`, `runpod-http-{wan,oracle,oracle-r2}.json`,
+    `oracle-extra-{dry-run.txt,gates.tsv}`.
+  - The script sides' GPU-check bodies: `runpod-http-wan-r2.json`, `runpod-http-oracle-sfwan13-r2.json`.
+  - Before the change, `fv-lab-goldens.sh --check` passed on the base (`7e513f6`, the same `scripts/gpu` as
+    `c8d27080`). So the frozen files are what the script last wrote.
+- **The frozen copy** (§20.8 item 3, §21.9 item 3): `crates/fastvideo-lab/fixtures/oracle-script/`.
+  - It is `runpod-matrix.sh` at `7e513f6a`, the last main with the script, cut to its frame, the `oracle` branch
+    and the fallback branch, every kept line unchanged (`git show 7e513f6a:scripts/gpu/runpod-matrix.sh | sed -n
+    '1,469p;814,1208p'`, 864 lines), plus that commit's `cuda-13.pins` and `fv-lab-retired.sh` whole, as §15.10's
+    `det-script/`.
+  - `tests/repeats_oracle.rs`'s oracle tests run it, the clip-metric and `sfwan13` ones included. A family with no
+    frozen copy panics. `the_frozen_script_dry_runs_as_the_frozen_goldens` holds its dry run to the six frozen
+    oracle fixtures, line for line and the gates' first four columns, under the settings `fv-lab-goldens.sh` used:
+    `oracle` (the nine tensor-diff targets), `oracle-extra` (the ten clip-metric targets) and `oracle-r2`
+    (`FV_ORACLE_TARGETS=sfwan13`), each at `FV_GEN_TIMEOUT_S=5400` (after the review below). Mutation-checked on
+    the build pod: an H3 arm's `--seconds 5` → 4 fails `oracle`, a `ltx25-retake` window `1.5:3.5` → `1.5:3.4` fails
+    `oracle-extra`, the composed SF-Wan arm's `FASTVIDEO_WAN_CAUSAL_FLASH=0` → 2 fails `oracle-r2`.
+  - `fv-lab-goldens.sh` cuts `frames_digest` from it for `frames-sample.sha256.json` and its compare-runs checks.
+  - `tests/dry_run.rs` `runpod_matrix_sh_is_gone` holds that the copy has the `oracle` branch and not `wan` /
+    `sfwan`.
+- **Deleted.**
+  - `scripts/gpu/runpod-matrix.sh` (1,208 lines): its last three branches, `sfwan`, `wan` and `oracle`, with the
+    helpers only they called (`metric_dry`, `oracle_run`, `oracle_fetch`, `oracle_diff`).
+  - `runpod-http.sh run`'s script path (§14.6): `run` and `all` for a name that is no fv-lab tier of
+    `fv-lab-retired.sh` are refused before the key, any lookup or a pod: "is no fv-lab tier … and the script path
+    is gone". Before, they created a pod running `runpod-matrix.sh`. The script path's `FV_DRY_RUN` notice went with
+    it; `kernels` / `weights` / `upstream` keep a dry-run notice.
+  - Two items read as part of that script path, each the "or" / the item §21.8 names:
+    - `FV_R2_TREES` and `scripts/gpu/r2-stage.sh`. §21.8, "The script side's tree: `runpod-http.sh run`
+      `FV_R2_TREES`", is the script runner's R2 staging before `runpod-matrix.sh`, and `r2-stage.sh` had no other
+      caller. `FV_R2_TREES` is now refused (exit 2) before the key on every command but `down` / `status` /
+      `attach`, as `FV_POD_FILES` was in §23.10. On the fv-lab route it keeps its §22.19 answer ("has no
+      FV_R2_TREES"). With it unset its start-command block rendered nothing, so no body changes.
+      `scripts/gpu/tests/runpod-r2.test.sh` (its test) goes with it.
+    - `scripts/gpu/oracle.sh`, the script path's oracle driver (its runtime side was `FV_FAMILY=oracle
+      runpod-http.sh run`, refused by fv-lab's route for `FV_POD_FILE` / `FV_CREATE_WAIT_S`). It is deleted with a
+      pointer in docs/oracle.md, §20.8 item 4's second option. The wrapper option would have needed a mapping §20.8
+      leaves open: two `fv-lab oracle` runs when `sfwan13` is mixed with other targets.
+    - `scripts/gpu/upstream/oracle.sh`, the reference side, stays. So do `runpod-http.sh upstream` and
+      `plan-upstream`, the upstream pods' goldens (§19.8 item 3).
+  - `runpod.sh`: `RP_FV_LAB_TIERS` and `rp_has_branch` go, so `wan` is routed as a retired tier. `rp_start_family`
+    no longer copies `runpod-matrix.sh` to the pod. The fallback die names the deleted script, and `wan`'s
+    no-fv-lab message reads "wan is fv-lab only" (was "runpod.sh runs wan as its fv-lab tier").
+  - CI: the path filters of `control.yml` and `adapter-tests.yml` drop the deleted files, and `control.yml` drops
+    the `runpod-r2.test.sh` step.
+  - The Dockerfiles copy `scripts/gpu` whole (`docker/gpucheck.Dockerfile` `COPY scripts/gpu …`); none names a
+    deleted file.
+- **Every pod golden is byte-identical**: no `crates/fastvideo-lab/fixtures/*.json` changed.
+  - `runpod-http.sh`'s start command keeps its `run` / `all` block, which still names `runpod-matrix.sh $FAMILY`. No
+    pod this driver creates reaches the block now. `plan` still renders it as the pod body golden of the tiers that
+    never were script families (`gold`, `h3-graphs`, the `sol-bench-<set>` tiers): `tests/payload_golden.rs` holds
+    fv-lab's body to it with that one line replaced by `fv-lab run <tier>`.
+  - Dropping the block would rewrite those live goldens. Per §14.6, they freeze when `runpod-http.sh` itself goes.
+    A host-side comment above `start_cmd` says so, as §22.19 did for the `FV_POD_FILES` comment.
+  - The frozen and restored fixtures (reproduced from `5987e6a4`) keep the line too.
+- **Review (coordinator, 2026-10-28, of #241 at `211c06db`)**: nothing blocked, and the coordinator accepted as
+  decisions the five calls above: `oracle.sh` deleted with a pointer; `FV_R2_TREES` and `r2-stage.sh` deleted, with
+  `FV_R2_TREES` refused; `sfwan`'s prelude dropped; the helpers below kept (each is still read); `all` refused for
+  every family. Fixed in the same PR:
+  - the frozen copy is held to the frozen oracle goldens (above);
+  - `runpod-http.sh plan` refuses (exit 2, before the key) a name that is no tier retired to fv-lab, `gold` or an
+    experiment tier, as `run` / `all` refuse it; the bodies of `gold`, `h3-graphs` and the `sol-bench-<set>` tiers
+    are byte-identical;
+  - docs that contradicted the code: `lab/README.md`, `docs/ports/wan.md`, `scripts/gpu/README.md`'s evaluation
+    layer, `docs/oracle.md`'s mapping table (with `FV_ORACLE_FAMILY` → `--family`, `FV_ORACLE_EXTRA_ENV` →
+    `--extra-env`, `FV_POD_CAP_S` → `--wall-cap-s` / `--upstream-wall-cap-s`), `docs/dev/fv-lab.md` (both frozen
+    script sides), `fv-lab-retired.sh`'s comments, §14.6's table;
+  - nits: the `all` refusal's tense, the dry-run notice's article, the unused `fv_lab_sibling_mode` and
+    `runpod.sh`'s `gen` removed, and the unreachable `matrix_exit` check in `cmd_run` replaced by a comment;
+  - `runpod-matrix.sh`, `oracle.sh` and `r2-stage.sh` stay in the CI path filters, so a PR that restores one runs
+    the guards (`tests/dry_run.rs` `runpod_matrix_sh_is_gone`, now for all three, `fv-lab-goldens.sh`, the route
+    and plan tests).
+- **Left as they are**, though nothing on the script path calls them now: `fetch_taehv.sh`, `hd_report.py`,
+  `speech_transcribe.py`, `compare` / `gate` policy files, `prompts-*.json`. The ADR lists none of them for deletion,
+  and fv-lab's cells, the docs or hand runs still read most of them. Their removal is a separate decision.
+- **Tests**:
+  - `fv-lab-route.test.sh`:
+    - the three are routed, `all` refused, `plan` fv-lab's;
+    - the oracle and `sfwan` knobs are refused, `FV_ORACLE_TARGETS` / `FV_SFWAN_CELLS` with `FV_CELLS` (also from
+      the host environment);
+    - `oracle` with `FV_ORACLE_TARGETS=sfwan13` names `oracle-r2` in `run` / `all` / `plan`;
+    - `FV_R2_TREES` is refused everywhere but `down`;
+    - a non-tier `run` / `all` / `plan` is refused, while `plan` of `gold`, `h3-graphs` and `sol-bench-a1` still
+      renders the script body;
+    - `sfwan` gets its pointer;
+    - the three scripts are gone and `upstream/oracle.sh` stays;
+    - the `runpod-matrix.sh` refusal cases (`mx`) go with the script.
+  - `runpod-plan.test.sh`: no recorded command names `runpod-matrix.sh` (no start, no copy), `sfwan` is refused in
+    all four modes, and `wan` runs as a retired tier.
+  - `upstream-r2.test.sh`: `oracle.sh`'s two checks go; `lab/upstream.toml`'s stays.
+  - `tests/dry_run.rs`: the S8 three are retired, `sfwan` is retired with no tier, no live sibling or script tier is
+    left, and the script is gone.
+  - `knobs::tests`: `the_oracle_sfwan13_target_names_the_oracle_r2_tier`; the oracle and `sfwan` knob tests are
+    flipped to `MODE_KNOBS`.
+- **Gates** (before, at main `c8d27080`, then after):
+
+  | gate | before | after |
+  |---|---|---|
+  | `scripts/gpu/lint.sh` | 117 scripts parsed | 113 (−4: the three scripts and `runpod-r2.test.sh`) |
+  | `fv-lab-route.test.sh` | 384 ok | 379 ok at `211c06db`; 384 ok after the review (the `plan` cases) |
+  | `runpod-plan.test.sh` | 113 ok | 118 ok |
+  | `upstream-r2.test.sh` | 73 ok | 71 ok |
+  | `runpod-r2.test.sh` | 87 ok | deleted |
+  | `cargo test -p fastvideo-lab --features cli` (build pod) | 300 passed | 302 passed, 0 failed |
+
+  - The four goldens scripts `--check` and the other shell tests pass unchanged.
+  - `cargo test -p fastvideo-models --lib`: 595 passed, 1 ignored; that crate is unchanged.
+  - The Python tests: 42 r2 and 54 build-pod-server, both OK and unchanged.
+  - `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` are clean.
+- **Docs**:
+  - docs/oracle.md: "Running it" is `fv-lab oracle`, with how `oracle.sh`'s settings map.
+  - docs/dev/fv-lab.md: intro, table rows, the route section, the oracle / `wan` sections, the retired-with-no-tier
+    table with `sfwan`.
+  - docs/ports/wan.md, docs/serve/fal-parity.md (the 5-prompt rerun needs a cell), docs/ops/runpod-secrets.md,
+    README.md, docs/perf/datacenter-kernel-plan.md.
+  - `lab/tiers.toml` and `lab/upstream.toml` comments.
+  - Historical run records keep naming the scripts as they ran.
 
 ### 23. sol-bench as fv-lab experiment tiers (done, CPU-side and GPU-side)
 

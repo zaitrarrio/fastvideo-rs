@@ -405,8 +405,9 @@ cells = ["h3-graphs-turbo-trace", "h3-graphs-turbo"]
 # and the oracle as tiers, each held equal to the script's dry run by a golden
 # (fv-lab-goldens.sh). All three passed their GPU check through both runners
 # (§15.7, f93a961): det-short and determinism are retired (branches deleted,
-# goldens frozen, FV_DET_* dropped: select by arm), and oracle's branch stays
-# whole for its clip-metric targets and oracle.sh (§15.10). Every tier is the
+# goldens frozen, FV_DET_* dropped: select by arm), and oracle's branch stayed
+# whole for its clip-metric targets and oracle.sh (§15.10) until it retired with
+# the script in S8 (§22.20, its goldens frozen). Every tier is the
 # rtx6000 tier's pod, as runpod-http.sh gives every FV_FAMILY the same pod.
 
 # Was runpod-matrix.sh `det-short`: one cell per arm group of its default
@@ -451,11 +452,11 @@ preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3",
 tae = true
 cells = ["determinism-ltx-t2v", "determinism-ltx-i2v", "determinism-h3"]
 
-# runpod-matrix.sh `oracle` with FV_ORACLE_TARGETS naming its nine tensor-diff
+# Was runpod-matrix.sh `oracle` (retired in S8, §22.20) with FV_ORACLE_TARGETS naming its nine tensor-diff
 # targets (sfwan13 is the oracle-r2 tier below, §21; the clip-metric targets are the
 # extra cells below, §20): one cell per target,
 # its reference fetched from FV_ORACLE_URL. cell_timeout_s 5400 as
-# scripts/gpu/oracle.sh passes FV_GEN_TIMEOUT_S. `pod up` needs FV_ORACLE_URL
+# scripts/gpu/oracle.sh passed FV_GEN_TIMEOUT_S. `pod up` needs FV_ORACLE_URL
 # (--extra-env) and --cells (the targets the upstream pods make).
 [[tier]]
 name = "oracle"
@@ -486,9 +487,9 @@ extra_cells = ["oracle-ltx25-i2v", "oracle-ltx25-kf", "oracle-ltx25-ref2v", "ora
 # (28.93 GB) is R2-only since 2026-10-13: fetched onto the container disk
 # before the first arm that reads it (150 GB: the tree and the 120 GB every
 # volume tier keeps), the pod's idle limit weights::r2_idle_min, the R2 key as
-# Runpod secret references. A sibling tier of the `oracle` family
-# (fv-lab-retired.sh FV_LAB_SIBLINGS): its goldens are the script's dry run
-# with FV_ORACLE_TARGETS=sfwan13. `pod up` / `fv-lab oracle --family
+# Runpod secret references. A sibling tier of the `oracle` family, frozen
+# with it in S8 (fv-lab-retired.sh FV_LAB_RETIRED_SIBLINGS, §22.20): its
+# goldens are the script's dry run with FV_ORACLE_TARGETS=sfwan13. `pod up` / `fv-lab oracle --family
 # oracle-r2` need --cells, as the oracle tier.
 [[tier]]
 name = "oracle-r2"
@@ -750,11 +751,10 @@ cells = ["mmaudio-sidecar"]
 # gated arm's env entry (Addition 16, §22.4: its arms read `{tae}` without a
 # `tae` file), engine-fw22's `--tae-dir "$TAE"` went (as serve-engine's in S3)
 # and its TAE fetch is skipped in a dry run, so the script's dry run is the
-# tier's (fv-lab-goldens.sh). The branch stays after the GPU check through both
-# runners (§22.18): `sfwan` still runs its SF-Wan arms (its FV_SFWAN_CELLS;
-# fv-lab: --cells on this tier), so S8 retires it with `sfwan` (S7, §22.19,
-# retired the other four §22 families without it).
-# runpod-matrix.sh `wan`: FastWan2.1 1.3B's kernel, decoder, cache and
+# tier's (fv-lab-goldens.sh). The branch stayed after the GPU check through
+# both runners (§22.18) while `sfwan` ran its SF-Wan arms (its FV_SFWAN_CELLS;
+# fv-lab: --cells on this tier); S8 retired it with `sfwan` (§22.20).
+# Was runpod-matrix.sh `wan`: FastWan2.1 1.3B's kernel, decoder, cache and
 # attention arms with their lossy and exact gates, SF-Wan 1.3B at 81 frames,
 # the TI2V-5B and T2V-14B kernel A/B, T2V-14B's caches and Sol at 50 steps,
 # the TI2V-5B recipe, the two module-parity oracle cells (`[reference]`

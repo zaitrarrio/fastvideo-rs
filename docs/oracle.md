@@ -60,42 +60,51 @@ report-only reorderings.
 
 ## Running it
 
-```
-scripts/gpu/oracle.sh [sha]            # ORACLE_TARGETS="fasth3-8step fasth3-4step-vsa ltx25-512p-dense ltx25-512p"
-```
+`fv-lab oracle` runs it (ADR-0019 §19; the targets are cells of the `oracle`
+tier, §15 and §20, and `sfwan13` of the `oracle-r2` tier, §21).
+`scripts/gpu/oracle.sh`, the driver of the script path (`runpod-http.sh
+upstream` pods, then a runtime pod running `runpod-matrix.sh oracle`), was
+deleted with `runpod-matrix.sh` when `oracle` retired to fv-lab (ADR-0019
+§20.8 item 4, §22.20); its runs are recorded below as they ran. Its settings
+in `fv-lab oracle` (§20.8):
 
-(`scripts/gpu/oracle.sh` runs from a private copy, so the repo copy can be
-edited during a run.) It starts one upstream pod per reference image (`runpod-http.sh upstream`, pod
-step `oracle:<targets>`, kept alive to serve its dumps), and one runtime pod
-(`FV_FAMILY=oracle`) that downloads each `oracle-<target>/oracle-dump.tar` as
-soon as it is ready, runs ours injected, and compares. Targets:
-`fasth3-8step`, `fasth3-4step-vsa`, the controls `fasth3-8step-vsa0` (VSA
-sparsity 0 on both sides: every tile, gated compression kept, no top-k
-selection; `FASTVIDEO_VSA_SPARSITY` on ours) and `fasth3-4step-dense` (the
-dense-datafree LoRA, FLASH_ATTN, no VSA anywhere), and `ltx25-512p[-dense]`,
-`ltx25-4k[-dense]`. For H3 targets the runtime pod also runs ours with f32
-activations (`FV_ORACLE_F32`, default on for H3) and reports
-`oracle-<t>-bf16-vs-f32`: how far bf16 rounding alone moves our pipeline,
-the floor the Rust-vs-Python profile is judged against.
+| `oracle.sh` | `fv-lab oracle` |
+|---|---|
+| `ORACLE_TARGETS` | `--cells` with every arm of `oracle-<target>` |
+| `FV_ORACLE_FAMILY` (the runtime family) | `--family` (`oracle`, or `oracle-r2` for `sfwan13`, §21.9) |
+| `FV_ORACLE_EXTRA_ENV` | `--extra-env` (a knob no tier reads is refused) |
+| `FV_RUNTIME_STOCK_WAIT_S` | `--stock-wait-s` |
+| `FV_POD_CAP_S` | `--wall-cap-s` (the runtime pod) and `--upstream-wall-cap-s` (the reference pods), each lowering the tier's or stack's cap |
+| `FV_ORACLE_F32` | the cells' `-f32` arms (the H3 targets and `sfwan13`), selected by arm |
+| `FV_ORACLE_OWN_TEXT` | none: no cell runs on our own text contexts; fv-lab refuses the knob |
+| `FV_ORACLE_RUN_MODE=all` | none: gone with the script path (run `runpod-http.sh kernels` on its own) |
+| `UP_AFTER` (an upstream benchmark on the same pod) | none: `runpod-http.sh upstream` with `UP_STEPS` on its own |
+
+
+The tier's default targets: `fasth3-8step`, `fasth3-4step-vsa`, the controls
+`fasth3-8step-vsa0` (VSA sparsity 0 on both sides: every tile, gated
+compression kept, no top-k selection; `FASTVIDEO_VSA_SPARSITY` on ours) and
+`fasth3-4step-dense` (the dense-datafree LoRA, FLASH_ATTN, no VSA anywhere),
+`h3-ref2va-4step`, and `ltx25-512p[-dense]`, `ltx25-4k[-dense]`. For H3
+targets the runtime pod also runs ours with f32 activations (the cell's
+`-f32` arms) and reports `oracle-<t>-bf16-vs-f32`: how far bf16 rounding alone
+moves our pipeline, the floor the Rust-vs-Python profile is judged against.
 Results: `artifacts/runpod/oracle/<tag>/oracle-<target>-diff/` (the stderr
 table and `gpucheck-out/*.json`); the dumps themselves stay on the pods.
 
 **With fv-lab** (ADR-0019 §19, accepted: its GPU check passed on `664473b`;
-§20, proposed: its check is to be re-run once the Hub token secret exists): the same run on fv-deploy's guards, for the targets that are cells of
+§20, accepted: its check passed on `4902297` and `7e513f6`, §20.7): the run on
+fv-deploy's guards, for the targets that are cells of
 the `oracle` tier: the nine tensor-diff targets, and the ten LTX clip-metric
 targets (`ltx25-{i2v,kf,ref2v,a2v,a2v-i2v,retake,retake-v,retake-a,extend,a2v-guided}`,
 the tier's extra cells, run when `--cells` names their arms; their ffmpeg /
 ffprobe `[[metric]]` reports land in `oracle-<target>-frames/metrics.txt`,
 fetched with `--fetch-tree`). `sfwan13` is the `oracle-r2` tier's cell
-(ADR-0019 §21, proposed: `weights = "volume+r2"`, its tree `sfwan21-1.3b` R2-only
+(ADR-0019 §21, accepted: `weights = "volume+r2"`, its tree `sfwan21-1.3b` R2-only
 since 2026-10-13; `--family oracle-r2`); its upstream reference fetches the tree
 from R2 onto the `fastvideo` pod's container disk (the step `r2:sfwan21-1.3b`,
-180 GB, the R2 key by Runpod secret reference). On `oracle.sh`'s path the
-upstream side does the same, and the runtime pod (`FV_FAMILY=oracle`) gets
-`FV_R2_TREES=sfwan21-1.3b` on a 150 GB disk: `runpod-http.sh run` makes fv-lab's
-merged weight root `/fvscratch/weights` there (`scripts/gpu/r2-stage.sh`, the
-key by Runpod secret reference to its plan step alone) and the matrix reads it
-(§21.8):
+180 GB, the R2 key by Runpod secret reference), and the runtime pod fetches it
+into its merged weight root (§16):
 
 ```
 ./fv-lab oracle --sha <7> --cells <arms>          # the plan: both pods' bodies, no key
@@ -204,10 +213,11 @@ Its pod limit was not recorded. So the evidence strongly supports host-RAM
 starvation (an OOM kill during the LoRA conversion), but does not prove it.
 
 **The setting:** run upstream H3 LoRA cells (`oracle:fasth3-4step-*`,
-`cells:fv-fasth3-4step-*`) with `FV_MIN_RAM_GB=192`. `scripts/gpu/oracle.sh`
-passes the caller's environment to `runpod-http.sh upstream`, so set it there
-too. The command in ADR-0019 §15.7 does. `fv-lab oracle` takes it from
-`lab/upstream.toml`: the `fastvideo` stack's `min_ram_gb = 192`.
+`cells:fv-fasth3-4step-*`) with `FV_MIN_RAM_GB=192`. `runpod-http.sh upstream`
+reads it from the caller's environment (as `scripts/gpu/oracle.sh` passed it on
+until it went, ADR-0019 §22.20), so set it there. The command in ADR-0019 §15.7
+does. `fv-lab oracle` takes it from `lab/upstream.toml`: the `fastvideo`
+stack's `min_ram_gb = 192`.
 
 ## Results: H3 turbo on H100 with the datacenter VSA kernel (2026-09-29)
 

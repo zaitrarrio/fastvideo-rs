@@ -1,0 +1,172 @@
+# shellcheck shell=bash
+# Sourced, not run. The runpod-matrix.sh families retired to fv-lab
+# (docs/adr/0019-fv-lab.md §8, §9.5, §10, §11.6 for b4a, the first with
+# a verdict step, §15.10 for det-short and determinism, the [repeats]
+# families, §17.6 for fuse, attn3 and ltx, D1f's, and §22.19 for hd (with its
+# sibling hd5, below), serve-engine, sfstream and mmaudio, §22's S7): each
+# passed its GPU gate (one
+# `fv-lab pod up --wait` run and one `runpod-http.sh run` of the same commit,
+# `fv-lab-compare-runs.sh` exit 0), so its `case` branch is gone from
+# runpod-matrix.sh and the tier lives only in lab/ (lab/tiers.toml,
+# lab/cells/<tier>-*.toml).
+#
+# Read by:
+#   runpod-http.sh             `run` / `plan` for one of these call fv-lab pod up
+#                              (FV_SCRIPT_RETIRED below: refused)
+#   runpod.sh                  `gpu` / `matrix`: fv-lab run for these, refused for
+#                              FV_SCRIPT_RETIRED
+#   tests/fv-lab-goldens.sh    their fixtures are frozen (no longer regenerated
+#                              from the scripts, only checked to be present)
+#   crates/fastvideo-lab/tests/dry_run.rs   the same list, the same checks
+#
+# A family joins this list in the PR that deletes its branch, never before.
+# The restored modes below join it in the PR that restores them: their branch
+# was already gone, so they start frozen.
+FV_LAB_RETIRED="rtx6000 techniques b6 rtx5090 fastvideo h3arms trace ltxfps ltxvae precision precision-nvfp4 ltxvae-gen b4a det-short determinism fuse attn3 ltx hd hd5 serve-engine sfstream mmaudio"
+
+# Script modes restored as tiers (ADR-0019 §12, owner decision 2026-10-25):
+# `<tier>:<family>:<K=V>` is the mode `FV_EXTRA_ENV=<K=V> runpod-matrix.sh
+# <family>` ran before #185 deleted the branch. The tier's fixtures are that
+# mode's dry run, gates and `runpod-http.sh plan` body as the script wrote them
+# at 5987e6a4 (scripts/gpu/tests/fv-lab-restored-goldens.sh); fv-lab's equal
+# them but for the family's name (the tier's) and the mode's setting (none).
+# runpod-http.sh refuses <K=V> in FV_EXTRA_ENV and names the tier.
+FV_LAB_RESTORED="precision-nvfp4:precision:FV_PRECISION_ARM=ltx-nvfp4 ltxvae-gen:ltxvae:FV_VAE_GEN=1"
+
+# Tiers made from a port one-off of scripts/gpu/experiments/ (ADR-0019 §14,
+# D1e; the directory is gone since h3-graphs' GPU check, §14.4, and its pod
+# script is read from the history): never runpod-matrix.sh families. Their
+# commands are the experiment pod script's own, cut from it by
+# tests/fv-lab-experiment-goldens.sh; their dry
+# run is fv-lab's own golden (fixtures/<tier>-dry-run.txt) and their pod body
+# runpod-http.sh plan's, like the `gold` tier's. runpod-http.sh refuses `run`
+# and `all` for them and names the fv-lab command. The sol-bench-<set> tiers
+# (ADR-0019 §23, one per FV_SOL_SET of scripts/gpu/sol-bench-pod.sh, in its
+# order) are made the same way from that pod script, deleted after their GPU
+# check (§23.7, §23.10) and read from the history like h3-graphs'.
+FV_LAB_EXPERIMENTS="h3-graphs sol-bench-a1 sol-bench-a3 sol-bench-a2 sol-bench-b1 sol-bench-b2 sol-bench-b2r sol-bench-b3 sol-bench-b4 sol-bench-b5 sol-bench-b6 sol-bench-c1 sol-bench-c2 sol-bench-c3 sol-bench-c4 sol-bench-c6 sol-bench-d1 sol-bench-d2 sol-bench-e1 sol-bench-f1 sol-bench-f2 sol-bench-g1 sol-bench-g2"
+
+# Sibling tiers of a live runpod-matrix.sh family (ADR-0019 §20.5, §21, §22):
+# `<tier>:<family>` is a tier whose cells are targets of <family>'s branch
+# that its own tier cannot run (another pod: `oracle-r2`, the oracle family's
+# sfwan13 target, reads its tree from R2, `weights = "volume+r2"`). Its
+# fixtures are <family>'s dry run under the tier's settings
+# (tests/fv-lab-goldens.sh fam_env) and runpod-http.sh plan's body for the
+# tier; fv-lab's dry run equals the first with the tier's name for the
+# family's and its merged weights root for the volume's
+# (crates/fastvideo-lab/tests/dry_run.rs). No branch of its own:
+# runpod-http.sh refuses `run` / `all` for it and names fv-lab's command; the
+# script runs those targets as <family> (FV_FAMILY=<family>, with
+# fv_lab_sibling_mode's settings). A sibling of a family that retires is
+# frozen with it (FV_LAB_RETIRED, ADR-0019 §10) and moves to
+# FV_LAB_RETIRED_SIBLINGS below.
+FV_LAB_SIBLINGS="oracle-r2:oracle"
+
+# Sibling tiers frozen with their family (ADR-0019 §22.10 "Then", §22.19):
+# `<tier>:<family>:<K=V>`, both in FV_LAB_RETIRED, <K=V> the setting that made
+# the family's run the tier's. `hd5` is the hd family with
+# FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json (the 1080P serve
+# gate's prompt set, which fv-lab takes from its hd5-canvases cell, §22, S2).
+# That setting with the family names the tier in every refusal
+# (fv_lab_retired_sibling_mode below: runpod-matrix.sh, runpod-http.sh run /
+# all / plan, fv-lab's --extra-env), since dropping it alone would run the
+# family's own prompt set under the same arm names.
+# Its fixtures stay as the script wrote them as a sibling (the hd family's
+# dry run under that setting, `[hd]` lines and its `prompt set:` line; its pod
+# body runpod-http.sh plan's for FV_FAMILY=hd5): the tests read them with the
+# family's name as the tier's and without that line, as while it was live
+# (crates/fastvideo-lab/tests/common Sibling). Like every tier of
+# FV_LAB_RETIRED it is fv-lab only: runpod-http.sh run / plan route it to
+# fv-lab pod up, runpod.sh to fv-lab run, runpod-matrix.sh refuses it.
+FV_LAB_RETIRED_SIBLINGS="hd5:hd:FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json"
+
+# The runpod-matrix.sh families retired with no tier (ADR-0019 §18, D1g,
+# coordinator decision 2026-10-26): finished experiments and one-time
+# measurements whose evidence is committed or recorded, families the EU volume
+# cannot run, and ones another tier covers. Their `case` branches are deleted
+# and nothing runs them: runpod-matrix.sh, runpod-http.sh run / all / plan and
+# runpod.sh gpu / matrix refuse them (exit 2) with fv_script_retired_why's
+# pointer, never route them to fv-lab (they are no tier of lab/tiers.toml).
+# A family joins this list in the PR that deletes its branch. The last nine
+# (ADR-0019 §22, S1, FVID-2026-10-26-d1-remaining) are finished studies and
+# measurements, a run of other tiers' cells, and the sol-engine branches the
+# benchmark does not run (it runs the sol-bench-<set> tiers, which were
+# sol-bench-pod.sh until ADR-0019 §23.10); each pointer also names
+# what is lost, and their commands are in
+# `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
+FV_SCRIPT_RETIRED="h3 hunyuan sana-video b200 writer precision-debug identity b4b b4c b4c2 h3attn sfquality headline speechtest cold eval ltxoffload solbench sol-lingbot sol-cosmos3"
+
+# fv_lab_retired <family>: true when the family is fv-lab only.
+fv_lab_retired() {
+  [[ " $FV_LAB_RETIRED " == *" ${1:-} "* ]]
+}
+
+# fv_lab_experiment <tier>: true for a tier made from a port one-off.
+fv_lab_experiment() {
+  [[ " $FV_LAB_EXPERIMENTS " == *" ${1:-} "* ]]
+}
+
+# fv_lab_sibling <tier>: the live family a sibling tier is cut from (empty
+# and false for any other name).
+fv_lab_sibling() {
+  local e
+  for e in $FV_LAB_SIBLINGS; do
+    [[ "${e%%:*}" == "${1:-}" ]] && { echo "${e#*:}"; return 0; }
+  done
+  return 1
+}
+
+# fv_lab_sibling_mode <tier>: the settings under which the script runs a
+# sibling tier's cells as its family (FV_FAMILY=<family> plus these), for the
+# refusals; tests/fv-lab-goldens.sh makes the tier's dry-run golden under them.
+fv_lab_sibling_mode() {
+  case "${1:-}" in
+    oracle-r2) echo "FV_ORACLE_TARGETS=sfwan13" ;;
+  esac
+}
+
+# fv_lab_retired_sibling_mode <family> <K> <V>: the frozen sibling tier
+# (FV_LAB_RETIRED_SIBLINGS) whose mode <family> with <K>=<V> is, printed as
+# "<tier> <K=V>"; false for any other setting. A path value matches by its file
+# name (prompts-hd5.json from the repository, the image or a checkout).
+fv_lab_retired_sibling_mode() {
+  local e t f m m_v
+  for e in $FV_LAB_RETIRED_SIBLINGS; do
+    IFS=: read -r t f m <<<"$e"
+    [[ "$f" == "${1:-}" && "${m%%=*}" == "${2:-}" && -n "${3:-}" ]] || continue
+    m_v="${m#*=}"
+    [[ "${3##*/}" == "${m_v##*/}" ]] && { echo "$t $m"; return 0; }
+  done
+  return 1
+}
+
+# fv_script_retired <family>: true when the family is retired with no tier.
+fv_script_retired() {
+  [[ " $FV_SCRIPT_RETIRED " == *" ${1:-} "* ]]
+}
+
+# fv_script_retired_why <family>: what replaces a family retired with no tier
+# (ADR-0019 §18, §22) and, for §22's, what is lost: the text of every
+# refusal; empty for any other name.
+fv_script_retired_why() {
+  case "${1:-}" in
+    h3) echo "the rtx6000 tier runs every arm but the refiner-less Spark fallback and the cold streamed-encoder runs, which nothing serves (ADR-0019 §17.4, §18): fv-lab pod up --family rtx6000, or FV_FAMILY=rtx6000 runpod-http.sh run; the h3 commands: git show b019ccb2:scripts/gpu/runpod-matrix.sh" ;;
+    b4b | b4c | b4c2) echo "a finished experiment: its GPU gate passed when its change merged (b4b #179, b4c #177, b4c2 #178; artifacts/runpod/$1/); a later change to the fusions or the prompt cache gets its own byte-identity run (the b4a / techniques tiers' baseline-vs-this-build shape) and the CPU fixtures (rt/prompt_cache/equality.rs, rt/fuse/equality.rs) (ADR-0019 §17.3, §18)" ;;
+    hunyuan) echo "nothing runs it: its tree is not on the EU volume and no variant or gold file serves it; its arm by hand: git show b019ccb2:scripts/gpu/runpod-matrix.sh (ADR-0019 §14.7, §18)" ;;
+    sana-video) echo "the sol-engine benchmark runs its two arms, sana-baseline and sana-full (the same prompt, seed and --warm), in the fv-lab tier sol-bench-b1, its tree fetched from R2 (docs/perf/sol-bench.md: fv-lab pod up --family sol-bench-b1 --cells sana-baseline sana-full); no variant or gold file serves it. Lost: the compare of the two arms; its commands: docs/ports/sana-video.md, or git show b019ccb2:scripts/gpu/runpod-matrix.sh (ADR-0019 §14.7, §18, §23)" ;;
+    b200) echo "the US volume it ran on is gone (CLAUDE.md, owner decision 2026-10-06) (ADR-0019 §14.7, §18)" ;;
+    writer) echo "a one-time measurement of the frame writer (commit a8ecfec6); its commands: git show b019ccb2:scripts/gpu/runpod-matrix.sh (ADR-0019 §14.7, §18)" ;;
+    precision-debug) echo "the precision tiers run the same precision variants, but not its per-step CUPTI trace (FASTVIDEO_GPU_TRACE_STEP) or its FASTVIDEO_DUMP_DIR + compare-dumps diffs; those by hand: git show b019ccb2:scripts/gpu/runpod-matrix.sh (ADR-0019 §14.7, §18)" ;;
+    identity) echo "the det-short and determinism tiers cover it (ADR-0019 §14.7, §18)" ;;
+    h3attn) echo "its arms are measured and recorded (docs/techniques.md \"H3 attention arms\"; the served variants' gold files); no attention arm of it is open (ADR-0019 §14.7, §18)" ;;
+    sfquality) echo "a finished study (design risk R12) whose outcome has shipped: the default sink of 15 frames (families/wan.toml) and the causal session caps (docs/serve/design.md); written up in docs/ports/wan.md (R12) and docs/serve/e2e/wan.md, its last run artifacts/serve/e2e/wan/r12/2c987e8-09282029-sfq-main.json.gz. The sfstream tier (fv-lab run sfstream) keeps a pod check of the rollout. Lost: the sweep in one command, and the f32 and second-seed rollouts; by hand: fv-gpucheck wan stream --run <spec>, the specs in git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
+    headline) echo "its nine arms are cells of four tiers: fv-lab run <tier> --cells <arms> on a box, or fv-lab pod up --family <tier> --cells <arms> from a host, for fastvideo (fasth3-4step-vsa-480p fasth3-8step-480p fasth3-4step-vsa-768p fasth3-8step-768p), rtx6000 (sol-h3), rtx5090 (h3-768p-fullopt ltx25-4k5s-sol) and precision (ltx25-4k5s-sol-bf16act-fp8); the served numbers are the gold tier's. Lost: the nine arms on one pod, and its use on a new GPU type (each tier fixes its gpu); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
+    speechtest) echo "a finished question (can MMAudio say a given line?), answered in docs/ports/mmaudio.md \"Speech\" (run fc6053d); nothing served depends on it, and the mmaudio tier (fv-lab run mmaudio) keeps the sidecar checked on a pod. Lost: the Whisper check in one command (scripts/gpu/speech_transcribe.py by hand); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
+    cold) echo "no result of it was recorded and nothing reads one. Lost: the page-cache-cold end-to-end time with load included (sol-engine's e2e), which no tier measures (rtx5090's LTX-2.5 4k5s / 1080p20s arms run warm); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
+    eval) echo "its pieces run elsewhere: the precision tiers' f32act / bf16act pairs with lossy gates, fuse's exact gates with an OFF arm, prompt sets in cells (h3-graphs), and LPIPS as --lpips on any fv-lab run. Lost: a prompt set, LPIPS and the promotion gate in one run; the BF16_ACT=0 OFF-identity gate; the 480p / 512p five-prompt LPIPS pairs (never recorded); the LPIPS self-test on a pod (by hand: fv-gpucheck lpips --weights <dir>); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
+    ltxoffload) echo "a finished measurement: its numbers are in docs/ports/ltx25.md (runs a73173e-09270009, a2cd194-09270039, a2cd194-09270103), and the b6 tier's b6-ltx25-offload-cpu arm still checks --offload cpu across builds. Lost: LTX cpu-against-resident identity and the 4K cpu peaks; its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3)" ;;
+    solbench) echo "the sol-engine benchmark runs the fv-lab tiers sol-bench-<set> (docs/perf/sol-bench.md; its Wan2.1-1.3B, Wan2.2-A14B and LTX-2.3 HQ arms in sol-bench-b1, -b2, -b2r, -b3, -c1, -c2, -c4, -c6, -e1, -g1 and -g2: fv-lab pod up --family sol-bench-<set>), not this branch, and nothing served reads its trees. Lost, never recorded: each arm's compare and lossy gate against its base, and the arms those tiers lack (wan13-sol-easycache, wan13-sol-attn, a14b-sol-mxfp8); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3, §23)" ;;
+    sol-lingbot) echo "the sol-engine benchmark runs the fv-lab tiers sol-bench-<set> (docs/perf/sol-bench.md; its LingBot arms in sol-bench-b3, -b4, -c2, -c3, -d1, -f1, -f2 and -g2, with lingbot-router too: fv-lab pod up --family sol-bench-<set>), not this branch, and nothing served reads the tree. Lost, never recorded: LingBot on three prompts (the tiers run one), and the B200 path with both base and refiner resident (FV_LINGBOT_RESIDENCY=both: the tiers' LingBot arms pass --residency swap); its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3, §23)" ;;
+    sol-cosmos3) echo "the sol-engine benchmark runs the fv-lab tiers sol-bench-<set> (docs/perf/sol-bench.md; its Cosmos3 arms in sol-bench-b5, -b6, -c4 and -d2: fv-lab pod up --family sol-bench-<set>), not this branch, and nothing served reads the tree; its commands: git show 4f8822a0:scripts/gpu/runpod-matrix.sh (ADR-0019 §22.3, §23)" ;;
+  esac
+}
