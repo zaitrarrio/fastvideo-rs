@@ -410,6 +410,17 @@ for mode in run all; do
   expect "no tier: $mode refused before any pod" 1 "no-such-family is no fv-lab tier of fv-lab-retired.sh, and the script path is gone" -- \
     RUNPOD_API_KEY=x FV_FAMILY=no-such-family bash "$HTTP" "$mode" abc1234
 done
+# `plan` of such a name would render a body starting the deleted
+# runpod-matrix.sh: refused (exit 2) before the key, as run / all refuse it.
+# The script body stays the golden of gold and the experiment tiers.
+for fam in no-such-family upstream; do
+  expect "no tier: plan refused ($fam)" 2 "$fam is no fv-lab tier of fv-lab-retired.sh, gold or an experiment tier, and the script path is gone" -- \
+    FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-t
+done
+for fam in gold h3-graphs sol-bench-a1; do
+  expect "plan: $fam is still runpod-http.sh's body" 0 "\"name\": \"fv-lab-$fam-abc1234-t\"" -- RUNPOD_API_KEY=x \
+    FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-t
+done
 
 # b4a (ADR-0019 §11.6): fv-lab only, its GPU gate's cell selected by arm;
 # the script side's FV_B4A_CELLS in FV_EXTRA_ENV is refused with that answer.

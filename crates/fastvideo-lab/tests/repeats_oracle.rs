@@ -479,16 +479,65 @@ fn host_build_id() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// The frozen script is the one the frozen goldens came from: its dry run of
-/// `det-short` and `determinism`, under `fv-lab-goldens.sh`'s inputs, is
-/// `fixtures/<family>-dry-run.txt` line for line (which `tests/dry_run.rs`
-/// holds fv-lab's dry run to), and its `FV_DRY_RUN_GATES` records are the
-/// first four columns of `fixtures/<family>-gates.tsv` (the fifth, a cell's
-/// needs, is `verify-weights.sh --list`'s, added by the goldens script).
+/// The oracle's nine tensor-diff targets, as `fv-lab-goldens.sh` named them
+/// for `oracle-{dry-run.txt,gates.tsv}` (ADR-0019 §15).
+const ORACLE_GOLDEN_TARGETS: &str = "fasth3-8step fasth3-8step-vsa0 fasth3-4step-vsa fasth3-4step-dense h3-ref2va-4step ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense";
+
+/// The ten clip-metric targets, as it named them for `oracle-extra-*` (§20.3).
+const ORACLE_EXTRA_GOLDEN_TARGETS: &str = "ltx25-i2v ltx25-kf ltx25-ref2v ltx25-a2v ltx25-a2v-i2v ltx25-retake ltx25-retake-v ltx25-retake-a ltx25-extend ltx25-a2v-guided";
+
+/// One dry run of a frozen script: its family, the golden it is held to,
+/// and the settings `fv-lab-goldens.sh` ran it under.
+type FrozenDryRun = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+/// The frozen scripts are the ones the frozen goldens came from: the dry run
+/// of `det-short` and `determinism` (`fixtures/det-script/`) and of `oracle`
+/// (`fixtures/oracle-script/`, ADR-0019 §20.8 item 3, §22.20) under
+/// `fv-lab-goldens.sh`'s inputs is `fixtures/<golden>-dry-run.txt` line for
+/// line (which `tests/dry_run.rs` holds fv-lab's dry run to), and its
+/// `FV_DRY_RUN_GATES` records are the first four columns of
+/// `fixtures/<golden>-gates.tsv` (the fifth, a cell's needs, is
+/// `verify-weights.sh --list`'s, added by the goldens script). `oracle` is
+/// read three times, with the settings that goldens script used before the
+/// branch went: its nine tensor-diff targets (`oracle`), the ten clip-metric
+/// targets (`oracle-extra`) and `sfwan13` (`oracle-r2`, the sibling tier),
+/// each at `FV_GEN_TIMEOUT_S=5400`.
 #[test]
 fn the_frozen_script_dry_runs_as_the_frozen_goldens() {
-    for family in ["det-short", "determinism"] {
-        let f = fake(&format!("{family}-frozen-dry"), "");
+    let runs: [FrozenDryRun; 5] = [
+        ("det-short", "det-short", &[]),
+        ("determinism", "determinism", &[]),
+        (
+            "oracle",
+            "oracle",
+            &[
+                ("FV_ORACLE_TARGETS", ORACLE_GOLDEN_TARGETS),
+                ("FV_GEN_TIMEOUT_S", "5400"),
+            ],
+        ),
+        (
+            "oracle",
+            "oracle-extra",
+            &[
+                ("FV_ORACLE_TARGETS", ORACLE_EXTRA_GOLDEN_TARGETS),
+                ("FV_GEN_TIMEOUT_S", "5400"),
+            ],
+        ),
+        (
+            "oracle",
+            "oracle-r2",
+            &[
+                ("FV_ORACLE_TARGETS", "sfwan13"),
+                ("FV_GEN_TIMEOUT_S", "5400"),
+            ],
+        ),
+    ];
+    for (family, golden_name, settings) in runs {
+        let f = fake(&format!("{family}-frozen-dry-{golden_name}"), "");
         let (work, scratch) = (f.dir.join("dry-work"), f.dir.join("dry-scratch"));
         std::fs::create_dir_all(work.join("weights/auxiliary/tae")).unwrap();
         std::fs::write(work.join("weights/auxiliary/tae/.complete"), "").unwrap();
@@ -511,11 +560,12 @@ fn the_frozen_script_dry_runs_as_the_frozen_goldens() {
             .env("FV_SCRATCH", &scratch)
             .env("FV_RUN_TAG", "1234567-10241200")
             .env("FV_BASELINE_SHA", "7654321")
+            .envs(settings.iter().copied())
             .output()
             .expect("bash runs");
         assert!(
             o.status.success(),
-            "{family}: {}",
+            "{golden_name}: {}",
             String::from_utf8_lossy(&o.stderr)
         );
         let (s, w, r) = (
@@ -544,10 +594,11 @@ fn the_frozen_script_dry_runs_as_the_frozen_goldens() {
             .collect();
         let golden = std::fs::read_to_string(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("fixtures/{family}-dry-run.txt")),
+                .join(format!("fixtures/{golden_name}-dry-run.txt")),
         )
         .expect("frozen golden");
-        assert_eq!(ours, golden.lines().collect::<Vec<_>>(), "{family}");
+        assert!(!golden.trim().is_empty(), "{golden_name}: dry run");
+        assert_eq!(ours, golden.lines().collect::<Vec<_>>(), "{golden_name}");
         let first4 = |t: &str| -> Vec<String> {
             t.lines()
                 .map(|l| l.split('\t').take(4).collect::<Vec<_>>().join("\t"))
@@ -558,11 +609,12 @@ fn the_frozen_script_dry_runs_as_the_frozen_goldens() {
             .replace(&s, "/fvscratch")
             .replace(&w, "/workspace");
         let golden = std::fs::read_to_string(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/{family}-gates.tsv")),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("fixtures/{golden_name}-gates.tsv")),
         )
         .expect("frozen gates");
-        assert!(!golden.is_empty(), "{family}: gates");
-        assert_eq!(first4(&ours), first4(&golden), "{family}: gates");
+        assert!(!golden.is_empty(), "{golden_name}: gates");
+        assert_eq!(first4(&ours), first4(&golden), "{golden_name}: gates");
     }
 }
 

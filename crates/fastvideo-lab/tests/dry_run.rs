@@ -466,6 +466,17 @@ fn matrix_script() -> String {
 #[test]
 fn runpod_matrix_sh_is_gone() {
     assert!(matrix_script().is_empty());
+    // The script path's oracle driver and R2 staging went with it (§22.20).
+    for f in ["scripts/gpu/oracle.sh", "scripts/gpu/r2-stage.sh"] {
+        assert!(
+            !repo_root().join(f).exists(),
+            "{f}: deleted with the script path"
+        );
+    }
+    assert!(
+        repo_root().join("scripts/gpu/upstream/oracle.sh").is_file(),
+        "the reference side stays"
+    );
     // The oracle's frozen copy (§20.8 item 3) is what repeats_oracle.rs runs.
     let frozen = repo_root().join("crates/fastvideo-lab/fixtures/oracle-script/runpod-matrix.sh");
     let t = std::fs::read_to_string(&frozen).expect("fixtures/oracle-script/runpod-matrix.sh");

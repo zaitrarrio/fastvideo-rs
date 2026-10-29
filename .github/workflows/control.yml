@@ -44,6 +44,11 @@ on:
       - "scripts/gcp/vm.sh"
       - "scripts/gcp/lib.sh"
       - "scripts/gcp/tests/**"
+      # deleted with ADR-0019 §22.20; listed to keep them gone: a PR that restores one
+      # runs the guards (fv-lab-goldens.sh, the route and plan tests)
+      - "scripts/gpu/runpod-matrix.sh"
+      - "scripts/gpu/oracle.sh"
+      - "scripts/gpu/r2-stage.sh"
       - "scripts/gpu/runpod-http.sh"
       - "scripts/gpu/tests/fv-lab-goldens.sh"
       - "scripts/gpu/fv-lab-compare-runs.sh"
@@ -132,6 +137,11 @@ on:
       - "scripts/gcp/vm.sh"
       - "scripts/gcp/lib.sh"
       - "scripts/gcp/tests/**"
+      # deleted with ADR-0019 §22.20; listed to keep them gone: a PR that restores one
+      # runs the guards (fv-lab-goldens.sh, the route and plan tests)
+      - "scripts/gpu/runpod-matrix.sh"
+      - "scripts/gpu/oracle.sh"
+      - "scripts/gpu/r2-stage.sh"
       - "scripts/gpu/runpod-http.sh"
       - "scripts/gpu/tests/fv-lab-goldens.sh"
       - "scripts/gpu/fv-lab-compare-runs.sh"

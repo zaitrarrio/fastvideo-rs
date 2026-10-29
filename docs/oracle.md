@@ -65,13 +65,21 @@ tier, §15 and §20, and `sfwan13` of the `oracle-r2` tier, §21).
 `scripts/gpu/oracle.sh`, the driver of the script path (`runpod-http.sh
 upstream` pods, then a runtime pod running `runpod-matrix.sh oracle`), was
 deleted with `runpod-matrix.sh` when `oracle` retired to fv-lab (ADR-0019
-§20.8 item 4, §22.20); its runs are recorded below as they ran. Its
-`ORACLE_TARGETS` are `--cells` with every arm of `oracle-<target>`, its
-`FV_RUNTIME_STOCK_WAIT_S` is `--stock-wait-s`; its default f32 control is the
-cells' `-f32` arms (the H3 targets and `sfwan13`); `FV_ORACLE_OWN_TEXT` and
-`FV_ORACLE_RUN_MODE=all` have no equivalent (fv-lab refuses them), and
-`UP_AFTER` (an upstream benchmark on the same pod) is `runpod-http.sh
-upstream` with `UP_STEPS` on its own.
+§20.8 item 4, §22.20); its runs are recorded below as they ran. Its settings
+in `fv-lab oracle` (§20.8):
+
+| `oracle.sh` | `fv-lab oracle` |
+|---|---|
+| `ORACLE_TARGETS` | `--cells` with every arm of `oracle-<target>` |
+| `FV_ORACLE_FAMILY` (the runtime family) | `--family` (`oracle`, or `oracle-r2` for `sfwan13`, §21.9) |
+| `FV_ORACLE_EXTRA_ENV` | `--extra-env` (a knob no tier reads is refused) |
+| `FV_RUNTIME_STOCK_WAIT_S` | `--stock-wait-s` |
+| `FV_POD_CAP_S` | `--wall-cap-s` (the runtime pod) and `--upstream-wall-cap-s` (the reference pods), each lowering the tier's or stack's cap |
+| `FV_ORACLE_F32` | the cells' `-f32` arms (the H3 targets and `sfwan13`), selected by arm |
+| `FV_ORACLE_OWN_TEXT` | none: no cell runs on our own text contexts; fv-lab refuses the knob |
+| `FV_ORACLE_RUN_MODE=all` | none: gone with the script path (run `runpod-http.sh kernels` on its own) |
+| `UP_AFTER` (an upstream benchmark on the same pod) | none: `runpod-http.sh upstream` with `UP_STEPS` on its own |
+
 
 The tier's default targets: `fasth3-8step`, `fasth3-4step-vsa`, the controls
 `fasth3-8step-vsa0` (VSA sparsity 0 on both sides: every tile, gated

@@ -41,7 +41,9 @@
 #                                (scripts/gpu/tests/fv-lab-goldens.sh). The volume's
 #                                datacentre comes from FV_PLAN_VOLUME="<id> <dc>" or,
 #                                without it, the API lookup `run` makes. For a
-#                                retired family: `fv-lab pod up` without --yes (its plan)
+#                                retired family: `fv-lab pod up` without --yes (its plan);
+#                                the script body only for gold and the experiment tiers,
+#                                any other name refused (exit 2; ADR-0019 §22.20)
 #   runpod-http.sh plan-upstream [sha] [tag]  print the pod body `upstream` would send
 #                                (no pod, no price check): the payload golden of the
 #                                upstream pods of `fv-lab oracle` (fv-lab-goldens.sh;
@@ -133,6 +135,15 @@ OUT_ROOT="$ROOT/artifacts/runpod/$FAMILY"
 # or route. Refused (exit 2) before the key, any lookup or a pod.
 if [[ "${1:-}" == run || "${1:-}" == all || "${1:-}" == plan ]] && fv_script_retired "$FAMILY"; then
   echo "runpod-http: $FAMILY is retired with no tier (fv-lab-retired.sh FV_SCRIPT_RETIRED, docs/adr/0019-fv-lab.md §18, §22): $(fv_script_retired_why "$FAMILY")" >&2
+  exit 2
+fi
+# `plan`'s script body is the pod body golden of the tiers that never were
+# script families (gold, FV_LAB_EXPERIMENTS); a tier retired to fv-lab gets
+# fv-lab's plan. For any other name it would start the deleted
+# runpod-matrix.sh (ADR-0019 §22.20): refused (exit 2) before the key, as
+# `run` and `all` refuse it before any pod.
+if [[ "${1:-}" == plan && "$FAMILY" != gold ]] && ! fv_lab_experiment "$FAMILY" && ! fv_lab_retired "$FAMILY"; then
+  echo "runpod-http: $FAMILY is no fv-lab tier of fv-lab-retired.sh, gold or an experiment tier, and the script path is gone (runpod-matrix.sh had no family left and was deleted, docs/adr/0019-fv-lab.md §22.20): no body to plan; an fv-lab tier: FV_FAMILY=<tier> runpod-http.sh plan, or fv-lab pod up --sha <sha> --family <tier>" >&2
   exit 2
 fi
 # FV_R2_TREES (ADR-0019 §21.8) was the script runner's R2 trees: r2-stage.sh
@@ -947,7 +958,7 @@ cmd_run() {
   fi
   if [[ "$mode" == run || "$mode" == all ]] && fv_lab_retired "$FAMILY"; then
     refuse_retired_sibling_mode
-    [[ "$mode" == run ]] || die "\`all\` runs runpod-matrix.sh $FAMILY after the kernels, and $FAMILY is fv-lab only (fv-lab-retired.sh): run \`kernels\`, then \`run\`"
+    [[ "$mode" == run ]] || die "\`all\` ran runpod-matrix.sh's cells after the kernels on one pod, and that script is gone (docs/adr/0019-fv-lab.md §22.20); $FAMILY is fv-lab only (fv-lab-retired.sh): run \`kernels\`, then \`run\`"
     fv_lab_route run "$sha"
     return
   fi
@@ -961,7 +972,7 @@ cmd_run() {
   refuse_dropped
   # FV_DRY_RUN=1: say what would run and create nothing.
   if [[ "${FV_DRY_RUN:-0}" == 1 ]]; then
-    echo "runpod-http: dry run: $mode $FAMILY at $sha, nothing created: a $mode pod" >&2
+    echo "runpod-http: dry run: $mode $FAMILY at $sha, nothing created: the pod of \`$mode\`" >&2
     return 0
   fi
   image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}"
@@ -988,10 +999,9 @@ cmd_run() {
     log "host driver too old ($(grep driver_too_old "$OUT_ROOT/$tag/box.txt")); rerun (RUNPOD_ALLOWED_CUDA=13.0 avoids old hosts but also hides the 13.1 / 13.2 ones)"
     rc=1
   fi
-  if grep -q "matrix_exit=[1-9]" "$OUT_ROOT/$tag/matrix.out" 2>/dev/null; then
-    log "matrix exited abnormally: $(grep matrix_exit "$OUT_ROOT/$tag/matrix.out")"
-    rc=1
-  fi
+  # (A matrix.out with matrix_exit=<n> was checked here: only `run` / `all`
+  # wrote one, from runpod-matrix.sh, and neither reaches this pod path since
+  # the script went, ADR-0019 §22.20; fv-lab pod up checks its own.)
   # FV_KEEP_POD=1: the caller deletes the pod (it still serves results to
   # another pod); the FV_POD_CAP_S backstop deletes it regardless.
   if [[ "${FV_KEEP_POD:-0}" == 1 ]]; then

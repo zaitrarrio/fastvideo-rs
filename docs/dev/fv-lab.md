@@ -372,8 +372,11 @@ the hashes files byte for byte and each arm's `compare-dumps` lines, except a `[
 until `sfwan13` (the `oracle-r2` tier's cell, §21) and the ten LTX clip-metric targets (the tier's extra cells, §20)
 passed their checks and `fv-lab oracle` (below) drove the reference pods; it retired with the script in S8 (§22.20),
 and `scripts/gpu/oracle.sh` with it. `FV_ORACLE_OWN_TEXT=1` has no cell. det-short's opt-in `ltx-sol`
-group and other `FV_DET_REPEATS` went with its branch (a tier when wanted). The two retired families' script side is
-frozen for `tests/repeats_oracle.rs` at `0f63c56b` (`crates/fastvideo-lab/fixtures/det-script/`).
+group and other `FV_DET_REPEATS` went with its branch (a tier when wanted). The retired families' script side is
+frozen for `tests/repeats_oracle.rs`: `det-short` and `determinism` at `0f63c56b`
+(`crates/fastvideo-lab/fixtures/det-script/`), `oracle` (its `sfwan13` target included) at `7e513f6a`
+(`crates/fastvideo-lab/fixtures/oracle-script/`), each dry run held to its frozen goldens (`oracle`,
+`oracle-extra`, `oracle-r2`; ADR-0019 §20.8 item 3, §22.20).
 
 ## An oracle run: `fv-lab oracle` (D1h)
 

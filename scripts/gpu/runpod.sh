@@ -847,7 +847,7 @@ cmd_matrix() {
   require_tools curl jq ssh rsync python3
   rp_load_key
   [[ -f "$RP_SSH_KEY" ]] || die "ssh key $RP_SSH_KEY missing"
-  local vol dc auth name id host port family cmd gen
+  local vol dc auth name id host port family cmd
   vol="$(jq -r '.id // empty' "$RP_STATE/volume.json" 2>/dev/null || cat "$RP_STATE/volume.id" 2>/dev/null || true)"
   [[ -n "$vol" ]] || die "no volume id"
   [[ -f "$(rp_volume_ready_file)" ]] || die "volume not verified"
@@ -875,10 +875,10 @@ cmd_matrix() {
     # Every family runs through fv-lab (retired; runpod-matrix.sh is gone,
     # ADR-0019 §22.20), and fv-lab reads FV_GEN_TIMEOUT_S as its per-arm cap:
     # it gets the tier's cell_timeout_s (ltx and wan: 3600; ltx25-two-stage
-    # takes about 540 s and wan's 50-step 14B and 5B arms longer), not the
-    # script families' 300 s, which this exported until §22.20.
-    gen=""
-    if ! rp_ssh "$host" "$port" "export FV_WORK=/workspace ${gen} PATH=/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:\$PATH
+    # takes about 540 s and wan's 50-step 14B and 5B arms longer), so no
+    # FV_GEN_TIMEOUT_S is exported (the script families' 300 s was, until
+    # §22.20).
+    if ! rp_ssh "$host" "$port" "export FV_WORK=/workspace PATH=/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:\$PATH
       $cmd"; then
       rp_log "family $family returned non-zero (cells continue-on-fail inside the script)"
     fi

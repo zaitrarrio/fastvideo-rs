@@ -58,9 +58,9 @@ FV_LAB_EXPERIMENTS="h3-graphs sol-bench-a1 sol-bench-a3 sol-bench-a2 sol-bench-b
 # tier; fv-lab's dry run equals the first with the tier's name for the
 # family's and its merged weights root for the volume's
 # (crates/fastvideo-lab/tests/dry_run.rs). No branch of its own:
-# runpod-http.sh refuses `run` / `all` for it and names fv-lab's command; the
-# script runs those targets as <family> (FV_FAMILY=<family>, with
-# fv_lab_sibling_mode's settings). A sibling of a family that retires is
+# runpod-http.sh refused `run` / `all` for it and named fv-lab's command; the
+# script ran those targets as <family> (FV_FAMILY=<family>, with the tier's
+# settings). A sibling of a family that retires is
 # frozen with it (FV_LAB_RETIRED, ADR-0019 §10) and moves to
 # FV_LAB_RETIRED_SIBLINGS below. None is left: oracle-r2 moved there with
 # oracle (ADR-0019 §21.9 item 1, §22.20), and no family has a branch.
@@ -75,24 +75,26 @@ FV_LAB_SIBLINGS=""
 # target, whose tree the tier fetches from R2, §21; frozen with oracle in S8,
 # §22.20).
 # That setting with the family names the tier in every refusal
-# (fv_lab_retired_sibling_mode below: runpod-matrix.sh, runpod-http.sh run /
-# all / plan, fv-lab's --extra-env), since dropping it alone would run the
-# family's own prompt set under the same arm names.
+# (fv_lab_retired_sibling_mode below: runpod-http.sh run / all / plan, fv-lab's
+# --extra-env and run; runpod-matrix.sh too until it went, §22.20), since
+# dropping it alone would run the family's own prompt set (hd5) or other
+# targets (oracle-r2) under the tier's arm names.
 # Its fixtures stay as the script wrote them as a sibling (the hd family's
 # dry run under that setting, `[hd]` lines and its `prompt set:` line; its pod
 # body runpod-http.sh plan's for FV_FAMILY=hd5): the tests read them with the
 # family's name as the tier's and without that line, as while it was live
 # (crates/fastvideo-lab/tests/common Sibling). Like every tier of
 # FV_LAB_RETIRED it is fv-lab only: runpod-http.sh run / plan route it to
-# fv-lab pod up, runpod.sh to fv-lab run, runpod-matrix.sh refuses it.
+# fv-lab pod up, runpod.sh to fv-lab run (runpod-matrix.sh refused it until it
+# went, §22.20).
 FV_LAB_RETIRED_SIBLINGS="hd5:hd:FV_PROMPTS=/opt/fastvideo-rs/scripts/gpu/prompts-hd5.json oracle-r2:oracle:FV_ORACLE_TARGETS=sfwan13"
 
 # The runpod-matrix.sh families retired with no tier (ADR-0019 §18, D1g,
 # coordinator decision 2026-10-26): finished experiments and one-time
 # measurements whose evidence is committed or recorded, families the EU volume
 # cannot run, and ones another tier covers. Their `case` branches are deleted
-# and nothing runs them: runpod-matrix.sh, runpod-http.sh run / all / plan and
-# runpod.sh gpu / matrix refuse them (exit 2) with fv_script_retired_why's
+# and nothing runs them: runpod-http.sh run / all / plan and runpod.sh gpu /
+# matrix refuse them (exit 2; runpod-matrix.sh too until it went, §22.20) with fv_script_retired_why's
 # pointer, never route them to fv-lab (they are no tier of lab/tiers.toml).
 # A family joins this list in the PR that deletes its branch. The last nine
 # (ADR-0019 §22, S1, FVID-2026-10-26-d1-remaining) are finished studies and
@@ -125,13 +127,8 @@ fv_lab_sibling() {
   return 1
 }
 
-# fv_lab_sibling_mode <tier>: the settings under which the script ran a live
-# sibling tier's cells as its family (FV_FAMILY=<family> plus these), for the
-# refusals. No live sibling is left (oracle-r2's mode is in
-# FV_LAB_RETIRED_SIBLINGS since S8), so it prints nothing.
-fv_lab_sibling_mode() {
-  :
-}
+# (fv_lab_sibling_mode, a live sibling's settings for the refusals, went in
+# S8: no live sibling is left; oracle-r2's mode is in FV_LAB_RETIRED_SIBLINGS.)
 
 # fv_lab_retired_sibling_mode <family> <K> <V>: the frozen sibling tier
 # (FV_LAB_RETIRED_SIBLINGS) whose mode <family> with <K>=<V> is, printed as

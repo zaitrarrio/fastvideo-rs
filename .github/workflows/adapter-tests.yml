@@ -45,8 +45,13 @@ on:
       - "scripts/gpu/verify-weights.sh"
       - "scripts/gpu/volumes.sh"
       - "scripts/gpu/fetch-tae.sh"
-      # tests/dry_run.rs reads this (the retired families; runpod-matrix.sh is gone, ADR-0019 §22.20).
+      # tests/dry_run.rs reads this (the retired families).
       - "scripts/gpu/fv-lab-retired.sh"
+      # deleted with ADR-0019 §22.20; listed to keep them gone: a PR that restores one
+      # runs tests/dry_run.rs's guard (runpod_matrix_sh_is_gone, all three)
+      - "scripts/gpu/runpod-matrix.sh"
+      - "scripts/gpu/oracle.sh"
+      - "scripts/gpu/r2-stage.sh"
       # tests/report.rs and tests/fetch_tree.rs (ADR-0019 §13): the reports'
       # inputs, the goldens' layout helper, the script fetch_tree is cut from.
       - "scripts/gpu/runpod-http.sh"
@@ -95,8 +100,13 @@ on:
       - "scripts/gpu/verify-weights.sh"
       - "scripts/gpu/volumes.sh"
       - "scripts/gpu/fetch-tae.sh"
-      # tests/dry_run.rs reads this (the retired families; runpod-matrix.sh is gone, ADR-0019 §22.20).
+      # tests/dry_run.rs reads this (the retired families).
       - "scripts/gpu/fv-lab-retired.sh"
+      # deleted with ADR-0019 §22.20; listed to keep them gone: a PR that restores one
+      # runs tests/dry_run.rs's guard (runpod_matrix_sh_is_gone, all three)
+      - "scripts/gpu/runpod-matrix.sh"
+      - "scripts/gpu/oracle.sh"
+      - "scripts/gpu/r2-stage.sh"
       # tests/report.rs and tests/fetch_tree.rs (ADR-0019 §13): the reports'
       # inputs, the goldens' layout helper, the script fetch_tree is cut from.
       - "scripts/gpu/runpod-http.sh"

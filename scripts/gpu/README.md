@@ -186,12 +186,17 @@ fails on the next poll.
   PNG frames stay on the instance; the mp4, contact sheet and latents are pulled after every stage.
 - `artifacts/clips/<run>/<name>.mp4` (+ `<name>.png` contact sheet): every generated clip, copied as soon as its stage is pulled.
 
-## Evaluation layer (Runpod matrix)
+## Evaluation layer
 
-sol-engine promotes an optimization only after its evaluation gate; these are the pieces of it here.
+sol-engine promotes an optimization only after its evaluation gate; these are the pieces of it here. The Runpod
+matrix that read `FV_PROMPTS` / `FV_LPIPS` and ran `gate_cells` (`runpod-matrix.sh`) was deleted with its last branch
+(`docs/adr/0019-fv-lab.md` §22.20): the fv-lab tiers carry these pieces now (a prompt set is an arm's `--prompts`
+file, a cell's `[[prompt_file]]` or a repository set as in `h3-graphs`; a gate a cell's `[[gate]]`; LPIPS `fv-lab pod
+up --lpips`, or `FV_LPIPS=1` for `fv-lab run`). The bullets below say what the pieces are; the
+`FV_PROMPTS` and `gate_cells` forms are the script's, kept for its recorded runs.
 
 - `benchmark.json` in every H3 / LTX-2 gen cell (`<cell>/benchmark.json`, beside `frames/`): `total_s` / `denoise_s` / `decode_s`, `stage_seconds`, `step_seconds`, peak memory, and what each forward ran (`teacache` decisions, `attention` routes with `sol_calls` / `dense_video_calls` / `tau_calls`, `vsa` density, `ffn_chunking`, `quantized_linears`). Keys follow sol-engine's `collect_run.py` and its H3 / LTX-2.5 RTX5090 runners (`crates/fastvideo-gpucheck/src/benchmark.rs`).
-- `FV_PROMPTS=5`: gen cells run the five sol-engine prompts of `prompts-eval.json` (fixed seeds) in one warm process, one clip per prompt under `<cell>/frames/<name>/`; `benchmark.json` then holds each prompt under `prompts` and the medians at the top level. Unset keeps the single `FV_PROMPT` run.
-- `FV_LPIPS=1`: `fetch-lpips.sh` (hash-pinned torchvision AlexNet + LPIPS v0.1 heads, read as the official `.pth` files) and `compare-clips --lpips`, which scores sol-engine's frame selection on the GPU and reports `lpips_mean` / `lpips_max`. `fv-gpucheck lpips --weights <dir>` checks the port against the official package's numbers on `crates/fastvideo-gpucheck/fixtures/lpips` (recomputed by the upstream pod step `lpips:ref`).
-- `fv-gpucheck gate --baseline <cell> --candidate <cell> --policy gate-policy.toml [--compare ...] [--off-compare ...] [--kind lossy|exact]`: sol-engine's promotion rule over those files; `gate_cells` in the matrix writes `$RUNS/gate/gate-<b>--<c>.json`.
+- `FV_PROMPTS=5` (the script's; fv-lab refuses it, a prompt set being a cell's workload): gen cells run the five sol-engine prompts of `prompts-eval.json` (fixed seeds) in one warm process, one clip per prompt under `<cell>/frames/<name>/`; `benchmark.json` then holds each prompt under `prompts` and the medians at the top level. Unset keeps the single `FV_PROMPT` run.
+- `FV_LPIPS=1` (fv-lab: `--lpips`, which `runpod-http.sh` maps from it): `fetch-lpips.sh` (hash-pinned torchvision AlexNet + LPIPS v0.1 heads, read as the official `.pth` files) and `compare-clips --lpips`, which scores sol-engine's frame selection on the GPU and reports `lpips_mean` / `lpips_max`. `fv-gpucheck lpips --weights <dir>` checks the port against the official package's numbers on `crates/fastvideo-gpucheck/fixtures/lpips` (recomputed by the upstream pod step `lpips:ref`).
+- `fv-gpucheck gate --baseline <cell> --candidate <cell> --policy gate-policy.toml [--compare ...] [--off-compare ...] [--kind lossy|exact]`: sol-engine's promotion rule over those files; a cell's `[[gate]]` (the script's `gate_cells`) writes `$RUNS/gate/gate-<b>--<c>.json`.
 - `FV_FAMILY=eval` (H3 FastH3 8-step 480p and LTX-2.5 512p, f32 vs bf16 activations, five prompts, LPIPS, the gate, and a second f32 H3 arm as the OFF-identity check) is retired with no tier (`fv-lab-retired.sh` `FV_SCRIPT_RETIRED`, `docs/adr/0019-fv-lab.md` §22): the `precision` tiers run the f32act / bf16act pairs with lossy gates, `fuse` the `exact` gates with an OFF arm, and `--lpips` adds LPIPS to any fv-lab run. The combination in one run, the `BF16_ACT=0` OFF-identity gate and the LPIPS self-test on a pod are lost; its commands are in `git show 4f8822a0:scripts/gpu/runpod-matrix.sh`.
