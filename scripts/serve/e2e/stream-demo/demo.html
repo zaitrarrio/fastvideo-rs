@@ -15,21 +15,22 @@
   fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 12px 0; }
   legend { color: var(--muted); padding: 0 6px; }
   label { display: block; margin: 6px 0 2px; color: var(--muted); font-size: 13px; }
-  input, textarea { width: 100%; background: #171a21; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
+  input, textarea, select { width: 100%; background: #171a21; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
   textarea { min-height: 64px; resize: vertical; }
   button { background: var(--accent); color: #06111f; border: 0; border-radius: 6px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; margin: 8px 8px 0 0; }
   button.secondary { background: #2b3140; color: var(--fg); }
   button:disabled { opacity: .5; cursor: default; }
-  #status { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+  #status, #models { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
   code { color: var(--accent); }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
 <main>
   <h1>Live stream demo</h1>
-  <p class="sub">A causal model (SF-Wan) renders one continuous stream on the GPU, fv-serve publishes it over WHIP to a Cloudflare Stream live input, and this page plays it back over WHEP. Switch the prompt while it runs.</p>
+  <p class="sub">fv-serve renders one stream on the GPU (a causal model such as SF-Wan as one continuous rollout; a clip model such as H3, LTX or Wan as a clip queue), publishes it over WHIP to a Cloudflare Stream live input, and this page plays it back over WHEP. Steer the prompt while it runs.</p>
 
   <video id="video" autoplay playsinline muted controls></video>
   <div id="status">idle</div>
@@ -40,6 +41,8 @@
       <div><label>fv-serve URL</label><input id="server" placeholder="https://…-8000.proxy.runpod.net"></div>
       <div><label>API key</label><input id="key" type="password" placeholder="fvk-…"></div>
     </div>
+    <button id="load" class="secondary">Load models</button>
+    <div id="models"></div>
   </fieldset>
 
   <fieldset>
@@ -47,8 +50,8 @@
     <label>Opening prompt</label>
     <textarea id="prompt">A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed</textarea>
     <div class="row">
-      <div><label>Model</label><input id="model" value="sfwan21-1.3b"></div>
-      <div><label>Max seconds (session length; a reset restarts the clock)</label><input id="max" type="number" value="300"></div>
+      <div><label>Model (from the server's capabilities)</label><select id="model"></select></div>
+      <div><label id="maxLabel">Max seconds (causal: session length, a reset restarts the clock; clip: optional)</label><input id="max" type="number" value="300"></div>
     </div>
     <button id="start">Start stream</button>
     <button id="stop" class="secondary" disabled>Stop</button>
@@ -59,10 +62,11 @@
     </div>
   </fieldset>
 
-  <fieldset>
-    <legend>Steer</legend>
-    <label>New prompt (applied at the next block boundary)</label>
+  <fieldset id="steer">
+    <legend>Steer <span id="modeTag"></span></legend>
+    <label id="nextLabel">New prompt</label>
     <textarea id="next">The same river as mist rolls in and the light turns blue and cold, slow steady forward camera motion</textarea>
+    <div class="row clip-only hidden"><div><label>Clip length (seconds; blank: the session's default)</label><input id="clipSec" type="number" step="0.5" placeholder="e.g. 5"></div><div></div></div>
     <button id="switch" disabled>Switch prompt</button>
     <button id="pause" class="secondary" disabled>Pause</button>
     <button id="resume" class="secondary" disabled>Resume</button>
@@ -73,7 +77,8 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const statusEl = $('status');
-  let streamId = null, pc = null, poll = null, whep = null;
+  let streamId = null, mode = null, pc = null, poll = null, whep = null;
+  let modelKinds = {};
 
   const save = () => { try { localStorage.setItem('demo.server', $('server').value); } catch {} };
   try { $('server').value = localStorage.getItem('demo.server') || ''; } catch {}
@@ -93,6 +98,49 @@
     if (!r.ok) throw new Error(`${method} ${path}: ${r.status} ${j?.error?.message || j?.message || text.slice(0, 200)}`);
     return j;
   };
+
+  // The models the server serves and how each streams: `caps.stream` is
+  // {causal: {...}} (one rollout: set_prompt / set_paused / reset) or
+  // {clip: {...}} (a clip queue: enqueue / set_autoplay / reset).
+  const kindOf = (caps) => {
+    const s = caps?.stream;
+    if (!s || typeof s !== 'object') return null;
+    return 'causal' in s ? 'causal' : 'clip' in s ? 'clip' : Object.keys(s)[0] || null;
+  };
+  async function loadModels() {
+    save();
+    const sel = $('model');
+    try {
+      const c = await api('GET', '/fv/v1/capabilities');
+      const list = (c.models || []).map((m) => ({ id: m.caps?.id, kind: kindOf(m.caps) })).filter((m) => m.id);
+      const keep = sel.value;
+      sel.innerHTML = '';
+      modelKinds = {};
+      for (const m of list) {
+        modelKinds[m.id] = m.kind;
+        const o = document.createElement('option');
+        o.value = m.id; o.textContent = `${m.id}${m.kind ? ' · ' + m.kind : ' · no stream caps'}`;
+        sel.appendChild(o);
+      }
+      const streaming = list.filter((m) => m.kind);
+      if (keep && list.some((m) => m.id === keep)) sel.value = keep;
+      else if (streaming.length) sel.value = streaming[0].id;
+      $('models').textContent = list.length ? `${list.length} model(s): ${list.map((m) => `${m.id} (${m.kind || 'no stream'})`).join(', ')}` : 'the server lists no models';
+      showMode(modelKinds[sel.value] || null);
+    } catch (e) { $('models').textContent = String(e); }
+  }
+  $('load').onclick = loadModels;
+  $('model').onchange = () => { if (!streamId) showMode(modelKinds[$('model').value] || null); };
+
+  function showMode(m) {
+    mode = m;
+    $('modeTag').textContent = m ? `· ${m}` : '';
+    for (const el of document.querySelectorAll('.clip-only')) el.classList.toggle('hidden', m !== 'clip');
+    $('switch').textContent = m === 'clip' ? 'Enqueue clip' : 'Switch prompt';
+    $('nextLabel').textContent = m === 'clip' ? 'Next clip prompt (queued behind the clips already generating)' : 'New prompt (applied at the next block boundary)';
+    $('pause').textContent = m === 'clip' ? 'Pause (autoplay off)' : 'Pause';
+    $('resume').textContent = m === 'clip' ? 'Resume (autoplay on)' : 'Resume';
+  }
 
   async function playWhep(url) {
     await stopPlayer();
@@ -123,6 +171,13 @@
     $('start').disabled = on;
   };
 
+  const sessionLine = (s) => {
+    const ses = s.session || {};
+    if (s.mode === 'causal') return ses.prompt ? ` · prompt: ${String(ses.prompt).slice(0, 60)}…` : '';
+    if (s.mode === 'clip') return ` · ${ses.playing ? 'playing' : 'idle'}, ${ses.generation_queued ?? '?'} generating, ${ses.playout_queued ?? '?'} queued, autoplay ${ses.autoplay ?? '?'}`;
+    return '';
+  };
+
   async function follow(id) {
     streamId = id;
     enable(true);
@@ -131,9 +186,9 @@
     const tick = async () => {
       try {
         const s = await api('GET', `/fv/v1/streams/${id}`);
+        if (s.mode && s.mode !== mode) showMode(s.mode);
         const st = s.status || {};
-        const prompt = s.session?.prompt ? ` · prompt: ${String(s.session.prompt).slice(0, 60)}…` : '';
-        say(`stream ${id}: ${st.state || '?'} · output ${st.output_state || '?'}${st.output_error ? ' (' + st.output_error + ')' : ''}${prompt}`);
+        say(`stream ${id} (${s.model || '?'}, ${s.mode || '?'}): ${st.state || '?'} · output ${st.output_state || '?'}${st.output_error ? ' (' + st.output_error + ')' : ''}${sessionLine(s)}`);
         const whepUrl = s.playback?.whep_url;
         if (!playing && whepUrl && st.output_state === 'publishing') {
           playing = true;
@@ -141,7 +196,7 @@
           try { await playWhep(whepUrl); } catch (e) { playing = false; say(`WHEP: ${e}`); }
         }
         if (['closed', 'failed', 'ended'].includes(st.state) || st.output_state === 'failed' || st.output_state === 'ended') {
-          clearInterval(poll); enable(false); await stopPlayer();
+          clearInterval(poll); enable(false); streamId = null; await stopPlayer();
           say(`stream ${id}: ${st.state} · output ${st.output_state}${st.output_error ? ' (' + st.output_error + ')' : ''}${st.end_reason ? ' · ' + st.end_reason : ''}`);
         }
       } catch (e) { say(String(e)); }
@@ -154,21 +209,34 @@
     save();
     try {
       say('starting…');
-      const s = await api('POST', '/fv/v1/streams', {
-        model: $('model').value, prompt: $('prompt').value, max_seconds: Number($('max').value) || undefined,
-        output: { kind: 'cloudflare' },
-      });
+      const body = { model: $('model').value, prompt: $('prompt').value, output: { kind: 'cloudflare' } };
+      const max = Number($('max').value);
+      if (max > 0) body.max_seconds = max;
+      const s = await api('POST', '/fv/v1/streams', body);
       $('joinId').value = s.id;
       follow(s.id);
     } catch (e) { say(String(e)); }
   };
   $('join').onclick = () => { save(); if ($('joinId').value) follow($('joinId').value.trim()); };
   $('stop').onclick = async () => { try { await api('DELETE', `/fv/v1/streams/${streamId}`); } catch (e) { say(String(e)); } };
-  const cmd = (type, data) => async () => { try { const r = await api('POST', `/fv/v1/streams/${streamId}/commands`, data === undefined ? { type } : { type, data }); say(`${type}: ${JSON.stringify(r.reply ?? r).slice(0, 160)}`); } catch (e) { say(String(e)); } };
-  $('switch').onclick = () => cmd('set_prompt', { prompt: $('next').value })();
-  $('pause').onclick = cmd('set_paused', { paused: true });
-  $('resume').onclick = cmd('set_paused', { paused: false });
-  $('reset').onclick = cmd('reset', undefined);
+  const cmd = async (type, data) => {
+    try {
+      const r = await api('POST', `/fv/v1/streams/${streamId}/commands`, data === undefined ? { type } : { type, data });
+      say(`${type}: ${JSON.stringify(r.reply ?? r).slice(0, 160)}`);
+    } catch (e) { say(String(e)); }
+  };
+  $('switch').onclick = () => {
+    if (mode === 'clip') {
+      const sec = Number($('clipSec').value);
+      cmd('enqueue', sec > 0 ? { prompt: $('next').value, seconds: sec } : { prompt: $('next').value });
+    } else cmd('set_prompt', { prompt: $('next').value });
+  };
+  $('pause').onclick = () => mode === 'clip' ? cmd('set_autoplay', false) : cmd('set_paused', { paused: true });
+  $('resume').onclick = () => mode === 'clip' ? cmd('set_autoplay', true) : cmd('set_paused', { paused: false });
+  $('reset').onclick = () => cmd('reset', undefined);
+
+  showMode(null);
+  if ($('key').value || $('server').value) loadModels();
 })();
 </script>
 </body>
