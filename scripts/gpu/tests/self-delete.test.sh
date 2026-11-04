@@ -70,6 +70,7 @@ LOCAL=(
   scripts/serve/e2e/ltx-pod.sh
   scripts/serve/e2e/pod.sh
   scripts/serve/e2e/segments-pod.sh
+  scripts/serve/e2e/stream-demo/stream-demo-pod.sh
   scripts/serve/e2e/wan-pod.sh
   scripts/serve/runpod-pod.sh
   scripts/serve/runpod-sfwan-whip.sh
