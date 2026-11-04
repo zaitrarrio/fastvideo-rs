@@ -79,6 +79,7 @@
   const statusEl = $('status');
   let streamId = null, mode = null, pc = null, poll = null, whep = null;
   let modelKinds = {};
+  let loadSeq = 0;
 
   const save = () => { try { localStorage.setItem('demo.server', $('server').value); } catch {} };
   try { $('server').value = localStorage.getItem('demo.server') || ''; } catch {}
@@ -110,8 +111,10 @@
   async function loadModels() {
     save();
     const sel = $('model');
+    const seq = ++loadSeq;
     try {
       const c = await api('GET', '/fv/v1/capabilities');
+      if (seq !== loadSeq) return; // a newer load is on its way
       const list = (c.models || []).map((m) => ({ id: m.caps?.id, kind: kindOf(m.caps) })).filter((m) => m.id);
       const keep = sel.value;
       sel.innerHTML = '';
@@ -127,7 +130,7 @@
       else if (streaming.length) sel.value = streaming[0].id;
       $('models').textContent = list.length ? `${list.length} model(s): ${list.map((m) => `${m.id} (${m.kind || 'no stream'})`).join(', ')}` : 'the server lists no models';
       showMode(modelKinds[sel.value] || null);
-    } catch (e) { $('models').textContent = String(e); }
+    } catch (e) { if (seq === loadSeq) $('models').textContent = String(e); }
   }
   $('load').onclick = loadModels;
   $('model').onchange = () => { if (!streamId) showMode(modelKinds[$('model').value] || null); };
@@ -236,7 +239,7 @@
   $('reset').onclick = () => cmd('reset', undefined);
 
   showMode(null);
-  if ($('key').value || $('server').value) loadModels();
+  $('key').onchange = loadModels;
 })();
 </script>
 </body>
