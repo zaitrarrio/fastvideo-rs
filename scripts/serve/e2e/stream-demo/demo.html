@@ -131,17 +131,19 @@
     const tick = async () => {
       try {
         const s = await api('GET', `/fv/v1/streams/${id}`);
-        const out = s.output || {};
+        const st = s.status || {};
         const prompt = s.session?.prompt ? ` · prompt: ${String(s.session.prompt).slice(0, 60)}…` : '';
-        const ostate = out.state || out.phase || s.output_state || '?';
-        say(`stream ${id}: ${s.state} · output ${ostate}${out.error ? ' (' + out.error + ')' : ''}${prompt}`);
+        say(`stream ${id}: ${st.state || '?'} · output ${st.output_state || '?'}${st.output_error ? ' (' + st.output_error + ')' : ''}${prompt}`);
         const whepUrl = s.playback?.whep_url;
-        if (!playing && whepUrl && (ostate === 'publishing' || s.state === 'streaming')) {
+        if (!playing && whepUrl && st.output_state === 'publishing') {
           playing = true;
           say(`playing over WHEP: ${whepUrl}`);
-          await playWhep(whepUrl);
+          try { await playWhep(whepUrl); } catch (e) { playing = false; say(`WHEP: ${e}`); }
         }
-        if (s.state === 'closed' || s.state === 'failed') { clearInterval(poll); enable(false); await stopPlayer(); }
+        if (['closed', 'failed', 'ended'].includes(st.state) || st.output_state === 'failed' || st.output_state === 'ended') {
+          clearInterval(poll); enable(false); await stopPlayer();
+          say(`stream ${id}: ${st.state} · output ${st.output_state}${st.output_error ? ' (' + st.output_error + ')' : ''}${st.end_reason ? ' · ' + st.end_reason : ''}`);
+        }
       } catch (e) { say(String(e)); }
     };
     poll = setInterval(tick, 2000);
