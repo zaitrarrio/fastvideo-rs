@@ -41,7 +41,8 @@
 # default sfwan); FV_DEMO_WEIGHTS (volume | r2 | hub; default volume);
 # FV_DEMO_SCRIPTS_REF (the git ref the pod fetches scripts/gpu from for r2 and
 # hub; default HEAD, which must be pushed); RUNPOD_GPU_TYPES ('|' or ','
-# separated; default: the volume's types with volume, else H100 / RTX PRO 6000
+# separated; default: the volume's types with volume, a 96 GB card (RTX PRO
+# 6000 / H200) for a preset with min_vram_gb over 80, else H100 / RTX PRO 6000
 # / H100 NVL); RUNPOD_GPU_MAX_DPH (4.0); FV_POD_CAP_S (14400); FV_MIN_BALANCE
 # (8); FV_DEMO_READY_S (2400); FV_SERVE_IMAGE (digest ref; default: :cuda).
 set -euo pipefail
@@ -95,18 +96,24 @@ resolve_digest() { # ref -> ghcr.io/repo@sha256:…
   echo "ghcr.io/$repo@$digest"
 }
 
-# The launch plan: the preset's config and trees against the weights source
-# (exit 2 with the reason when the source cannot serve it).
-PLAN="$(python3 -I "$HERE/stream-demo-plan.py" --root "$ROOT" --preset "$PRESET" --source "$WEIGHTS")" || exit 2
+# The launch plan (up and plan only): the preset's config and trees against
+# the weights source (exit 2 with the reason when the source cannot serve it).
+PLAN=""
 plan() { jq -r "$@" <<<"$PLAN"; }
-DISK_GB="$(plan .disk_gb)"
-WEIGHTS_DIR="$(plan .weights)"
-if [[ "$WEIGHTS" == volume ]]; then
-  fv_check_volume "$(plan .volume.id)"
-  GPUS="${RUNPOD_GPU_TYPES:-$(plan .volume.gpus)}"
-else
-  GPUS="${RUNPOD_GPU_TYPES:-NVIDIA H100 80GB HBM3|NVIDIA RTX PRO 6000 Blackwell Server Edition|NVIDIA H100 NVL}"
-fi
+load_plan() {
+  PLAN="$(python3 -I "$HERE/stream-demo-plan.py" --root "$ROOT" --preset "$PRESET" --source "$WEIGHTS")" || exit 2
+  DISK_GB="$(plan .disk_gb)"
+  WEIGHTS_DIR="$(plan .weights)"
+  if [[ "$WEIGHTS" == volume ]]; then
+    fv_check_volume "$(plan .volume.id)"
+    GPUS="${RUNPOD_GPU_TYPES:-$(plan .volume.gpus)}"
+  elif [[ "$(plan .min_vram_gb)" -gt 80 ]]; then
+    # A preset that wants a 96 GB card (the family presets: NVFP4 members need sm_100 / sm_120).
+    GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX PRO 6000 Blackwell Server Edition|NVIDIA H200}"
+  else
+    GPUS="${RUNPOD_GPU_TYPES:-NVIDIA H100 80GB HBM3|NVIDIA RTX PRO 6000 Blackwell Server Edition|NVIDIA H100 NVL}"
+  fi
+}
 
 # The pod's start command: the demo page on :8001, the weights where fv-boot
 # does not fetch them itself (r2), then fv-boot as the image would run it.
@@ -195,14 +202,16 @@ describe() {
 }
 
 cmd_plan() {
+  load_plan
   describe
   IFS='|' read -r -a types <<<"${GPUS//,/|}"
   payload "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda" "${types[0]}" "fv-stream-demo-plan" "<sha256 of the run key>" \
-    | jq '.env.FV_DEMO_HTML_B64 = "<demo.html>" | .env.FV_WORKER_TOML_B64 = "<\(.env.FV_WORKER_TOML_B64 | @base64d | length) bytes of config>" | .dockerStartCmd = ["<\(.dockerStartCmd[0] | length) bytes>"]'
+    | jq '.env.FV_DEMO_HTML_B64 = "<demo.html>" | .env.FV_CF_STREAM_API_TOKEN = "<the Cloudflare Stream token>" | .env.FV_WORKER_TOML_B64 = "<\(.env.FV_WORKER_TOML_B64 | @base64d | length) bytes of config>" | .dockerStartCmd = ["<\(.dockerStartCmd[0] | length) bytes>"]'
 }
 
 cmd_up() {
   : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
+  load_plan
   [[ -n "$CF_TOKEN" ]] || die "no Cloudflare Stream token (FV_CF_STREAM_API_TOKEN or CLOUDFLARE_API_KEY)"
   [[ -z "$(st pod)" ]] || die "state $STATE already has pod $(st pod); run down first"
   describe

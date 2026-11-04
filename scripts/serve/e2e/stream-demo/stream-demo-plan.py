@@ -6,7 +6,8 @@ resolved against one weights source (stream-demo-pod.sh calls this; stdlib only)
 
 Prints one JSON object:
 
-    preset, config (path), config_b64, variants, trees (every tree the config
+    preset, config (path), config_b64, variants, min_vram_gb (the preset's, 0 when
+    unset), trees (every tree the config
     loads: the variants' trees from families/*.toml, ${FV_WEIGHTS}/<tree>
     references, the preset's pre-quantized trees), aux (the auxiliary/ files
     among them), bytes (the trees' size per scripts/gpu/weights-r2.tsv),
@@ -82,18 +83,19 @@ def families(root):
 def preset_of(root, name):
     with open(os.path.join(root, "deploy/deploy.toml"), "rb") as f:
         deploy = tomllib.load(f)
-    presets = {p["id"]: p for p in deploy.get("presets", [])}
+    # The model presets and the family presets (every variant of a family on one pod).
+    presets = {p["id"]: p for p in deploy.get("presets", []) + deploy.get("family_presets", [])}
     if name in presets:
         p = presets[name]
-        return name, os.path.join(root, "configs/serve", p["config"]), p.get("prequant", []), p.get("container_disk_gb")
+        return name, os.path.join(root, "configs/serve", p["config"]), p.get("prequant", []), p.get("container_disk_gb"), p.get("min_vram_gb", 0)
     path = name if os.path.isfile(name) else os.path.join(root, "configs/serve", name)
     if not os.path.isfile(path):
         die(f"preset {name}: not a deploy/deploy.toml preset id ({', '.join(sorted(presets))}) nor a configs/serve file")
     base = os.path.basename(path)
     for p in presets.values():
         if p["config"] == base:
-            return p["id"], path, p.get("prequant", []), p.get("container_disk_gb")
-    return os.path.splitext(base)[0], path, [], None
+            return p["id"], path, p.get("prequant", []), p.get("container_disk_gb"), p.get("min_vram_gb", 0)
+    return os.path.splitext(base)[0], path, [], None, 0
 
 
 def config_trees(path, fams):
@@ -125,7 +127,7 @@ def main():
     root = a.root
     gpu = os.path.join(root, "scripts/gpu")
 
-    preset, cfg_path, prequant, disk_override = preset_of(root, a.preset)
+    preset, cfg_path, prequant, disk_override, min_vram_gb = preset_of(root, a.preset)
     cfg, variants, trees = config_trees(cfg_path, families(root))
     manifest = {r[0]: r for r in tsv_rows(os.path.join(gpu, "weights-manifest.tsv"))}
     aux = {d: r for d, r in manifest.items() if len(r) > 1 and r[1].startswith("url:")}
@@ -144,6 +146,7 @@ def main():
         "trees": weight_trees + prequant,
         "aux": aux_files,
         "prequant": prequant,
+        "min_vram_gb": min_vram_gb,
         "source": a.source,
     }
 
