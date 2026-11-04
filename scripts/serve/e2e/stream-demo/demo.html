@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live stream demo</title>
+<style>
+  :root { --bg: #0f1115; --fg: #e6e6e6; --muted: #8a919c; --line: #262a33; --accent: #5aa9ff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 12px 0; }
+  legend { color: var(--muted); padding: 0 6px; }
+  label { display: block; margin: 6px 0 2px; color: var(--muted); font-size: 13px; }
+  input, textarea { width: 100%; background: #171a21; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
+  textarea { min-height: 64px; resize: vertical; }
+  button { background: var(--accent); color: #06111f; border: 0; border-radius: 6px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; margin: 8px 8px 0 0; }
+  button.secondary { background: #2b3140; color: var(--fg); }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+  code { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Live stream demo</h1>
+  <p class="sub">A causal model (SF-Wan) renders one continuous stream on the GPU, fv-serve publishes it over WHIP to a Cloudflare Stream live input, and this page plays it back over WHEP. Switch the prompt while it runs.</p>
+
+  <video id="video" autoplay playsinline muted controls></video>
+  <div id="status">idle</div>
+
+  <fieldset>
+    <legend>Server</legend>
+    <div class="row">
+      <div><label>fv-serve URL</label><input id="server" placeholder="https://…-8000.proxy.runpod.net"></div>
+      <div><label>API key</label><input id="key" type="password" placeholder="fvk-…"></div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Stream</legend>
+    <label>Opening prompt</label>
+    <textarea id="prompt">A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed</textarea>
+    <div class="row">
+      <div><label>Model</label><input id="model" value="sfwan21-1.3b"></div>
+      <div><label>Max seconds (session length; a reset restarts the clock)</label><input id="max" type="number" value="300"></div>
+    </div>
+    <button id="start">Start stream</button>
+    <button id="stop" class="secondary" disabled>Stop</button>
+    <label>Or watch a running stream by id</label>
+    <div class="row">
+      <div><input id="joinId" placeholder="fvstream_…"></div>
+      <div><button id="join" class="secondary">Watch</button></div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Steer</legend>
+    <label>New prompt (applied at the next block boundary)</label>
+    <textarea id="next">The same river as mist rolls in and the light turns blue and cold, slow steady forward camera motion</textarea>
+    <button id="switch" disabled>Switch prompt</button>
+    <button id="pause" class="secondary" disabled>Pause</button>
+    <button id="resume" class="secondary" disabled>Resume</button>
+    <button id="reset" class="secondary" disabled>Reset (scene cut)</button>
+  </fieldset>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('status');
+  let streamId = null, pc = null, poll = null, whep = null;
+
+  const save = () => { try { localStorage.setItem('demo.server', $('server').value); } catch {} };
+  try { $('server').value = localStorage.getItem('demo.server') || ''; } catch {}
+  if (!$('server').value) $('server').value = location.origin.replace(/-8001\./, '-8000.');
+
+  const say = (s) => { statusEl.textContent = s; };
+  const base = () => $('server').value.replace(/\/$/, '');
+  const headers = () => {
+    const h = { 'content-type': 'application/json' };
+    if ($('key').value) h['authorization'] = 'Bearer ' + $('key').value;
+    return h;
+  };
+  const api = async (method, path, body) => {
+    const r = await fetch(base() + path, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined });
+    const text = await r.text();
+    let j; try { j = JSON.parse(text); } catch { j = { raw: text }; }
+    if (!r.ok) throw new Error(`${method} ${path}: ${r.status} ${j?.error?.message || j?.message || text.slice(0, 200)}`);
+    return j;
+  };
+
+  async function playWhep(url) {
+    await stopPlayer();
+    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+    pc.ontrack = (ev) => { $('video').srcObject = ev.streams[0]; };
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await new Promise((res) => {
+      if (pc.iceGatheringState === 'complete') return res();
+      const t = setTimeout(res, 2000);
+      pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } };
+    });
+    const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/sdp' }, body: pc.localDescription.sdp });
+    if (!r.ok) throw new Error(`WHEP ${r.status}`);
+    whep = r.headers.get('location') ? new URL(r.headers.get('location'), url).href : null;
+    await pc.setRemoteDescription({ type: 'answer', sdp: await r.text() });
+  }
+  async function stopPlayer() {
+    if (whep) { try { await fetch(whep, { method: 'DELETE' }); } catch {} whep = null; }
+    if (pc) { pc.close(); pc = null; }
+    $('video').srcObject = null;
+  }
+
+  const enable = (on) => {
+    for (const id of ['switch', 'pause', 'resume', 'reset', 'stop']) $(id).disabled = !on;
+    $('start').disabled = on;
+  };
+
+  async function follow(id) {
+    streamId = id;
+    enable(true);
+    let playing = false;
+    clearInterval(poll);
+    const tick = async () => {
+      try {
+        const s = await api('GET', `/fv/v1/streams/${id}`);
+        const out = s.output || {};
+        const prompt = s.session?.prompt ? ` · prompt: ${String(s.session.prompt).slice(0, 60)}…` : '';
+        const ostate = out.state || out.phase || s.output_state || '?';
+        say(`stream ${id}: ${s.state} · output ${ostate}${out.error ? ' (' + out.error + ')' : ''}${prompt}`);
+        const whepUrl = s.playback?.whep_url;
+        if (!playing && whepUrl && (ostate === 'publishing' || s.state === 'streaming')) {
+          playing = true;
+          say(`playing over WHEP: ${whepUrl}`);
+          await playWhep(whepUrl);
+        }
+        if (s.state === 'closed' || s.state === 'failed') { clearInterval(poll); enable(false); await stopPlayer(); }
+      } catch (e) { say(String(e)); }
+    };
+    poll = setInterval(tick, 2000);
+    tick();
+  }
+
+  $('start').onclick = async () => {
+    save();
+    try {
+      say('starting…');
+      const s = await api('POST', '/fv/v1/streams', {
+        model: $('model').value, prompt: $('prompt').value, max_seconds: Number($('max').value) || undefined,
+        output: { kind: 'cloudflare' },
+      });
+      $('joinId').value = s.id;
+      follow(s.id);
+    } catch (e) { say(String(e)); }
+  };
+  $('join').onclick = () => { save(); if ($('joinId').value) follow($('joinId').value.trim()); };
+  $('stop').onclick = async () => { try { await api('DELETE', `/fv/v1/streams/${streamId}`); } catch (e) { say(String(e)); } };
+  const cmd = (type, data) => async () => { try { const r = await api('POST', `/fv/v1/streams/${streamId}/commands`, data === undefined ? { type } : { type, data }); say(`${type}: ${JSON.stringify(r.reply ?? r).slice(0, 160)}`); } catch (e) { say(String(e)); } };
+  $('switch').onclick = () => cmd('set_prompt', { prompt: $('next').value })();
+  $('pause').onclick = cmd('set_paused', { paused: true });
+  $('resume').onclick = cmd('set_paused', { paused: false });
+  $('reset').onclick = cmd('reset', undefined);
+})();
+</script>
+</body>
+</html>
