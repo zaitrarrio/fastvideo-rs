@@ -2,6 +2,26 @@
 
 Project code: FVID
 
+### FVID · 2026-11-07 · FVID-2026-11-07-moe-aot-flags
+- Trigger: ADR-0024 step 1a: the MoE kernels (`rt/ops.rs` `load_moe_kernels`) always NVRTC-compile `moe_kernel_src()` with fast math + FTZ, while the same region in the main AOT module is compiled with the reference (non-fast) flags
+- Options: own AOT table compiled with fast math + FTZ to match the NVRTC options; load the MoE entry points from the main AOT module (reference flags) and re-measure LingBot gold numbers
+- Decision: **(owner) compile the MoE AOT cubins with fast math** (+ FTZ, the nvcc equivalent of the NVRTC options), as their own `AOT_MOE` table
+- Reason: owner chose the option that keeps served outputs bit-identical (plan §1); flag equivalence is proven by the gpucheck `moe_aot` bit-equality group, not assumed
+- Reversibility: cheap (one build.rs helper and one loader)
+- Executed by: pending (WO-1a, docs/plan/2026-11-07-driver-only-runtime-wo.md)
+- ADR: docs/adr/0024-driver-only-runtime.md (D1)
+- Verification: pending (WO-1a acceptance criteria)
+
+### FVID · 2026-11-07 · FVID-2026-11-07-no-jit-build-gate
+- Trigger: ADR-0024 step 1b: without the new `jit` feature a `cuda` build with no nvcc would embed no kernels, and `task build:cuda` runs `cargo check` with no nvcc
+- Options: `build:cuda` checks with `--features cuda,jit` and build.rs fails a `cuda` build without `jit` and without nvcc; keep the build.rs warning and rely on the runtime `KernelsUnavailable` error
+- Decision: **(owner) adopt the recommendation: `task build:cuda` checks `--features cuda,jit`; build.rs panics for `cuda` without `jit` when no nvcc is found, naming `NVCC` and the `jit` feature**
+- Reason: owner adopted the recommendation: a kernel-less served binary is caught at build time, not on a rented GPU
+- Reversibility: cheap (Taskfile line, one build.rs check)
+- Executed by: pending (WO-1b)
+- ADR: docs/adr/0024-driver-only-runtime.md (D3)
+- Verification: pending (WO-1b acceptance criteria)
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-metronome-deadline-slack
 - Trigger: `stream_causal`'s paused-time session-limit tests hung twice (CI job 120998352681, `check.sh` on the build pod). Root cause: when the first block reaches the causal pacer while tokio's paused clock stands at a timer-wheel slot boundary (e.g. 1.984 s) rather than a whole second, the metronome schedule is anchored on a millisecond that f64 cannot represent; later the clock lands exactly on a deadline that the f64 schedule places a few ulps later (64.109 s vs 64.10900000000001 s), `Metronome::poll` asks for a 7e-15 s wait, `Duration::from_secs_f64` makes it 0 ns, tokio fires that sleep at once without advancing the paused clock, and the pacer spins forever without ticking or closing `ticks`
 - Options: a tokio timeout or retry in the test; round the wait up in the causal pacer only; let `Metronome::poll` treat a deadline within a small slack as reached
