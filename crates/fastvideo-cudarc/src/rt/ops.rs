@@ -4648,7 +4648,10 @@ pub fn scatter_add_rows_host(
 
 /// The MoE region of the kernel source (`rt/kernels/moe.cu`) as its own NVRTC
 /// source (LingBot MoE), sliced from the concatenated string as before the split.
-#[cfg(feature = "cuda")]
+/// `build.rs` writes the same bytes to `$OUT_DIR/moe_aot.cu` for the
+/// ahead-of-time cubins ([`moe_aot::AOT_MOE`], ADR-0024 step 1a); the
+/// `moe_aot_source_is_moe_kernel_src` test keeps the two equal.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub fn moe_kernel_src() -> String {
     const ALL: &str = super::kernel_src::KERNEL_SRC;
     let start = ALL
@@ -4663,9 +4666,86 @@ pub fn moe_kernel_src() -> String {
     )
 }
 
+/// The MoE module compiled ahead of time by `build.rs` (nvcc `-O3
+/// --use_fast_math --ftz=true`, the equivalent of the NVRTC options below;
+/// FVID-2026-11-07-moe-aot-flags): `(sm, cubin, ptx)` per SM in
+/// `FV_CUBIN_SMS`, empty when the build had no nvcc.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub(crate) mod moe_aot {
+    include!(concat!(env!("OUT_DIR"), "/aot_moe.rs"));
+}
+
+#[cfg(test)]
+mod moe_aot_tests {
+    /// nvcc's MoE input (`$OUT_DIR/moe_aot.cu`) is the NVRTC string byte for
+    /// byte, so the embedded cubins compile what NVRTC compiles. Embedded at
+    /// compile time: CI runs test binaries where `OUT_DIR` does not exist.
+    #[test]
+    fn moe_aot_source_is_moe_kernel_src() {
+        let bytes: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/moe_aot.cu"));
+        assert_eq!(bytes, super::moe_kernel_src().as_bytes());
+    }
+
+    /// When nvcc ran, every SM of `FV_CUBIN_SMS` has an ELF cubin and PTX;
+    /// without nvcc the table is empty (NVRTC at run time).
+    #[test]
+    fn moe_aot_table_covers_every_built_sm() {
+        use super::moe_aot::{AOT_MOE, AOT_MOE_BUILT, AOT_MOE_SMS};
+        if !AOT_MOE_BUILT {
+            assert!(AOT_MOE.is_empty());
+            return;
+        }
+        assert!(!AOT_MOE_SMS.is_empty());
+        for sm in AOT_MOE_SMS {
+            assert!(
+                AOT_MOE.iter().any(|(s, cubin, ptx)| s == sm
+                    && cubin.starts_with(b"\x7fELF")
+                    && ptx.contains(&format!(".target sm_{sm}"))),
+                "AOT_MOE has no cubin + PTX for sm_{sm}"
+            );
+        }
+        assert_eq!(AOT_MOE.len(), AOT_MOE_SMS.len());
+    }
+}
+
+/// Which build of the MoE module this thread's [`moe_kernels`] loads.
+/// `Auto` is the served order: embedded cubin, then embedded PTX, then NVRTC
+/// (`FASTVIDEO_KERNELS=nvrtc` skips the embedded ones). `Embedded` and
+/// `Nvrtc` pin one build: fv-gpucheck's `moe_aot` group compares them.
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoeSource {
+    Auto,
+    Embedded,
+    Nvrtc,
+}
+
+#[cfg(feature = "cuda")]
+thread_local! {
+    static MOE_SOURCE: std::cell::Cell<MoeSource> = const { std::cell::Cell::new(MoeSource::Auto) };
+    static MOE_CELL: std::cell::RefCell<Option<std::rc::Rc<MoeKernels>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Pin the MoE module build for this thread and drop the loaded one, so the
+/// next MoE op loads from `source`.
+#[cfg(feature = "cuda")]
+pub fn set_moe_source(source: MoeSource) {
+    MOE_SOURCE.with(|s| s.set(source));
+    MOE_CELL.with(|c| *c.borrow_mut() = None);
+}
+
+/// Where this thread's MoE module came from (`cubin sm120`, `ptx compute90`,
+/// or the `nvrtc_sass` origin), loading it if needed.
+#[cfg(feature = "cuda")]
+pub fn moe_kernels_origin() -> Result<String> {
+    Ok(moe_kernels()?.origin.clone())
+}
+
 #[cfg(feature = "cuda")]
 struct MoeKernels {
     _module: std::sync::Arc<cudarc::driver::CudaModule>,
+    origin: String,
     rope_real: cudarc::driver::CudaFunction,
     sigmoid_f: cudarc::driver::CudaFunction,
     copy_f: cudarc::driver::CudaFunction,
@@ -4677,11 +4757,7 @@ struct MoeKernels {
 
 #[cfg(feature = "cuda")]
 fn moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
-    thread_local! {
-        static CELL: std::cell::RefCell<Option<std::rc::Rc<MoeKernels>>> =
-            const { std::cell::RefCell::new(None) };
-    }
-    CELL.with(|c| {
+    MOE_CELL.with(|c| {
         if let Some(k) = c.borrow().as_ref() {
             return Ok(k.clone());
         }
@@ -4691,28 +4767,78 @@ fn moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
     })
 }
 
+/// The embedded MoE module for the live device: its own SM's cubin, else the
+/// newest same-major PTX at or below it (the order of `attn_fp8`).
+#[cfg(feature = "cuda")]
+fn load_moe_embedded(
+    dev: &DeviceContext,
+) -> Result<Option<(Arc<cudarc::driver::CudaModule>, String)>> {
+    let want = (dev.sm_major * 10 + dev.sm_minor) as u32;
+    if let Some((_, cubin, _)) = moe_aot::AOT_MOE.iter().find(|(sm, _, _)| *sm == want) {
+        let path =
+            std::env::temp_dir().join(format!("fv-moe-{}-sm{want}.cubin", std::process::id()));
+        std::fs::write(&path, cubin).map_err(err)?;
+        let loaded = dev.ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
+        let _ = std::fs::remove_file(&path);
+        return Ok(Some((loaded.map_err(err)?, format!("cubin sm{want}"))));
+    }
+    if let Some((sm, _, ptx)) = moe_aot::AOT_MOE
+        .iter()
+        .filter(|(sm, _, _)| sm / 10 == want / 10 && *sm <= want)
+        .max_by_key(|(sm, _, _)| *sm)
+    {
+        let module = dev
+            .ctx
+            .load_module(cudarc::nvrtc::Ptx::from_src(*ptx))
+            .map_err(err)?;
+        return Ok(Some((module, format!("ptx compute{sm}"))));
+    }
+    Ok(None)
+}
+
 #[cfg(feature = "cuda")]
 fn load_moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
     use cudarc::nvrtc::CompileOptions;
     let dev = ctx()?;
-    let src = moe_kernel_src();
-    let opts = CompileOptions {
-        use_fast_math: Some(true),
-        ftz: Some(true),
-        ..Default::default()
+    let source = MOE_SOURCE.with(|s| s.get());
+    let embedded = match source {
+        MoeSource::Nvrtc => None,
+        MoeSource::Auto if super::envflag::string_flag("FASTVIDEO_KERNELS", "auto") == "nvrtc" => {
+            None
+        }
+        MoeSource::Auto => load_moe_embedded(&dev)?,
+        MoeSource::Embedded => Some(load_moe_embedded(&dev)?.ok_or_else(|| {
+            let built: Vec<u32> = moe_aot::AOT_MOE.iter().map(|(sm, _, _)| *sm).collect();
+            err(format!(
+                "moe kernels: no embedded cubin or PTX for sm_{}{} (built for {built:?})",
+                dev.sm_major, dev.sm_minor
+            ))
+        })?),
     };
-    // SASS for the device's own SM, not PTX: the image's NVRTC writes PTX
-    // newer than a pod's driver may JIT (CUDA_ERROR_UNSUPPORTED_PTX_VERSION,
-    // sol-bench phase B LingBot); see `nvrtc_sass`.
-    let (module, origin) = super::nvrtc_sass::load_for_device(
-        &dev.ctx,
-        dev.sm_major,
-        dev.sm_minor,
-        &src,
-        &opts,
-        "moe",
-    )
-    .map_err(|e| err(format!("moe kernels: {e}")))?;
+    let (module, origin) = match embedded {
+        Some(m) => m,
+        None => {
+            let src = moe_kernel_src();
+            let opts = CompileOptions {
+                use_fast_math: Some(true),
+                ftz: Some(true),
+                ..Default::default()
+            };
+            // SASS for the device's own SM, not PTX: the image's NVRTC writes PTX
+            // newer than a pod's driver may JIT (CUDA_ERROR_UNSUPPORTED_PTX_VERSION,
+            // sol-bench phase B LingBot); see `nvrtc_sass`.
+            let (module, origin) = super::nvrtc_sass::load_for_device(
+                &dev.ctx,
+                dev.sm_major,
+                dev.sm_minor,
+                &src,
+                &opts,
+                "moe",
+            )
+            .map_err(|e| err(format!("moe kernels: {e}")))?;
+            (module, origin.to_string())
+        }
+    };
     static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     super::log::info_once(&SAID, format_args!("moe kernels: {origin}"));
     Ok(std::rc::Rc::new(MoeKernels {
@@ -4723,6 +4849,7 @@ fn load_moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
         scatter_add_rows: module.load_function("scatter_add_rows").map_err(err)?,
         moe_group_topk: module.load_function("moe_group_topk").map_err(err)?,
         moe_combine: module.load_function("moe_combine").map_err(err)?,
+        origin,
         _module: module,
     }))
 }

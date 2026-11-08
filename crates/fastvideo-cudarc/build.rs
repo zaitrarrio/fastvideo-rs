@@ -73,6 +73,12 @@ fn dc_wanted(sm: u32, sms: &[u32]) -> bool {
     sms.contains(&sm) || (sm == 103 && sms.contains(&100))
 }
 const DEFAULT_SMS: &str = "75,80,86,89,90,100,120";
+/// What `rt::ops::moe_kernel_src()` puts before the MoE region; the
+/// `moe_aot_source_is_moe_kernel_src` test keeps the two in step.
+const MOE_PREFIX: &str =
+    "#ifndef IDX\n#define IDX() ((long)blockIdx.x * (long)blockDim.x + (long)threadIdx.x)\n#endif\n";
+const MOE_BEGIN: &str = "// ==== region: moe ====";
+const MOE_END: &str = "// ==== end region: moe ====";
 
 fn find_nvcc() -> Option<PathBuf> {
     if let Ok(p) = env::var("NVCC") {
@@ -239,6 +245,8 @@ fn main() {
     let sage_table = out.join("aot_attn_sage.rs");
     let vdn_table = out.join("aot_h3_vdn.rs");
     let fp4_table = out.join("aot_attn_fp4.rs");
+    let moe_table = out.join("aot_moe.rs");
+    let moe_cu = write_moe_src(&out, &kernel_cu);
     let cuda_on = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let nvcc = if cuda_on { find_nvcc() } else { None };
     // The oxide Tile-IR cubins are embedded with the `oxide` feature only
@@ -277,6 +285,7 @@ fn main() {
         write_module_table(&sage_table, "AOT_ATTN_SAGE", "");
         write_module_table(&vdn_table, "AOT_H3_VDN", "");
         write_cubin_table(&fp4_table, "AOT_ATTN_FP4", "");
+        write_moe_table(&moe_table, "", None);
         write_aot(&table, "", &oxide, "");
         return;
     };
@@ -388,6 +397,11 @@ fn main() {
         &precise_module_entries(&nvcc, &out, &sms, SRC_VDN, "h3_vdn"),
     );
     write_cubin_table(&fp4_table, "AOT_ATTN_FP4", &fp4_entries(&nvcc, &out, &sms));
+    write_moe_table(
+        &moe_table,
+        &moe_entries(&nvcc, &out, &sms, &moe_cu),
+        Some(&sms),
+    );
     println!(
         "cargo:warning=fastvideo-cudarc: embedded cubins for sm {:?} via {}",
         sms,
@@ -419,6 +433,82 @@ fn write_kernel_src(out: &Path) -> PathBuf {
     let gen = out.join("kernel_src.rs");
     fs::write(&gen, rs).unwrap_or_else(|e| panic!("write {}: {e}", gen.display()));
     cu
+}
+
+/// `$OUT_DIR/moe_aot.cu`: the MoE region of `kernels.cu` with the prefix
+/// `rt::ops::moe_kernel_src()` adds, i.e. exactly the string NVRTC compiles.
+fn write_moe_src(out: &Path, kernel_cu: &Path) -> PathBuf {
+    let all = fs::read_to_string(kernel_cu)
+        .unwrap_or_else(|e| panic!("read {}: {e}", kernel_cu.display()));
+    let start = all.find(MOE_BEGIN).expect("kernels.cu moe region");
+    let end = all.find(MOE_END).expect("kernels.cu moe end");
+    let cu = out.join("moe_aot.cu");
+    fs::write(&cu, format!("{MOE_PREFIX}{}", &all[start..end]))
+        .unwrap_or_else(|e| panic!("write {}: {e}", cu.display()));
+    cu
+}
+
+/// `$OUT_DIR/aot_moe.rs`: `AOT_MOE` (sm, cubin, ptx), whether nvcc built it,
+/// and the SMs it was asked for (the coverage test's input).
+fn write_moe_table(table: &Path, entries: &str, sms: Option<&[u32]>) {
+    let list = sms
+        .unwrap_or(&[])
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    fs::write(
+        table,
+        format!(
+            "pub static AOT_MOE: &[(u32, &[u8], &str)] = &[\n{entries}];\n\
+             pub const AOT_MOE_BUILT: bool = {};\n\
+             pub const AOT_MOE_SMS: &[u32] = &[{list}];\n",
+            sms.is_some()
+        ),
+    )
+    .unwrap_or_else(|e| panic!("write {}: {e}", table.display()));
+}
+
+/// The LingBot MoE module (`moe_aot.cu`) for every SM in the list, cubin +
+/// PTX, with the nvcc equivalent of its NVRTC options (`use_fast_math`,
+/// `ftz`): owner decision FVID-2026-11-07-moe-aot-flags, ADR-0024 step 1a.
+/// Bit equality with the NVRTC build is fv-gpucheck's `moe_aot` group.
+fn moe_entries(nvcc: &Path, out: &Path, sms: &[u32], src: &Path) -> String {
+    let mut entries = String::new();
+    for sm in sms {
+        let cubin = out.join(format!("moe_sm{sm}.cubin"));
+        let ptx = out.join(format!("moe_compute{sm}.ptx"));
+        for (kind, arch, dest) in [
+            ("-cubin", format!("sm_{sm}"), &cubin),
+            ("-ptx", format!("compute_{sm}"), &ptx),
+        ] {
+            let status = Command::new(nvcc)
+                .args([
+                    kind,
+                    "-arch",
+                    &arch,
+                    "-O3",
+                    "--use_fast_math",
+                    "--ftz=true",
+                    "-o",
+                ])
+                .arg(dest)
+                .arg(src)
+                .status()
+                .unwrap_or_else(|e| panic!("running {}: {e}", nvcc.display()));
+            assert!(
+                status.success(),
+                "nvcc {kind} -arch={arch} failed for {}",
+                src.display()
+            );
+        }
+        entries.push_str(&format!(
+            "    ({sm}, include_bytes!({:?}), include_str!({:?})),\n",
+            cubin.display(),
+            ptx.display()
+        ));
+    }
+    entries
 }
 
 fn write_fp8(table: &Path, entries: &str) {
