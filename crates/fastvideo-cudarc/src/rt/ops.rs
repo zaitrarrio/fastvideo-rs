@@ -4950,7 +4950,9 @@ pub fn topk_last_device(
     Ok((idx_h, val_h))
 }
 
-/// Copy `base` then `out[idx[r], :] += src[r, :] * weight[r]`.
+/// Copy `base` then `out[idx[r], :] += src[r, :] * weight[r]`. The add is a
+/// plain read-modify-write, not atomic: `idx` must not repeat, or the rows
+/// that share an index race.
 #[cfg(feature = "cuda")]
 pub fn scatter_add_rows_device(
     base: &CudaSlice<f32>,

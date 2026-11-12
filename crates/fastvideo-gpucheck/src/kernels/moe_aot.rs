@@ -49,8 +49,12 @@ fn outputs(c: &mut Ctx<'_>) -> anyhow::Result<Vec<(&'static str, Vec<u32>)>> {
         ));
     }
 
-    // scatter_add_rows (+ copy_f): repeated destination rows accumulate.
-    let (base_rows, src_rows, dd) = (19usize, 53usize, 96usize);
+    // scatter_add_rows (+ copy_f), with distinct destination rows: the kernel
+    // does a plain (non-atomic) `out[idx[r]] += ...`, so a repeated index is a
+    // race whose result depends on scheduling even within one build (the
+    // first b9ee5a9 run differed in 320 / 1824 elements that way). 7 is
+    // invertible mod 61, so `i * 7 % 61` never repeats for i < 53.
+    let (base_rows, src_rows, dd) = (61usize, 53usize, 96usize);
     let base = c.rand(base_rows * dd, 1.0);
     let src = c.rand(src_rows * dd, 1.0);
     let idx: Vec<u32> = (0..src_rows)
