@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap (build.rs helper; `fastvideo-cudarc` gains a cudarc build-dependency, same crate and version as the runtime one)
 - Executed by: PR #245
 - ADR: docs/adr/0024-driver-only-runtime.md (D1)
-- Verification: pending (fv-gpucheck `moe_aot` on RTX PRO 6000)
+- Verification: done 2026-11-12: fv-gpucheck `moe_aot` on one RTX PRO 6000 at `a9e6fa5`, 12/12 bit-equal (origin `cubin sm120 nvrtc 13.4` vs `nvrtc sass sm_120`); CI green. The b9ee5a9 run's one difference (scatter_add_rows) was the gate's own repeated destination indices racing in the non-atomic kernel, fixed in the gate
 
 ### FVID · 2026-11-07 · FVID-2026-11-07-moe-aot-flags
 - Trigger: ADR-0024 step 1a: the MoE kernels (`rt/ops.rs` `load_moe_kernels`) always NVRTC-compile `moe_kernel_src()` with fast math + FTZ, while the same region in the main AOT module is compiled with the reference (non-fast) flags
