@@ -1,8 +1,9 @@
 # Work orders: driver-only runtime, step 1 (ADR-0024)
 
 Two increments, in order. WO-1b starts only after WO-1a is merged.
-Owner decisions recorded 2026-11-07: D1 (FVID-2026-11-07-moe-aot-flags) and
-D3 (FVID-2026-11-07-no-jit-build-gate). Both work orders are ready to run.
+Owner decisions recorded: D1 (2026-11-12, FVID-2026-11-12-moe-aot-build-time-nvrtc,
+replacing FVID-2026-11-07-moe-aot-flags) and D3 (2026-11-07,
+FVID-2026-11-07-no-jit-build-gate). Both work orders are ready to run.
 
 ---
 
@@ -60,10 +61,14 @@ bit-identical to today's NVRTC module. NVRTC stays as the last fallback
   same shape as AOT_ATTN_FP8.
 - SMs: every SM in FV_CUBIN_SMS (default "75,80,86,89,90,100,120"); no
   sm >= 89 filter for this module.
-- nvcc flags (owner decision D1, FVID-2026-11-07-moe-aot-flags):
-  `-O3 --use_fast_math` with FTZ on, the nvcc equivalent of the NVRTC
-  options above. Bit-equality on GPU is the proof; flag equivalence
-  is UNVERIFIED until that test passes.
+- Compiler (owner decision D1, revised 2026-11-12,
+  FVID-2026-11-12-moe-aot-build-time-nvrtc): libnvrtc at build time, via a
+  cudarc build-dependency (features std, nvrtc, dynamic-loading,
+  cuda-13000), with `rt/moe_nvrtc_opts.rs` `MOE_NVRTC_OPTIONS`
+  (`--ftz=true --fmad=true`) + `--gpu-architecture=sm_XY` (cubin) /
+  `compute_XY` (PTX). Test `moe_nvrtc_options_match_runtime` pins those to
+  what the runtime path passes. The first attempt (nvcc `--use_fast_math
+  --ftz=true`) failed the GPU gate in 4 of 12 checks.
 - `fn load_moe_kernels() -> Result<Rc<MoeKernels>>` keeps its signature;
   the log line keeps the form `moe kernels: {origin}` with origin
   `cubin sm{N}` | `ptx compute{N}` | the nvrtc_sass origin.

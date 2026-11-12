@@ -4666,10 +4666,10 @@ pub fn moe_kernel_src() -> String {
     )
 }
 
-/// The MoE module compiled ahead of time by `build.rs` (nvcc `-O3
-/// --use_fast_math --ftz=true`, the equivalent of the NVRTC options below;
-/// FVID-2026-11-07-moe-aot-flags): `(sm, cubin, ptx)` per SM in
-/// `FV_CUBIN_SMS`, empty when the build had no nvcc.
+/// The MoE module compiled ahead of time by `build.rs` with libnvrtc and the
+/// runtime's own option strings ([`super::moe_nvrtc_opts`];
+/// FVID-2026-11-12-moe-aot-build-time-nvrtc): `(sm, cubin, ptx)` per SM in
+/// `FV_CUBIN_SMS`, empty when the build had no CUDA toolkit.
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub(crate) mod moe_aot {
     include!(concat!(env!("OUT_DIR"), "/aot_moe.rs"));
@@ -4706,6 +4706,22 @@ mod moe_aot_tests {
         }
         assert_eq!(AOT_MOE.len(), AOT_MOE_SMS.len());
     }
+
+    /// The embedded cubins are compiled with the strings the run-time NVRTC
+    /// path passes, so both builds are the same compiler on the same input.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn moe_nvrtc_options_match_runtime() {
+        use crate::rt::moe_nvrtc_opts::MOE_NVRTC_OPTIONS;
+        for arch in ["sm_120", "compute_90"] {
+            let mut want: Vec<String> = MOE_NVRTC_OPTIONS.iter().map(|s| s.to_string()).collect();
+            want.push(format!("--gpu-architecture={arch}"));
+            assert_eq!(
+                crate::rt::nvrtc_sass::option_strings(&super::moe_compile_options(), arch),
+                want
+            );
+        }
+    }
 }
 
 /// Which build of the MoE module this thread's [`moe_kernels`] loads.
@@ -4735,7 +4751,8 @@ pub fn set_moe_source(source: MoeSource) {
     MOE_CELL.with(|c| *c.borrow_mut() = None);
 }
 
-/// Where this thread's MoE module came from (`cubin sm120`, `ptx compute90`,
+/// Where this thread's MoE module came from (`cubin sm120 nvrtc 13.4`,
+/// `ptx compute90 nvrtc 13.4`,
 /// or the `nvrtc_sass` origin), loading it if needed.
 #[cfg(feature = "cuda")]
 pub fn moe_kernels_origin() -> Result<String> {
@@ -4780,7 +4797,10 @@ fn load_moe_embedded(
         std::fs::write(&path, cubin).map_err(err)?;
         let loaded = dev.ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
         let _ = std::fs::remove_file(&path);
-        return Ok(Some((loaded.map_err(err)?, format!("cubin sm{want}"))));
+        return Ok(Some((
+            loaded.map_err(err)?,
+            format!("cubin sm{want} nvrtc {}", moe_aot::AOT_MOE_NVRTC),
+        )));
     }
     if let Some((sm, _, ptx)) = moe_aot::AOT_MOE
         .iter()
@@ -4791,14 +4811,28 @@ fn load_moe_embedded(
             .ctx
             .load_module(cudarc::nvrtc::Ptx::from_src(*ptx))
             .map_err(err)?;
-        return Ok(Some((module, format!("ptx compute{sm}"))));
+        return Ok(Some((
+            module,
+            format!("ptx compute{sm} nvrtc {}", moe_aot::AOT_MOE_NVRTC),
+        )));
     }
     Ok(None)
 }
 
+/// The MoE module's run-time NVRTC options. They expand to
+/// [`super::moe_nvrtc_opts::MOE_NVRTC_OPTIONS`], which `build.rs` uses for the
+/// embedded cubins (`moe_nvrtc_options_match_runtime`).
+#[cfg(feature = "cuda")]
+fn moe_compile_options() -> cudarc::nvrtc::CompileOptions {
+    cudarc::nvrtc::CompileOptions {
+        use_fast_math: Some(true),
+        ftz: Some(true),
+        ..Default::default()
+    }
+}
+
 #[cfg(feature = "cuda")]
 fn load_moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
-    use cudarc::nvrtc::CompileOptions;
     let dev = ctx()?;
     let source = MOE_SOURCE.with(|s| s.get());
     let embedded = match source {
@@ -4819,11 +4853,7 @@ fn load_moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
         Some(m) => m,
         None => {
             let src = moe_kernel_src();
-            let opts = CompileOptions {
-                use_fast_math: Some(true),
-                ftz: Some(true),
-                ..Default::default()
-            };
+            let opts = moe_compile_options();
             // SASS for the device's own SM, not PTX: the image's NVRTC writes PTX
             // newer than a pod's driver may JIT (CUDA_ERROR_UNSUPPORTED_PTX_VERSION,
             // sol-bench phase B LingBot); see `nvrtc_sass`.

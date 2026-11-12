@@ -1,6 +1,6 @@
 # ADR-0024: A driver-only runtime (no JIT, no cuDNN, static CUDA libraries)
 
-- Status: Accepted for step 1 (D1, D3 decided 2026-11-07); steps 2–4
+- Status: Accepted for step 1 (D3 decided 2026-11-07, D1 revised 2026-11-12); steps 2–4
   Proposed (D2, D4 open)
 - Date: 2026-11-07
 - Decision-id: FVID-2026-11-07-driver-only-runtime
@@ -63,9 +63,10 @@ Reach a driver-only runtime in four ordered steps, each its own work order
 and each gated on byte identity of outputs where the plan's §1 rule applies:
 
 1. **No runtime compilation in served builds.**
-   1a. The MoE module gets its own AOT table (`AOT_MOE`), compiled by nvcc
-       from the exact string `moe_kernel_src()` returns, with flags matching
-       its NVRTC options, for every SM in `FV_CUBIN_SMS`. Loading follows the
+   1a. The MoE module gets its own AOT table (`AOT_MOE`), compiled at build
+       time by libnvrtc (not nvcc) from the exact string `moe_kernel_src()`
+       returns, with the runtime's NVRTC option strings, for every SM in
+       `FV_CUBIN_SMS`. Loading follows the
        attn_fp8 order: exact cubin → same-major PTX ≤ device SM → NVRTC.
    1b. A cargo feature `jit` on `fastvideo-cudarc` gates every runtime NVRTC
        compile path. Without it, a module with no cubin or PTX for the
@@ -87,12 +88,14 @@ and each gated on byte identity of outputs where the plan's §1 rule applies:
 
 ## Owner decisions
 
-- **D1 (step 1a flags). Decided 2026-11-07: fast math + FTZ, own `AOT_MOE`
-  table** (FVID-2026-11-07-moe-aot-flags). Was recommended: MoE cubins compiled with flags
-  equivalent to its NVRTC options (fast math + FTZ), proven bit-identical on
-  GPU against the NVRTC module. Alternative: load the MoE entry points from
-  the main AOT module (reference flags), accepting a numerics change and a
-  new LingBot gold measurement.
+- **D1 (step 1a compiler). Decided 2026-11-12: libnvrtc at build time**,
+  with the runtime's own option strings (`rt/moe_nvrtc_opts.rs`:
+  `--ftz=true --fmad=true`), FVID-2026-11-12-moe-aot-build-time-nvrtc.
+  It supersedes the 2026-11-07 choice of nvcc `--use_fast_math --ftz=true`
+  (FVID-2026-11-07-moe-aot-flags), which the GPU gate refuted: 4 of 12
+  `moe_aot` checks differed on an RTX PRO 6000, because cudarc 0.17's
+  `use_fast_math` only emits `--fmad=true` and the served MoE module was
+  never fast math.
 - **D2 (step 2 margin).** The acceptable slowdown, per tier GPU, for dropping
   the cuDNN SDPA candidate.
 - **D3 (step 1b CI type-check). Decided 2026-11-07: the recommendation**
