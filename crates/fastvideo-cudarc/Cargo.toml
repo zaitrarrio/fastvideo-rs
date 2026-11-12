@@ -41,6 +41,15 @@ oxide = ["nvfp4-gemm"]
 workspace = true
 optional = true
 
+# build.rs compiles the MoE AOT cubins with libnvrtc (loaded at build time,
+# only where the CUDA toolkit is found): ADR-0024 step 1a,
+# FVID-2026-11-12-moe-aot-build-time-nvrtc. A fixed API version, so a build
+# without a toolkit never runs `nvcc --version` for it.
+[build-dependencies.cudarc]
+version = "0.17"
+default-features = false
+features = ["std", "nvrtc", "dynamic-loading", "cuda-13000"]
+
 [lints.rust]
 unsafe_code = "allow"
 

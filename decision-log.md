@@ -2,10 +2,20 @@
 
 Project code: FVID
 
+### FVID · 2026-11-12 · FVID-2026-11-12-moe-aot-build-time-nvrtc
+- Trigger: the WO-1a GPU gate (fv-gpucheck `moe_aot`, RTX PRO 6000, PR #245 at `045bc79`): nvcc `-O3 --use_fast_math --ftz=true` cubins differed from the run-time NVRTC module in 4 of 12 checks (sigmoid_f 1652/4105, topk_last_norm/val 107/296, scatter_add_rows 352/1824, moe_group_topk/plain val 220/328). Root of the premise error: cudarc 0.17's `CompileOptions { use_fast_math: Some(true) }` emits only `--fmad=true`, so the served MoE module was never fast math (it is `--ftz=true --fmad=true`, IEEE div/sqrt/expf)
+- Options: compile `AOT_MOE` with libnvrtc at build time using the runtime's exact option strings; keep nvcc fast math and re-measure LingBot gold with tolerances; diff nvcc vs NVRTC PTX first, then choose
+- Decision: **(owner) compile the MoE AOT cubins with NVRTC at build time** (pinned libnvrtc 13.4 of the build image, option strings shared with the runtime in `rt/moe_nvrtc_opts.rs`); supersedes the flags of FVID-2026-11-07-moe-aot-flags
+- Reason: owner chose option 1: same compiler, same source, same options as the served path, so outputs match by construction and the served binary still needs no NVRTC
+- Reversibility: cheap (build.rs helper; `fastvideo-cudarc` gains a cudarc build-dependency, same crate and version as the runtime one)
+- Executed by: PR #245
+- ADR: docs/adr/0024-driver-only-runtime.md (D1)
+- Verification: done 2026-11-12: fv-gpucheck `moe_aot` on one RTX PRO 6000 at `a9e6fa5`, 12/12 bit-equal (origin `cubin sm120 nvrtc 13.4` vs `nvrtc sass sm_120`); CI green. The b9ee5a9 run's one difference (scatter_add_rows) was the gate's own repeated destination indices racing in the non-atomic kernel, fixed in the gate
+
 ### FVID · 2026-11-07 · FVID-2026-11-07-moe-aot-flags
 - Trigger: ADR-0024 step 1a: the MoE kernels (`rt/ops.rs` `load_moe_kernels`) always NVRTC-compile `moe_kernel_src()` with fast math + FTZ, while the same region in the main AOT module is compiled with the reference (non-fast) flags
 - Options: own AOT table compiled with fast math + FTZ to match the NVRTC options; load the MoE entry points from the main AOT module (reference flags) and re-measure LingBot gold numbers
-- Decision: **(owner) compile the MoE AOT cubins with fast math** (+ FTZ, the nvcc equivalent of the NVRTC options), as their own `AOT_MOE` table
+- Decision: **(owner) compile the MoE AOT cubins with fast math** (+ FTZ, the nvcc equivalent of the NVRTC options), as their own `AOT_MOE` table. Superseded 2026-11-12 by FVID-2026-11-12-moe-aot-build-time-nvrtc (the GPU gate failed: the NVRTC module was never fast math)
 - Reason: owner chose the option that keeps served outputs bit-identical (plan §1); flag equivalence is proven by the gpucheck `moe_aot` bit-equality group, not assumed
 - Reversibility: cheap (one build.rs helper and one loader)
 - Executed by: pending (WO-1a, docs/plan/2026-11-07-driver-only-runtime-wo.md)

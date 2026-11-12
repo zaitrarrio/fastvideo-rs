@@ -42,7 +42,7 @@ pub fn sass_arch(sm_major: i32, sm_minor: i32) -> Option<&'static str> {
 /// The option strings cudarc 0.17's `CompileOptions::build` passes (it is
 /// crate-private), with `arch` as given. Same strings, so a SASS module is
 /// compiled with exactly the flags the PTX path used.
-fn option_strings(opts: &CompileOptions, arch: &str) -> Vec<String> {
+pub(crate) fn option_strings(opts: &CompileOptions, arch: &str) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(v) = opts.ftz {
         out.push(format!("--ftz={v}"));
