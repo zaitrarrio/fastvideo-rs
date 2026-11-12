@@ -1,6 +1,7 @@
 # ADR-0024: A driver-only runtime (no JIT, no cuDNN, static CUDA libraries)
 
-- Status: Accepted for step 1 (D3 decided 2026-11-07, D1 revised 2026-11-12); steps 2–4
+- Status: Step 1a accepted and done (PR #245, D1 revised 2026-11-12); step 1b
+  deferred to step 4 (FVID-2026-11-12-defer-wo-1b, D3 suspended); steps 2–4
   Proposed (D2, D4 open)
 - Date: 2026-11-07
 - Decision-id: FVID-2026-11-07-driver-only-runtime
@@ -68,7 +69,10 @@ and each gated on byte identity of outputs where the plan's §1 rule applies:
        returns, with the runtime's NVRTC option strings, for every SM in
        `FV_CUBIN_SMS`. Loading follows the
        attn_fp8 order: exact cubin → same-major PTX ≤ device SM → NVRTC.
-   1b. A cargo feature `jit` on `fastvideo-cudarc` gates every runtime NVRTC
+   1b. *(Deferred 2026-11-12 to step 4, FVID-2026-11-12-defer-wo-1b: it removes
+       no library while cuBLASLt / cuDNN still load libnvrtc, and it would drop
+       the NVRTC fallback an unbuilt GPU generation relies on.)*
+       A cargo feature `jit` on `fastvideo-cudarc` gates every runtime NVRTC
        compile path. Without it, a module with no cubin or PTX for the
        device is a hard error naming the module, the device SM and the SMs
        the binary was built for; `FASTVIDEO_KERNELS=nvrtc` is refused naming
@@ -99,7 +103,7 @@ and each gated on byte identity of outputs where the plan's §1 rule applies:
 - **D2 (step 2 margin).** The acceptable slowdown, per tier GPU, for dropping
   the cuDNN SDPA candidate.
 - **D3 (step 1b CI type-check). Decided 2026-11-07: the recommendation**
-  (FVID-2026-11-07-no-jit-build-gate). `task build:cuda` runs `cargo check` with
+  (FVID-2026-11-07-no-jit-build-gate); suspended 2026-11-12 with step 1b. `task build:cuda` runs `cargo check` with
   no nvcc; without `jit` that binary would embed no kernels. Recommended:
   `build:cuda` checks with `--features cuda,jit`, and `build.rs` fails a
   `cuda` build without `jit` when no nvcc is found. Alternative: keep the

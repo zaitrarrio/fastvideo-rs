@@ -1,6 +1,8 @@
 # Work orders: driver-only runtime, step 1 (ADR-0024)
 
-Two increments, in order. WO-1b starts only after WO-1a is merged.
+Two increments, in order. WO-1a is done (PR #245, merged 2026-11-12). **WO-1b is
+deferred to ADR-0024 step 4** (FVID-2026-11-12-defer-wo-1b); it is kept below
+unchanged for then.
 Owner decisions recorded: D1 (2026-11-12, FVID-2026-11-12-moe-aot-build-time-nvrtc,
 replacing FVID-2026-11-07-moe-aot-flags) and D3 (2026-11-07,
 FVID-2026-11-07-no-jit-build-gate). Both work orders are ready to run.

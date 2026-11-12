@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-11-12 · FVID-2026-11-12-defer-wo-1b
+- Trigger: after WO-1a (PR #245) every module of a built SM loads embedded cubins; WO-1b (a `jit` feature gating run-time NVRTC) was next
+- Options: implement WO-1b now; defer it to ADR-0024 step 4
+- Decision: **(owner) defer WO-1b** to step 4 (when libnvrtc leaves the image); FVID-2026-11-07-no-jit-build-gate (D3) is suspended with it
+- Reason: owner chose to defer: WO-1b removes no library (cuBLASLt / cuDNN engines still load libnvrtc until steps 2–3 and a measurement say otherwise) and would drop the NVRTC fallback that lets an unbuilt GPU generation (e.g. sm_110) run; its cost (seven call sites, build.rs gate, CI feature changes, feature-unification risk) is better spent at step 4
+- Reversibility: cheap (the work order stays in docs/plan, unchanged)
+- Executed by: this PR (docs only)
+- ADR: docs/adr/0024-driver-only-runtime.md (step 1b, D3)
+- Verification: n/a (no code)
+
 ### FVID · 2026-11-12 · FVID-2026-11-12-moe-aot-build-time-nvrtc
 - Trigger: the WO-1a GPU gate (fv-gpucheck `moe_aot`, RTX PRO 6000, PR #245 at `045bc79`): nvcc `-O3 --use_fast_math --ftz=true` cubins differed from the run-time NVRTC module in 4 of 12 checks (sigmoid_f 1652/4105, topk_last_norm/val 107/296, scatter_add_rows 352/1824, moe_group_topk/plain val 220/328). Root of the premise error: cudarc 0.17's `CompileOptions { use_fast_math: Some(true) }` emits only `--fmad=true`, so the served MoE module was never fast math (it is `--ftz=true --fmad=true`, IEEE div/sqrt/expf)
 - Options: compile `AOT_MOE` with libnvrtc at build time using the runtime's exact option strings; keep nvcc fast math and re-measure LingBot gold with tolerances; diff nvcc vs NVRTC PTX first, then choose
@@ -23,6 +33,7 @@ Project code: FVID
 - Verification: pending (WO-1a acceptance criteria)
 
 ### FVID · 2026-11-07 · FVID-2026-11-07-no-jit-build-gate
+- Status: suspended 2026-11-12 with WO-1b (FVID-2026-11-12-defer-wo-1b)
 - Trigger: ADR-0024 step 1b: without the new `jit` feature a `cuda` build with no nvcc would embed no kernels, and `task build:cuda` runs `cargo check` with no nvcc
 - Options: `build:cuda` checks with `--features cuda,jit` and build.rs fails a `cuda` build without `jit` and without nvcc; keep the build.rs warning and rely on the runtime `KernelsUnavailable` error
 - Decision: **(owner) adopt the recommendation: `task build:cuda` checks `--features cuda,jit`; build.rs panics for `cuda` without `jit` when no nvcc is found, naming `NVCC` and the `jit` feature**
