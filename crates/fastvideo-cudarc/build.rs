@@ -509,12 +509,16 @@ fn moe_entries(out: &Path, sms: &[u32], src: &Path) -> String {
 /// The libnvrtc version the MoE table was compiled with, as `major.minor`.
 fn nvrtc_version() -> String {
     use cudarc::nvrtc::sys;
-    let (mut major, mut minor) = (0i32, 0i32);
-    // SAFETY: two valid out-pointers; the library loads on first use.
-    let ok = std::panic::catch_unwind(|| unsafe { sys::nvrtcVersion(&mut major, &mut minor) });
+    // SAFETY: two valid out-pointers; the library loads on first use (and
+    // panics inside cudarc when it is missing, hence catch_unwind).
+    let ok = std::panic::catch_unwind(|| {
+        let (mut major, mut minor) = (0i32, 0i32);
+        let r = unsafe { sys::nvrtcVersion(&mut major, &mut minor) };
+        (r, major, minor)
+    });
     match ok {
-        Ok(r) if r == sys::nvrtcResult::NVRTC_SUCCESS => format!("{major}.{minor}"),
-        Ok(r) => panic!("nvrtcVersion: {r:?}"),
+        Ok((r, major, minor)) if r == sys::nvrtcResult::NVRTC_SUCCESS => format!("{major}.{minor}"),
+        Ok((r, _, _)) => panic!("nvrtcVersion: {r:?}"),
         Err(_) => panic!(
             "the MoE AOT table needs libnvrtc at build time (nvcc was found, so the \
              CUDA toolkit is expected): libnvrtc.so did not load"
