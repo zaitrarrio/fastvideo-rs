@@ -67,7 +67,7 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
     };
     let (q, k, v) = (mk(c), mk(c), mk(c));
 
-    let saved = std::env::var("FASTVIDEO_KERNELS").ok();
+    let saved = fastvideo_models::settings::env_var("FASTVIDEO_KERNELS").ok();
     std::env::remove_var("FASTVIDEO_KERNELS");
     let served = run_on_fresh_thread(&q, &k, &v);
     std::env::set_var("FASTVIDEO_KERNELS", "nvrtc");
