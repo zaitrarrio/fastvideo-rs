@@ -164,7 +164,11 @@ mod imp {
         let opts = CompileOptions {
             use_fast_math: Some(true),
             ftz: Some(true),
-            options: vec!["-std=c++17".into()],
+            // cudarc's `use_fast_math` only emits `--fmad=true`; the embedded
+            // cubins are nvcc `-std=c++17 --use_fast_math` (build.rs
+            // `module_entries`), so pass the real flag to build the same
+            // kernel (fv-gpucheck `attn_aot` checks bit equality).
+            options: vec!["-std=c++17".into(), "--use_fast_math".into()],
             ..Default::default()
         };
         let (module, origin) = crate::rt::nvrtc_sass::load_for_device(

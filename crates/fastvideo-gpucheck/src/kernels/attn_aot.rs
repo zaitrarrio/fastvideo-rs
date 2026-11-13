@@ -2,10 +2,11 @@
 //! nvcc cubins, `--use_fast_math`) against the NVRTC build of the same
 //! source (`FASTVIDEO_KERNELS=nvrtc`: the fallback for an unbuilt GPU and the
 //! "keep the source path exercised" switch). cudarc 0.17's `use_fast_math:
-//! Some(true)` only emits `--fmad=true`, so the two builds are expected to
-//! differ; this group measures by how much (bits and max |diff|) and passes
-//! when both builds load and run. Found while doing ADR-0024 WO-1a, where
-//! the same mismatch made the MoE module fail bit equality.
+//! Some(true)` only emits `--fmad=true`, so until the fallback also passed
+//! `--use_fast_math` the two builds differed (RTX PRO 6000, `1a92cf4`: 3-15%
+//! of elements, max |diff| 0.006 fp8 / 0.011 sage). Now they must be equal
+//! bit for bit. Found during ADR-0024 WO-1a, where the same flag gap made
+//! the MoE module fail bit equality.
 
 use super::*;
 use fastvideo_cudarc::rt::{attn_fp8, attn_sage, device};
@@ -102,13 +103,11 @@ pub(super) fn run(c: &mut Ctx<'_>) -> StageResult<()> {
             .zip(b)
             .map(|(x, y)| (x - y).abs())
             .fold(0f32, f32::max);
-        let finite = a.iter().chain(b).all(|x| x.is_finite());
-        // Measured, not gated on equality: both builds must run and stay finite.
         c.report.check(
             format!("attn_aot/{name}"),
-            finite && a.len() == b.len(),
+            differing == 0 && a.len() == b.len(),
             json!({"elements": a.len(), "differing": differing, "max_abs_diff": max_abs}),
-            json!({"finite": true, "differing": "reported"}),
+            json!({"differing": 0}),
         )?;
     }
     Ok(())
