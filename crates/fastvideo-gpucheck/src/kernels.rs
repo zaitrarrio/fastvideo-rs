@@ -24,6 +24,7 @@ use crate::report::{Report, StageError, StageResult};
 
 mod attn2;
 mod attn3;
+mod attn_aot;
 mod determinism;
 mod h3vae;
 mod moe_aot;
@@ -2429,6 +2430,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     // Repeat runs of the order- or selection-sensitive kernels, bit for bit.
     group(&mut c, "determinism", determinism::run)?;
     group(&mut c, "moe_aot", moe_aot::run)?;
+    group(&mut c, "attn_aot", attn_aot::run)?;
     group(&mut c, "vsa_stages", attn3::vsa_stages)?;
     group(&mut c, "attn_dc", attn2::dc_parity)?;
     group(&mut c, "vsa_dc", vsa_dc::run)?;

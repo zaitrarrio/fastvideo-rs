@@ -175,12 +175,21 @@ mod imp {
 
     struct Kernels {
         _module: Arc<cudarc::driver::CudaModule>,
+        origin: String,
         colsum: CudaFunction,
         colsum_reduce: CudaFunction,
         quant: CudaFunction,
         vmax: CudaFunction,
         vquant: CudaFunction,
         fwd_d128: CudaFunction,
+    }
+
+    /// Where this thread's attn_sage module came from (`cubin sm120`,
+    /// `ptx compute90`, or an `nvrtc ...` origin), loading it if needed.
+    /// `FASTVIDEO_KERNELS=nvrtc` at first load picks the NVRTC build;
+    /// fv-gpucheck's `attn_aot` group compares the two.
+    pub fn kernels_origin() -> Result<String> {
+        Ok(kernels()?.origin.clone())
     }
 
     fn kernels() -> Result<std::rc::Rc<Kernels>> {
@@ -270,6 +279,7 @@ mod imp {
             vquant: f("attn_sage_vquant")?,
             fwd_d128: f("attn_sage_fwd_d128")?,
             _module: module,
+            origin: origin.clone(),
         };
         crate::rt::ops::opt_in_dynamic_shared(&k.fwd_d128, SMEM)?;
         crate::rt::log::info(format_args!(
