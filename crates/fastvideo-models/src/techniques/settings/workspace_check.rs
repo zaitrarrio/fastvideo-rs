@@ -107,6 +107,11 @@ const INDIRECT_ALLOWED: &[(&str, &str, &str)] = &[
 /// byte-identical, it does not promote them to the layered reader).
 const ENV_READS_OF_LAYERED: &[(&str, &str, &str)] = &[
     (
+        "crates/fastvideo-gpucheck/src/kernels/attn_aot.rs",
+        "FASTVIDEO_KERNELS",
+        "gpucheck attn_aot: save / restore around set_var",
+    ),
+    (
         "crates/fastvideo-core/src/generator.rs",
         "FASTVIDEO_VSA",
         "the `fastvideo` CLI's VSA-id check: `1` / `true` from the environment only",
