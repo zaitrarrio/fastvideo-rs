@@ -373,6 +373,6 @@ fn variant_counts() {
         .collect();
     eprintln!("variants per family: {counts:?}");
     let total: usize = counts.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 32);
+    assert_eq!(total, 33);
     assert_eq!(total, catalog(&WeightLayout::default()).unwrap().len());
 }
