@@ -6,7 +6,9 @@
 //! conv3×3 3→F, PReLU → `convs` × (conv3×3 F→F, PReLU) → conv3×3 F→3·s²
 //! → pixel-shuffle s, plus the input upsampled ×s (nearest), clamp, round.
 //!
-//! On the device every conv goes through [`super::conv::cudnn_conv`] with
+//! On the device every conv goes through [`super::conv::cudnn_conv_fma`]
+//! (FMA math whatever `FASTVIDEO_TF32` says: under the TF32 default 7 % of a
+//! real ×4 frame's bytes came out one level off the host reference) with
 //! the fused `bias_prelu_inplace` epilogue (the last conv bias-only), then
 //! `esrgan_pack_rgb8` does the pixel shuffle, the residual add from the exact
 //! 8-bit input, the clamp and the rounding and writes interleaved RGB8 on
@@ -395,7 +397,7 @@ impl Esrgan {
         let plane = h * w;
         let mut cur = x;
         for (l, d) in self.layers.iter().zip(layers) {
-            let (mut y, _) = super::conv::cudnn_conv(
+            let (mut y, _) = super::conv::cudnn_conv_fma(
                 &cur,
                 &[n, l.cin, h, w],
                 &d.w,
