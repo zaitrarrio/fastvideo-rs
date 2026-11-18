@@ -55,7 +55,7 @@ FV_LAB_EXPERIMENTS="h3-graphs sol-bench-a1 sol-bench-a3 sol-bench-a2 sol-bench-b
 # golden (fixtures/<tier>-dry-run.txt, tests/own_tiers.rs) and their pod body
 # runpod-http.sh plan's (fv-lab-goldens.sh). runpod-http.sh refuses `run` and
 # `all` for them and names the fv-lab command (`fv-lab pod up --family <tier>`).
-FV_LAB_OWN=""
+FV_LAB_OWN="variants"
 
 # Sibling tiers of a live runpod-matrix.sh family (ADR-0019 §20.5, §21, §22):
 # `<tier>:<family>` is a tier whose cells are targets of <family>'s branch

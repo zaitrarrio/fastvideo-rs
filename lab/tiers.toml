@@ -1254,3 +1254,31 @@ weights = "volume+r2"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = false
 cells = ["sol-bench-g2"]
+
+# ---- The variants port (2026-11-18): History Forcing, the Real-ESRGAN upscaler
+# and the LongLive-Plug H3 variants run as an unmerged LoRA branch, ported
+# from fastwan-rs / h3-rs (docs/ports/variants-parity.md). Not a
+# runpod-matrix.sh family and not an experiment one-off: fv-lab's own, run
+# with `fv-lab pod up --family variants`. The rtx6000 tier's pod with weights
+# "volume+r2" (sfwan21-1.3b, fastwan21-1.3b and the Plug adapters are R2-only)
+# and a bigger container disk: the History Forcing checkpoint (11.35 GB) is
+# staged from the Hub by an ungated `fv-gpucheck fetch` arm (its tree is not
+# published to R2 yet, scripts/gpu/weights-manifest.tsv), the Real-ESRGAN file
+# by fetch-tae.sh (`tae = true`).
+[[tier]]
+name = "variants"
+description = "The variants port: History Forcing (window 21 / sink 3) against SF-Wan, the Real-ESRGAN upscaler on a Wan and an H3 clip, and the LongLive-Plug H3 4-step adapter as a branch against the merge (bf16 and MXFP8)"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 2.5
+wall_cap_s = 14400
+cell_timeout_s = 3600
+container_disk_gb = 200
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["upscale"]
