@@ -367,3 +367,152 @@ fn audio_decoder_matches_diffusers_stage_by_stage() {
         .expect("rows");
     assert_matches("wave from rows", &from_rows, &map, "ref.wave", 1e-5);
 }
+
+/// A rank-2 PEFT adapter on every attention and FFN linear of the tiny DiT
+/// and its refiner, merged (`LoraMode::Merge`) and as an unmerged branch
+/// (`LoraMode::Branch`, the LongLive-Plug default), through the production
+/// loaders: the two forwards agree up to the branch's bfloat16 factors, and
+/// both move the velocity away from the unadapted model.
+#[test]
+fn an_unmerged_lora_branch_matches_the_merge_on_the_tiny_dit() {
+    use super::lora::{H3LoraFuse, LoraMode};
+    use fastvideo_models::h3::lora::plan_from_keys;
+    use std::collections::HashMap;
+
+    let (cfg, map) = (dit_config(), fixture("dit_tiny.st"));
+    let rank = 2usize;
+    let mut modules = Vec::new();
+    for i in 0..cfg.num_layers {
+        modules.push(format!("transformer_blocks.{i}"));
+    }
+    for i in 0..cfg.num_refiner_layers {
+        modules.push(format!("token_refiner.refiner_blocks.{i}"));
+    }
+    let ramp = |n: usize, seed: f32| -> Vec<f32> {
+        (0..n)
+            .map(|i| ((i as f32 + seed) * 0.37).sin() * 0.25)
+            .collect()
+    };
+    let mut tensors = Vec::new();
+    let mut seed = 1.0f32;
+    for block in &modules {
+        for target in [
+            "attn.to_q",
+            "attn.to_k",
+            "attn.to_v",
+            "attn.to_out.0",
+            "ff.net.0.proj",
+            "ff.net.2",
+        ] {
+            let module = format!("{block}.{target}");
+            let shape = map
+                .shape(&format!("{module}.weight"))
+                .unwrap_or_else(|| panic!("{module}"));
+            let (out, inn) = (shape[0], shape[1]);
+            tensors.push((
+                format!("{module}.lora_A.weight"),
+                vec![rank, inn],
+                ramp(rank * inn, seed),
+            ));
+            tensors.push((
+                format!("{module}.lora_B.weight"),
+                vec![out, rank],
+                ramp(out * rank, seed + 0.5),
+            ));
+            seed += 1.0;
+        }
+    }
+    let keys: Vec<String> = tensors.iter().map(|(k, _, _)| k.clone()).collect();
+    let adapter = WeightMap::from_f32_tensors(tensors);
+    let open = |mode: Option<LoraMode>| -> Option<H3LoraFuse> {
+        let mode = mode?;
+        let plan = plan_from_keys(&keys, &HashMap::new(), "tiny-adapter").unwrap();
+        let mut fuse = H3LoraFuse::from_plan(
+            &map,
+            &adapter,
+            std::path::Path::new("tiny-adapter"),
+            plan,
+            rank as u32,
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(fuse.pairs_total, 6 * modules.len());
+        fuse.set_mode(mode);
+        Some(fuse)
+    };
+
+    let layout = H3PackedLayout::new(5, (3, 4, 6), 3, cfg.patch_size).expect("layout");
+    let (noise_shape, noise) = values(&map, "in.video_noise");
+    let rows = patchify(
+        &noise,
+        [
+            noise_shape[1],
+            noise_shape[2],
+            noise_shape[3],
+            noise_shape[4],
+        ],
+        cfg.patch_size,
+    )
+    .expect("patchify");
+    let schedule = H3JointSchedule::fasth3_8step();
+    let step = values(&map, "in.step").1[0] as usize;
+    let device_layout = DeviceLayout::new(&cfg, layout.clone()).expect("rope");
+    let video_rows =
+        CudaTensor::from_vec(rows, vec![layout.video.len, cfg.video_patch_dim()]).expect("rows");
+    let audio_rows = tensor(&map, "in.audio_rows");
+
+    let run = |mode: Option<LoraMode>| -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+        let mut lora = open(mode);
+        let refiner = H3TextRefiner::load_with(&cfg, &map, &mut lora).expect("refiner");
+        let refined = refiner.forward(&tensor(&map, "in.text")).expect("refine");
+        let model = H3Transformer::load_with(cfg.clone(), &map, &schedule, false, None, &mut lora)
+            .expect("load");
+        if let Some(f) = &lora {
+            f.finish().expect("every pair consumed");
+        }
+        let (video, audio) = model
+            .forward(
+                step,
+                &video_rows,
+                &audio_rows,
+                &refined,
+                &device_layout,
+                AttnMode::Dense,
+                None,
+                None,
+                None,
+            )
+            .expect("forward");
+        (
+            refined.host_cow().unwrap().into_owned(),
+            video.host_cow().unwrap().into_owned(),
+            audio.host_cow().unwrap().into_owned(),
+        )
+    };
+    let base = run(None);
+    let merged = run(Some(LoraMode::Merge));
+    let branched = run(Some(LoraMode::Branch));
+    for (name, b, m, br) in [
+        ("text_refined", &base.0, &merged.0, &branched.0),
+        ("video velocity", &base.1, &merged.1, &branched.1),
+        ("audio velocity", &base.2, &merged.2, &branched.2),
+    ] {
+        let moved = b
+            .iter()
+            .zip(m)
+            .fold(0.0f32, |acc, (p, q)| acc.max((p - q).abs()));
+        assert!(
+            moved > 1e-2,
+            "{name}: the adapter moves the output ({moved})"
+        );
+        let gap = m
+            .iter()
+            .zip(br)
+            .fold(0.0f32, |acc, (p, q)| acc.max((p - q).abs()));
+        // The branch's bf16 factors and bf16 `A x` against the f32 merge.
+        assert!(
+            gap <= 3e-2 * moved + 1e-5,
+            "{name}: branch against merge {gap} (the adapter moved {moved})"
+        );
+    }
+}

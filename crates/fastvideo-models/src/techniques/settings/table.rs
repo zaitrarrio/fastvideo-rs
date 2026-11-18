@@ -299,6 +299,8 @@ mod rows {
             "H3 glue kernels between the fused ops (bit-identical); `0` runs the separate ops."),
         row("FASTVIDEO_H3_GRAPHS", Layered, Flag, "", Value("0"), H3, "cuda_graphs", Call,
             "CUDA-graph capture of the H3 denoise step."),
+        row("FASTVIDEO_H3_LORA_BRANCH", Layered, Text, "`1` / `on` / `true` / `branch`, or `0` / `off` / `false` / `merge` (trimmed; empty is unset); anything else is an error", Computed("`1` for the LongLive-Plug recipes (`h3-plug-4step`, `h3-plug-cfg`), `0` for every other adapter"), H3, "lora", Load,
+            "Run an H3 adapter's low-rank pairs as an unmerged branch (`y = W x + B (A x)`, the base quantized alone) instead of merging them into the weights."),
         row("FASTVIDEO_H3_LORA_DEVICE", Layered, Flag, "", Value("1"), H3, "lora", Process,
             "Fuse H3 LoRAs on the device."),
         row("FASTVIDEO_H3_LORA_VERIFY", Layered, Flag, "", Value("0"), H3, "debug", Process,
