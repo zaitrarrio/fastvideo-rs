@@ -22,6 +22,7 @@ mod coldstart;
 mod embed;
 #[cfg(feature = "cuda")]
 mod engine_stage;
+mod fetch;
 mod gate;
 mod gpu;
 mod h3_stage;
@@ -207,6 +208,19 @@ enum Cmd {
         dir: PathBuf,
         #[arg(long, default_value_t = 8000)]
         port: u16,
+    },
+    /// Stage one pinned public file (https URL, SHA-256, size) onto the box's
+    /// disk with curl, for a lab arm whose weights are not on the volume or
+    /// in R2 yet; a file already there with the pinned bytes is kept.
+    Fetch {
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        sha256: String,
+        #[arg(long)]
+        size: u64,
+        #[arg(long)]
+        out: PathBuf,
     },
     /// NVRTC-compile the kernel module for each compute capability (no GPU).
     #[cfg(feature = "cuda")]
@@ -685,6 +699,7 @@ fn check_dump_mode(io: &reference::RefIo, device: &str, mode: Mode) -> StageResu
 fn stage_name(cmd: &Cmd) -> &'static str {
     match cmd {
         Cmd::Serve { .. } => "serve",
+        Cmd::Fetch { .. } => "fetch",
         #[cfg(feature = "cuda")]
         Cmd::Nvrtc { .. } => "nvrtc",
         #[cfg(feature = "cuda")]
@@ -731,6 +746,12 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
     report.set("cuda_feature", cfg!(feature = "cuda"));
     match &cli.cmd {
         Cmd::Serve { dir, port } => Ok(serve::run(dir, *port)?),
+        Cmd::Fetch {
+            url,
+            sha256,
+            size,
+            out,
+        } => Ok(fetch::run(report, url, sha256, *size, out)?),
         #[cfg(feature = "cuda")]
         Cmd::Engine {
             model,
