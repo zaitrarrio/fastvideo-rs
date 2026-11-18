@@ -302,6 +302,8 @@ cells = [
   "gold-h3-larry-turbo",
   "gold-h3-lightx2v-turbo-v01",
   "gold-h3-lightx2v-turbo",
+  "gold-h3-plug-4step",
+  "gold-h3-plug-cfg",
   "gold-h3-ref2v-max",
   "gold-h3-ref2v-turbo",
   "gold-longlive-1.3b",

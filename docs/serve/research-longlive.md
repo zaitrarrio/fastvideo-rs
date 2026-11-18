@@ -1334,3 +1334,39 @@ are in the session scratchpad (`clips/h3-plug-fast/`).
 answered. It was deleted after its outputs were pulled (GET 404). Build
 pod: a few minutes of `cargo test` on the shared `fv-build` pod. Balance:
 $31.18 before the pod, $24.54 after (other agents ran in parallel).
+
+### 12.10 The H3 adapter as an unmerged branch; `h3-plug-4step` / `h3-plug-cfg` as family variants (2026-11-18)
+
+Every H3 Plug number above was measured with the adapter **merged** into
+the bf16 weights before quantization (§12.2's FastH3 fuse path). The
+reference repository (h3-rs, `docs/runs/2026-11-15-runpod-6000s-longlive-plug`,
+RTX PRO 6000 Blackwell Server Edition, binaries 7a74532 and 857cbe1) found
+that this keeps only what survives the device weight's rounding: the
+adapter's |ΔW| / |W| is 1–2·10⁻⁴, below one bf16 step of the weight, so the
+bf16 merge kept about a third of it and the MXFP8 merge a tenth, and the
+MXFP8 clips turned stylised (10.5 dB from the bf16 clip) where the base and
+FastH3 V2 kept their scene on the same path. With the pairs kept out of
+the weight (`y = W x + B (A x)`, bf16 factors) the MXFP8 clip is the bf16
+clip's scene again (17.3 dB luma), the branch costs about 0.6 s of a 7.0 s
+dense forward (+8 %), and that repository's `h3-plug4` draft tier makes a
+photographic 1344×768×124 clip in 34.7 s after load against its V2's best
+43.3 s. Pika's FL2VA adapter survives a merge far better (28.6 dB), so the
+branch is the Plug recipes' default only.
+
+Ported here (branch `feat/h3-plug-branch`): `Linear::attach_branch` (every
+forward path, the fused QKV stack as one block-diagonal branch, a plain-Rust
+twin on the CPU), `H3LoraFuse` mode `Branch | Merge`
+(`FASTVIDEO_H3_LORA_BRANCH=1|0`, default branch for `h3-plug-4step` /
+`h3-plug-cfg`, merge for Sol-H3, Turbo, VDN and Preview), the two family
+variants (`families/h3.toml`, untiered, dense, MXFP8 base, profiles
+`h3/plug_h3_4step_dense` / `h3/plug_h3_cfg_dense`), their gold files
+(`lab/gold/h3-plug-*.toml`, no measurements yet) and the lab cell
+`lab/cells/h3-plug.toml`: `plug4-branch` (the served default) against
+`plug4-merged` (`FASTVIDEO_H3_LORA_BRANCH=0`, §12.7's path) and against
+`plug4-branch-bf16` (`FASTVIDEO_H3_QUANT=off`), one prompt at 832×480 with
+TAEH3. Expected from the reference run: `plug4-merged` far from
+`plug4-branch` (the merge drops most of the adapter under MXFP8, so the
+merged clip is the stylised one), `plug4-branch-bf16` close to
+`plug4-branch` (the 17 dB band). Not yet run on a GPU here; the §12.7 /
+§12.9 numbers stand for the merged path only. docs/techniques.md
+"LongLive-Plug recipes" has the mechanism and the knob.

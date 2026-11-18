@@ -1,0 +1,23 @@
+# LongLive-Plug h3-plug-4step served as a family variant (families/h3.toml
+# `h3-plug-4step`): base MiniMax-H3 with the Plug few-step LoRA
+# (Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step, rank 128) run as
+# an unmerged branch at forward time (FASTVIDEO_H3_LORA_BRANCH, default on
+# for the Plug recipes), the base quantized to MXFP8 alone, bf16
+# activations, dense attention, the release's fresh-noise 4-step sampler
+# (4 forwards, shifts 12 / 3, no CFG). docs/techniques.md "LongLive-Plug
+# recipes"; the h3-max-techniques variant is plug_h3_4step_engine_ladder.
+
+[id]
+name = "plug_h3_4step_dense"
+family = "minimax_h3"
+description = "LongLive-Plug H3 4-step (fresh-noise sampler), the LoRA as an unmerged branch, dense attention, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "h3-plug-4step"
+
+[techniques.dense_attention]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

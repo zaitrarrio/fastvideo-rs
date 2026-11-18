@@ -261,6 +261,8 @@ techniques, parameters and settings as the shipped profile of the same name.
 | `h3/sol_h3_4step` | `sol-h3` | `dense_attention`, `mxfp8`, `bf16_activations` |
 | `h3/sol_h3_4step_engine` | `sol-h3` | `sol_attn` (engine, prefix sink), `mxfp8`, `bf16_activations` |
 | `h3/plug_h3_4step_engine_ladder` | `h3-plug-4step` | `h3/sol_h3_4step_engine_ladder`'s techniques (Sol engine route, tau 1.0 / 1.25 / 1.5 on forwards 1-3, `mxfp8`, `bf16_activations`) on the LongLive-Plug recipe; opt-in, docs/serve/research-longlive.md §12.8 |
+| `h3/plug_h3_4step_dense` | `h3-plug-4step` | `dense_attention`, `mxfp8`, `bf16_activations`; the LoRA as an unmerged branch (the `h3-plug-4step` variant, "LongLive-Plug recipes" below) |
+| `h3/plug_h3_cfg_dense` | `h3-plug-cfg` | `dense_attention`, `mxfp8`, `bf16_activations`; the LoRA as an unmerged branch (the `h3-plug-cfg` variant) |
 | `h3/fasth3_8step_sol` | `8step` | `sol_attn` (tau 1.0, text sink, no dense step or block), `mxfp8`, `bf16_activations` |
 | `h3/fasth3_8step_teacache` | `8step` | `vsa`, `teacache` (threshold 1.0, retain 3, cooldown 3: only steps 3-4 can reuse), `mxfp8`, `bf16_activations` |
 | `h3/fasth3_8step_sol_teacache` | `8step` | both of the above |
@@ -653,8 +655,9 @@ Numbers and method: docs/perf/h3-vae-decode-speed.md.
 
 ## LongLive-Plug recipes
 
-NVlabs LongLive-Plug LoRAs (arXiv 2609.38154) are merged into the base
-weights at load. They are recipes, not techniques: each one fixes a base
+NVlabs LongLive-Plug LoRAs (arXiv 2609.38154) are applied to the base
+weights at load: the Wan adapters merged, the H3 adapters as an unmerged
+branch (below). They are recipes, not techniques: each one fixes a base
 checkpoint, its adapters with their merge weights, and the sampler that the
 adapters were distilled for. `fastvideo_models::plug::PlugRecipe` is the
 catalog.
@@ -663,7 +666,58 @@ catalog.
 2026-10-02) as the Wan 2.1 T2V-14B fast tier, public name `wan14b-turbo`.
 It runs at 832x480 / 480x832, up to 81 frames at 16 fps, text-to-video only,
 and is not in the `wan-*` tier slots (see docs/serve/fal-parity.md §3). The
-other three recipes stay opt-in (`fv-gpucheck` only).
+two H3 recipes are family variants since 2026-11-18 (`families/h3.toml`
+`h3-plug-4step`, served name `h3-plug`, 4 forwards; `h3-plug-cfg`, 49
+forwards): base `h3-base` with the adapter tree
+`longlive-plug/minimax-h3-{few-step,cfg}` beside it, dense attention, MXFP8
+base weights (`h3/plug_h3_4step_dense`, `h3/plug_h3_cfg_dense`), T2VA and
+keyframes (FL2VA by transfer, as the h3-rs run found; the plug path refuses
+Ref2VA), short edge 768 / 480, licence MiniMax H3 Community. Both are
+untiered: the h3 draft tier is `fasth3-4step-vsa-480p-taeh3`, and the engine
+binds one model per tier alias (a second draft binding would shadow the
+first), so the tier is the coordinator's decision. `wan5b-plug-4step` stays
+opt-in (`fv-gpucheck` only).
+
+**Branch, not merge, for the H3 adapters** (`FASTVIDEO_H3_LORA_BRANCH`,
+default `1` for `h3-plug-4step` / `h3-plug-cfg`, `0` for every other H3
+adapter): the pairs stay out of the weight and each adapted linear runs
+`y = W x + B (A x)` (`fastvideo_cudarc::rt::nn::Linear::attach_branch`,
+`H3LoraFuse::branch_parts`; the fused `[q; k; v]` stack takes one
+block-diagonal branch, `A` the three `A`s stacked along the rank axis and
+`B` each section's block in its own row range and column block). The
+factors are bf16 on the device (the scale folded into `B`; 312 rank-128
+pairs are about 0.4 GiB), the forward is two bf16 GEMMs with f32
+accumulation (`t = A x` written in bf16, `B t` added into the GEMM's output
+with cuBLAS `beta = 1`), on every path: the bf16 GEMM, the f32-weight GEMM,
+W8A8 and MXFP8 (the branch reads the un-quantized bf16 activation, so the
+fused MXFP8 producers hand such a linear bf16 and it quantizes itself; a
+path with no branch arithmetic, such as `forward_mx` or a raw-weight GEMM,
+refuses a linear that has one). The base weight is untouched, so MXFP8
+rounds the base alone, and the host run has a plain-Rust twin
+(`fastvideo_models::h3::lora::LowRankBranch`) that the CPU tests cover.
+`.diff` and `.set_weight` replacements still merge (they are not low rank).
+Why (the reference repository h3-rs, its run
+`docs/runs/2026-11-15-runpod-6000s-longlive-plug`, RTX PRO 6000 Server
+Edition): a merge keeps only what survives the device weight's rounding.
+LongLive-Plug's |ΔW| / |W| ≈ 1–2·10⁻⁴ is below one bf16 step of the weight
+it is added to, so round-to-nearest snaps most of it back: the bf16 merge
+kept about a third of the adapter (cosine 0.24–0.49 with Δ), the MXFP8
+merge a tenth (cosine 0.07–0.10), and the MXFP8 clips turned stylised
+(10.5 dB from the bf16 clip; the base and FastH3 V2 keep their scene on the
+same MXFP8 path). The bf16 branch keeps `B·A` to 1.5–2.3·10⁻³ of Δ; with it
+the MXFP8 clip is the bf16 clip's scene again (17.3 dB luma against the bf16
+branch, 11.2 dB between the merged and the branched bf16 clips: the full
+adapter takes another trajectory). The branch cost about 0.6 s of a 7.0 s
+dense plug forward there (+8 %: the rank-128 / 384 up-projections 1.63 s
+and the down-projections 0.3 s over 4 forwards), and that repository's
+`h3-plug4` draft tier (4 forwards, Pika's renoise rule over linspace(1, 0,
+5) shifted 12 / 3, no CFG, MXFP8 weights and decoder, pv8) made a
+photographic 1344×768×124 clip in 34.7 s after load against its V2's best
+43.3 s. Pika's FL2VA delta survived a merge far better (28.6 dB between its
+merged and branched clips), which is why the other adapters keep the
+merge by default. None of this is measured in fastvideo-rs yet:
+`lab/cells/h3-plug.toml` runs the branch against the merge and against bf16
+weights (docs/serve/research-longlive.md §12.10).
 
 | recipe | base | adapters (merge weight, rank / alpha) | sampler | licence |
 |---|---|---|---|---|
@@ -673,7 +727,8 @@ other three recipes stay opt-in (`fv-gpucheck` only).
 | `wan14b-plug-4step` | `wan21-t2v-14b` | `wan21-t2v-14b-few-step` lightx2v export (1.0, 128 / 128) + `wan21-t2v-14b-cfg` (0.5, 128 / 128) | LightX2V step-distill Euler: `[1000, 750, 500, 250]` warped with shift 5 (1000 / 937.5 / 833.3 / 625), guidance 1.0 | Apache-2.0 |
 
 The merge rule is `W + Σ weight · alpha / rank · B @ A`, accumulated in f32
-and stored in the base dtype. The H3 adapters are used one at a time, as
+and stored in the base dtype (the Wan adapters, and the H3 adapters under
+`FASTVIDEO_H3_LORA_BRANCH=0`). The H3 adapters are used one at a time, as
 both H3 cards ask. The loader reads PEFT safetensors (it strips the
 `base_model.model.` prefix), the lightx2v export (bare original-Wan names),
 and the `.pt` release (`fastvideo_loader::pth`, tensors under

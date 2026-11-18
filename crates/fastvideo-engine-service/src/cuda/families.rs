@@ -375,11 +375,13 @@ mod tests {
     #[test]
     fn the_embedded_files_are_the_catalog() {
         let cat = catalog(&WeightLayout::default()).unwrap();
-        assert_eq!(cat.len(), 32);
+        assert_eq!(cat.len(), 34);
         let ids: Vec<&str> = cat.iter().map(|m| m.id.as_str()).collect();
         assert!(ids.contains(&"fasth3-4step-vsa"));
         assert!(ids.contains(&"longlive-1.3b"));
         assert!(ids.contains(&"h3-lightx2v-turbo-v01"));
+        assert!(ids.contains(&"h3-plug-4step"));
+        assert!(ids.contains(&"h3-plug-cfg"));
         let m = cat
             .iter()
             .find(|m| m.id.as_str() == "fasth3-4step-vsa")

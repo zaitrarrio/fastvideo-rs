@@ -52,6 +52,8 @@ export const MANIFEST_FAMILIES: ManifestFamily[] = [
       "h3-larry-turbo",
       "h3-lightx2v-turbo",
       "h3-lightx2v-turbo-v01",
+      "h3-plug-4step",
+      "h3-plug-cfg",
       "vdn-h3",
       "vdn-h3-8step",
       "h3-ref2v-max",
@@ -459,6 +461,70 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
     "weight_trees": [
       "h3-base",
       "h3-turbo-loras/lightx2v-v0.1"
+    ],
+    "main_tree": "h3-base",
+    "gpu": {
+      "min_vram_gib": 80,
+      "min_sm": 89,
+      "needs": [
+        "fp8"
+      ]
+    }
+  },
+  "h3-plug-4step": {
+    "family": "h3",
+    "tier": null,
+    "served_names": [
+      "h3-plug"
+    ],
+    "public_names": [
+      "MiniMax-H3-Plug"
+    ],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes"
+    ],
+    "resident_default": true,
+    "recipe_name": "h3-plug-4step-dense",
+    "trees": [
+      "h3-base",
+      "longlive-plug/minimax-h3-few-step"
+    ],
+    "weight_trees": [
+      "h3-base",
+      "longlive-plug/minimax-h3-few-step"
+    ],
+    "main_tree": "h3-base",
+    "gpu": {
+      "min_vram_gib": 80,
+      "min_sm": 89,
+      "needs": [
+        "fp8"
+      ]
+    }
+  },
+  "h3-plug-cfg": {
+    "family": "h3",
+    "tier": null,
+    "served_names": [],
+    "public_names": [
+      "MiniMax-H3-Plug-CFG"
+    ],
+    "tasks": [
+      "t2v",
+      "i2v",
+      "keyframes"
+    ],
+    "resident_default": true,
+    "recipe_name": "h3-plug-cfg-dense",
+    "trees": [
+      "h3-base",
+      "longlive-plug/minimax-h3-cfg"
+    ],
+    "weight_trees": [
+      "h3-base",
+      "longlive-plug/minimax-h3-cfg"
     ],
     "main_tree": "h3-base",
     "gpu": {
@@ -1127,6 +1193,18 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
   "h3-max": {
     "variant": "sol-h3",
     "kind": "tier"
+  },
+  "h3-plug": {
+    "variant": "h3-plug-4step",
+    "kind": "served"
+  },
+  "h3-plug-4step": {
+    "variant": "h3-plug-4step",
+    "kind": "id"
+  },
+  "h3-plug-cfg": {
+    "variant": "h3-plug-cfg",
+    "kind": "id"
   },
   "h3-ref2v-max": {
     "variant": "h3-ref2v-max",
