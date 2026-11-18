@@ -48,6 +48,28 @@ env = ["FASTVIDEO_TAE_DIR={tae}"]
 argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
   "hf-30s,preset=history-forcing,seconds=30,dump=1"]
 
+# The same generator under fastvideo-rs's rebased-sink RoPE (the served SF-Wan policy, docs/ports/wan.md "Long-run
+# quality"): the sink keys re-roped to sit just before the rolled window, so every query-key offset stays within the
+# trained 21 frames however long the rollout runs. The first GPU run (12bd290, 2026-11-18) found both absolute-RoPE
+# arms clean at 15 s and degraded by 30 s (History Forcing into saturated light streaks, SF-Wan into a dark melt).
+[[arm]]
+name = "hf-30s-rebased"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+requires = ["{runs}/hf-stage"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
+  "hf-30s-rebased,preset=history-forcing,rope=rebased,seconds=30,dump=1"]
+
+[[arm]]
+name = "hf-60s-rebased"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+requires = ["{runs}/hf-stage"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
+  "hf-60s-rebased,preset=history-forcing,rope=rebased,seconds=60,dump=1"]
+
 [[arm]]
 name = "sf-w21-30s"
 gate = "sfwan21-1.3b"
