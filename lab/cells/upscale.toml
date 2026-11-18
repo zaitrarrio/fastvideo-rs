@@ -30,6 +30,18 @@ h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}
   "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
 up = ["--upscale-weights", "{tae}/realesr-animevideov3.pth"]
 
+# The upscaler's kernels against their host twins (`fv-gpucheck kernels --groups esrgan`: the bias + PReLU epilogue,
+# the pack kernel at every factor, the tiny network device vs host, and the real weights device vs host byte for byte
+# plus a timed 480x272x81 x4 clip). It reads the checkpoint through FASTVIDEO_ESRGAN_WEIGHTS, so it is TAE-gated on the
+# fetched file; the gate's trees are the H3 arm's (the kernels read no weight tree).
+[[arm]]
+name = "esrgan-kernels"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+tae = "realesr-animevideov3.pth"
+env = ["FASTVIDEO_ESRGAN_WEIGHTS={tae}/realesr-animevideov3.pth"]
+argv = ["--keep-going", "--mode", "fast", "kernels", "--groups", "esrgan"]
+
 # FastH3 4-step VSA at 480p decoded by TAEH3 (the fastvideo-h3-480p cell's fasth3-4step-vsa-480p-taeh3 arm), then x2.
 [[arm]]
 name = "upscale-h3-480p"
