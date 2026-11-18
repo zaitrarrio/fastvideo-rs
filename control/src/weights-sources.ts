@@ -47,6 +47,7 @@ export const HUB_TREES: Record<string, HubTree> = {
   "longlive-plug/wan21-t2v-14b-cfg": { repo: "Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-cfg", revision: "32b8aa3d1db3d178a9c82f3731cc917a34fb7693", globs: ["README.md","SHA256SUMS","adapter_config.json","adapter_model.safetensors","inference_overrides.yaml","provenance.json","release_metadata.json","training_config.yaml"] },
   "longlive-plug/wan22-ti2v-5b-few-step": { repo: "Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step", revision: "38a6ec4e8f5b644749d3072bfe1ac383d00951c0", globs: ["README.md","adapter_config.json","adapter_model.safetensors","inference_config.yaml","load_generator_lora.py","provenance.json","training_config.yaml"] },
   "longlive-plug/wan22-ti2v-5b-cfg": { repo: "Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-cfg", revision: "fa1f9280778aa27c8038fe06e29fb5f2ed6be451", globs: ["README.md","SHA256SUMS","adapter_config.json","adapter_model.safetensors","inference_overrides.yaml","provenance.json","release_metadata.json","training_config.yaml"] },
+  "history-forcing-1.3b": { repo: "xzxxntxdy/History-Forcing", revision: "8604aafe4fada0311c7f5a993e7e620473c8e7ac", globs: ["README.md","dmd/model.pt"] },
   "wan21-t2v-1.3b": { repo: "Wan-AI/Wan2.1-T2V-1.3B-Diffusers", revision: "0fad780a534b6463e45facd96134c9f345acfa5b", globs: ["model_index.json","scheduler/*","tokenizer/*","text_encoder/*","transformer/*","vae/*"] },
   "ltx23-dev": { repo: "Lightricks/LTX-2.3", revision: "3c6a4e66e5d0a684231950b9c74dd4ded7b6fadc", globs: ["ltx-2.3-22b-dev.safetensors","ltx-2.3-22b-distilled-lora-384-1.1.safetensors","ltx-2.3-spatial-upscaler-x2-1.1.safetensors"] },
   "wan22-t2v-a14b": { repo: "Wan-AI/Wan2.2-T2V-A14B-Diffusers", revision: "5be7df9619b54f4e2667b2755bc6a756675b5cd7", globs: ["model_index.json","scheduler/*","tokenizer/*","text_encoder/*","transformer/*","transformer_2/*","vae/*"] },
@@ -212,6 +213,10 @@ export const HUB_SHA256: Record<string, [string, number | null, string[]][]> = {
     ["provenance.json", 2638, ["39cd4f8a99c86db1af0bb30d0818c582f8b5347b3ab11187571b5f3b8cf36281"]],
     ["release_metadata.json", 1065, ["db32274369ebcf321c99187aa8d6951ec2c64ef8f1a265ccab4628a7694da1a8"]],
     ["training_config.yaml", 2354, ["72060c553a8137df63c1dee4e3d657abc7d192c9351dfe405ef36995be23290c"]],
+  ],
+  "history-forcing-1.3b": [
+    ["README.md", 2460, ["be8fc18cec7d65df9c88684b85892922e2e37120aab3c52702aa710909b5d291"]],
+    ["dmd/model.pt", 11352569509, ["9fd236f48acaa0cc4d8115c7b1adb05781945c213a24e028e05227cbf50f9ae3"]],
   ],
   "sana-video-2b-480p": [
     ["model_index.json", 414, ["e0a267cdbebb9fc98f562e8280899001cee05d58050f16c120126379bc53f7dd"]],
