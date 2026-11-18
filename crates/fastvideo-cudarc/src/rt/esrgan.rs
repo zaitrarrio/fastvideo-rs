@@ -1244,7 +1244,7 @@ mod tests {
     /// sha256 of the ×4 bytes pinned here), and ×2 / ×3 sizes.
     #[test]
     fn real_weights_match_numpy_and_a_plain_loop() {
-        let Some(path) = std::env::var_os("FASTVIDEO_ESRGAN_WEIGHTS") else {
+        let Some(path) = fastvideo_models::settings::env_var_os("FASTVIDEO_ESRGAN_WEIGHTS") else {
             eprintln!("FASTVIDEO_ESRGAN_WEIGHTS unset: skipping the real-weights parity test");
             return;
         };

@@ -344,6 +344,8 @@ process: the first read is cached).
 | `FASTVIDEO_DIT_OFFLOAD_LOOKAHEAD` | env, then profile | usize: clamped to 1..=8 | `1` | per load | runtime | `residency` | Streamed DiT blocks copied ahead of the one computing. |
 | `FASTVIDEO_DUMP_DIR` | env | text: a directory (empty = unset) | unset | once per process | runtime | `debug` | Dump named intermediate tensors here (parity runs). |
 | `FASTVIDEO_DUMP_OPS` | env | text: block indices whose ops are dumped | `0` | once per process | runtime | `debug` | Blocks whose per-op tensors are dumped. |
+| `FASTVIDEO_ESRGAN_BUDGET_GIB` | env | text: a positive number of GiB (trimmed; anything else is unset) | `2` | per call | runtime | `upscaler` | Device-memory budget of one batch of the Real-ESRGAN upscaler's activations (`rt::esrgan`, docs/ports/upscaler.md). |
+| `FASTVIDEO_ESRGAN_WEIGHTS` | env | text: a path (empty = unset) | `$FASTVIDEO_TAE_DIR/realesr-animevideov3.pth`, else `auxiliary/upscalers/realesr-animevideov3.pth` under the weights roots | per call | runtime | `upscaler` | The Real-ESRGAN `realesr-animevideov3` checkpoint of `--upscale` (`.pth` or safetensors). |
 | `FASTVIDEO_FFMPEG` | env | text: a program | `ffmpeg` | per call | LTX-2 | `io` | ffmpeg binary for the LTX image-conditioning recompression. |
 | `FASTVIDEO_FLASH_KERNEL` | env, then profile | keyword | `auto` | per call | runtime | `kernel_choice` | Dense attention kernel (profile `[kernels] dense_attention`). |
 | `FASTVIDEO_FLUX1_DUMMY_TEXT` | env | text: `1`, `true` or `TRUE` (exact) | `0` | per load | FLUX.1 | `text_encoder` | FLUX.1: zero text embeddings instead of the T5/CLIP encoders (smoke runs). |
