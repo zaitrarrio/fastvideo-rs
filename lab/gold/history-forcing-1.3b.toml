@@ -1,0 +1,108 @@
+# Gold standard of `history-forcing-1.3b` (wan, untiered): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# History Forcing (ziplab, arXiv 2611.02782): the SF-Wan causal stream with the History Forcing generator
+# (window 21, sink 3, no LoRA, no re-cache at a prompt switch); weights with NO STATED LICENCE (evaluation
+# only). No GPU run of this port yet: every number is a gap (docs/ports/wan.md "History Forcing").
+
+schema = 1
+
+[model]
+variant = "history-forcing-1.3b"
+family = "wan"
+
+[tier]
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 832
+height = 480
+seconds = 30.0
+fps = 16
+prompt_set = "scripts/gpu/prompts-eval.json"
+note = "The gold cell (lab/cells/gold-history-forcing-1.3b.toml) is one serve-engine request of runpod-matrix.sh's default prompt at the served default length, seed 1024, as the other causal gold files; the stream shape (30 s) is lab/cells/history-forcing.toml's `hf-30s` arm (fv-gpucheck wan stream, preset=history-forcing). Neither has run yet."
+
+[latency]
+
+[quality]
+
+[cost]
+
+[last_validated]
+
+[[source]]
+fields = []
+path = "docs/ports/wan.md"
+heading = "History Forcing"
+date = "2026-11-18"
+note = "The port notes: what the model is, its inference contract (window 21, sink 3, 4 DMD steps 1000/750/500/250 warped by shift 5, 3-frame blocks, no LoRA, no re-cache) read from ziplab/History-Forcing's configs on 2026-11-18, the converter, how to run it, and what is unverified (no GPU run of this port). Not a D2 source: it backs no field. The served stream shape is the family file's engine table (families/wan.toml `history-forcing-1.3b`)."
+
+[[source]]
+fields = []
+path = "docs/ports/wan.md"
+heading = "Long-run quality: the R12 study (sink size decides it)"
+date = "2026-10-01"
+note = "The SF-Wan long-run study the comparison arm (lab/cells/history-forcing.toml `sf-w21-30s`: plain sfwan21-1.3b at window 21, sink 3, absolute RoPE) is read against: a related measurement of the same engine, not this variant. The fastwan-rs notes of its own History Forcing run (an RTX 4090, 60 s, 7.9 fps at 21 / 3, another implementation) are summarised in the History Forcing section above; they are not a measurement of this port."
+
+[[gap]]
+field = "latency.p50_s"
+why = "no GPU run of this variant yet (the derived tree history-forcing-1.3b-safetensors is not on R2 or the volume; the owner publishes it, then `fv-lab run gold` measures the gold cell)"
+
+[[gap]]
+field = "latency.min_s"
+why = "no GPU run of this variant yet; the gold run makes one serve job per variant (n = 1), so there will be no spread either"
+
+[[gap]]
+field = "latency.max_s"
+why = "no GPU run of this variant yet; the gold run makes one serve job per variant (n = 1), so there will be no spread either"
+
+[[gap]]
+field = "latency.denoise_s"
+why = "no GPU run of this variant yet"
+
+[[gap]]
+field = "latency.decode_s"
+why = "no GPU run of this variant yet"
+
+[[gap]]
+field = "latency.load_s"
+why = "no GPU run of this variant yet (the Rust .pt reader and the converted generator_ema.safetensors were only loaded on a CPU box, docs/ports/wan.md History Forcing)"
+
+[[gap]]
+field = "latency.peak_gib"
+why = "no GPU run of this variant yet; the Wan pipeline's engine report carries no peak_memory_mb either"
+
+[[gap]]
+field = "latency.fps"
+why = "no stream of this variant measured yet: lab/cells/history-forcing.toml `hf-30s` (fv-gpucheck wan stream, preset=history-forcing, 30 s) is the cell that will; fastwan-rs measured 7.9 fps at 21 / 3 on an RTX 4090 with its own implementation, not this port"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "no stream of this variant measured yet (lab/cells/history-forcing.toml `hf-30s`)"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "no measurement: no oracle dump of ziplab/History-Forcing's inference exists (its inference_memrope.py runs MemRoPE, which this port does not implement; a plain-cache dump would need its evaluation/generator.py path)"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "no measurement: no oracle dump of the upstream inference (see quality.psnr_vs_upstream_min_db)"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no measurement: no GPU run of this variant yet"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no measurement: no GPU run of this variant yet"
+
+[[gap]]
+field = "cost.usd_per_hr"
+why = "no run on a priced tier yet; the RTX PRO 6000 price other gold files cite (docs/perf/h3-nvfp4-tier-options.md, $2.49/hr) applies once the gold cell has run"
+
+[[gap]]
+field = "cost.usd_per_clip"
+why = "derived from cost.usd_per_hr and latency.p50_s, both gaps"

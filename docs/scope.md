@@ -74,6 +74,15 @@ Samplers: UniPC, DMD, causal DMD, TurboDiffusion rCM.
 QAD checkpoints are the same architecture as FastWan 1.3B and ship
 unquantized. They are listed so they do not fall through to UniPC.
 
+| Variant on `sf_wan_t2v_1_3b` | Checkpoint | Stream shape | Licence |
+|---|---|---|---|
+| `longlive-1.3b` | `Efficient-Large-Model/LongLive-1.3B` (`longlive_base` + LoRA, converted) | window 12, sink 3, KV re-cache at a prompt switch | CC-BY-NC-SA-4.0 (non-commercial) |
+| `history-forcing-1.3b` | `xzxxntxdy/History-Forcing` `dmd/model.pt` (EMA generator, converted or read as `.pt`) | window 21, sink 3, no LoRA, no re-cache | **none stated** (evaluation only) |
+
+Both run the SF-Wan causal engine with another transformer
+(`families/wan.toml`, [ports/wan.md](ports/wan.md) "History Forcing",
+[serve/research-longlive.md](serve/research-longlive.md)).
+
 The distilled presets (DMD, rCM, causal DMD) decode through TAEHV
 (`taew2_1`) by default when its weights are found; `FASTVIDEO_WAN_VAE=full`
 opts out to the Wan VAE (2 latent frames per pass by default). The mp4 is

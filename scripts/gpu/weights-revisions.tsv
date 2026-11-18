@@ -59,6 +59,7 @@ longlive-plug/wan21-t2v-14b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.1-
 longlive-plug/wan21-t2v-14b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-cfg	32b8aa3d1db3d178a9c82f3731cc917a34fb7693	recorded	hub
 longlive-plug/wan22-ti2v-5b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step	38a6ec4e8f5b644749d3072bfe1ac383d00951c0	recorded	hub
 longlive-plug/wan22-ti2v-5b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-cfg	fa1f9280778aa27c8038fe06e29fb5f2ed6be451	recorded	hub
+history-forcing-1.3b	xzxxntxdy/History-Forcing	8604aafe4fada0311c7f5a993e7e620473c8e7ac	recorded	hub
 h3-ref2va	MiniMaxAI/MiniMax-H3	42ed227ee7df40d41602854ae760620d6eb651fe	recorded	h3-ref2va
 h3-ref2va	lightx2v/Minimax-h3-Turbo	3ec17a324ced54151364f24f8b5fb6bf7e26414f	recorded	h3-ref2va
 mmaudio-44k-v2	hkchengrex/MMAudio	eb13a1a98fdbec91753775c57b074ccdfc60587c	unpinned	mmaudio

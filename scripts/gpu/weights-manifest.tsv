@@ -127,6 +127,14 @@ longlive-plug/wan21-t2v-14b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.1-
 longlive-plug/wan21-t2v-14b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
 longlive-plug/wan22-ti2v-5b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step	README.md adapter_config.json adapter_model.safetensors inference_config.yaml load_generator_lora.py provenance.json training_config.yaml
 longlive-plug/wan22-ti2v-5b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
+# history-forcing-1.3b (docs/ports/wan.md "History Forcing"; ziplab/History-Forcing, arXiv 2611.02782): the Wan2.1-T2V-1.3B
+# long-video generator, raw + EMA, as the training checkpoint dmd/model.pt (11 352 569 509 B, f32, sha256 9fd236f4…f9ae3;
+# the Hub repo's ar_teacher/ and opsd/ are not fetched). LICENCE: NONE STATED on the Hub card or in the code repo
+# (the code is Apache-2.0): evaluation only until the authors state one. history-forcing-1.3b-safetensors (not a hub
+# row) is derived by scripts/gpu/convert-history-forcing.py (torch-free): generator_ema.safetensors, the EMA generator
+# with its original Wan names (5 676 070 768 B); hashes in weights-sha256.tsv (sha:history-forcing-1.3b-safetensors).
+# Neither tree is on R2 or the EU volume yet (2026-11-18): the owner publishes (r2-weights.py publish-hub / publish-dir).
+history-forcing-1.3b	xzxxntxdy/History-Forcing	README.md dmd/model.pt
 # sol-engine benchmark trees, fetched to EU 2026-10-06 (owner-approved; docs/ops/runpod-volumes.md §2). Hub rows added
 # add-only by fetch-hub-tree.sh at the revisions in weights-revisions.tsv; every file checked against the Hub (LFS SHA-256 /
 # git blob SHA-1) and its SHA-256 recorded in weights-sha256.tsv (verify-weights.sh sha:<dest>). Names and globs as the

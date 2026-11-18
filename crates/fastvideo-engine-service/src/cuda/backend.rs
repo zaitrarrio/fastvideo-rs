@@ -113,8 +113,9 @@ fn rollout_base(
     }
 }
 
-/// The LongLive settings of a recipe, its window and sink taken from the
-/// recipe (12 and 3 for the release).
+/// The LongLive / History Forcing settings of a recipe: the preset's
+/// contract, its window and sink taken from the recipe (12 / 3 for
+/// LongLive, 21 / 3 for History Forcing).
 fn longlive_config(r: &SfWanRecipe) -> Option<fastvideo_cudarc::wan::longlive::LongLiveConfig> {
     let l = r.longlive.as_ref()?;
     Some(fastvideo_cudarc::wan::longlive::LongLiveConfig {
@@ -123,28 +124,39 @@ fn longlive_config(r: &SfWanRecipe) -> Option<fastvideo_cudarc::wan::longlive::L
         global_sink: l.global_sink,
         recache: l.recache,
         relative_rope: l.relative_rope,
-        ..fastvideo_cudarc::wan::longlive::LongLiveConfig::interactive()
+        ..l.preset.config()
     })
 }
 
-/// The LongLive transformer of a recipe (renamed, LoRA merged), if any.
+/// The LongLive / History Forcing transformer of a recipe (renamed, LoRA
+/// merged when the preset has one), if any. `weights` is the checkpoint
+/// dir (`wan::longlive::BASE_FILES`) or the generator file itself (a
+/// safetensors or a torch `.pt`, e.g. the Hub's `dmd/model.pt`).
 fn longlive_dit(
     r: &SfWanRecipe,
 ) -> Result<Option<fastvideo_cudarc::rt::weights::WeightMap>, ApiError> {
     let (Some(l), Some(cfg)) = (r.longlive.as_ref(), longlive_config(r)) else {
         return Ok(None);
     };
-    let mut w = fastvideo_cudarc::wan::longlive::LongLiveWeights::in_dir(&l.weights, &cfg);
+    let name = l.preset.display();
+    let mut w = fastvideo_cudarc::wan::longlive::LongLiveWeights::at(&l.weights, &cfg);
     if !l.lora {
         w.lora = None;
     } else if w.lora.is_none() {
-        return Err(ApiError::engine_failed(format!(
-            "longlive: {} has no lora.safetensors (set lora: false for the base generator)",
-            l.weights.display()
-        )));
+        return Err(ApiError::engine_failed(if cfg.has_lora() {
+            format!(
+                "{name}: {} has no lora.safetensors (set lora: false for the base generator)",
+                l.weights.display()
+            )
+        } else {
+            format!(
+                "{name} has no LoRA: set lora: false for {}",
+                l.weights.display()
+            )
+        }));
     }
     let (map, _) = fastvideo_cudarc::wan::longlive::load_transformer_map(&w).map_err(|e| {
-        ApiError::engine_failed(format!("longlive weights {}: {e}", l.weights.display()))
+        ApiError::engine_failed(format!("{name} weights {}: {e}", l.weights.display()))
     })?;
     Ok(Some(map))
 }

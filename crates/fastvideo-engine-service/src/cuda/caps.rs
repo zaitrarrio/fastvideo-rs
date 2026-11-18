@@ -322,15 +322,100 @@ impl SfWanRecipe {
 /// The extra served name of a LongLive model: the fal app
 /// `fastvideo/longlive` resolves to it (docs/serve/director-causal.md §5).
 pub const LONGLIVE_NAME: &str = "longlive";
+/// The extra served name of a History Forcing model (the standalone causal
+/// backend; the family file's `served_names` for the catalog variant).
+pub const HISTORY_FORCING_NAME: &str = "history-forcing";
 
-/// LongLive settings of an [`SfWanRecipe`] (`wan::longlive::LongLiveConfig`).
+/// Which checkpoint family a [`LongLiveRecipe`] runs on the SF-Wan engine
+/// (`wan::longlive::LongLiveConfig`'s presets): the inference contract the
+/// family file's window and sink are laid over.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LongLivePreset {
+    /// LongLive-1.3B (`LongLiveConfig::interactive`): window 12, sink 3,
+    /// LoRA rank 256, KV re-cache at a prompt switch.
+    #[default]
+    Longlive,
+    /// History Forcing's long-video generator
+    /// (`LongLiveConfig::history_forcing`, docs/ports/wan.md "History
+    /// Forcing"): window 21, sink 3, no LoRA, no re-cache; the weights carry
+    /// no stated licence (evaluation only).
+    HistoryForcing,
+}
+
+impl LongLivePreset {
+    /// The preset's inference settings (`LongLiveConfig::interactive` /
+    /// `history_forcing`; the recipe then overrides window, sink, LoRA and
+    /// switch behaviour): `super::causal::preset_config`, with the CUDA
+    /// backend.
+    #[cfg(feature = "cuda")]
+    pub fn config(self) -> fastvideo_cudarc::wan::longlive::LongLiveConfig {
+        super::causal::preset_config(self)
+    }
+
+    /// The default preset (serde: left out of a serialised recipe).
+    pub fn is_longlive(&self) -> bool {
+        *self == Self::Longlive
+    }
+
+    /// The model's name in summaries and messages.
+    pub fn display(self) -> &'static str {
+        match self {
+            Self::Longlive => "LongLive",
+            Self::HistoryForcing => "History Forcing",
+        }
+    }
+
+    /// The name a recipe summary starts with. LongLive's is unchanged
+    /// (its non-commercial licence is on the deployment's `licence` and the
+    /// director form, docs/serve/director-causal.md §5); History Forcing
+    /// carries its caveat here, since its weights state no licence at all
+    /// (docs/ports/wan.md "History Forcing").
+    pub fn summary_name(self) -> &'static str {
+        match self {
+            Self::Longlive => "LongLive",
+            Self::HistoryForcing => {
+                "History Forcing (weights with no stated licence: evaluation only)"
+            }
+        }
+    }
+
+    /// The extra served name of a model on this preset.
+    pub fn served_name(self) -> &'static str {
+        match self {
+            Self::Longlive => LONGLIVE_NAME,
+            Self::HistoryForcing => HISTORY_FORCING_NAME,
+        }
+    }
+
+    /// `longlive` | `history-forcing` (the family file's `preset`, the
+    /// `FV_LONGLIVE_PRESET` env of the standalone backend).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "longlive" => Some(Self::Longlive),
+            "history-forcing" | "history_forcing" => Some(Self::HistoryForcing),
+            _ => None,
+        }
+    }
+}
+
+/// LongLive / History Forcing settings of an [`SfWanRecipe`]
+/// (`wan::longlive::LongLiveConfig`): a checkpoint in LongLive's format
+/// replacing `wan.weights/transformer`, and how the rollout treats it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LongLiveRecipe {
-    /// The converted checkpoint: `longlive_base.safetensors` and
-    /// `lora.safetensors` (same keys as the Hub's `.pt` files).
+    /// The checkpoint: a directory holding `longlive_base.safetensors` (+
+    /// `lora.safetensors`), `generator_ema.safetensors` or a torch
+    /// `model.pt` / `dmd/model.pt` (`wan::longlive::BASE_FILES`), or the
+    /// file itself (`LongLiveWeights::at`).
     pub weights: PathBuf,
-    /// Merge `lora.safetensors` (the long-tuned model; off only for the
-    /// base-generator ablation).
+    /// Which checkpoint family (`longlive` by default, `history-forcing`).
+    /// The default is left out when serialised, so LongLive's engine table
+    /// round-trips as it always did.
+    #[serde(default, skip_serializing_if = "LongLivePreset::is_longlive")]
+    pub preset: LongLivePreset,
+    /// Merge `lora.safetensors` (LongLive's long-tuned model; off for the
+    /// base-generator ablation and for History Forcing, which has none).
     #[serde(default = "longlive_on")]
     pub lora: bool,
     /// KV re-cache at a prompt switch (off: keep the cache, the ablation).
@@ -695,7 +780,7 @@ impl CudaModel {
                 "taehv".to_owned(),
                 format!(
                     "{} causal rollout, {} Self-Forcing steps per block, KV window {} latent frames, sink {}{}",
-                    if r.longlive.is_some() { "LongLive" } else { "SF-Wan" },
+                    r.longlive.as_ref().map_or("SF-Wan", |l| l.preset.summary_name()),
                     r.wan.sampler.steps(),
                     r.local_attn_frames,
                     r.sink_frames,
@@ -910,7 +995,7 @@ pub struct ModelEntryCfg {
     /// Optional per-model settings: `text_encoder`, `i2v_encoder`, `warmup`, `h3_1080p`
     /// (H3), `text` (LTX), `adaln_cache` (H3), `taeh3` / `tae` (tiny
     /// decoders), `steps` / `lora_strength` (Turbo LoRA), `longlive` /
-    /// `longlive_recache` (LongLive).
+    /// `longlive_recache` (LongLive, History Forcing).
     pub extra: BTreeMap<String, String>,
 }
 
@@ -1100,17 +1185,20 @@ pub fn model_from_catalog(cat: &[CudaModel], e: &ModelEntryCfg) -> Result<CudaMo
             if let Some(w) = &e.weights {
                 r.wan.weights = w.clone();
             }
-            // LongLive-1.3B: the `longlive-1.3b` variant carries the recipe
-            // (window 12, sink 3, KV re-cache); `longlive = "<dir>"` moves its
-            // converted checkpoint, `longlive_recache = false` keeps the cache
-            // at a prompt switch (the ablation).
+            // LongLive-1.3B / History Forcing: the `longlive-1.3b` and
+            // `history-forcing-1.3b` variants carry the recipe (window, sink,
+            // preset, re-cache); `longlive = "<dir or file>"` moves the
+            // checkpoint, `longlive_recache = false` keeps the cache at a
+            // prompt switch (LongLive's ablation; History Forcing's default
+            // is `false` and `true` borrows LongLive's re-cache).
             match (&mut r.longlive, x("longlive").filter(|d| !d.is_empty())) {
                 (Some(l), dir) => {
                     if let Some(d) = dir {
                         l.weights = d.into();
                     }
                     l.recache = match x("longlive_recache").as_deref() {
-                        None | Some("true") => true,
+                        None => l.recache,
+                        Some("true") => true,
                         Some("false") => false,
                         Some(other) => {
                             return Err(format!(
@@ -1122,14 +1210,14 @@ pub fn model_from_catalog(cat: &[CudaModel], e: &ModelEntryCfg) -> Result<CudaMo
                 }
                 (None, Some(_)) => {
                     return Err(format!(
-                        "model `{}`: `longlive` applies to the LongLive variant (variant = \"longlive-1.3b\")",
+                        "model `{}`: `longlive` applies to the LongLive / History Forcing variants (variant = \"longlive-1.3b\" | \"history-forcing-1.3b\")",
                         e.id
                     ))
                 }
                 (None, None) => {
                     if x("longlive_recache").is_some() {
                         return Err(format!(
-                            "model `{}`: longlive_recache applies to the LongLive variant",
+                            "model `{}`: longlive_recache applies to the LongLive / History Forcing variants",
                             e.id
                         ));
                     }
@@ -1581,7 +1669,7 @@ mod tests {
     fn causal_clip_progress_counts_every_block() {
         use fastvideo_models::wan::{WanVaeConfig, WanVideoArchConfig};
         let cat = catalog(&WeightLayout::default()).unwrap();
-        for id in ["sfwan21-1.3b", "longlive-1.3b"] {
+        for id in ["sfwan21-1.3b", "longlive-1.3b", "history-forcing-1.3b"] {
             let m = find(&cat, id).unwrap();
             let CudaRecipe::SfWan(r) = &m.recipe else {
                 panic!("{id}: not a causal recipe")
@@ -2946,6 +3034,135 @@ mod tests {
         assert!(model_from_config(&layout, &with).is_err());
     }
 
+    /// History Forcing is its own variant on the same loader: preset
+    /// `history-forcing` (window 21, sink 3, no LoRA, no re-cache), the
+    /// served name `history-forcing`, its derived tree, and a summary that
+    /// names the model and its licence caveat. `longlive_recache = true`
+    /// borrows LongLive's re-cache; `longlive = "<file>"` may point at the
+    /// Hub's `dmd/model.pt` itself.
+    #[test]
+    fn history_forcing_variant_runs_its_preset() {
+        let layout = WeightLayout::new("/w");
+        let mut e = ModelEntryCfg {
+            id: "history-forcing-1.3b".into(),
+            variant: "history-forcing-1.3b".into(),
+            ..Default::default()
+        };
+        let m = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &m.recipe else {
+            panic!()
+        };
+        let l = r.longlive.as_ref().unwrap();
+        assert_eq!(l.preset, LongLivePreset::HistoryForcing);
+        assert!(!l.lora && !l.recache && l.global_sink && !l.relative_rope);
+        assert_eq!(
+            l.weights,
+            PathBuf::from("/w/history-forcing-1.3b-safetensors")
+        );
+        assert_eq!((r.local_attn_frames, r.sink_frames), (21, 3));
+        assert_eq!(r.wan.weights, PathBuf::from("/w/sfwan21-1.3b"));
+        assert_eq!(r.wan.sampler.steps(), 4);
+        #[cfg(feature = "cuda")]
+        {
+            let cfg = l.preset.config();
+            assert_eq!(
+                cfg,
+                fastvideo_cudarc::wan::longlive::LongLiveConfig::history_forcing()
+            );
+            assert!(!cfg.has_lora());
+            assert_eq!(
+                LongLivePreset::Longlive.config(),
+                fastvideo_cudarc::wan::longlive::LongLiveConfig::interactive()
+            );
+        }
+        let caps = m.caps();
+        assert_eq!(
+            caps.served_names,
+            ["history-forcing-1.3b", HISTORY_FORCING_NAME]
+        );
+        assert!(!caps.served_names.iter().any(|n| n == LONGLIVE_NAME));
+        assert_eq!(
+            caps.stream,
+            Some(StreamCaps::Causal {
+                block_frames: 12,
+                target_fps: 16,
+                context: Some(fastvideo_protocol::CausalContext {
+                    window_latent_frames: 21,
+                    sink_latent_frames: 3,
+                    prompt_recache: false
+                }),
+            })
+        );
+        let summary = m.describe().summary;
+        assert!(summary.starts_with("History Forcing"), "{summary}");
+        assert!(summary.contains("no stated licence"), "{summary}");
+        assert!(
+            summary.contains("KV window 21 latent frames, sink 3"),
+            "{summary}"
+        );
+        assert!(!summary.contains("re-cache"), "{summary}");
+        // The preset round-trips through the recipe's JSON; LongLive's
+        // recipe is unchanged by the field (its default).
+        let v = serde_json::to_value(r).unwrap();
+        assert_eq!(v["longlive"]["preset"], "history-forcing");
+        let back: SfWanRecipe = serde_json::from_value(v).unwrap();
+        assert_eq!(&back, r);
+        let ll = find(&catalog(&layout).unwrap(), "longlive-1.3b").unwrap();
+        let CudaRecipe::SfWan(lr) = &ll.recipe else {
+            panic!()
+        };
+        assert_eq!(
+            lr.longlive.as_ref().unwrap().preset,
+            LongLivePreset::Longlive
+        );
+        assert!(serde_json::to_value(lr).unwrap()["longlive"]
+            .get("preset")
+            .is_none());
+        assert_eq!(
+            LongLivePreset::parse("history-forcing"),
+            Some(LongLivePreset::HistoryForcing)
+        );
+        assert_eq!(
+            LongLivePreset::parse("longlive"),
+            Some(LongLivePreset::Longlive)
+        );
+        assert_eq!(LongLivePreset::parse("other"), None);
+        assert_eq!(LongLivePreset::default(), LongLivePreset::Longlive);
+        // Overrides: the checkpoint file itself, and LongLive's re-cache.
+        e.extra
+            .insert("longlive".into(), "/elsewhere/dmd/model.pt".into());
+        e.extra.insert("longlive_recache".into(), "true".into());
+        let m = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &m.recipe else {
+            panic!()
+        };
+        let l = r.longlive.as_ref().unwrap();
+        assert!(l.recache);
+        assert_eq!(l.preset, LongLivePreset::HistoryForcing);
+        assert_eq!(l.weights, PathBuf::from("/elsewhere/dmd/model.pt"));
+        assert!(m
+            .describe()
+            .summary
+            .contains("KV re-cache at prompt switches"));
+        assert!(matches!(
+            m.caps().stream,
+            Some(StreamCaps::Causal {
+                context: Some(fastvideo_protocol::CausalContext {
+                    prompt_recache: true,
+                    ..
+                }),
+                ..
+            })
+        ));
+        // Without the override the family's `recache = false` stands.
+        e.extra.remove("longlive_recache");
+        let m = model_from_config(&layout, &e).unwrap();
+        let CudaRecipe::SfWan(r) = &m.recipe else {
+            panic!()
+        };
+        assert!(!r.longlive.as_ref().unwrap().recache);
+    }
+
     /// LongLive is opt-in on an SF-Wan recipe: absent from the catalog's
     /// recipe (and its JSON), defaults on when a deployment sets it.
     #[test]
@@ -2967,6 +3184,7 @@ mod tests {
         let ll: SfWanRecipe = serde_json::from_value(v).unwrap();
         let l = ll.longlive.as_ref().unwrap();
         assert!(l.lora && l.recache && l.global_sink && !l.relative_rope);
+        assert_eq!(l.preset, LongLivePreset::Longlive);
         assert_eq!(l.weights, PathBuf::from("/w/longlive-1.3b-safetensors"));
     }
 }

@@ -234,6 +234,14 @@ fn trees_name_what_the_recipes_read() {
                 "sfwan21-1.3b",
             ][..],
         ),
+        (
+            "history-forcing-1.3b",
+            &[
+                "auxiliary/tae/taew2_1.safetensors",
+                "history-forcing-1.3b-safetensors",
+                "sfwan21-1.3b",
+            ][..],
+        ),
     ]
     .into_iter()
     .collect();
@@ -266,11 +274,20 @@ fn trees_name_what_the_recipes_read() {
             CudaRecipe::Wan(w) => wan_trees(m.id.as_str(), w, &t),
             CudaRecipe::SfWan(s) => {
                 wan_trees(m.id.as_str(), &s.wan, &t);
-                if s.longlive.is_some() {
+                // The LongLive / History Forcing checkpoint tree (the last
+                // component of `longlive.weights`: `<weights>/<tree>`).
+                if let Some(l) = &s.longlive {
+                    let tree = l
+                        .weights
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or_default()
+                        .to_owned();
                     assert!(
-                        t.contains(&"longlive-1.3b-safetensors".to_owned()),
-                        "{}",
-                        m.id
+                        t.contains(&tree),
+                        "{}: {t:?} lacks {tree} ({})",
+                        m.id,
+                        l.weights.display()
                     );
                 }
             }
@@ -356,6 +373,6 @@ fn variant_counts() {
         .collect();
     eprintln!("variants per family: {counts:?}");
     let total: usize = counts.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 32);
+    assert_eq!(total, 33);
     assert_eq!(total, catalog(&WeightLayout::default()).unwrap().len());
 }

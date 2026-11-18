@@ -109,6 +109,13 @@ were taken with a 2 s lead.
   (CC-BY-NC(-SA) 4.0 on the HF card; research-longlive.md §4.3). The director
   form of a LongLive app says so in its description. Serving it commercially
   is an owner/legal decision.
+- **History Forcing** (`history-forcing-1.3b`, also served as
+  `history-forcing`; ports/wan.md "History Forcing") is the same engine with
+  another checkpoint (window 21, sink 3, no re-cache): `FV_SFWAN_WEIGHTS` +
+  `FV_LONGLIVE_WEIGHTS` + `FV_LONGLIVE_PRESET=history-forcing`, or the
+  variant in `[[models]]`. Its weights carry **no stated licence** at all
+  (evaluation only); the recipe summary says so. No fal app, no preset, no
+  GPU run yet.
 
 ## 6. Reactor consistency
 

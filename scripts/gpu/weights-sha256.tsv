@@ -21,6 +21,12 @@
 #   longlive-1.3b-safetensors  artifacts/runpod/convert-longlive-1.3b-fv-weights-*/sha256.txt (convert-longlive.py).
 #                      longlive_base.safetensors is listed as US|EU: the two files differ only in the order of the
 #                      two __metadata__ entries in the header; tensor table and data are identical (2026-10-02).
+#   history-forcing-1.3b  dmd/model.pt: the Hub's LFS SHA-256 at the pinned revision (weights-revisions.tsv), equal to
+#                      the hash of the file fetched on 2026-11-18; README.md: the SHA-256 of the file at that revision.
+#                      Not on R2 or the EU volume yet (the owner publishes).
+#   history-forcing-1.3b-safetensors  scripts/gpu/convert-history-forcing.py on that dmd/model.pt (2026-11-18, a CPU
+#                      box; the output's sha256.txt): the header names the Hub path, not the local file, so the file
+#                      (and this hash) is the same wherever it is converted. Not on R2 or the EU volume yet.
 #   qwen3-4b-instruct-gguf  the prompt upsampler's local model (docs/serve/upsampler-local.md), R2 only (no volume):
 #                      Qwen/Qwen3-4B-Instruct-2507 @ cdbee75f17c01a7cc42f958dc650907174af0554 converted to GGUF Q8_0 by
 #                      llama.cpp b11195 convert_hf_to_gguf.py (2026-10-13); LICENSE = the repo's (git blob 6634c8cc…);
@@ -192,6 +198,10 @@ longlive-plug/wan22-ti2v-5b-cfg	release_metadata.json	1065	sha256:db32274369ebcf
 longlive-plug/wan22-ti2v-5b-cfg	training_config.yaml	2354	sha256:72060c553a8137df63c1dee4e3d657abc7d192c9351dfe405ef36995be23290c
 longlive-1.3b-safetensors	longlive_base.safetensors	5676075416	sha256:113656f29f96e42977de04d34784475260b92105ecbc83dbba111cfb345fa476|ff64e39c50dbc044c11d6a242a92a9e357ed16a1c6f0ffaf256630a1813187e1
 longlive-1.3b-safetensors	lora.safetensors	1399924800	sha256:7ec78e6338e0dfdb90c622bfc753820487d74eee6d3a00c081e661c8d8d78199
+history-forcing-1.3b	README.md	2460	sha256:be8fc18cec7d65df9c88684b85892922e2e37120aab3c52702aa710909b5d291
+history-forcing-1.3b	dmd/model.pt	11352569509	sha256:9fd236f48acaa0cc4d8115c7b1adb05781945c213a24e028e05227cbf50f9ae3
+history-forcing-1.3b-safetensors	generator_ema.safetensors	5676070768	sha256:c3ae7ceaca552dbbd72f3b2dcd3d24101a6fafbec06eaf3bc25ab5abdbb2a723
+history-forcing-1.3b-safetensors	keys.txt	33569	sha256:3ef44506e5d530eb0efef4c515c68fbfb149f3a6f0f2214ea0c3958cdb962e8a
 sana-video-2b-480p	model_index.json	414	sha256:e0a267cdbebb9fc98f562e8280899001cee05d58050f16c120126379bc53f7dd
 sana-video-2b-480p	scheduler/scheduler_config.json	909	sha256:5dc4f825f8966ed1fb6112ac9a2544b1b63ff396e24657a0f22a8404417a0afb
 sana-video-2b-480p	text_encoder/config.json	1460	sha256:96f080062373153486e5bf58452902fe105fa09815ed51239a1fbd3c892376db

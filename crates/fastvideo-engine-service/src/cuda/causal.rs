@@ -224,7 +224,17 @@ pub fn sfwan_caps(id: &str, context: Option<CausalContext>) -> ModelCaps {
     }
 }
 
-pub use super::caps::LONGLIVE_NAME;
+pub use super::caps::{LongLivePreset, HISTORY_FORCING_NAME, LONGLIVE_NAME};
+
+/// The inference settings of a preset: LongLive's interactive config, or
+/// History Forcing's (`wan::longlive::LongLiveConfig`).
+pub fn preset_config(p: LongLivePreset) -> fastvideo_cudarc::wan::longlive::LongLiveConfig {
+    use fastvideo_cudarc::wan::longlive::LongLiveConfig;
+    match p {
+        LongLivePreset::Longlive => LongLiveConfig::interactive(),
+        LongLivePreset::HistoryForcing => LongLiveConfig::history_forcing(),
+    }
+}
 
 /// A backend serving only causal SF-Wan (streaming; no batch jobs).
 pub struct CausalCudaBackend {
@@ -233,9 +243,15 @@ pub struct CausalCudaBackend {
     preset: String,
     device: String,
     base: RolloutConfig,
-    /// LongLive-1.3B (`FV_LONGLIVE_WEIGHTS`): its converted checkpoint dir
-    /// and settings; the transformer replaces `weights/transformer`.
-    longlive: Option<(PathBuf, fastvideo_cudarc::wan::longlive::LongLiveConfig)>,
+    /// LongLive-1.3B or History Forcing (`FV_LONGLIVE_WEIGHTS`,
+    /// `FV_LONGLIVE_PRESET`): the checkpoint (a dir or the generator
+    /// file), which preset, and its settings; the transformer replaces
+    /// `weights/transformer`.
+    longlive: Option<(
+        PathBuf,
+        LongLivePreset,
+        fastvideo_cudarc::wan::longlive::LongLiveConfig,
+    )>,
     driver: Option<CausalDriver>,
 }
 
@@ -273,12 +289,25 @@ impl CausalCudaBackend {
     /// re-cache at prompt switches). `weights` still supplies the text
     /// encoder, tokenizer and VAE (`sfwan21-1.3b`).
     pub fn with_longlive(
-        mut self,
+        self,
         dir: PathBuf,
         cfg: fastvideo_cudarc::wan::longlive::LongLiveConfig,
     ) -> Self {
+        self.with_preset(dir, LongLivePreset::Longlive, cfg)
+    }
+
+    /// [`Self::with_longlive`] for either preset: History Forcing
+    /// (docs/ports/wan.md "History Forcing") reads `generator_ema.safetensors`
+    /// or the Hub's `dmd/model.pt` from `path` (a dir or the file), no LoRA,
+    /// window 21, sink 3, the cache kept at a prompt switch.
+    pub fn with_preset(
+        mut self,
+        path: PathBuf,
+        preset: LongLivePreset,
+        cfg: fastvideo_cudarc::wan::longlive::LongLiveConfig,
+    ) -> Self {
         self.base = cfg.rollout(self.base);
-        self.longlive = Some((dir, cfg));
+        self.longlive = Some((path, preset, cfg));
         self
     }
 
@@ -288,6 +317,10 @@ impl CausalCudaBackend {
     /// `FV_LONGLIVE_WEIGHTS` (the converted checkpoint dir),
     /// `FV_LONGLIVE_RECACHE=0` (keep the cache at switches, the ablation),
     /// `FV_LONGLIVE_INFINITY=1` (relative RoPE, past 1024 latent frames).
+    /// `FV_LONGLIVE_PRESET=history-forcing` reads History Forcing's
+    /// checkpoint instead (`generator_ema.safetensors` dir, or the
+    /// `dmd/model.pt` file / dir): no LoRA, window 21, sink 3, no re-cache
+    /// unless `FV_LONGLIVE_RECACHE=1`.
     pub fn from_env() -> Option<Self> {
         let w = std::env::var("FV_SFWAN_WEIGHTS")
             .ok()
@@ -306,12 +339,24 @@ impl CausalCudaBackend {
             std::env::var(k).map_or(d, |v| !matches!(v.trim(), "0" | "false" | "off"))
         };
         use fastvideo_cudarc::wan::longlive::LongLiveConfig;
+        let preset = std::env::var("FV_LONGLIVE_PRESET")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map_or(LongLivePreset::Longlive, |s| {
+                LongLivePreset::parse(&s).unwrap_or_else(|| {
+                    tracing::warn!(
+                        "FV_LONGLIVE_PRESET={s:?}: not longlive | history-forcing; serving LongLive"
+                    );
+                    LongLivePreset::Longlive
+                })
+            });
+        let base = preset.config();
         let cfg = LongLiveConfig {
-            recache: flag("FV_LONGLIVE_RECACHE", true),
+            recache: flag("FV_LONGLIVE_RECACHE", base.recache),
             relative_rope: flag("FV_LONGLIVE_INFINITY", false),
-            ..LongLiveConfig::interactive()
+            ..base
         };
-        Some(me.with_longlive(PathBuf::from(ll), cfg))
+        Some(me.with_preset(PathBuf::from(ll), preset, cfg))
     }
 
     fn driver(&mut self) -> Result<&mut CausalDriver, ApiError> {
@@ -344,9 +389,13 @@ impl EngineBackend for CausalCudaBackend {
         };
         let mut c = sfwan_caps(&self.id, Some(context));
         // A LongLive model is also served as `longlive` (the fal app
-        // `fastvideo/longlive` resolves to it).
-        if self.longlive.is_some() && self.id != LONGLIVE_NAME {
-            c.served_names.push(LONGLIVE_NAME.into());
+        // `fastvideo/longlive` resolves to it), History Forcing as
+        // `history-forcing`.
+        if let Some((_, preset, _)) = &self.longlive {
+            let alias = preset.served_name();
+            if self.id != alias {
+                c.served_names.push(alias.into());
+            }
         }
         vec![c]
     }
@@ -358,10 +407,19 @@ impl EngineBackend for CausalCudaBackend {
             steps: Some(4),
             attention: "dense".into(),
             vae: "taehv".into(),
-            summary: if self.longlive.is_some() {
-                "LongLive 1.3B, causal DMD 4 steps, rolling KV (window 12, frame sink 3), KV re-cache at prompt switches, TAEHV per block".into()
-            } else {
-                "Self-Forcing Wan 2.1 1.3B, causal DMD 4 steps, rolling KV (sink 15), TAEHV per block".into()
+            summary: match &self.longlive {
+                Some((_, LongLivePreset::Longlive, _)) => {
+                    "LongLive 1.3B, causal DMD 4 steps, rolling KV (window 12, frame sink 3), KV re-cache at prompt switches, TAEHV per block".into()
+                }
+                Some((_, LongLivePreset::HistoryForcing, cfg)) => format!(
+                    "History Forcing 1.3B (weights with no stated licence: evaluation only), causal DMD 4 steps, rolling KV (window {}, frame sink {}){}, TAEHV per block",
+                    cfg.local_attn_frames,
+                    cfg.sink_frames,
+                    if cfg.recache { ", KV re-cache at prompt switches" } else { "" }
+                ),
+                None => {
+                    "Self-Forcing Wan 2.1 1.3B, causal DMD 4 steps, rolling KV (sink 15), TAEHV per block".into()
+                }
             },
         }
     }
@@ -384,18 +442,25 @@ impl EngineBackend for CausalCudaBackend {
             .map_err(|e| ApiError::engine_failed(format!("device {}: {e}", self.device)))?;
         obs(LoadEvent::Stage("pipeline"));
         let dit = match &self.longlive {
-            Some((dir, cfg)) => {
+            Some((path, preset, cfg)) => {
                 obs(LoadEvent::Stage("longlive_weights"));
-                let w = fastvideo_cudarc::wan::longlive::LongLiveWeights::in_dir(dir, cfg);
-                if w.lora.is_none() {
+                let w = fastvideo_cudarc::wan::longlive::LongLiveWeights::at(path, cfg);
+                // LongLive's checkpoint is base + LoRA; History Forcing's
+                // has no LoRA to look for.
+                if cfg.has_lora() && w.lora.is_none() {
                     return Err(ApiError::engine_failed(format!(
-                        "longlive: no lora.safetensors in {}",
-                        dir.display()
+                        "{}: no lora.safetensors in {}",
+                        preset.display(),
+                        path.display()
                     )));
                 }
                 let (map, _) =
                     fastvideo_cudarc::wan::longlive::load_transformer_map(&w).map_err(|e| {
-                        ApiError::engine_failed(format!("longlive weights {}: {e}", dir.display()))
+                        ApiError::engine_failed(format!(
+                            "{} weights {}: {e}",
+                            preset.display(),
+                            path.display()
+                        ))
                     })?;
                 Some(map)
             }
