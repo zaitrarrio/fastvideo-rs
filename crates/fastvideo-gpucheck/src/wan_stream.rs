@@ -11,7 +11,7 @@
 //! * every `--run name,seconds=S[,rope=rel|abs][,sink=N][,window=N]
 //!   [,switch_at=S[/S2/...]][,switch=keep|reset|recache|recache_sink][,drop_rgb=1]
 //!   [,recache=EVERY:KEEP][,graphs=0|1][,fresh=0|1][,sheet=0|1][,keep_s=S]
-//!   [,longlive=1][,dump=1]`: a rollout for `S`
+//!   [,longlive=1 | preset=longlive|history-forcing][,dump=1]`: a rollout for `S`
 //!   seconds of video at `--fps`, blocks handed through a depth-4 channel to
 //!   a consumer thread (the design's executor → pacer hand-off) that measures
 //!   picture statistics per window of video time. Reports time to first
@@ -41,6 +41,14 @@
 //! through `--switch-prompts` (one prompt per line, or LongLive's
 //! `interactive_example.jsonl`: `{"prompts": [...]}` on a line, whose first
 //! prompt replaces `--prompt`), else to `--switch-prompt` each time.
+//!
+//! History Forcing (docs/ports/wan.md "History Forcing"): `--longlive` takes
+//! its checkpoint too (a `generator_ema.safetensors` dir from
+//! `convert-history-forcing.py`, or the Hub's `dmd/model.pt` as a file or its
+//! dir) with `--longlive-no-lora`, since it has no LoRA; `preset=history-forcing`
+//! in a run (first, like `longlive=1`) takes its window 21, sink 3, absolute
+//! RoPE and the cache kept at a prompt switch (`LongLiveConfig::history_forcing`).
+//! `preset=longlive` is `longlive=1`.
 
 use std::sync::mpsc::sync_channel;
 use std::time::Instant;
@@ -94,6 +102,18 @@ struct RunSpec {
     sheet: bool,
     keep_s: f64,
     dump: bool,
+}
+
+impl RunSpec {
+    /// A checkpoint's inference contract (`longlive=1`, `preset=...`): its
+    /// window, sink, RoPE policy and prompt-switch behaviour; later keys of
+    /// the run override them.
+    fn apply(&mut self, c: &LongLiveConfig) {
+        self.window = c.local_attn_frames;
+        self.sink = c.sink_frames;
+        self.rope = c.rope(false);
+        self.switch = c.prompt_switch();
+    }
 }
 
 fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
@@ -151,13 +171,12 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
                     _ => bail!("--run {s}: switch={v}"),
                 }
             }
-            "longlive" if v == "1" => {
-                let ll = LongLiveConfig::interactive();
-                r.window = ll.local_attn_frames;
-                r.sink = ll.sink_frames;
-                r.rope = ll.rope(false);
-                r.switch = ll.prompt_switch();
-            }
+            "longlive" if v == "1" => r.apply(&LongLiveConfig::interactive()),
+            "preset" => r.apply(&match v {
+                "longlive" => LongLiveConfig::interactive(),
+                "history-forcing" | "history_forcing" => LongLiveConfig::history_forcing(),
+                _ => bail!("--run {s}: preset={v} (longlive | history-forcing)"),
+            }),
             "drop_rgb" => r.drop_rgb = v == "1",
             "recache" => {
                 let (e, k) = v
@@ -247,22 +266,29 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
     let t = Instant::now();
     let dit = match a.longlive {
         Some(dir) => {
+            // The LoRA (LongLive's) is looked for under the LongLive config;
+            // --longlive-no-lora drops it: LongLive's base generator, or a
+            // History Forcing checkpoint, which has none.
             let ll = LongLiveConfig::interactive();
-            let mut w = fastvideo_cudarc::wan::longlive::LongLiveWeights::in_dir(dir, &ll);
+            let mut w = fastvideo_cudarc::wan::longlive::LongLiveWeights::at(dir, &ll);
             if !a.longlive_lora {
                 w.lora = None;
             } else if w.lora.is_none() {
                 return Err(anyhow!(
-                    "--longlive {}: no lora.safetensors (--longlive-no-lora for the base)",
-                    dir.display()
+                    "--longlive {}: no lora.safetensors beside {} (a LongLive checkpoint has one; \
+                     --longlive-no-lora for LongLive's base generator or for History Forcing, which has no LoRA)",
+                    dir.display(),
+                    w.base.display()
                 )
                 .into());
             }
             let (map, rep) = fastvideo_cudarc::wan::longlive::load_transformer_map(&w)
-                .map_err(|e| anyhow!("{e}"))?;
+                .map_err(|e| anyhow!("--longlive {}: {e}", dir.display()))?;
             report.note(
                 "longlive_weights",
-                json!({"dir": dir.display().to_string(), "tensors": rep.tensors, "lora_modules_merged": rep.merged,
+                json!({"dir": dir.display().to_string(), "base": w.base.display().to_string(),
+                       "lora": w.lora.as_ref().map(|p| p.display().to_string()),
+                       "tensors": rep.tensors, "lora_modules_merged": rep.merged,
                        "lora_scale": w.lora_scale, "skipped": rep.skipped, "seconds": t.elapsed().as_secs_f64()}),
             );
             Some(map)

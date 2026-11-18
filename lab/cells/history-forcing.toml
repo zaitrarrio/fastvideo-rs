@@ -1,0 +1,43 @@
+# History Forcing (docs/ports/wan.md "History Forcing"; ziplab/History-Forcing, arXiv 2611.02782) on the open-ended
+# causal SF-Wan rollout (`fv-gpucheck wan stream`, wan::stream::CausalRollout, the sfstream-rollout cell's harness).
+# `hf-30s`: the History Forcing generator (`--longlive {weights}/history-forcing-1.3b-safetensors --longlive-no-lora`:
+# the converted generator_ema.safetensors replaces sfwan21-1.3b's transformer; it has no LoRA) under its trained
+# contract (`preset=history-forcing`: window 21, sink 3, absolute RoPE, the cache kept at a prompt switch), 30 s of
+# video at 16 fps, every frame dumped (`frames/hf-30s/`) for offline metrics. `sf-w21-30s`: plain SF-Wan
+# (sfwan21-1.3b's own transformer) at the same window 21, sink 3 and absolute RoPE, same prompt, seed and canvas, for
+# the comparison (the served SF-Wan default is window 21, sink 15, rebased: docs/ports/wan.md "Long-run quality").
+# No GPU run yet, and no tier: history-forcing-1.3b-safetensors is not published to R2 or staged on a volume (the
+# owner publishes, the coordinator stages it on the pod and adds the tier). TAEHV (taew2_1) decodes every block,
+# found through FASTVIDEO_TAE_DIR={tae} (each arm's env entry, as sfstream-rollout.toml); the arms gate on their
+# trees only (verify-weights.sh history-forcing-1.3b checks the derived file and SF-Wan's parts; sfwan21-1.3b
+# SF-Wan's tree). Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "history-forcing"
+description = "History Forcing 1.3B on the SF-Wan causal rollout (wan stream: window 21, sink 3, no LoRA, no re-cache) for 30 s with every frame dumped, against plain SF-Wan 1.3B at the same window, sink and RoPE"
+
+[workload]
+model = "wan stream"
+prompt = "A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed"
+seed = 1024
+width = 832
+height = 480
+note = "The sfstream-rollout cell's prompt (runpod-matrix.sh sfstream's default SF_PROMPT) and seed, at the SF-Wan default canvas 832x480 and 16 fps; both arms run 30 s (480 frames: block 0 gives 9, every later block 12) and dump every frame"
+
+[lists]
+stream = ["--keep-going", "--mode", "fast", "wan", "stream", "--weights", "{weights}/sfwan21-1.3b", "--prompt", "{prompt}",
+  "--seed", "{seed}", "--width", "{width}", "--height", "{height}"]
+
+[[arm]]
+name = "hf-30s"
+gate = "history-forcing-1.3b"
+trees = ["history-forcing-1.3b-safetensors", "sfwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--longlive", "{weights}/history-forcing-1.3b-safetensors", "--longlive-no-lora", "--run",
+  "hf-30s,preset=history-forcing,seconds=30,dump=1"]
+
+[[arm]]
+name = "sf-w21-30s"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--run", "sf-w21-30s,seconds=30,window=21,sink=3,rope=abs,dump=1"]

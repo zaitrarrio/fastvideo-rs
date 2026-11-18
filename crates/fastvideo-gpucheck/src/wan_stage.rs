@@ -128,10 +128,13 @@ pub enum Stage {
         #[arg(long, default_value_t = 0)]
         switch_prompts_line: usize,
         /// LongLive-1.3B: the converted checkpoint dir (`longlive_base.safetensors`,
-        /// `lora.safetensors`) replacing `--weights/transformer`.
+        /// `lora.safetensors`) replacing `--weights/transformer`; or History
+        /// Forcing's (`generator_ema.safetensors` dir, the Hub's `dmd/model.pt`
+        /// file or its dir), with `--longlive-no-lora` (it has no LoRA).
         #[arg(long)]
         longlive: Option<PathBuf>,
-        /// With `--longlive`: the base generator without the LoRA.
+        /// With `--longlive`: no LoRA merged (LongLive's base generator, or
+        /// History Forcing's checkpoint, which has none).
         #[arg(long)]
         longlive_no_lora: bool,
         #[arg(long, default_value_t = 1024)]
@@ -144,7 +147,7 @@ pub enum Stage {
         fps: u32,
         #[arg(long)]
         parity: bool,
-        /// `name,[longlive=1,]seconds=S[,rope=rel|abs|rebased][,sink=N][,window=N][,switch_at=S[/S2..]][,switch=keep|reset|recache|recache_sink][,drop_rgb=1]`
+        /// `name,[longlive=1 | preset=longlive|history-forcing,]seconds=S[,rope=rel|abs|rebased][,sink=N][,window=N][,switch_at=S[/S2..]][,switch=keep|reset|recache|recache_sink][,drop_rgb=1]`
         #[arg(long = "run")]
         runs: Vec<String>,
         /// Video seconds per statistics window.

@@ -15,6 +15,15 @@ changes.
 | docs sites | `nvlabs.github.io/LongLive/docs/`, `…/LongLive2/docs/`, `…/LongLive-Plug/` (text read 2026-10-01) |
 | ours | `crates/…`, `docs/…` in this repo |
 
+**History Forcing (2026-11-18).** ziplab's History Forcing generator (arXiv
+2611.02782, the same Wan2.1-T2V-1.3B Self-Forcing recipe with a 21-frame
+window, a 3-frame sink, no LoRA and no switch re-cache) runs on this same
+loader and engine: `LongLiveConfig::history_forcing()`, the
+`history-forcing-1.3b` variant, `convert-history-forcing.py` (torch-free)
+and `fv-gpucheck wan stream --longlive ... preset=history-forcing`. Its
+weights state no licence (evaluation only). Everything about it is in
+`docs/ports/wan.md` "History Forcing"; nothing below changes for LongLive.
+
 **INFERRED** marks my own reading where no source states it. **UNVERIFIED**
 marks a claim in the task brief that I could not confirm at the sources.
 Nothing was measured on a GPU for this document.
