@@ -1819,6 +1819,63 @@ extern "C" __global__ void pack_rgb_u8(
     }
 }
 
+// ---- the Real-ESRGAN compact upscaler (rt::esrgan) -------------------------
+
+// Per-channel bias then PReLU, in place, over NCHW `x` seen as
+// [n, period, inner]: v = x + bias[c]; x = v >= 0 ? v : v * slope[c]. The
+// epilogue of every conv of the network but the last.
+extern "C" __global__ void bias_prelu_inplace(
+    float* x, const float* __restrict__ bias, const float* __restrict__ slope,
+    long n, long inner, long period
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long c = (i / inner) % period;
+    float v = x[i] + bias[c];
+    x[i] = v >= 0.0f ? v : v * slope[c];
+}
+
+// The upscaler's last step on the device: `y` is the last conv's output
+// [frames, 3*s*s, h, w] (bias added), `base` the exact 8-bit input
+// [frames, h, w, 3]. Pixel-shuffle s, add the input upsampled x s (nearest)
+// as the residual, clamp and round:
+//   out[f, Y, X, c] = u8(clamp(y[f, c*s*s + (Y%s)*s + X%s, Y/s, X/s] * 255 + base[f, Y/s, X/s, c] + 0.5, 0, 255))
+// `down` = 2 box-filters each 2x2 block of that xs picture, clamped but not
+// yet rounded (x2 from the x4 network), so `out` is [frames, h*s/down,
+// w*s/down, 3]. The arithmetic is
+// double: every product and sum is exact there, so the host twin
+// (`ops::host::esrgan_pack_rgb8`) is bit-identical whatever fma contraction
+// NVRTC applies.
+extern "C" __global__ void esrgan_pack_rgb8(
+    const float* __restrict__ y, const unsigned char* __restrict__ base,
+    unsigned char* __restrict__ out, int frames, int h, int w, int s, int down
+) {
+    int oh = h * s / down, ow = w * s / down;
+    long plane_out = (long)oh * ow;
+    long n = (long)frames * plane_out;
+    long i = IDX();
+    if (i >= n) return;
+    long f = i / plane_out, p = i - f * plane_out;
+    int oy = (int)(p / ow), ox = (int)(p - (long)oy * ow);
+    long plane = (long)h * w;
+    const float* yf = y + f * 3 * s * s * plane;
+    unsigned char* dst = out + i * 3;
+    for (int c = 0; c < 3; ++c) {
+        double acc = 0.0;
+        for (int dy = 0; dy < down; ++dy) {
+            for (int dx = 0; dx < down; ++dx) {
+                int Y = oy * down + dy, X = ox * down + dx;
+                int sy = Y / s, sx = X / s;
+                long ch = (long)c * s * s + (long)(Y - sy * s) * s + (X - sx * s);
+                double b = (double)base[((f * h + sy) * (long)w + sx) * 3 + c];
+                double v = (double)yf[ch * plane + (long)sy * w + sx] * 255.0 + b;
+                acc += fmin(fmax(v, 0.0), 255.0);
+            }
+        }
+        dst[c] = (unsigned char)(acc / (double)(down * down) + 0.5);
+    }
+}
+
 // ---- ops shared by the decoder-only text encoders and the audio decoders ----
 
 // Exact GELU, 0.5 x (1 + erf(x / sqrt 2)): what `nn.GELU()` means when a

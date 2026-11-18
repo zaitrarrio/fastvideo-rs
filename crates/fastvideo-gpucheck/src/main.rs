@@ -64,6 +64,7 @@ mod serve;
 mod sol_stage;
 mod st;
 mod taehv;
+mod upscale;
 mod wan_oracle;
 mod wan_stage;
 mod wan_stream;

@@ -282,6 +282,17 @@ pub enum Stage {
         ref_root: Option<PathBuf>,
         #[arg(long, default_value = "cuda")]
         device: String,
+        /// After the clip is written: Real-ESRGAN `realesr-animevideov3`
+        /// (`rt::esrgan`) ×2, ×3 or ×4 of its frames into `frames-up/` and
+        /// `output-up.mp4` (the audio track kept), timed as `upscale_s` in
+        /// benchmark.json.
+        #[arg(long)]
+        upscale: Option<usize>,
+        /// The upscaler checkpoint (default: FASTVIDEO_ESRGAN_WEIGHTS,
+        /// $FASTVIDEO_TAE_DIR/realesr-animevideov3.pth, then
+        /// `<weights>/../auxiliary/upscalers/realesr-animevideov3.pth`).
+        #[arg(long)]
+        upscale_weights: Option<PathBuf>,
     },
     /// Image-to-video with the multimodal text encoder resident, then
     /// streamed from the volume, then resident again, on one loaded pipeline:
@@ -447,6 +458,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             references,
             ref_root,
             device,
+            upscale,
+            upscale_weights,
         } => {
             let text_cache = if *no_text_cache {
                 None
@@ -524,6 +537,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 *compare_text_encoders,
                 device,
                 *device_budget_gib,
+                crate::upscale::UpscaleArgs::resolve(
+                    *upscale,
+                    upscale_weights.as_deref(),
+                    Some(weights),
+                )?,
             )
         }
         Stage::SlimText {
@@ -1623,6 +1641,7 @@ fn gen(
     compare_text_encoders: bool,
     device: &str,
     device_budget_gib: Option<f64>,
+    upscale: Option<crate::upscale::UpscaleArgs>,
 ) -> StageResult<()> {
     use fastvideo_cudarc::h3::pipeline::{H3Output, H3Pipeline};
 
@@ -1929,8 +1948,19 @@ fn gen(
             )?;
                 }
                 let counters = fastvideo_cudarc::rt::evalstats::snapshot();
+                let upscaled = match &upscale {
+                    Some(u) => Some(u.run(
+                        clip_dir,
+                        Some(fastvideo_models::h3::config::H3_FPS as u32),
+                        Some(out.wav.as_path()),
+                    )?),
+                    None => None,
+                };
                 let mut values = timings(&out, total);
                 values["warm"] = json!(warm);
+                if let Some(u) = &upscaled {
+                    values["upscale"] = u.clone();
+                }
                 values["load_s"] = json!(load_s);
                 let peak_mib = mem.stop();
                 values["peak_mib"] = json!(peak_mib);
@@ -1938,7 +1968,7 @@ fn gen(
                 if let Some(trace) = &gpu_trace {
                     values["gpu_trace"] = trace.clone();
                 }
-                let doc = h3_benchmark(&H3Bench {
+                let mut doc = h3_benchmark(&H3Bench {
                     spec,
                     recipe: recipe.as_deref(),
                     out: &out,
@@ -1948,6 +1978,10 @@ fn gen(
                     peak_mib,
                     seconds,
                 });
+                if let Some(u) = &upscaled {
+                    doc["upscale"] = u.clone();
+                    doc["upscale_s"] = u["upscale_s"].clone();
+                }
                 docs.push((spec.clone(), crate::benchmark::merge(doc, counters)));
                 report.note(
                     if multi {

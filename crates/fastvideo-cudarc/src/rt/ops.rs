@@ -1805,6 +1805,63 @@ pub mod host {
         }
     }
 
+    /// Twin of `bias_prelu_inplace`: `x = prelu(x + bias[c], slope[c])` over
+    /// `[n, c, inner]`.
+    pub fn bias_prelu(x: &mut [f32], bias: &[f32], slope: &[f32], inner: usize) {
+        assert!(!bias.is_empty() && slope.len() == bias.len() && inner > 0);
+        assert_eq!(x.len() % (inner * bias.len()), 0);
+        x.par_chunks_mut(inner).enumerate().for_each(|(k, chunk)| {
+            let c = k % bias.len();
+            let (b, a) = (bias[c], slope[c]);
+            for v in chunk {
+                let y = *v + b;
+                *v = if y >= 0.0 { y } else { y * a };
+            }
+        });
+    }
+
+    /// Twin of `esrgan_pack_rgb8` (bit-identical: every operation is exact in
+    /// f64): pixel-shuffle `y` `[frames, 3·s², h, w]` by `s`, add the 8-bit
+    /// input `base` `[frames, h, w, 3]` upsampled ×s (nearest), clamp,
+    /// box-filter `down`×`down` blocks and round; `[frames, h·s/down, w·s/down, 3]`.
+    pub fn esrgan_pack_rgb8(
+        y: &[f32],
+        base: &[u8],
+        frames: usize,
+        h: usize,
+        w: usize,
+        s: usize,
+        down: usize,
+    ) -> Vec<u8> {
+        let plane = h * w;
+        assert!(s > 0 && down > 0 && s.is_multiple_of(down));
+        assert_eq!(y.len(), frames * 3 * s * s * plane);
+        assert_eq!(base.len(), frames * plane * 3);
+        let (oh, ow) = (h * s / down, w * s / down);
+        let mut out = vec![0u8; frames * oh * ow * 3];
+        out.par_chunks_mut(ow * 3).enumerate().for_each(|(row, o)| {
+            let (f, oy) = (row / oh, row % oh);
+            let yf = &y[f * 3 * s * s * plane..(f + 1) * 3 * s * s * plane];
+            for ox in 0..ow {
+                for c in 0..3 {
+                    let mut acc = 0.0f64;
+                    for dy in 0..down {
+                        for dx in 0..down {
+                            let (yy, xx) = (oy * down + dy, ox * down + dx);
+                            let (sy, sx) = (yy / s, xx / s);
+                            let ch = c * s * s + (yy % s) * s + xx % s;
+                            let b = f64::from(base[((f * h + sy) * w + sx) * 3 + c]);
+                            let v = f64::from(yf[ch * plane + sy * w + sx]) * 255.0 + b;
+                            acc += v.clamp(0.0, 255.0);
+                        }
+                    }
+                    o[ox * 3 + c] = (acc / (down * down) as f64 + 0.5) as u8;
+                }
+            }
+        });
+        out
+    }
+
     /// `[N, C, L]`: `x + inv_beta[c] * sin^2(alpha[c] x)`.
     pub fn snake_beta(a: &[f32], alpha: &[f32], inv_beta: &[f32], c: usize, l: usize) -> Vec<f32> {
         a.par_iter()
@@ -3092,6 +3149,82 @@ pub fn pack_rgb_u8_launch_device(
     launch!(dev.stream, &dev.kernels.pack_rgb_u8, cfg_n(pixels); x, &mut out, &fr, &hh, &ww, &a, &b)
         .map_err(err)?;
     Ok(out)
+}
+
+// ---- the Real-ESRGAN compact upscaler (rt::esrgan) -------------------------
+
+/// `x = prelu(x + bias[c], slope[c])` in place over `[n, c, inner]`: the
+/// epilogue of the upscaler's convs. Twin: [`host::bias_prelu`].
+#[cfg(feature = "cuda")]
+pub fn bias_prelu_inplace_device(
+    x: &mut CudaSlice<f32>,
+    bias: &CudaSlice<f32>,
+    slope: &CudaSlice<f32>,
+    inner: usize,
+) -> Result<()> {
+    check(
+        "bias_prelu",
+        !bias.is_empty()
+            && slope.len() == bias.len()
+            && inner > 0
+            && x.len().is_multiple_of(inner * bias.len()),
+    )?;
+    let dev = ctx()?;
+    let (n, inner_i, period) = (x.len() as i64, inner as i64, bias.len() as i64);
+    let cfg = cfg_n(x.len());
+    launch!(dev.stream, &dev.kernels.bias_prelu_inplace, cfg; x, bias, slope, &n, &inner_i, &period)
+        .map_err(err)
+}
+
+/// The upscaler's pixel shuffle, residual, clamp and rounding on the device
+/// (see the kernel): `y` `[frames, 3·s², h, w]`, `base` the 8-bit input
+/// `[frames, h, w, 3]`; interleaved RGB8 `[frames, h·s/down, w·s/down, 3]`
+/// stays on the device. Twin: [`host::esrgan_pack_rgb8`].
+#[cfg(feature = "cuda")]
+pub fn esrgan_pack_rgb8_launch_device(
+    y: &CudaSlice<f32>,
+    base: &CudaSlice<u8>,
+    frames: usize,
+    h: usize,
+    w: usize,
+    s: usize,
+    down: usize,
+) -> Result<CudaSlice<u8>> {
+    let plane = h * w;
+    check(
+        "esrgan_pack_rgb8",
+        s > 0
+            && down > 0
+            && s.is_multiple_of(down)
+            && y.len() == frames * 3 * s * s * plane
+            && base.len() == frames * plane * 3,
+    )?;
+    let dev = ctx()?;
+    let (oh, ow) = (h * s / down, w * s / down);
+    let pixels = frames * oh * ow;
+    let mut out = unsafe { dev.stream.alloc::<u8>((pixels * 3).max(1)) }.map_err(err)?;
+    let a = [frames as i32, h as i32, w as i32, s as i32, down as i32];
+    launch!(dev.stream, &dev.kernels.esrgan_pack_rgb8, cfg_n(pixels); y, base, &mut out, &a[0], &a[1], &a[2], &a[3], &a[4])
+        .map_err(err)?;
+    Ok(out)
+}
+
+/// [`esrgan_pack_rgb8_launch_device`] plus the one copy down.
+#[cfg(feature = "cuda")]
+pub fn esrgan_pack_rgb8_device(
+    y: &CudaSlice<f32>,
+    base: &CudaSlice<u8>,
+    frames: usize,
+    h: usize,
+    w: usize,
+    s: usize,
+    down: usize,
+) -> Result<Vec<u8>> {
+    let dev = ctx()?;
+    let out = esrgan_pack_rgb8_launch_device(y, base, frames, h, w, s, down)?;
+    let host = dev.stream.memcpy_dtov(&out).map_err(err)?;
+    super::stats::record_d2h(host.len() / 4);
+    Ok(host)
 }
 
 // ---- FP8 E4M3 ------------------------------------------------------------

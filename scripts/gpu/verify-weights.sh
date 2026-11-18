@@ -34,7 +34,8 @@
 #   3. every safetensors file is its full length (header + data, via
 #      verify-safetensors.sh), following HF-cache symlinks.
 # The `aux` cell instead checks every auxiliary/ url: row of weights-manifest.tsv (TAE and
-# LPIPS files): present, the listed size, the listed SHA-256.
+# LPIPS files, the Real-ESRGAN upscaler under auxiliary/upscalers/): present, the listed
+# size, the listed SHA-256.
 # The `upsampler-local` cell checks the prompt upsampler's local GGUF tree
 # (qwen3-vl-4b-instruct-gguf: Q8_0 model + F16 mmproj, R2 only;
 # docs/serve/upsampler-local.md): every file weights-sha256.tsv lists for it,

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use fastvideo_core::family::{h3::H3Options, ltx2::Ltx2Options, wan, wan::WanOptions};
+use fastvideo_core::upscale::{upscale_output, UpscaleOptions};
 use fastvideo_core::{
     registered, resolve, AvGenerateOptions, BackendKind, Canvas, FamilyOptions, Hooks, LoadOptions,
     Request, Sampler, Timing, VideoGenerator,
@@ -181,6 +182,19 @@ struct GenerateArgs {
     /// directory). Default: the full video VAE.
     #[arg(long)]
     tae_weights: Option<String>,
+    /// After the frames are written: Real-ESRGAN `realesr-animevideov3`
+    /// (2.5 MB, BSD-3; docs/ports/upscaler.md) ×2, ×3 or ×4 of every frame
+    /// into `frames-up/` and `output-up.mp4` next to them (same fps, H3's
+    /// audio track kept). Any family whose output is PNG frames.
+    #[arg(long)]
+    upscale: Option<usize>,
+    /// The upscaler checkpoint (`realesr-animevideov3.pth`, or a safetensors
+    /// with the same keys). Default: FASTVIDEO_ESRGAN_WEIGHTS,
+    /// $FASTVIDEO_TAE_DIR/realesr-animevideov3.pth, then
+    /// `auxiliary/upscalers/realesr-animevideov3.pth` under `--weights`, its
+    /// parent, FASTVIDEO_WEIGHTS or FV_WEIGHTS.
+    #[arg(long)]
+    upscale_weights: Option<String>,
 }
 
 /// Minimal TOML overlay for `generate` (not full upstream YAML).
@@ -216,6 +230,8 @@ struct GenerateToml {
     ltx23_hq: Option<bool>,
     diff_vae: Option<bool>,
     tae_weights: Option<String>,
+    upscale: Option<usize>,
+    upscale_weights: Option<String>,
 }
 
 fn load_generate_toml(path: &str) -> Result<GenerateToml> {
@@ -367,6 +383,19 @@ fn main() -> Result<()> {
             } else {
                 file.device.unwrap_or(args.device)
             };
+            let upscale = args.upscale.or(file.upscale).map(|factor| UpscaleOptions {
+                factor,
+                weights: args
+                    .upscale_weights
+                    .clone()
+                    .or(file.upscale_weights.clone())
+                    .map(PathBuf::from),
+            });
+            if let Some(u) = &upscale {
+                if !(2..=4).contains(&u.factor) {
+                    anyhow::bail!("--upscale {}: want 2, 3 or 4", u.factor);
+                }
+            }
             let options = AvGenerateOptions {
                 model_id: args.model,
                 weights: args.weights.map(PathBuf::from),
@@ -413,11 +442,29 @@ fn main() -> Result<()> {
                     if let Some(path) = out.frame_paths.first() {
                         println!("wrote {} frames, first={path}", out.frame_paths.len());
                     }
-                    if let Some(wav) = out.wav {
+                    if let Some(wav) = &out.wav {
                         println!("wav={wav}");
                     }
-                    if let Some(mp4) = out.mp4 {
+                    if let Some(mp4) = &out.mp4 {
                         println!("mp4={mp4}");
+                    }
+                    if let Some(u) = &upscale {
+                        let timer = std::time::Instant::now();
+                        let r = upscale_output(&out, u, options.weights.as_deref())?;
+                        println!(
+                            "upscaled x{} {} frames {}x{} -> {}x{} in {:.2}s ({}; {:.2}s with read/load/write), first={}{}",
+                            r.factor,
+                            r.frames,
+                            r.in_width,
+                            r.in_height,
+                            r.out_width,
+                            r.out_height,
+                            r.upscale_s,
+                            r.device,
+                            timer.elapsed().as_secs_f64(),
+                            r.frame_paths.first().map(String::as_str).unwrap_or("-"),
+                            r.mp4.as_deref().map(|m| format!(" mp4={m}")).unwrap_or_default(),
+                        );
                     }
                 }
                 Err(err) => {

@@ -26,6 +26,7 @@ pub mod cudnn_sdpa;
 pub mod device;
 pub mod dump;
 pub mod envflag;
+pub mod esrgan;
 pub mod evalstats;
 #[cfg(feature = "cuda")]
 pub mod fp8;
