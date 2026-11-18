@@ -171,6 +171,21 @@ A set whose arms do not fit one pod runs one pod per `--cells` group: `lab/tiers
 which only it used: set, either is refused before any lookup or pod (`down`, `status` and `attach` still work). The goldens script reads the script from the parent of
 the deleting commit, as `h3-graphs-pod.sh`, and in a shallow clone keeps the fixture as it is.
 
+### fv-lab's own tiers
+
+A tier written for fv-lab after the script went (ADR-0019 §22.20) is neither a retired family nor a port one-off:
+there is no script dry run to equal and no experiment pod script to cut its commands from. Such a tier is listed in
+`FV_LAB_OWN` (`scripts/gpu/fv-lab-retired.sh`), is gold-like, and holds itself to two goldens of its own:
+
+```sh
+bash scripts/gpu/tests/fv-lab-goldens.sh [--check]                      # its pod body: fixtures/runpod-http-<tier>.json (runpod-http.sh plan)
+FV_LAB_WRITE=crates/fastvideo-lab cargo test -p fastvideo-lab --test own_tiers   # its dry run: fixtures/<tier>-dry-run.txt
+```
+
+`tests/own_tiers.rs` holds the dry run and `tests/payload_golden.rs` the pod body; a change to the tier's cells
+changes the dry-run fixture in the same PR. `runpod-http.sh` refuses `run` / `all` for it (`fv-lab pod up --sha <7>
+--family <tier> --yes --wait` runs it) and `plan` writes its body. The first is `variants` (docs/ports/variants-parity.md).
+
 ### `runpod-http.sh` for a retired tier
 
 `runpod-http.sh run [sha]` with `FV_FAMILY` (default `rtx6000`) set to a retired tier runs

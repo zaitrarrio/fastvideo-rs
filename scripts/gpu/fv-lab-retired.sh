@@ -49,6 +49,14 @@ FV_LAB_RESTORED="precision-nvfp4:precision:FV_PRECISION_ARM=ltx-nvfp4 ltxvae-gen
 # check (§23.7, §23.10) and read from the history like h3-graphs'.
 FV_LAB_EXPERIMENTS="h3-graphs sol-bench-a1 sol-bench-a3 sol-bench-a2 sol-bench-b1 sol-bench-b2 sol-bench-b2r sol-bench-b3 sol-bench-b4 sol-bench-b5 sol-bench-b6 sol-bench-c1 sol-bench-c2 sol-bench-c3 sol-bench-c4 sol-bench-c6 sol-bench-d1 sol-bench-d2 sol-bench-e1 sol-bench-f1 sol-bench-f2 sol-bench-g1 sol-bench-g2"
 
+# fv-lab's own tiers (docs/dev/fv-lab.md "fv-lab's own tiers"): never a
+# runpod-matrix.sh family and no experiment pod script to be cut from, like
+# `gold`: their cells are written for fv-lab, their dry run is fv-lab's own
+# golden (fixtures/<tier>-dry-run.txt, tests/own_tiers.rs) and their pod body
+# runpod-http.sh plan's (fv-lab-goldens.sh). runpod-http.sh refuses `run` and
+# `all` for them and names the fv-lab command (`fv-lab pod up --family <tier>`).
+FV_LAB_OWN=""
+
 # Sibling tiers of a live runpod-matrix.sh family (ADR-0019 §20.5, §21, §22):
 # `<tier>:<family>` is a tier whose cells are targets of <family>'s branch
 # that its own tier cannot run (another pod: `oracle-r2`, the oracle family's
@@ -115,6 +123,11 @@ fv_lab_retired() {
 # fv_lab_experiment <tier>: true for a tier made from a port one-off.
 fv_lab_experiment() {
   [[ " $FV_LAB_EXPERIMENTS " == *" ${1:-} "* ]]
+}
+
+# fv_lab_own <tier>: true for one of fv-lab's own tiers.
+fv_lab_own() {
+  [[ " $FV_LAB_OWN " == *" ${1:-} "* ]]
 }
 
 # fv_lab_sibling <tier>: the live family a sibling tier is cut from (empty

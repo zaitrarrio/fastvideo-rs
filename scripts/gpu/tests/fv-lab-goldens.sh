@@ -125,6 +125,11 @@ for e in $FV_LAB_RETIRED_SIBLINGS; do
   ! has_branch "$t" && ! has_branch "$f" || { echo "fv-lab-goldens: retired sibling $t or its family $f has a runpod-matrix.sh branch" >&2; exit 2; }
   ! fv_lab_sibling "$t" >/dev/null || { echo "fv-lab-goldens: $t is both a live and a retired sibling (FV_LAB_SIBLINGS)" >&2; exit 2; }
 done
+for f in $FV_LAB_OWN; do
+  grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: own tier $f is no tier of lab/tiers.toml" >&2; exit 2; }
+  ! fv_lab_retired "$f" && ! fv_lab_experiment "$f" || { echo "fv-lab-goldens: own tier $f is in another list of fv-lab-retired.sh" >&2; exit 2; }
+  ! has_branch "$f" || { echo "fv-lab-goldens: own tier $f has a runpod-matrix.sh branch" >&2; exit 2; }
+done
 for f in $FV_LAB_EXPERIMENTS; do
   grep -qx "$f" <<<"$FAMILIES" || { echo "fv-lab-goldens: experiment tier $f is no tier of lab/tiers.toml" >&2; exit 2; }
   fv_lab_retired "$f" && { echo "fv-lab-goldens: $f is both an experiment tier and retired (fv-lab-retired.sh)" >&2; exit 2; }
@@ -183,7 +188,9 @@ for FAMILY in $FAMILIES; do
       r2_body+=(FV_MIN_RAM_GB="$ram")
     fi
   fi
-  if [[ "$FAMILY" == gold ]] || fv_lab_experiment "$FAMILY"; then
+  # fv-lab's own tiers (FV_LAB_OWN) are gold-like: their dry run is fv-lab's
+  # (tests/own_tiers.rs), only the pod body is written here.
+  if [[ "$FAMILY" == gold ]] || fv_lab_experiment "$FAMILY" || fv_lab_own "$FAMILY"; then
     extra=(${r2_body[@]+"${r2_body[@]}"})
     # Its wall cap and cell cap as the script's FV_POD_CAP_S / FV_GEN_TIMEOUT_S
     # (runpod-http.sh's defaults, 14400 / 3600, for gold and h3-graphs; the
@@ -213,7 +220,7 @@ for FAMILY in $FAMILIES; do
   # Any other tier would need a runpod-matrix.sh branch to make its goldens
   # from, and the script is gone (ADR-0019 §22.20): a new tier is gold-like
   # (its own dry run, its pod body below) or an experiment tier.
-  echo "fv-lab-goldens: tier $FAMILY is neither gold, an experiment tier nor retired (fv-lab-retired.sh); runpod-matrix.sh is gone (ADR-0019 §22.20), so no script makes its goldens" >&2
+  echo "fv-lab-goldens: tier $FAMILY is neither gold, one of fv-lab's own (FV_LAB_OWN), an experiment tier nor retired (fv-lab-retired.sh); runpod-matrix.sh is gone (ADR-0019 §22.20), so no script makes its goldens" >&2
   exit 2
 done
 
