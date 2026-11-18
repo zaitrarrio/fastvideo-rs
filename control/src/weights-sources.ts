@@ -66,6 +66,7 @@ export const AUX_FILES: { path: string; url: string; sha256: string; size: numbe
   { path: "auxiliary/tae/taew2_2.safetensors", url: "https://raw.githubusercontent.com/madebyollin/taehv/e589fddc076e77f5ba8cd6baabe4ba3260b261cd/safetensors/taew2_2.safetensors", sha256: "b84609b2a133d48434bd9636bfcb44bf05168dc436e2d3cecf26256faa1f5325", size: 22848048 },
   { path: "auxiliary/lpips/alexnet-owt-7be5be79.pth", url: "https://download.pytorch.org/models/alexnet-owt-7be5be79.pth", sha256: "7be5be791159472b1fbf3c69796f7cb30dca7ad8466c2df70058c37116cdee02", size: 244408911 },
   { path: "auxiliary/lpips/lpips_v0.1_alex.pth", url: "https://raw.githubusercontent.com/richzhang/PerceptualSimilarity/082bb24f84c091ea94de2867d34c4544f68e0963/lpips/weights/v0.1/alex.pth", sha256: "df73285e35b22355a2df87cdb6b70b343713b667eddbda73e1977e0c860835c0", size: 6009 },
+  { path: "auxiliary/upscalers/realesr-animevideov3.pth", url: "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth", sha256: "b8a8376811077954d82ca3fcf476f1ac3da3e8a68a4f4d71363008000a18b75d", size: 2504012 },
 ];
 /** scripts/gpu/weights-sha256.tsv's rows of the Hub trees above: [path in the tree, bytes (null: not recorded), the
  * accepted SHA-256s]. A Hub boot checks what it fetched against them (serverless weights_source hub). */
