@@ -24,6 +24,15 @@ admin turns on in the console. See [Clip length](#clip-length-5-s-10-s-experimen
 Workers also refuse to report ready on a GPU that cannot run H3 (no FP8);
 see [Capability check](#capability-check-at-start-2026-09-29).
 
+**Update (2026-11-18):** the decision below not to port a diffusion video
+super-resolution model stands. A different, cheap option is in now:
+Real-ESRGAN's compact per-frame network (`realesr-animevideov3`, 2.5 MB,
+BSD-3; the "Real-ESRGAN" row of Part B, but the compact ×4 checkpoint, not
+RRDB `x4plus`), ported from fastwan-rs / h3-rs as `rt::esrgan` with
+`generate --upscale 2|3|4` and `fv-gpucheck wan|h3 gen --upscale N`. It
+sharpens and steadies; it invents no detail, and it is not on any serve
+path. See [docs/ports/upscaler.md](../ports/upscaler.md).
+
 ## Summary
 
 - **Native 1080p works and adds real detail.** At 1920x1088 and 1088x1920,

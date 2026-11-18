@@ -18,6 +18,10 @@ model adapters `crates/fastvideo-models/src/h3/techniques.rs` and
 LTX-2 pipelines). Profiles: `profiles/<model>/*.toml`, also compiled into the
 binaries.
 
+Not a technique, but the one post-decode step the CLIs share: the
+Real-ESRGAN compact upscaler (`generate --upscale 2|3|4`, `fv-gpucheck wan|h3
+gen --upscale N`; `rt::esrgan`), in [docs/ports/upscaler.md](ports/upscaler.md).
+
 ## Using it
 
 ```bash

@@ -2543,6 +2543,147 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
         Ok(())
     })?;
 
+    group(&mut c, "esrgan", |c| {
+        use fastvideo_cudarc::rt::esrgan::{Esrgan, EsrganConfig};
+        // The fused conv epilogue: bit-exact against its host twin.
+        for (n, ch, inner) in [(2usize, 5usize, 7 * 9usize), (1, 64, 24 * 16), (3, 48, 33)] {
+            let x = c.rand(n * ch * inner, 1.0);
+            let bias = c.rand(ch, 0.5);
+            let slope = c.rand(ch, 0.3);
+            let mut dx = up(&x)?;
+            ops::bias_prelu_inplace_device(&mut dx, &up(&bias)?, &up(&slope)?, inner)?;
+            let mut want = x.clone();
+            host::bias_prelu(&mut want, &bias, &slope, inner);
+            c.cmp(
+                &format!("bias_prelu_n{n}_c{ch}_i{inner}"),
+                &down(&dx)?,
+                &want,
+                0.0,
+            )?;
+        }
+        // The pack: pixel shuffle, residual, clamp, round (and the ×2 box).
+        let dev = dev()?;
+        for (frames, h, w, s, dn) in [
+            (2usize, 7usize, 9usize, 4usize, 1usize),
+            (2, 7, 9, 4, 2),
+            (1, 5, 6, 2, 1),
+            (3, 16, 24, 4, 4),
+        ] {
+            let y: Vec<f32> = c.rand(frames * 3 * s * s * h * w, 0.3);
+            let base: Vec<u8> = c
+                .rand(frames * h * w * 3, 1.0)
+                .iter()
+                .map(|v| ((v * 60.0 + 128.0).clamp(0.0, 255.0)) as u8)
+                .collect();
+            let dbase = dev.stream.memcpy_stod(&base)?;
+            let got = ops::esrgan_pack_rgb8_device(&up(&y)?, &dbase, frames, h, w, s, dn)?;
+            let want = host::esrgan_pack_rgb8(&y, &base, frames, h, w, s, dn);
+            let mism = got.iter().zip(&want).filter(|(a, b)| a != b).count();
+            c.report.check(
+                format!("esrgan_pack_f{frames}_{w}x{h}_s{s}_down{dn}"),
+                got.len() == want.len() && mism == 0,
+                json!({"mismatched_bytes": mism, "n": got.len(), "want_n": want.len()}),
+                json!({"mismatched_bytes": 0}),
+            )?;
+        }
+        // The whole network on the device (cuDNN convs, the epilogue, the
+        // pack) against the f64 host reference: tiny synthetic weights at
+        // every factor, then the real checkpoint when it is reachable.
+        let bytes_check = |c: &mut Ctx<'_>,
+                           name: String,
+                           got: &[u8],
+                           want: &[u8],
+                           max_levels: i32| {
+            let mut worst = 0i32;
+            let mut mism = 0usize;
+            for (a, b) in got.iter().zip(want) {
+                let d = (i32::from(*a) - i32::from(*b)).abs();
+                worst = worst.max(d);
+                mism += usize::from(d != 0);
+            }
+            let frac = mism as f64 / want.len().max(1) as f64;
+            c.report.check(
+                name,
+                got.len() == want.len() && worst <= max_levels && frac < 0.01,
+                json!({"max_levels": worst, "mismatched_bytes": mism, "fraction": frac, "n": got.len()}),
+                json!({"max_levels": max_levels, "fraction_max": 0.01}),
+            )
+        };
+        let mut cfg = EsrganConfig::tiny();
+        cfg.scale = 4;
+        let tiny = Esrgan::synthetic(cfg, 21);
+        let (frames, h, w) = (3usize, 12usize, 10usize);
+        let rgb: Vec<u8> = c
+            .rand(frames * h * w * 3, 1.0)
+            .iter()
+            .map(|v| ((v * 70.0 + 128.0).clamp(0.0, 255.0)) as u8)
+            .collect();
+        for factor in [4usize, 3, 2] {
+            let mut got = Vec::new();
+            tiny.upscale_rgb8(&rgb, frames, h, w, factor, &mut |_, _, x| {
+                got.extend(x);
+                Ok(())
+            })?;
+            let mut want = Vec::new();
+            tiny.upscale_rgb8_cpu(&rgb, frames, h, w, factor, &mut |_, _, x| {
+                want.extend(x);
+                Ok(())
+            })?;
+            bytes_check(
+                c,
+                format!("esrgan_tiny_x{factor}_device_vs_host"),
+                &got,
+                &want,
+                1,
+            )?;
+        }
+        match fastvideo_cudarc::rt::esrgan::resolve_weights(None, None) {
+            Ok(path) => {
+                let real = Esrgan::load(&path)?;
+                let (h, w) = (16usize, 24usize);
+                let rgb: Vec<u8> = c
+                    .rand(h * w * 3, 1.0)
+                    .iter()
+                    .map(|v| ((v * 70.0 + 128.0).clamp(0.0, 255.0)) as u8)
+                    .collect();
+                let (mut got, mut want) = (Vec::new(), Vec::new());
+                real.upscale_rgb8(&rgb, 1, h, w, 4, &mut |_, _, x| {
+                    got = x;
+                    Ok(())
+                })?;
+                real.upscale_rgb8_cpu(&rgb, 1, h, w, 4, &mut |_, _, x| {
+                    want = x;
+                    Ok(())
+                })?;
+                bytes_check(c, "esrgan_real_x4_device_vs_host".into(), &got, &want, 1)?;
+                // Timing at the fastwan-rs reference size: 81 frames 480×272 → 1920×1088
+                // (its RTX 4090 number: 0.87 s wall, 285 ms GPU).
+                let (frames, h, w) = (81usize, 272usize, 480usize);
+                let clip: Vec<u8> = (0..frames * h * w * 3)
+                    .map(|i| (i * 7919 % 251) as u8)
+                    .collect();
+                let mut bytes = 0usize;
+                real.upscale_rgb8(&clip, frames, h, w, 4, &mut |_, _, x| {
+                    bytes += x.len();
+                    Ok(())
+                })?;
+                dev.synchronize()?;
+                let timer = std::time::Instant::now();
+                real.upscale_rgb8(&clip, frames, h, w, 4, &mut |_, _, _| Ok(()))?;
+                dev.synchronize()?;
+                let secs = timer.elapsed().as_secs_f64();
+                c.report.note(
+                    "esrgan_480x272x81_x4",
+                    json!({"seconds": secs, "fps": frames as f64 / secs, "out": "1920x1088", "weights": path.display().to_string(), "bytes": bytes}),
+                );
+            }
+            Err(e) => c
+                .report
+                .note("esrgan_real_weights", json!({"skipped": e.to_string()})),
+        }
+        Ok(())
+    })?;
+
     group(&mut c, "conv3d_bench", |c| {
         // VAE decoder shapes at 480p-class resolution: time both strategies.
         for (ch, t_in, hh, ww) in [
