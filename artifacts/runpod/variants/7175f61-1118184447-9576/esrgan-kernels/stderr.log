@@ -1,0 +1,15 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[PASS] kernels/bias_prelu_n2_c5_i63 {"cosine":1.0,"max_abs":0.0,"non_finite":0,"ref_norm":18.099457360277636,"rel_l2":0.0} (limits {"rel_l2":0.0})
+[PASS] kernels/bias_prelu_n1_c64_i384 {"cosine":1.0,"max_abs":0.0,"non_finite":0,"ref_norm":128.87487186985095,"rel_l2":0.0} (limits {"rel_l2":0.0})
+[PASS] kernels/bias_prelu_n3_c48_i33 {"cosine":1.0,"max_abs":0.0,"non_finite":0,"ref_norm":59.66032121776501,"rel_l2":0.0} (limits {"rel_l2":0.0})
+[PASS] kernels/esrgan_pack_f2_9x7_s4_down1 {"mismatched_bytes":0,"n":6048,"want_n":6048} (limits {"mismatched_bytes":0})
+[PASS] kernels/esrgan_pack_f2_9x7_s4_down2 {"mismatched_bytes":0,"n":1512,"want_n":1512} (limits {"mismatched_bytes":0})
+[PASS] kernels/esrgan_pack_f1_6x5_s2_down1 {"mismatched_bytes":0,"n":360,"want_n":360} (limits {"mismatched_bytes":0})
+[PASS] kernels/esrgan_pack_f3_24x16_s4_down4 {"mismatched_bytes":0,"n":3456,"want_n":3456} (limits {"mismatched_bytes":0})
+[PASS] kernels/esrgan_tiny_x4_device_vs_host {"fraction":0.0,"max_levels":0,"mismatched_bytes":0,"n":17280} (limits {"fraction_max":0.01,"max_levels":1})
+[PASS] kernels/esrgan_tiny_x3_device_vs_host {"fraction":0.0,"max_levels":0,"mismatched_bytes":0,"n":9720} (limits {"fraction_max":0.01,"max_levels":1})
+[PASS] kernels/esrgan_tiny_x2_device_vs_host {"fraction":0.0,"max_levels":0,"mismatched_bytes":0,"n":4320} (limits {"fraction_max":0.01,"max_levels":1})
+[FAIL] kernels/esrgan_real_x4_device_vs_host {"fraction":0.0715060763888889,"max_levels":1,"mismatched_bytes":1318,"n":18432} (limits {"fraction_max":0.01,"max_levels":1})
+[INFO] kernels/esrgan_480x272x81_x4 {"bytes":507617280,"fps":179.5997874168225,"out":"1920x1088","seconds":0.451002761,"weights":"/fvscratch/weights/auxiliary/tae/realesr-animevideov3.pth"}
+[FAIL] stage kernels → gpucheck-out/kernels.json (1.4s)
+check failed: 1 check(s) failed: kernels/esrgan_real_x4_device_vs_host: {"fraction":0.0715060763888889,"max_levels":1,"mismatched_bytes":1318,"n":18432} vs limits {"fraction_max":0.01,"max_levels":1}

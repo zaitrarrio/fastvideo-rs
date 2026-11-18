@@ -70,6 +70,27 @@ env = ["FASTVIDEO_TAE_DIR={tae}"]
 argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
   "hf-60s-rebased,preset=history-forcing,rope=rebased,seconds=60,dump=1"]
 
+# Diagnostics after the second run (7175f61): the rebased sink degraded exactly as the absolute policy did (the 30 s
+# frames alike), so the RoPE policy is not the cause. A pure sliding window (no sink) and FastVideo's literal
+# relativistic policy, 30 s each.
+[[arm]]
+name = "hf-30s-sink0"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+requires = ["{runs}/hf-stage"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
+  "hf-30s-sink0,preset=history-forcing,sink=0,rope=abs,seconds=30,dump=1"]
+
+[[arm]]
+name = "hf-30s-rel"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+requires = ["{runs}/hf-stage"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
+  "hf-30s-rel,preset=history-forcing,rope=rel,seconds=30,dump=1"]
+
 [[arm]]
 name = "sf-w21-30s"
 gate = "sfwan21-1.3b"

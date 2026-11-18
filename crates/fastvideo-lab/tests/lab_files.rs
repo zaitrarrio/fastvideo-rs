@@ -401,7 +401,7 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
     }
     // Addition 16 (ADR-0019 §22.4): the arms that read `{tae}` without a
     // `tae` file are sfstream's two and mmaudio's two Wan arms (§22, S5)
-    // (`FASTVIDEO_TAE_DIR={tae}`), plus the variants tier's four History Forcing arms, in a `tae = true` tier (`Lab::load`
+    // (`FASTVIDEO_TAE_DIR={tae}`), plus the variants tier's six History Forcing arms, in a `tae = true` tier (`Lab::load`
     // refuses any other), and the file they need, taew2_1, is one
     // fetch-tae.sh fetches.
     let readers: Vec<(&str, &str)> = lab
@@ -437,6 +437,8 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
             ("variants", "hf-30s"),
             ("variants", "hf-30s-rebased"),
             ("variants", "hf-60s-rebased"),
+            ("variants", "hf-30s-sink0"),
+            ("variants", "hf-30s-rel"),
             ("variants", "sf-w21-30s")
         ]
     );
