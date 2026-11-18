@@ -95,8 +95,12 @@ fn own_tier_dry_runs_equal_their_goldens() {
             continue;
         }
         let p = fixture_path(&name);
-        let fixture = std::fs::read_to_string(&p)
-            .unwrap_or_else(|e| panic!("{}: {e} (FV_LAB_WRITE=<dir> cargo test -p fastvideo-lab --test own_tiers)", p.display()));
+        let fixture = std::fs::read_to_string(&p).unwrap_or_else(|e| {
+            panic!(
+                "{}: {e} (FV_LAB_WRITE=<dir> cargo test -p fastvideo-lab --test own_tiers)",
+                p.display()
+            )
+        });
         assert_eq!(
             ours,
             fixture.lines().collect::<Vec<_>>(),

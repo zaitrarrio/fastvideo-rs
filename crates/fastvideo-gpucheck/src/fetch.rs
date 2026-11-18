@@ -51,7 +51,13 @@ fn pinned_ok(path: &Path, sha256: &str, size: u64) -> anyhow::Result<bool> {
 }
 
 /// Download `url` to `out` unless `out` already holds the pinned bytes.
-pub fn run(report: &mut Report, url: &str, sha256: &str, size: u64, out: &Path) -> anyhow::Result<()> {
+pub fn run(
+    report: &mut Report,
+    url: &str,
+    sha256: &str,
+    size: u64,
+    out: &Path,
+) -> anyhow::Result<()> {
     if !url.starts_with("https://") {
         bail!("fetch: {url}: only https:// URLs are fetched");
     }
@@ -115,17 +121,15 @@ pub fn run(report: &mut Report, url: &str, sha256: &str, size: u64, out: &Path) 
         let _ = std::fs::remove_file(&part);
         bail!("fetch: {url}: sha256 {got}, pinned {sha256}");
     }
-    std::fs::rename(&part, out).map_err(|e| anyhow!("rename {} -> {}: {e}", part_s, out.display()))?;
+    std::fs::rename(&part, out)
+        .map_err(|e| anyhow!("rename {} -> {}: {e}", part_s, out.display()))?;
     let secs = t0.elapsed().as_secs_f64();
     report.note(
         "fetch",
         json!({"url": url, "out": out.display().to_string(), "bytes": size, "cached": false,
                "seconds": secs, "mb_per_s": size as f64 / 1e6 / secs.max(1e-9)}),
     );
-    eprintln!(
-        "fetch ok: {} ({size} bytes, {secs:.1}s)",
-        out.display()
-    );
+    eprintln!("fetch ok: {} ({size} bytes, {secs:.1}s)", out.display());
     Ok(())
 }
 
