@@ -3,12 +3,23 @@
 //! The product is the host form of `weight.addmm_(B, A)`: `W += multiplier * B @ A`,
 //! then any FastVideo `.diff` correction in float32. See
 //! [`fastvideo_models::h3::lora`].
+//!
+//! [`LoraMode::Branch`] keeps the low-rank pairs out of the weight instead:
+//! each linear runs `y = W x + B (A x)` with the pair attached as an
+//! unmerged branch ([`crate::rt::nn::Linear::attach_branch`]) and the base
+//! weight (then quantized alone) untouched; `.diff` and `.set_weight`
+//! replacements still merge. The default for the LongLive-Plug recipes
+//! (`FASTVIDEO_H3_LORA_BRANCH` overrides): a merge keeps only what survives
+//! the device weight's rounding, and the Plug adapter's |ΔW| / |W| ≈ 2·10⁻⁴
+//! kept a third in bf16 and a tenth in MXFP8 (h3-rs,
+//! `docs/runs/2026-11-15-runpod-6000s-longlive-plug`; docs/techniques.md
+//! "LongLive-Plug recipes").
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use fastvideo_models::h3::lora::{
-    add_diff, add_low_rank, lora_multiplier, plan_from_keys, LoraFormat, LoraPlan,
+    add_diff, add_low_rank, lora_multiplier, plan_from_keys, LoraFormat, LoraPlan, LowRankBranch,
 };
 
 use crate::rt::nn::Linear;
@@ -85,9 +96,57 @@ struct Pair {
     inn: usize,
 }
 
+/// `FASTVIDEO_H3_LORA_BRANCH=1|0`: run the adapter's low-rank pairs as an
+/// unmerged branch, or merge them into the weights ([`LoraMode`]). Unset:
+/// the branch for the LongLive-Plug recipes, the merge for every other
+/// adapter.
+pub const BRANCH_ENV: &str = "FASTVIDEO_H3_LORA_BRANCH";
+
+/// How an adapter's low-rank pairs reach the linears.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoraMode {
+    /// `W += multiplier * B @ A` at load, before quantization (the
+    /// reference's merge; Sol-H3, Turbo, VDN, FastH3 Preview as before).
+    Merge,
+    /// `y = W x + B (A x)`: the pair attached to the linear as a branch
+    /// ([`crate::rt::nn::Linear::attach_branch`]), the base weight untouched.
+    Branch,
+}
+
+impl LoraMode {
+    /// The mode for a load: [`BRANCH_ENV`] from `settings` (`1` / `0`,
+    /// trimmed; empty is unset), else `Branch` for a Plug recipe and `Merge`
+    /// otherwise. Any other value is an error.
+    pub fn from_settings(
+        settings: &dyn fastvideo_models::settings::Source,
+        plug: bool,
+    ) -> Result<Self> {
+        Self::resolve(settings.var(BRANCH_ENV).as_deref(), plug)
+    }
+
+    /// [`Self::from_settings`] on an explicit value.
+    pub fn resolve(env: Option<&str>, plug: bool) -> Result<Self> {
+        match env.map(str::trim) {
+            None | Some("") => Ok(if plug { Self::Branch } else { Self::Merge }),
+            Some("1" | "on" | "true" | "branch") => Ok(Self::Branch),
+            Some("0" | "off" | "false" | "merge") => Ok(Self::Merge),
+            Some(other) => Err(msg(format!("{BRANCH_ENV}={other}: expected 1|0"))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Branch => "branch",
+        }
+    }
+}
+
 /// One adapter, consumed as the transformer loader touches each parameter.
 pub struct H3LoraFuse {
     pairs: HashMap<String, Pair>,
+    /// How the pairs reach the linears ([`Self::set_mode`]; `Merge` unless set).
+    mode: LoraMode,
     /// Copy of [`Self::pairs`] that survives host `fuse` consume, for device re-fuse.
     factors: HashMap<String, Pair>,
     diffs: HashMap<String, Vec<f32>>,
@@ -221,6 +280,7 @@ impl H3LoraFuse {
         let pairs_total = pairs.len();
         Ok(Self {
             factors: pairs.clone(),
+            mode: LoraMode::Merge,
             pairs,
             diffs: HashMap::new(),
             replacements: HashMap::new(),
@@ -306,7 +366,7 @@ impl H3LoraFuse {
         Self::from_plan(base, &adapter_map, &path, plan, alpha as u32, spec.weight)
     }
 
-    fn from_plan(
+    pub(crate) fn from_plan(
         base: &WeightMap,
         adapter_map: &WeightMap,
         adapter: &Path,
@@ -391,6 +451,7 @@ impl H3LoraFuse {
         let replacements_total = replacements.len();
         Ok(Self {
             factors: pairs.clone(),
+            mode: LoraMode::Merge,
             pairs,
             diffs,
             replacements,
@@ -506,6 +567,7 @@ impl H3LoraFuse {
         let pairs_total = pairs.len();
         Ok(Self {
             factors: pairs.clone(),
+            mode: LoraMode::Merge,
             pairs,
             diffs: HashMap::new(),
             replacements: HashMap::new(),
@@ -531,6 +593,53 @@ impl H3LoraFuse {
 
     pub fn effective_scale(&self) -> f32 {
         self.multiplier
+    }
+
+    /// How the pairs reach the linears.
+    pub fn mode(&self) -> LoraMode {
+        self.mode
+    }
+
+    /// Set [`Self::mode`] before the transformer loads.
+    pub fn set_mode(&mut self, mode: LoraMode) {
+        self.mode = mode;
+    }
+
+    /// `true` under [`LoraMode::Branch`].
+    pub fn is_branch(&self) -> bool {
+        self.mode == LoraMode::Branch
+    }
+
+    /// Bytes the pairs' factors hold as bf16 branches (what
+    /// [`LoraMode::Branch`] keeps resident beside the weights).
+    pub fn factor_bytes(&self) -> u64 {
+        self.factors
+            .values()
+            .map(|p| 2 * (p.a.len() + p.b.len()) as u64)
+            .sum()
+    }
+
+    /// [`Self::take_parts`], with the pair split out as a branch under
+    /// [`LoraMode::Branch`]: the parts that still merge (a replacement, a
+    /// `.diff`; under `Merge` the pair too) and the branch to attach to the
+    /// loaded linear, if any. The loader's one entry for a linear's weight.
+    pub fn branch_parts(
+        &mut self,
+        param: &str,
+        shape: &[usize],
+    ) -> Result<(FuseParts, Option<LowRankBranch>)> {
+        let mut parts = self.take_parts(param, shape)?;
+        if self.mode != LoraMode::Branch {
+            return Ok((parts, None));
+        }
+        let branch = match parts.pair.take() {
+            Some(pair) => Some(
+                LowRankBranch::new(&pair.a, &pair.b, pair.out, pair.inn, parts.multiplier)
+                    .map_err(|e| msg(format!("{param}: {e}")))?,
+            ),
+            None => None,
+        };
+        Ok((parts, branch))
     }
 
     /// Recompute the host/device multiplier from a new adapter scale. Does not
@@ -764,6 +873,7 @@ mod tests {
 
         let mut fuse = H3LoraFuse {
             pairs: HashMap::new(),
+            mode: LoraMode::Merge,
             factors: HashMap::new(),
             diffs: HashMap::new(),
             replacements: HashMap::new(),
@@ -911,6 +1021,7 @@ mod tests {
     fn fuse_overwrites_from_set_weight() {
         let mut fuse = H3LoraFuse {
             pairs: HashMap::new(),
+            mode: LoraMode::Merge,
             factors: HashMap::new(),
             diffs: HashMap::new(),
             replacements: HashMap::from([(
@@ -973,6 +1084,98 @@ mod tests {
             fuse.fuse(&key, &mut data, &shape).unwrap();
             assert_eq!(data, row);
         }
+        fuse.finish().unwrap();
+    }
+
+    #[test]
+    fn lora_mode_resolves_from_the_knob_and_the_recipe() {
+        assert_eq!(LoraMode::resolve(None, true).unwrap(), LoraMode::Branch);
+        assert_eq!(LoraMode::resolve(None, false).unwrap(), LoraMode::Merge);
+        assert_eq!(
+            LoraMode::resolve(Some(" "), true).unwrap(),
+            LoraMode::Branch
+        );
+        assert_eq!(LoraMode::resolve(Some("0"), true).unwrap(), LoraMode::Merge);
+        assert_eq!(
+            LoraMode::resolve(Some("merge"), true).unwrap(),
+            LoraMode::Merge
+        );
+        assert_eq!(
+            LoraMode::resolve(Some("1"), false).unwrap(),
+            LoraMode::Branch
+        );
+        assert_eq!(
+            LoraMode::resolve(Some(" on "), false).unwrap(),
+            LoraMode::Branch
+        );
+        assert!(LoraMode::resolve(Some("yes"), false).is_err());
+        assert_eq!(LoraMode::Branch.as_str(), "branch");
+    }
+
+    /// Under `Branch` the pair leaves `FuseParts` as a bf16 branch with the
+    /// multiplier folded into `B` and nothing left to merge; under `Merge`
+    /// the parts carry the pair as before. Either way the pair counts as
+    /// consumed for `finish`.
+    #[test]
+    fn branch_parts_splits_the_pair_under_branch_mode() {
+        let (out, inn, rank) = (3usize, 4usize, 2usize);
+        let module = "transformer_blocks.0.attn.to_q";
+        let base = WeightMap::from_f32_tensors([(
+            format!("{module}.weight"),
+            vec![out, inn],
+            vec![0.0; out * inn],
+        )]);
+        let a: Vec<f32> = (0..rank * inn).map(|i| i as f32 * 0.1).collect();
+        let b: Vec<f32> = (0..out * rank).map(|i| 1.0 - i as f32 * 0.2).collect();
+        let adapter = WeightMap::from_f32_tensors([
+            (
+                format!("{module}.lora_A.weight"),
+                vec![rank, inn],
+                a.clone(),
+            ),
+            (
+                format!("{module}.lora_B.weight"),
+                vec![out, rank],
+                b.clone(),
+            ),
+        ]);
+        let keys = vec![
+            format!("{module}.lora_A.weight"),
+            format!("{module}.lora_B.weight"),
+        ];
+        let open = |mode: LoraMode| {
+            let plan = plan_from_keys(&keys, &HashMap::new(), "test").unwrap();
+            // PEFT: multiplier = scale * alpha / rank = 0.5 * 4 / 2 = 1.0.
+            let mut fuse =
+                H3LoraFuse::from_plan(&base, &adapter, Path::new("test"), plan, 4, 0.5).unwrap();
+            fuse.set_mode(mode);
+            fuse
+        };
+        let mut fuse = open(LoraMode::Branch);
+        assert!(fuse.is_branch());
+        assert_eq!(fuse.factor_bytes(), 2 * (rank * inn + out * rank) as u64);
+        let (parts, branch) = fuse
+            .branch_parts(&format!("{module}.weight"), &[out, inn])
+            .unwrap();
+        assert!(parts.is_empty());
+        let branch = branch.expect("the pair as a branch");
+        assert_eq!((branch.rank, branch.out, branch.inn), (rank, out, inn));
+        // The factors as the device holds them: bf16-rounded, B at multiplier 1.0.
+        let bf16 = |v: &[f32]| -> Vec<f32> {
+            v.iter()
+                .map(|&x| fastvideo_models::h3::lora::bf16_round(x))
+                .collect()
+        };
+        assert_eq!(branch.a, bf16(&a));
+        assert_eq!(branch.b, bf16(&b));
+        fuse.finish().unwrap();
+
+        let mut fuse = open(LoraMode::Merge);
+        let (parts, branch) = fuse
+            .branch_parts(&format!("{module}.weight"), &[out, inn])
+            .unwrap();
+        assert!(branch.is_none());
+        assert!(parts.pair().is_some());
         fuse.finish().unwrap();
     }
 }

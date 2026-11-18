@@ -115,6 +115,172 @@ pub fn add_diff(param: &mut [f32], delta: &[f32], scale: f32) -> Result<(), Stri
     Ok(())
 }
 
+/// The unmerged low-rank branch of one linear, `y = W x + B (A x)`, as the
+/// device runs it (`fastvideo_cudarc::rt::nn::Linear::attach_branch`): the
+/// factors are held in bfloat16, the scale (`multiplier`) is folded into
+/// `B`, and the forward is two GEMMs with f32 accumulation whose middle
+/// product `t = A x` is written in bfloat16 (the first GEMM's output), then
+/// `B t` is added into the linear's output in the output's dtype.
+///
+/// Why a branch and not a merge (h3-rs, `docs/runs/2026-11-15-runpod-6000s-longlive-plug`
+/// of that repository): a merge keeps only what survives the device weight's
+/// rounding. LongLive-Plug's |ΔW| / |W| ≈ 2·10⁻⁴ kept about a third of the
+/// adapter in bf16 and a tenth in MXFP8, and the MXFP8 clips turned stylised;
+/// the branch keeps `B·A` to ~2·10⁻³ of Δ in bf16 factors.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LowRankBranch {
+    /// `[rank, inn]`, each value rounded to bfloat16.
+    pub a: Vec<f32>,
+    /// `[out, rank]`, the scale folded in, each value rounded to bfloat16.
+    pub b: Vec<f32>,
+    pub rank: usize,
+    pub inn: usize,
+    pub out: usize,
+}
+
+impl LowRankBranch {
+    /// A branch from one pair: `A [rank, inn]`, `B [out, rank]`, at
+    /// `multiplier` (`scale * alpha / rank`, [`lora_multiplier`]), the
+    /// factors rounded to bfloat16 as the device holds them.
+    pub fn new(
+        a: &[f32],
+        b: &[f32],
+        out: usize,
+        inn: usize,
+        multiplier: f32,
+    ) -> Result<Self, String> {
+        if out == 0 || inn == 0 || b.is_empty() || !b.len().is_multiple_of(out) {
+            return Err(format!(
+                "lora branch: B len {} for out {out}, in {inn}",
+                b.len()
+            ));
+        }
+        let rank = b.len() / out;
+        if a.len() != rank * inn {
+            return Err(format!(
+                "lora branch: A len {} != rank {rank} * in {inn}",
+                a.len()
+            ));
+        }
+        if !multiplier.is_finite() {
+            return Err("lora branch: multiplier must be finite".into());
+        }
+        Ok(Self {
+            a: a.iter().map(|&v| bf16_round(v)).collect(),
+            b: b.iter().map(|&v| bf16_round(multiplier * v)).collect(),
+            rank,
+            inn,
+            out,
+        })
+    }
+
+    /// One block-diagonal branch over a fused (row-stacked) linear whose
+    /// sections each have `rows` output rows and, for some, their own pair:
+    /// `A` is the pairs' `A`s stacked along the rank axis
+    /// (`[Σ rank, inn]`), `B` is `[Σ rows, Σ rank]` with each section's `B`
+    /// in its own row range and column block and zeros elsewhere, so
+    /// `B (A x)` is each section's own `B_i (A_i x)` in its rows. `None`
+    /// when no section has a pair.
+    pub fn stack(
+        sections: &[(usize, Option<&LowRankBranch>)],
+        inn: usize,
+    ) -> Result<Option<Self>, String> {
+        let out: usize = sections.iter().map(|(rows, _)| rows).sum();
+        let rank: usize = sections.iter().filter_map(|(_, p)| p.map(|p| p.rank)).sum();
+        if rank == 0 {
+            return Ok(None);
+        }
+        for (i, (rows, p)) in sections.iter().enumerate() {
+            if let Some(p) = p {
+                if p.out != *rows || p.inn != inn {
+                    return Err(format!(
+                        "lora branch stack: section {i} pair is {}x{} (rank {}), section {rows}x{inn}",
+                        p.out, p.inn, p.rank
+                    ));
+                }
+            }
+        }
+        let mut a = Vec::with_capacity(rank * inn);
+        let mut b = vec![0.0f32; out * rank];
+        let (mut row0, mut col0) = (0usize, 0usize);
+        for (rows, p) in sections {
+            if let Some(p) = p {
+                a.extend_from_slice(&p.a);
+                for o in 0..p.out {
+                    let dst = &mut b[(row0 + o) * rank + col0..(row0 + o) * rank + col0 + p.rank];
+                    dst.copy_from_slice(&p.b[o * p.rank..(o + 1) * p.rank]);
+                }
+                col0 += p.rank;
+            }
+            row0 += rows;
+        }
+        Ok(Some(Self {
+            a,
+            b,
+            rank,
+            inn,
+            out,
+        }))
+    }
+
+    /// Bytes of the factors as the device holds them (bfloat16).
+    pub fn held_bytes(&self) -> u64 {
+        2 * (self.a.len() + self.b.len()) as u64
+    }
+
+    /// `B (A x)` for `x [m, inn]` (row-major), as the device computes it:
+    /// `t = A x` accumulated in f32 and rounded to bfloat16, then `B t`
+    /// accumulated in f32. The result `[m, out]` is what the caller adds into
+    /// the linear's output in the output's dtype.
+    pub fn delta(&self, x: &[f32], m: usize) -> Result<Vec<f32>, String> {
+        if x.len() != m * self.inn {
+            return Err(format!(
+                "lora branch: x len {} != {m} x {}",
+                x.len(),
+                self.inn
+            ));
+        }
+        let (rank, inn, out) = (self.rank, self.inn, self.out);
+        let mut d = vec![0.0f32; m * out];
+        d.par_chunks_mut(out)
+            .zip(x.par_chunks(inn))
+            .for_each(|(drow, xrow)| {
+                let t: Vec<f32> = (0..rank)
+                    .map(|r| {
+                        let arow = &self.a[r * inn..(r + 1) * inn];
+                        bf16_round(arow.iter().zip(xrow).map(|(a, x)| a * x).sum::<f32>())
+                    })
+                    .collect();
+                for (o, dv) in drow.iter_mut().enumerate() {
+                    let brow = &self.b[o * rank..(o + 1) * rank];
+                    *dv = brow.iter().zip(&t).map(|(b, t)| b * t).sum::<f32>();
+                }
+            });
+        Ok(d)
+    }
+
+    /// `out += delta(x)` for an `[m, out]` f32 output.
+    pub fn add_into(&self, out: &mut [f32], x: &[f32], m: usize) -> Result<(), String> {
+        let d = self.delta(x, m)?;
+        if out.len() != d.len() {
+            return Err(format!(
+                "lora branch: output len {} != {m} x {}",
+                out.len(),
+                self.out
+            ));
+        }
+        for (o, dv) in out.iter_mut().zip(&d) {
+            *o += dv;
+        }
+        Ok(())
+    }
+}
+
+/// Round to the nearest bfloat16 (ties to even).
+pub fn bf16_round(x: f32) -> f32 {
+    crate::ltx2::schedule::bf16_round(x)
+}
+
 /// `scale * alpha / rank`. Hybrid adapters use `alpha = rank`, so the product is `scale`.
 pub fn lora_multiplier(
     format: LoraFormat,
@@ -734,5 +900,120 @@ mod tests {
             .join("../../scripts/gpu/weights-manifest.tsv");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("fastwan21-1.3b\tFastVideo/FastWan2.1-T2V-1.3B-Diffusers"));
+    }
+
+    fn ramp(n: usize, seed: f32) -> Vec<f32> {
+        (0..n)
+            .map(|i| ((i as f32 + seed) * 0.37).sin() * 0.5)
+            .collect()
+    }
+
+    fn matmul_wt(x: &[f32], w: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+        let mut y = vec![0.0f32; m * n];
+        for i in 0..m {
+            for j in 0..n {
+                y[i * n + j] = (0..k).map(|t| x[i * k + t] * w[j * k + t]).sum();
+            }
+        }
+        y
+    }
+
+    /// `W x + B (A x)` from the branch equals `(W + s B A) x` from the merge,
+    /// up to the branch's bfloat16 roundings of the factors and of `A x`.
+    #[test]
+    fn branch_delta_matches_the_merged_weight() {
+        let (out, inn, rank, m, s) = (5usize, 7usize, 2usize, 3usize, 0.75f32);
+        let (a, b, w, x) = (
+            ramp(rank * inn, 1.0),
+            ramp(out * rank, 2.0),
+            ramp(out * inn, 3.0),
+            ramp(m * inn, 4.0),
+        );
+        let branch = LowRankBranch::new(&a, &b, out, inn, s).unwrap();
+        assert_eq!((branch.rank, branch.inn, branch.out), (rank, inn, out));
+        assert_eq!(branch.held_bytes(), 2 * (rank * inn + out * rank) as u64);
+        // The scale is folded into B.
+        assert!((branch.b[0] - bf16_round(s * b[0])).abs() < 1e-7);
+        let mut merged = w.clone();
+        add_low_rank(&mut merged, out, inn, &b, &a, s).unwrap();
+        let want = matmul_wt(&x, &merged, m, inn, out);
+        let mut got = matmul_wt(&x, &w, m, inn, out);
+        branch.add_into(&mut got, &x, m).unwrap();
+        let delta_scale = branch
+            .delta(&x, m)
+            .unwrap()
+            .iter()
+            .fold(0.0f32, |acc, v| acc.max(v.abs()));
+        assert!(
+            delta_scale > 0.05,
+            "the adapter moves the output ({delta_scale})"
+        );
+        for (g, w) in got.iter().zip(&want) {
+            // bf16 factors and a bf16 `A x`: ~2^-8 relative on the delta.
+            assert!((g - w).abs() <= 1.5e-2 * delta_scale + 1e-6, "{g} vs {w}");
+        }
+        assert!(branch.delta(&x, m + 1).is_err());
+        assert!(LowRankBranch::new(&a, &b[..out * rank - 1], out, inn, s).is_err());
+        assert!(LowRankBranch::new(&a[..1], &b, out, inn, s).is_err());
+    }
+
+    /// The block-diagonal branch over a fused `[q; k; v]` stack equals the
+    /// three per-section branches, and a section without a pair gets zeros.
+    #[test]
+    fn stacked_branch_equals_the_per_section_products() {
+        let (rows, inn, m) = (4usize, 6usize, 3usize);
+        let x = ramp(m * inn, 9.0);
+        let q =
+            LowRankBranch::new(&ramp(2 * inn, 1.0), &ramp(rows * 2, 2.0), rows, inn, 1.0).unwrap();
+        let k =
+            LowRankBranch::new(&ramp(3 * inn, 3.0), &ramp(rows * 3, 4.0), rows, inn, 0.5).unwrap();
+        let v = LowRankBranch::new(&ramp(inn, 5.0), &ramp(rows, 6.0), rows, inn, 2.0).unwrap();
+        // [q; k; v; gate], the gate without a pair.
+        let stacked = LowRankBranch::stack(
+            &[
+                (rows, Some(&q)),
+                (rows, Some(&k)),
+                (rows, Some(&v)),
+                (rows, None),
+            ],
+            inn,
+        )
+        .unwrap()
+        .expect("a branch");
+        assert_eq!((stacked.rank, stacked.inn, stacked.out), (6, inn, 4 * rows));
+        assert_eq!(stacked.a.len(), 6 * inn);
+        // B: each section's columns, zeros elsewhere.
+        for o in 0..rows {
+            assert_eq!(&stacked.b[o * 6..o * 6 + 2], &q.b[o * 2..o * 2 + 2]);
+            assert!(stacked.b[o * 6 + 2..o * 6 + 6].iter().all(|&z| z == 0.0));
+            let ko = rows + o;
+            assert_eq!(&stacked.b[ko * 6 + 2..ko * 6 + 5], &k.b[o * 3..o * 3 + 3]);
+            assert_eq!(stacked.b[ko * 6 + 5], 0.0);
+            let vo = 2 * rows + o;
+            assert!(stacked.b[vo * 6..vo * 6 + 5].iter().all(|&z| z == 0.0));
+            assert_eq!(stacked.b[vo * 6 + 5], v.b[o]);
+            let go = 3 * rows + o;
+            assert!(stacked.b[go * 6..go * 6 + 6].iter().all(|&z| z == 0.0));
+        }
+        let got = stacked.delta(&x, m).unwrap();
+        let (dq, dk, dv) = (
+            q.delta(&x, m).unwrap(),
+            k.delta(&x, m).unwrap(),
+            v.delta(&x, m).unwrap(),
+        );
+        for i in 0..m {
+            let row = &got[i * 4 * rows..(i + 1) * 4 * rows];
+            assert_eq!(&row[..rows], &dq[i * rows..(i + 1) * rows]);
+            assert_eq!(&row[rows..2 * rows], &dk[i * rows..(i + 1) * rows]);
+            assert_eq!(&row[2 * rows..3 * rows], &dv[i * rows..(i + 1) * rows]);
+            assert!(row[3 * rows..].iter().all(|&z| z == 0.0));
+        }
+        // No pair anywhere: no branch. A mismatched section: an error.
+        assert_eq!(
+            LowRankBranch::stack(&[(rows, None), (rows, None)], inn).unwrap(),
+            None
+        );
+        assert!(LowRankBranch::stack(&[(rows + 1, Some(&q))], inn).is_err());
+        assert!(LowRankBranch::stack(&[(rows, Some(&q))], inn + 1).is_err());
     }
 }

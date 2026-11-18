@@ -64,6 +64,10 @@ pub struct Linear {
     /// Resident LoRA: unfused base `W0` plus `A [rank, in]` / `B [out, rank]`.
     /// The live weight is `W0 + strength · B @ A`.
     lora: Option<LinearLora>,
+    /// An unmerged low-rank branch, `y = W x + B (A x)`
+    /// ([`Self::attach_branch`]): the base weight (whatever its form above)
+    /// is untouched and every forward adds the branch.
+    branch: Option<LinearBranch>,
 }
 
 /// The device NVFP4 weight of a [`Linear::from_nvfp4`] linear.
@@ -155,6 +159,23 @@ impl std::fmt::Debug for HostBase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "HostBase({} bf16)", self.0.len())
     }
+}
+
+/// The factors of an unmerged low-rank branch ([`Linear::attach_branch`]),
+/// held as bfloat16 on the device (`a16 [rank, in]`, `b16 [out, rank]`, the
+/// scale folded into `b16`), or on a host run as the plain-Rust twin
+/// ([`fastvideo_models::h3::lora::LowRankBranch`], the same bf16-valued
+/// factors). Never both: a live device holds no host copy.
+#[derive(Debug, Clone)]
+struct LinearBranch {
+    rank: usize,
+    host: Option<std::sync::Arc<fastvideo_models::h3::lora::LowRankBranch>>,
+    #[cfg(feature = "cuda")]
+    a16: Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>>,
+    #[cfg(feature = "cuda")]
+    b16: Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>>,
+    /// Bytes the factors hold (bf16, wherever they live).
+    bytes: u64,
 }
 
 thread_local! {
@@ -384,6 +405,7 @@ impl Linear {
                         #[cfg(feature = "cuda")]
                         nvfp4_w: None,
                         lora: None,
+                        branch: None,
                     });
                 }
                 Err(why) => {
@@ -428,6 +450,7 @@ impl Linear {
                 #[cfg(feature = "cuda")]
                 nvfp4_w: None,
                 lora: None,
+                branch: None,
             });
         }
         weight.pin_device()?;
@@ -446,6 +469,7 @@ impl Linear {
             #[cfg(feature = "cuda")]
             nvfp4_w: None,
             lora: None,
+            branch: None,
         })
     }
 
@@ -658,6 +682,7 @@ impl Linear {
             #[cfg(feature = "cuda")]
             nvfp4_w: None,
             lora: None,
+            branch: None,
         };
         maybe_attach_ltx2_lora(prefixes, &mut lin)?;
         Ok(Some(lin))
@@ -727,6 +752,7 @@ impl Linear {
             #[cfg(feature = "cuda")]
             nvfp4_w: None,
             lora: None,
+            branch: None,
         })
     }
 
@@ -773,6 +799,7 @@ impl Linear {
             #[cfg(feature = "cuda")]
             nvfp4_w: None,
             lora: None,
+            branch: None,
         })
     }
 
@@ -893,6 +920,7 @@ impl Linear {
             #[cfg(feature = "cuda")]
             nvfp4_w: None,
             lora: None,
+            branch: None,
         })
     }
 
@@ -926,6 +954,7 @@ impl Linear {
                 b += l.w0_bf16.as_ref().map_or(0, |w| w.len() as u64 * 2);
             }
         }
+        b += self.branch.as_ref().map_or(0, |br| br.bytes);
         b
     }
 
@@ -975,6 +1004,7 @@ impl Linear {
             nvfp4_act: None,
             nvfp4_w: Some(std::sync::Arc::new(Nvfp4Weight(stack))),
             lora: None,
+            branch: None,
         })
     }
 
@@ -997,6 +1027,7 @@ impl Linear {
             .nvfp4_w
             .as_deref()
             .ok_or_else(|| msg("forward_nvfp4_operand on a linear without an NVFP4 weight"))?;
+        self.refuse_branch("forward_nvfp4_operand")?;
         super::evalstats::quant_call("nvfp4_published");
         let y = w.0.gemm_operand(a)?;
         let out = CudaTensor::from_device_slice_bf16(y, out_shape)?;
@@ -1007,6 +1038,7 @@ impl Linear {
     /// quantized once per call, every stacked part's GEMM writes its columns.
     #[cfg(feature = "cuda")]
     fn forward_nvfp4(&self, w: &Nvfp4Weight, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
+        self.refuse_branch("forward_nvfp4")?;
         super::evalstats::quant_call("nvfp4_published");
         let (m, _, out_shape) = self.out_shape(xs)?;
         let x16 = xs
@@ -1079,6 +1111,7 @@ impl Linear {
             #[cfg(feature = "cuda")]
             nvfp4_w: None,
             lora: None,
+            branch: None,
         })
     }
 
@@ -1095,9 +1128,12 @@ impl Linear {
     /// Whether [`Self::forward_mx`] takes this linear's whole input: an
     /// MXFP8 weight with every section quantized, on the device.
     pub fn mx_whole(&self) -> bool {
-        self.quant.as_ref().is_some_and(|q| {
-            q.kind() == super::quant::QuantKind::Mxfp8 && q.layout_all_quantized() && q.is_device()
-        })
+        self.branch.is_none()
+            && self.quant.as_ref().is_some_and(|q| {
+                q.kind() == super::quant::QuantKind::Mxfp8
+                    && q.layout_all_quantized()
+                    && q.is_device()
+            })
     }
 
     /// Mark a module the reference keeps in f32 (`_keep_in_fp32_modules`).
@@ -1161,6 +1197,11 @@ impl Linear {
     /// reference-recipe (W8A8 / MXFP8) linears have one; weight-only FP8,
     /// affine, NVFP4 and resident-LoRA linears are refused.
     pub fn snapshot(&self) -> Result<LinearSnapshot> {
+        if self.branch.is_some() {
+            return Err(msg(
+                "snapshot: a linear with an unmerged low-rank branch is not stored (the branch is attached at load)",
+            ));
+        }
         if self.lora.is_some()
             || self.weight_affine.is_some()
             || self.weight_fp8_rows.is_some()
@@ -1260,6 +1301,7 @@ impl Linear {
                     #[cfg(feature = "cuda")]
                     nvfp4_w: None,
                     lora: None,
+                    branch: None,
                 })
             }
             SnapshotRef::Bf16(bytes) => {
@@ -1331,6 +1373,14 @@ impl Linear {
             .as_ref()
             .filter(|q| q.kind() == super::quant::QuantKind::Mxfp8)
             .ok_or_else(|| msg("forward_mx on a linear without an MXFP8 weight"))?;
+        if self.branch.is_some() {
+            // The branch runs on the bf16 activation; a producer that hands
+            // over its MXFP8 codes has nothing for it (`mx_whole` is false
+            // with a branch, so no producer should).
+            return Err(msg(
+                "forward_mx on a linear with a low-rank branch: the branch needs the bf16 activation",
+            ));
+        }
         super::evalstats::quant_call("mxfp8");
         if act.k != self.in_dim || out_shape.last() != Some(&self.out_dim) {
             return Err(msg("forward_mx: activation / output shape mismatch"));
@@ -1418,6 +1468,14 @@ impl Linear {
                     )?
                 }
             };
+            let mut y = y;
+            if self.branch.is_some() {
+                // The branch reads the un-quantized bf16 activation.
+                let x16 = xs
+                    .dev_bf16()?
+                    .ok_or_else(|| msg("quantized linear branch without a device tensor"))?;
+                self.branch_add_bf16(&x16, &mut y, m)?;
+            }
             let out = CudaTensor::from_device_slice_bf16(y, out_shape)?;
             return self.quant_epilogue(out, gelu);
         }
@@ -1430,7 +1488,14 @@ impl Linear {
             .iter()
             .map(|&v| super::quant::bf16_round(v))
             .collect();
-        let y = q.forward_host(&x, m)?;
+        let mut y = q.forward_host(&x, m)?;
+        if let Some(br) = self.branch_host()? {
+            // As the device: the branch accumulated into the bf16 output.
+            br.add_into(&mut y, &x, m).map_err(msg)?;
+            for v in &mut y {
+                *v = super::quant::bf16_round(*v);
+            }
+        }
         let out = CudaTensor::host_only_dtype(y, out_shape, super::tensor::TensorDType::Bf16);
         self.quant_epilogue(out, gelu)
     }
@@ -1570,6 +1635,193 @@ impl Linear {
         Ok(())
     }
 
+    /// Attach an unmerged low-rank branch: every forward computes
+    /// `y = W x + B (A x)` with the factors of `branch` (`A [rank, in]`,
+    /// `B [out, rank]` with the scale folded in; built by
+    /// [`fastvideo_models::h3::lora::LowRankBranch::new`], or
+    /// [`LowRankBranch::stack`](fastvideo_models::h3::lora::LowRankBranch::stack)
+    /// for a fused stack). The base weight is untouched, so a later
+    /// [`Self::quantize`] rounds the base alone. On a device run the factors
+    /// go up as bfloat16 and the branch is two bf16 GEMMs (f32 accumulate)
+    /// added into the GEMM's output in its dtype; on a host run the
+    /// plain-Rust twin. Refused on a linear with a re-fuse LoRA
+    /// ([`Self::attach_lora`]), a weight-only FP8 / affine / NVFP4 weight,
+    /// or a branch already attached (stack the pairs first).
+    pub fn attach_branch(
+        &mut self,
+        branch: fastvideo_models::h3::lora::LowRankBranch,
+    ) -> Result<()> {
+        if branch.inn != self.in_dim || branch.out != self.out_dim {
+            return Err(msg(format!(
+                "attach_branch: factors for [{}, {}] on a [{}, {}] linear",
+                branch.out, branch.inn, self.out_dim, self.in_dim
+            )));
+        }
+        if self.branch.is_some() {
+            return Err(msg(
+                "attach_branch: a branch is attached already (stack the pairs into one)",
+            ));
+        }
+        if self.lora.is_some()
+            || self.weight_fp8_rows.is_some()
+            || self.weight_affine.is_some()
+            || self.nvfp4_act.is_some()
+            || self.is_nvfp4_published()
+        {
+            return Err(msg(
+                "attach_branch: only plain bf16/f32 and W8A8/MXFP8 linears take a low-rank branch",
+            ));
+        }
+        let bytes = branch.held_bytes();
+        let rank = branch.rank;
+        #[cfg(feature = "cuda")]
+        if stats::device_expected() {
+            let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+            let up = |v: &[f32]| -> Result<cudarc::driver::CudaSlice<half::bf16>> {
+                let host = to_bf16_par(v);
+                stats::record_h2d(host.len() / 2);
+                dev.stream
+                    .memcpy_stod(&host)
+                    .map_err(|e| msg(format!("low-rank branch upload: {e}")))
+            };
+            let a16 = up(&branch.a)?;
+            let b16 = up(&branch.b)?;
+            self.branch = Some(LinearBranch {
+                rank,
+                host: None,
+                a16: Some(std::sync::Arc::new(a16)),
+                b16: Some(std::sync::Arc::new(b16)),
+                bytes,
+            });
+            return Ok(());
+        }
+        self.branch = Some(LinearBranch {
+            rank,
+            host: Some(std::sync::Arc::new(branch)),
+            #[cfg(feature = "cuda")]
+            a16: None,
+            #[cfg(feature = "cuda")]
+            b16: None,
+            bytes,
+        });
+        Ok(())
+    }
+
+    /// Whether [`Self::attach_branch`] attached an unmerged low-rank branch.
+    pub fn has_branch(&self) -> bool {
+        self.branch.is_some()
+    }
+
+    /// The branch's (summed) rank, if one is attached.
+    pub fn branch_rank(&self) -> Option<usize> {
+        self.branch.as_ref().map(|b| b.rank)
+    }
+
+    /// Bytes the branch's factors hold (bfloat16), 0 without one.
+    pub fn branch_bytes(&self) -> u64 {
+        self.branch.as_ref().map_or(0, |b| b.bytes)
+    }
+
+    fn refuse_branch(&self, what: &str) -> Result<()> {
+        if self.branch.is_some() {
+            return Err(msg(format!(
+                "{what}: this path has no low-rank branch; the linear's branch would be skipped"
+            )));
+        }
+        Ok(())
+    }
+
+    /// The host twin's factors; an error on a live device (no host fallback).
+    fn branch_host(&self) -> Result<Option<&fastvideo_models::h3::lora::LowRankBranch>> {
+        let Some(br) = &self.branch else {
+            return Ok(None);
+        };
+        stats::host_fallback(
+            "low-rank branch",
+            format_args!("rank {} on [{}, {}]", br.rank, self.out_dim, self.in_dim),
+        )?;
+        br.host
+            .as_deref()
+            .map(Some)
+            .ok_or_else(|| msg("low-rank branch: the factors are not on the host"))
+    }
+
+    /// The device factors `(A, B, rank)`; an error when the branch's factors
+    /// are not on the device (a live device never falls back to the host).
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::type_complexity)]
+    fn branch_device(
+        &self,
+    ) -> Result<
+        Option<(
+            &cudarc::driver::CudaSlice<half::bf16>,
+            &cudarc::driver::CudaSlice<half::bf16>,
+            usize,
+        )>,
+    > {
+        let Some(br) = &self.branch else {
+            return Ok(None);
+        };
+        match (&br.a16, &br.b16) {
+            (Some(a), Some(b)) => Ok(Some((a.as_ref(), b.as_ref(), br.rank))),
+            _ => Err(msg(
+                "low-rank branch: the factors are not on the device (no host fallback on a live device)",
+            )),
+        }
+    }
+
+    /// `c16 += B (A x16)`: `t = A x` as one bf16 GEMM (`[m, rank]`, f32
+    /// accumulate, bf16 out), then `B t` accumulated into the bf16 output
+    /// with cuBLAS `beta = 1` (f32 inside, one rounding into `c16`).
+    #[cfg(feature = "cuda")]
+    fn branch_add_bf16(
+        &self,
+        x16: &cudarc::driver::CudaSlice<half::bf16>,
+        c16: &mut cudarc::driver::CudaSlice<half::bf16>,
+        m: usize,
+    ) -> Result<()> {
+        let Some((a16, b16, rank)) = self.branch_device()? else {
+            return Ok(());
+        };
+        let (k, n) = (self.in_dim, self.out_dim);
+        let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+        // SAFETY: fully written by the first GEMM before the second reads it.
+        let mut t16 = unsafe { dev.stream.alloc::<half::bf16>((m * rank).max(1)) }
+            .map_err(|e| msg(e.to_string()))?;
+        super::device::matmul_linear_wt_bf16(x16, a16, &mut t16, m, k, rank)
+            .map_err(|e| msg(e.to_string()))?;
+        super::device::matmul_linear_wt_bf16_acc(&t16, b16, c16, m, rank, n)
+            .map_err(|e| msg(e.to_string()))?;
+        Ok(())
+    }
+
+    /// [`Self::branch_add_bf16`] into an f32 output (the f32-weight path):
+    /// the activation as bf16, `B t` accumulated with `beta = 1` into `c`.
+    #[cfg(feature = "cuda")]
+    fn branch_add_f32(
+        &self,
+        xs: &CudaTensor,
+        c: &mut cudarc::driver::CudaSlice<f32>,
+        m: usize,
+    ) -> Result<()> {
+        let Some((a16, b16, rank)) = self.branch_device()? else {
+            return Ok(());
+        };
+        let (k, n) = (self.in_dim, self.out_dim);
+        let x16 = xs
+            .dev_bf16()?
+            .ok_or_else(|| msg("low-rank branch without a device activation"))?;
+        let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+        // SAFETY: fully written by the first GEMM before the second reads it.
+        let mut t16 = unsafe { dev.stream.alloc::<half::bf16>((m * rank).max(1)) }
+            .map_err(|e| msg(e.to_string()))?;
+        super::device::matmul_linear_wt_bf16(&x16, a16, &mut t16, m, k, rank)
+            .map_err(|e| msg(e.to_string()))?;
+        super::device::matmul_linear_wt_bf16_f32_acc(&t16, b16, c, m, rank, n)
+            .map_err(|e| msg(e.to_string()))?;
+        Ok(())
+    }
+
     fn out_shape(&self, xs: &CudaTensor) -> Result<(usize, usize, Vec<usize>)> {
         let k = *xs.shape.last().ok_or_else(|| msg("linear on scalar"))?;
         if xs.rank() < 2 || k != self.in_dim {
@@ -1592,7 +1844,10 @@ impl Linear {
     pub(crate) fn weight_bf16_shared(
         &self,
     ) -> Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>> {
-        self.weight_bf16.clone().filter(|_| self.has_bf16_gemm())
+        // A caller that multiplies by the raw weight would skip the branch.
+        self.weight_bf16
+            .clone()
+            .filter(|_| self.has_bf16_gemm() && self.branch.is_none())
     }
 
     /// Drop the device bf16 weight (a caller that now holds the weight in
@@ -1641,6 +1896,7 @@ impl Linear {
             .map_err(|e| msg(e.to_string()))?;
         super::device::matmul_linear_wt_bf16(x16, w16, &mut c16, m, k, n)
             .map_err(|e| msg(e.to_string()))?;
+        self.branch_add_bf16(x16, &mut c16, m)?;
         Ok(Some(c16))
     }
 
@@ -1657,6 +1913,7 @@ impl Linear {
         let Some(w) = self.nvfp4_w.as_deref() else {
             return Ok(None);
         };
+        self.refuse_branch("gemm_nvfp4_bf16")?;
         if x16.len() < m * self.in_dim {
             return Err(msg(format!(
                 "nvfp4 gemm input of {} elements for [{m}, {}]",
@@ -1774,6 +2031,7 @@ impl Linear {
             .map_err(|e| msg(e.to_string()))?;
             super::device::matmul_linear_wt_bf16(&x16, w16, &mut c16, m, k, n)
                 .map_err(|e| msg(e.to_string()))?;
+            self.branch_add_bf16(&x16, &mut c16, m)?;
             drop(x16);
             let bias = match &self.bias {
                 Some(b) => Some(b.dev()?.ok_or_else(|| msg("bias"))?),
@@ -1787,6 +2045,7 @@ impl Linear {
             let mut c = super::ops::alloc((m * n).max(1))?;
             super::device::matmul_linear_wt_device(&x, &w, &mut c, m, k, n)
                 .map_err(|e| msg(e.to_string()))?;
+            self.branch_add_f32(xs, &mut c, m)?;
             match (&self.bias, gelu) {
                 (Some(b), true) => {
                     let b = b.dev()?.ok_or_else(|| msg("bias"))?;
@@ -1816,6 +2075,13 @@ impl Linear {
             None => self.weight.host_cow()?,
         };
         let b = self.bias.as_ref().map(|b| b.host_cow()).transpose()?;
+        // The plain-Rust twin of the device branch: `B (A x)` added before
+        // the bias and the activation, as the device adds it into the GEMM's
+        // output.
+        let delta = match self.branch_host()? {
+            Some(br) => Some(br.delta(&x, m).map_err(msg)?),
+            None => None,
+        };
         use rayon::prelude::*;
         let mut out = vec![0.0f32; m * n];
         out.par_chunks_mut(n.max(1))
@@ -1827,6 +2093,9 @@ impl Linear {
                     let mut acc = 0.0f32;
                     for t in 0..k {
                         acc += xi[t] * wj[t];
+                    }
+                    if let Some(d) = &delta {
+                        acc += d[i * n + j];
                     }
                     if let Some(b) = &b {
                         acc += b[j];
@@ -1861,7 +2130,7 @@ impl Linear {
                 fused_bias = true;
             }
         }
-        let c16 = match c16 {
+        let mut c16 = match c16 {
             Some(c) => c,
             None => {
                 let mut c = unsafe { dev.stream.alloc::<half::bf16>((m * n).max(1)) }
@@ -1871,6 +2140,7 @@ impl Linear {
                 c
             }
         };
+        self.branch_add_bf16(x16, &mut c16, m)?;
         let mut out = CudaTensor::from_device_slice_bf16(c16, out_shape)?;
         if let (Some(b), false) = (&self.bias, fused_bias) {
             // Fallback: bias after the bf16 GEMM output (a second rounding).
@@ -2513,4 +2783,168 @@ fn to_bf16_par(values: &[f32]) -> Vec<half::bf16> {
         t.elapsed(),
     );
     out
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+    use fastvideo_models::h3::lora::{add_low_rank, LowRankBranch};
+
+    fn ramp(n: usize, seed: f32) -> Vec<f32> {
+        (0..n)
+            .map(|i| ((i as f32 + seed) * 0.37).sin() * 0.5)
+            .collect()
+    }
+
+    /// `W x + B (A x)` from the branch equals `(W + s B A) x` from the merge
+    /// on the host twin (with the bias and GELU on top), up to the branch's
+    /// bf16 roundings; the branch is booked in `held_bytes`.
+    #[test]
+    fn branch_forward_matches_the_merged_weight_on_the_host() {
+        let (out, inn, rank, m, s) = (6usize, 8usize, 2usize, 5usize, 0.8f32);
+        let (w, a, b, bias, x) = (
+            ramp(out * inn, 1.0),
+            ramp(rank * inn, 2.0),
+            ramp(out * rank, 3.0),
+            ramp(out, 4.0),
+            ramp(m * inn, 5.0),
+        );
+        let lin = |weight: Vec<f32>| {
+            Linear::from_tensors(
+                CudaTensor::from_vec(weight, vec![out, inn]).unwrap(),
+                Some(CudaTensor::from_vec(bias.clone(), vec![out]).unwrap()),
+            )
+            .unwrap()
+        };
+        let mut merged = w.clone();
+        add_low_rank(&mut merged, out, inn, &b, &a, s).unwrap();
+        let base = lin(w.clone());
+        let fused = lin(merged);
+        let mut branched = lin(w);
+        let before = branched.held_bytes();
+        branched
+            .attach_branch(LowRankBranch::new(&a, &b, out, inn, s).unwrap())
+            .unwrap();
+        assert!(branched.has_branch());
+        assert_eq!(branched.branch_rank(), Some(rank));
+        assert_eq!(
+            branched.branch_bytes(),
+            2 * (rank * inn + out * rank) as u64
+        );
+        assert_eq!(branched.held_bytes(), before + branched.branch_bytes());
+        let xs = CudaTensor::from_vec(x, vec![m, inn]).unwrap();
+        for gelu in [false, true] {
+            let run = |l: &Linear| {
+                let y = if gelu {
+                    l.forward_gelu(&xs)
+                } else {
+                    l.forward(&xs)
+                }
+                .unwrap();
+                y.host_cow().unwrap().into_owned()
+            };
+            let (y0, y1, y2) = (run(&base), run(&fused), run(&branched));
+            let moved = y0
+                .iter()
+                .zip(&y1)
+                .fold(0.0f32, |acc, (p, q)| acc.max((p - q).abs()));
+            assert!(moved > 0.05, "the adapter moves the output ({moved})");
+            for (g, want) in y2.iter().zip(&y1) {
+                assert!(
+                    (g - want).abs() <= 2e-2 * moved + 1e-6,
+                    "gelu {gelu}: {g} vs {want}"
+                );
+            }
+        }
+    }
+
+    /// A linear with a branch refuses what would skip it: a snapshot (the
+    /// stored tree has no branch), a second branch, a raw-weight GEMM; the
+    /// factors must fit the linear.
+    #[test]
+    fn a_branch_refuses_paths_and_factors_that_do_not_fit() {
+        let (out, inn) = (4usize, 6usize);
+        let mut lin = Linear::from_tensors(
+            CudaTensor::from_vec(ramp(out * inn, 1.0), vec![out, inn]).unwrap(),
+            None,
+        )
+        .unwrap();
+        assert!(lin.snapshot().is_ok());
+        let wrong = LowRankBranch::new(
+            &ramp(2 * (inn + 1), 2.0),
+            &ramp(out * 2, 3.0),
+            out,
+            inn + 1,
+            1.0,
+        )
+        .unwrap();
+        assert!(lin.attach_branch(wrong).is_err());
+        assert!(!lin.has_branch());
+        let branch =
+            LowRankBranch::new(&ramp(2 * inn, 2.0), &ramp(out * 2, 3.0), out, inn, 1.0).unwrap();
+        lin.attach_branch(branch.clone()).unwrap();
+        assert!(lin.attach_branch(branch).is_err(), "one branch per linear");
+        assert!(lin.snapshot().is_err(), "a branch is not stored");
+        assert!(!lin.mx_whole());
+        #[cfg(feature = "cuda")]
+        assert!(lin.weight_bf16_shared().is_none());
+    }
+
+    /// The branch over a quantized base: the base's codes are the plain
+    /// quantized linear's (the branch never touches the weight), and the
+    /// output is the quantized GEMM plus the branch's delta.
+    #[test]
+    fn a_branch_rides_a_quantized_base_untouched() {
+        let (out, inn, rank, m) = (16usize, 64usize, 2usize, 3usize);
+        let (w, a, b, x) = (
+            ramp(out * inn, 1.0),
+            ramp(rank * inn, 2.0),
+            ramp(out * rank, 3.0),
+            ramp(m * inn, 4.0),
+        );
+        let section = || {
+            vec![super::super::quant::Section {
+                rows: out,
+                quantized: true,
+            }]
+        };
+        let mut plain = Linear::from_tensors(
+            CudaTensor::from_vec(w.clone(), vec![out, inn]).unwrap(),
+            None,
+        )
+        .unwrap();
+        plain
+            .quantize(super::super::quant::QuantKind::Mxfp8, section())
+            .unwrap();
+        let mut branched =
+            Linear::from_tensors(CudaTensor::from_vec(w, vec![out, inn]).unwrap(), None).unwrap();
+        let branch = LowRankBranch::new(&a, &b, out, inn, 1.0).unwrap();
+        branched.attach_branch(branch.clone()).unwrap();
+        branched
+            .quantize(super::super::quant::QuantKind::Mxfp8, section())
+            .unwrap();
+        assert!(branched.has_branch() && branched.is_fp8_gemm());
+        let xs = CudaTensor::from_vec(x.clone(), vec![m, inn]).unwrap();
+        let y_plain = plain.forward(&xs).unwrap().host_cow().unwrap().into_owned();
+        let y_branch = branched
+            .forward(&xs)
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned();
+        let x16: Vec<f32> = x
+            .iter()
+            .map(|&v| super::super::quant::bf16_round(v))
+            .collect();
+        let delta = branch.delta(&x16, m).unwrap();
+        let moved = delta.iter().fold(0.0f32, |acc, v| acc.max(v.abs()));
+        assert!(moved > 0.05, "{moved}");
+        for ((g, p), d) in y_branch.iter().zip(&y_plain).zip(&delta) {
+            // One bf16 rounding of the sum.
+            assert!(
+                (g - (p + d)).abs() <= 1e-2 * (p + d).abs() + 1e-3,
+                "{g} vs {p} + {d}"
+            );
+        }
+    }
 }

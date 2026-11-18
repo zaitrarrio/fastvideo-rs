@@ -401,7 +401,7 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
     }
     // Addition 16 (ADR-0019 §22.4): the arms that read `{tae}` without a
     // `tae` file are sfstream's two and mmaudio's two Wan arms (§22, S5)
-    // (`FASTVIDEO_TAE_DIR={tae}`), in a `tae = true` tier (`Lab::load`
+    // (`FASTVIDEO_TAE_DIR={tae}`), plus the variants tier's two History Forcing arms, in a `tae = true` tier (`Lab::load`
     // refuses any other), and the file they need, taew2_1, is one
     // fetch-tae.sh fetches.
     let readers: Vec<(&str, &str)> = lab
@@ -431,11 +431,16 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
             ("sfstream", "sfstream-main"),
             ("sfstream", "sfstream-10min"),
             ("mmaudio", "wan13-audio"),
-            ("mmaudio", "sfwan13-audio")
+            ("mmaudio", "sfwan13-audio"),
+            // The variants tier's History Forcing cell: two `wan stream`
+            // arms on taew2_1, like sfstream's (docs/ports/variants-parity.md).
+            ("variants", "hf-30s"),
+            ("variants", "sf-w21-30s")
         ]
     );
     assert!(lab.tier("sfstream").is_some_and(|t| t.tae));
     assert!(lab.tier("mmaudio").is_some_and(|t| t.tae));
+    assert!(lab.tier("variants").is_some_and(|t| t.tae));
     // sfstream's arms read the directory; `wan stream` reads taew2_1 in it,
     // and so does mmaudio's `wan gen` (the distilled presets' TAEHV).
     assert!(fetch.contains("\nfetch taew2_1.safetensors "));
@@ -582,10 +587,7 @@ fn every_cell_file_belongs_to_exactly_one_tier() {
 /// are not yet staged anywhere a tier could run it (the tier is added when
 /// they are, and the entry leaves this list then; a listed cell that is in
 /// a tier fails below).
-const PENDING_TIER: &[(&str, &str)] = &[(
-    "history-forcing",
-    "history-forcing-1.3b-safetensors is converted but not published to R2 or staged on a pod (docs/ports/wan.md \"History Forcing\"); the coordinator stages it and adds the tier",
-)];
+const PENDING_TIER: &[(&str, &str)] = &[];
 
 #[test]
 fn every_cell_file_belongs_to_a_tier() {

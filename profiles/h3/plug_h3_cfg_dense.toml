@@ -1,0 +1,22 @@
+# LongLive-Plug h3-plug-cfg served as a family variant (families/h3.toml
+# `h3-plug-cfg`): base MiniMax-H3 with the Plug CFG LoRA
+# (Efficient-Large-Model/LongLive-Plug-MiniMax-H3-cfg, rank 128) run as an
+# unmerged branch at forward time (FASTVIDEO_H3_LORA_BRANCH, default on for
+# the Plug recipes), the base quantized to MXFP8 alone, bf16 activations,
+# dense attention, the base 50-point grid (49 positive forwards, shifts
+# 12 / 3, Euler). docs/techniques.md "LongLive-Plug recipes".
+
+[id]
+name = "plug_h3_cfg_dense"
+family = "minimax_h3"
+description = "LongLive-Plug H3 CFG adapter (49 forwards), the LoRA as an unmerged branch, dense attention, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "h3-plug-cfg"
+
+[techniques.dense_attention]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

@@ -19,7 +19,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_lab::plan::{Lab, Step};
+use fastvideo_lab::plan::Lab;
 use fastvideo_lab::run::{dry_run_lines, RunConfig};
 use fastvideo_lab::weights::{R2Setup, TreeSources};
 
@@ -83,7 +83,6 @@ fn own_tier_dry_runs_equal_their_goldens() {
         let cfg = config(&t);
         let (_, cells) = lab.resolve(&t, None).expect("tier");
         let steps = Lab::steps(&cells, &cfg.bin, &cfg.paths()).expect("render");
-        assert!(steps.iter().all(|s| matches!(s, Step::Arm { .. })), "{t}");
         let ours = dry_run_lines(&cfg, &steps);
         let name = format!("{t}-dry-run.txt");
         // `FV_LAB_WRITE=<dir>`: write the golden there instead of comparing;

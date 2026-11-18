@@ -302,6 +302,8 @@ cells = [
   "gold-h3-larry-turbo",
   "gold-h3-lightx2v-turbo-v01",
   "gold-h3-lightx2v-turbo",
+  "gold-h3-plug-4step",
+  "gold-h3-plug-cfg",
   "gold-h3-ref2v-max",
   "gold-h3-ref2v-turbo",
   "gold-history-forcing-1.3b",
@@ -1282,4 +1284,4 @@ container_disk_gb = 200
 weights = "volume+r2"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
-cells = ["upscale"]
+cells = ["history-forcing", "upscale", "h3-plug"]

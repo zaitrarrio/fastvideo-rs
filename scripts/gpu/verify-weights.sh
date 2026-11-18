@@ -243,6 +243,8 @@ variant_trees() {
     h3-larry-turbo) echo "h3-base h3-turbo-loras/larry" ;;
     h3-lightx2v-turbo) echo "h3-base h3-turbo-loras/lightx2v" ;;
     h3-lightx2v-turbo-v01) echo "h3-base h3-turbo-loras/lightx2v-v0.1" ;;
+    h3-plug-4step) echo "h3-base longlive-plug/minimax-h3-few-step" ;;
+    h3-plug-cfg) echo "h3-base longlive-plug/minimax-h3-cfg" ;;
     vdn-h3) echo "h3-base vdn-h3-stage-b-2000" ;;
     vdn-h3-8step) echo "h3-base vdn-h3-dmd-250-turbo vdn-h3-stage-b-2000" ;;
     h3-ref2v-max) echo "h3-base h3-ref2va" ;;
@@ -267,7 +269,7 @@ variant_trees() {
     *) return 1 ;;
   esac
 }
-FV_VARIANT_IDS="sol-h3 fasth3-4step-vsa fasth3-4step-vsa-480p-taeh3 fasth3-8step-dense fasth3-trim-8step fasth3-trim-nvfp4 fasth3-trim-nvfp4-fast fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4 h3-larry-turbo h3-lightx2v-turbo h3-lightx2v-turbo-v01 vdn-h3 vdn-h3-8step h3-ref2v-max h3-ref2v-turbo fasth3-v2-nvfp4-taeh3 fasth3-4step-vsa-nvfp4-taeh3 fasth3-4step-vsa-taeh3 ltx25-distill-dense ltx25-distill-sol ltx25-distill-sol-nvfp4-taehv ltx25-ref2v ltx25-a2v-guided wan22-ti2v-5b fastwan22-ti2v-5b fastwan22-ti2v-5b-taehv wan14b-plug-4step fastwan21-1.3b fastwan21-1.3b-taehv sfwan21-1.3b longlive-1.3b history-forcing-1.3b"
+FV_VARIANT_IDS="sol-h3 fasth3-4step-vsa fasth3-4step-vsa-480p-taeh3 fasth3-8step-dense fasth3-trim-8step fasth3-trim-nvfp4 fasth3-trim-nvfp4-fast fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4 h3-larry-turbo h3-lightx2v-turbo h3-lightx2v-turbo-v01 h3-plug-4step h3-plug-cfg vdn-h3 vdn-h3-8step h3-ref2v-max h3-ref2v-turbo fasth3-v2-nvfp4-taeh3 fasth3-4step-vsa-nvfp4-taeh3 fasth3-4step-vsa-taeh3 ltx25-distill-dense ltx25-distill-sol ltx25-distill-sol-nvfp4-taehv ltx25-ref2v ltx25-a2v-guided wan22-ti2v-5b fastwan22-ti2v-5b fastwan22-ti2v-5b-taehv wan14b-plug-4step fastwan21-1.3b fastwan21-1.3b-taehv sfwan21-1.3b longlive-1.3b history-forcing-1.3b"
 # END GENERATED
 
 # The weights-sha256.tsv dests a composite cell also checks (sha:<dest>).

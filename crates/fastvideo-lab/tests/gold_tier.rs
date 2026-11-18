@@ -264,7 +264,7 @@ fn every_gold_arm_reads_trees_on_the_volume_or_in_r2() {
         );
     }
     assert_eq!(pending.len(), PENDING_R2.len(), "{pending:?}");
-    assert_eq!(plan.arms.len(), 33, "every gold variant runs (one of them, history-forcing-1.3b, skipped at its gate until its tree is published)");
+    assert_eq!(plan.arms.len(), 35, "every gold variant runs (one of them, history-forcing-1.3b, skipped at its gate until its tree is published)");
     // The R2-only arms the volume tier skipped now fetch (ADR-0023 §3).
     for arm in [
         "fasth3-8step-dense",
@@ -274,6 +274,8 @@ fn every_gold_arm_reads_trees_on_the_volume_or_in_r2() {
         "vdn-h3",
         "h3-larry-turbo",
         "fasth3-trim-nvfp4",
+        "h3-plug-4step",
+        "h3-plug-cfg",
     ] {
         assert!(
             !plan.arm(arm).expect(arm).reads.is_empty(),
@@ -288,9 +290,10 @@ fn the_gold_container_disk_holds_its_largest_arm() {
     let tier = lab.tier(GOLD_TIER).expect("gold tier");
     let (_, plan) = gold_plan(&lab);
     // h3-8step (fasth3-8step-dense), 147.86 GB, the largest arm; every
-    // distinct tree fetched once (530.74 GB) in the tier's order.
+    // distinct tree fetched once (536.27 GB: 530.74 GB plus the two
+    // LongLive-Plug H3 adapter trees, 2.77 GB each) in the tier's order.
     assert_eq!(plan.peak_bytes, 147_857_050_891);
-    assert_eq!(plan.fetch_bytes, 530_738_800_689);
+    assert_eq!(plan.fetch_bytes, 536_274_519_897);
     let peak_gb = plan.peak_bytes.div_ceil(1_000_000_000);
     assert!(
         u64::from(tier.container_disk_gb) >= peak_gb + DISK_RESERVE_GB,

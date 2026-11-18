@@ -6,8 +6,12 @@
 # video at 16 fps, every frame dumped (`frames/hf-30s/`) for offline metrics. `sf-w21-30s`: plain SF-Wan
 # (sfwan21-1.3b's own transformer) at the same window 21, sink 3 and absolute RoPE, same prompt, seed and canvas, for
 # the comparison (the served SF-Wan default is window 21, sink 15, rebased: docs/ports/wan.md "Long-run quality").
-# No GPU run yet, and no tier: history-forcing-1.3b-safetensors is not published to R2 or staged on a volume (the
-# owner publishes, the coordinator stages it on the pod and adds the tier). TAEHV (taew2_1) decodes every block,
+# The `variants` tier runs it. history-forcing-1.3b-safetensors is not published to R2 or staged on a volume (the
+# owner publishes), so the ungated `hf-fetch` arm stages the Hub's raw `dmd/model.pt` (11.35 GB, pinned by SHA-256)
+# on the container disk with `fv-gpucheck fetch`, and `hf-30s` reads it there (`--longlive <file>`: the generator_ema
+# dict read by fastvideo_loader::pth, docs/ports/wan.md "History Forcing") instead of the converted tree; once the
+# tree is on R2, point `--longlive` at `{weights}/history-forcing-1.3b-safetensors`, gate on `history-forcing-1.3b`
+# and drop the fetch arm. TAEHV (taew2_1) decodes every block,
 # found through FASTVIDEO_TAE_DIR={tae} (each arm's env entry, as sfstream-rollout.toml); the arms gate on their
 # trees only (verify-weights.sh history-forcing-1.3b checks the derived file and SF-Wan's parts; sfwan21-1.3b
 # SF-Wan's tree). Schema: crates/fastvideo-lab/schemas/cell.v1.json.
@@ -27,12 +31,21 @@ note = "The sfstream-rollout cell's prompt (runpod-matrix.sh sfstream's default 
 stream = ["--keep-going", "--mode", "fast", "wan", "stream", "--weights", "{weights}/sfwan21-1.3b", "--prompt", "{prompt}",
   "--seed", "{seed}", "--width", "{width}", "--height", "{height}"]
 
+# Staged from the Hub (xzxxntxdy/History-Forcing @ 8604aafe, dmd/model.pt: raw + EMA generator, no stated licence):
+# an ungated arm reads no weight tree; `hf-30s` requires its directory.
+[[arm]]
+name = "hf-fetch"
+argv = ["fetch", "--url", "https://huggingface.co/xzxxntxdy/History-Forcing/resolve/8604aafe4fada0311c7f5a993e7e620473c8e7ac/dmd/model.pt",
+  "--sha256", "9fd236f48acaa0cc4d8115c7b1adb05781945c213a24e028e05227cbf50f9ae3", "--size", "11352569509",
+  "--out", "{runs}/hf-stage/dmd-model.pt"]
+
 [[arm]]
 name = "hf-30s"
-gate = "history-forcing-1.3b"
-trees = ["history-forcing-1.3b-safetensors", "sfwan21-1.3b"]
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+requires = ["{runs}/hf-stage"]
 env = ["FASTVIDEO_TAE_DIR={tae}"]
-argv = ["{@stream}", "--longlive", "{weights}/history-forcing-1.3b-safetensors", "--longlive-no-lora", "--run",
+argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
   "hf-30s,preset=history-forcing,seconds=30,dump=1"]
 
 [[arm]]

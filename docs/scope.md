@@ -365,6 +365,7 @@ process: the first read is cached).
 | `FASTVIDEO_H3_FUSE` | env, then profile | flag | `1` | once per process | H3 | `kernel_fusion` | H3 fused MXFP8 activation and residual-plus-norm kernels (bit-identical); `0` runs the separate ops. |
 | `FASTVIDEO_H3_GLUE` | env, then profile | flag | `1` | once per process | H3 | `kernel_fusion` | H3 glue kernels between the fused ops (bit-identical); `0` runs the separate ops. |
 | `FASTVIDEO_H3_GRAPHS` | env, then profile | flag | `0` | per call | H3 | `cuda_graphs` | CUDA-graph capture of the H3 denoise step. |
+| `FASTVIDEO_H3_LORA_BRANCH` | env, then profile | text: `1` / `on` / `true` / `branch`, or `0` / `off` / `false` / `merge` (trimmed; empty is unset); anything else is an error | `1` for the LongLive-Plug recipes (`h3-plug-4step`, `h3-plug-cfg`), `0` for every other adapter | per load | H3 | `lora` | Run an H3 adapter's low-rank pairs as an unmerged branch (`y = W x + B (A x)`, the base quantized alone) instead of merging them into the weights. |
 | `FASTVIDEO_H3_LORA_DEVICE` | env, then profile | flag | `1` | once per process | H3 | `lora` | Fuse H3 LoRAs on the device. |
 | `FASTVIDEO_H3_LORA_VERIFY` | env, then profile | flag | `0` | once per process | H3 | `debug` | Check the device LoRA fusion against the host. |
 | `FASTVIDEO_H3_LTX_ADAPTER` | env | text: a path | found beside the H3 weights | per load | H3 | `weights` | Spark bridge LTX adapter checkpoint. |
