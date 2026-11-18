@@ -87,7 +87,8 @@ export const MANIFEST_FAMILIES: ManifestFamily[] = [
       "fastwan21-1.3b",
       "fastwan21-1.3b-taehv",
       "sfwan21-1.3b",
-      "longlive-1.3b"
+      "longlive-1.3b",
+      "history-forcing-1.3b"
     ]
   }
 ];
@@ -1026,6 +1027,34 @@ export const MANIFEST_VARIANTS: Record<string, ManifestVariant> = {
       "min_sm": 80,
       "needs": []
     }
+  },
+  "history-forcing-1.3b": {
+    "family": "wan",
+    "tier": null,
+    "served_names": [
+      "history-forcing"
+    ],
+    "public_names": [],
+    "tasks": [
+      "t2v"
+    ],
+    "resident_default": true,
+    "recipe_name": "sfwan21-1.3b-causal",
+    "trees": [
+      "auxiliary/tae/taew2_1.safetensors",
+      "history-forcing-1.3b-safetensors",
+      "sfwan21-1.3b"
+    ],
+    "weight_trees": [
+      "history-forcing-1.3b-safetensors",
+      "sfwan21-1.3b"
+    ],
+    "main_tree": "sfwan21-1.3b",
+    "gpu": {
+      "min_vram_gib": 24,
+      "min_sm": 80,
+      "needs": []
+    }
   }
 };
 /** Every name a serve config's `variant` (or a pool model's `recipe`) may use, as the engine resolves it
@@ -1171,6 +1200,14 @@ export const MODEL_NAMES: Record<string, { variant: string; kind: "tier" | "id" 
   "h3-v2-nvfp4-preview": {
     "variant": "fasth3-v2-nvfp4-taeh3",
     "kind": "served"
+  },
+  "history-forcing": {
+    "variant": "history-forcing-1.3b",
+    "kind": "served"
+  },
+  "history-forcing-1.3b": {
+    "variant": "history-forcing-1.3b",
+    "kind": "id"
   },
   "longlive": {
     "variant": "longlive-1.3b",

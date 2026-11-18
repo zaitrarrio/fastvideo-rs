@@ -304,6 +304,7 @@ cells = [
   "gold-h3-lightx2v-turbo",
   "gold-h3-ref2v-max",
   "gold-h3-ref2v-turbo",
+  "gold-history-forcing-1.3b",
   "gold-longlive-1.3b",
   "gold-ltx25-a2v-guided",
   "gold-ltx25-distill-dense",
