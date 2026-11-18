@@ -9,6 +9,9 @@ measured in this repo unless a `docs/` path of this repo is cited.
 
 ## Ported in this change
 
+First GPU run (2026-11-18, one RTX PRO 6000 Server Edition): every arm of the
+`variants` tier passed; the numbers are in docs/perf/variants-2026-11-18.md.
+
 | Variant / feature | Reference | Here | Status |
 |---|---|---|---|
 | **History Forcing** (ziplab, arXiv 2611.02782; Wan2.1-T2V-1.3B DMD generator, same recipe as Self-Forcing, trained window 21 / sink 3; weights carry **no stated licence**, evaluation only) | fastwan-rs: `generate --causal --cache-frames 21 --sink-frames 3`, `scripts/convert_self_forcing.py`; 7.9 fps on an RTX 4090 at 832×480, more prompt-faithful and dynamic than Self-Forcing at 21/3, over-saturates and shows light streaks (`fastwan-rs:docs/runs/2026-11-17-runpod-4090-history-forcing`) | the SF-Wan causal engine with a `LongLiveConfig::history_forcing()` preset (window 21, sink 3, no LoRA, no re-cache), the checkpoint read from `dmd/model.pt` directly (`fastvideo_loader::pth`) or from the torch-free converter's safetensors; family variant `history-forcing-1.3b`; `fv-gpucheck wan stream ... preset=history-forcing`; docs/ports/wan.md "History Forcing" | GPU run: the `variants` tier (`lab/cells/history-forcing.toml`). Tree not on R2 yet (owner publishes; the cell stages it from the Hub with `fv-gpucheck fetch`) |

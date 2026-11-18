@@ -146,6 +146,12 @@ factor whose output fits 2560×1440: 480×272 → ×4, 832×480 → ×3, 1344×7
 
 ## Unverified
 
+**Update (2026-11-18, first GPU run):** both arms passed on an RTX PRO 6000
+Server Edition: ×2 of 124 H3 frames (832×480 → 1664×960) in 1.48 s, ×4 of
+81 Wan frames (→ 3328×1920) in 1.40 s on the device; the numbers and the
+frames are in docs/perf/variants-2026-11-18.md. The kernel parity group on
+the GPU is the second run's.
+
 No GPU run of this port yet: the two kernels are written against their host
 twins and the `esrgan` parity group, which is how this repository proves
 kernels, but neither has compiled or run on a device, and no fastvideo-rs

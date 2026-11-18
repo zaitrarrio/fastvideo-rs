@@ -659,6 +659,11 @@ Numbers and method: docs/perf/h3-vae-decode-speed.md.
 
 ## LongLive-Plug recipes
 
+Measured 2026-11-18 on an RTX PRO 6000 Server Edition
+(docs/perf/variants-2026-11-18.md): the branch costs 12 % of a dense 480p
+step (2.17 vs 1.93 s), branch vs merged 13.8 dB, branch MXFP8 vs branch
+bf16 16.5 dB.
+
 NVlabs LongLive-Plug LoRAs (arXiv 2609.38154) are applied to the base
 weights at load: the Wan adapters merged, the H3 adapters as an unmerged
 branch (below). They are recipes, not techniques: each one fixes a base

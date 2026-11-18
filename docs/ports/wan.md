@@ -1057,6 +1057,15 @@ Two ways to read it, both without torch:
   cheaper path to load (lazy, 5.7 GB mapped, no f32 round trip); the `.pt`
   path is for a pod that has only the Hub tree.
 
+### First GPU run (2026-11-18)
+
+On an RTX PRO 6000 Server Edition (docs/perf/variants-2026-11-18.md): the
+generator read from `dmd/model.pt` in 18 s, 30 s of 832×480 at 15.4 fps
+(block p50 0.78 s, 29.7 GB), the same as SF-Wan at window 21; clean at
+15 s where SF-Wan had gone dark, degraded by 30 s under absolute RoPE
+(saturated light streaks) as SF-Wan degrades (a dark melt). The rebased-sink
+arms of the second run test the served policy on this generator.
+
 ### Running it
 
 - **`fv-gpucheck wan stream`** (`crates/fastvideo-gpucheck/src/wan_stream.rs`):

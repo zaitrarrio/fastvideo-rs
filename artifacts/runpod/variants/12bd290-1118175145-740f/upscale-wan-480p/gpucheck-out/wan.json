@@ -1,0 +1,165 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "dit_residency": "resident",
+        "mem_used_mib": 12930,
+        "moe": null,
+        "seconds": 30.385151271
+      }
+    },
+    {
+      "limits": {},
+      "name": "cold_generation",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 0.388636859,
+        "decoder": "taehv",
+        "denoise_s": 1.994787089,
+        "step_s": [
+          0.710348355,
+          0.642421692,
+          0.641895882
+        ],
+        "text_cache": "miss",
+        "text_s": 0.485162086,
+        "total_s": 3.00592757,
+        "video_encode_s": 0.054403211,
+        "video_push_s": 0.012751973,
+        "video_rgb_s": 0.17515394299965564,
+        "video_vae_s": 0.3212021102905273,
+        "video_wait_s": 0.018349300000000002,
+        "write_s": 0.125042412
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 0.296600069,
+        "decoder": "taehv",
+        "denoise_s": 1.931796223,
+        "frames_sha256": "85e8d7aaed5ebf54c073d8f63412a729e28ce5345a87dbf2628311d4b784c8a4",
+        "peak_mib": 22692,
+        "step_s": [
+          0.64573942,
+          0.643326381,
+          0.642571842
+        ],
+        "text_cache": "hit",
+        "text_s": 0.001330169,
+        "total_s": 2.244629213,
+        "upscale": {
+          "batch": 7,
+          "device": "cuda",
+          "factor": 4,
+          "fps": 57.85037432202548,
+          "frames": 81,
+          "frames_dir": "/fvscratch/runs/variants/12bd290-1118175145-740f/upscale-wan-480p/frames/frames-up",
+          "in": [
+            832,
+            480
+          ],
+          "load_s": 0.094000859,
+          "model": "realesr-animevideov3",
+          "mp4": "/fvscratch/runs/variants/12bd290-1118175145-740f/upscale-wan-480p/frames/output-up.mp4",
+          "out": [
+            3328,
+            1920
+          ],
+          "read_s": 0.051934922,
+          "upscale_s": 1.4001638010000002,
+          "weights": "/fvscratch/weights/auxiliary/tae/realesr-animevideov3.pth",
+          "write_s": 0.881990951
+        },
+        "video_encode_s": 0.032092593,
+        "video_push_s": 0.00001316,
+        "video_rgb_s": 0.013737645001783252,
+        "video_vae_s": 0.2623393955230713,
+        "video_wait_s": 0.203357099,
+        "write_s": 0.120859124
+      }
+    },
+    {
+      "limits": {
+        "expected": 81
+      },
+      "name": "frames",
+      "ok": true,
+      "values": {
+        "decoded": 81,
+        "written": 81
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/variants/12bd290-1118175145-740f/upscale-wan-480p/frames/frame-040.png",
+        "mean": 0.47105173553912355,
+        "std": 0.2784241593422323
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/variants/12bd290-1118175145-740f/upscale-wan-480p/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast",
+    "request": {
+      "cond_cache": true,
+      "dmd": true,
+      "dmd_steps": [
+        1000,
+        757,
+        522
+      ],
+      "flow_shift": 8.0,
+      "guidance": 1.0,
+      "guidance_2": null,
+      "height": 480,
+      "num_frames": 81,
+      "plug": null,
+      "preset": "fast_wan_t2v_480p",
+      "prompt_set": null,
+      "step_distill": null,
+      "steps": 3,
+      "text_cache": "/fvscratch/runs/variants/12bd290-1118175145-740f/upscale-wan-480p/text-cache",
+      "unipc_sigmas": "fastvideo",
+      "vae": "auto",
+      "vsa": true,
+      "warm": true,
+      "weights": "/fvscratch/weights/fastwan21-1.3b",
+      "width": 832
+    }
+  },
+  "elapsed_s": 38.750064155,
+  "env": {
+    "FASTVIDEO_TAEHV_WEIGHTS": "/fvscratch/weights/auxiliary/tae",
+    "FASTVIDEO_VSA": "1"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "wan",
+  "status": "pass"
+}
