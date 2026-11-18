@@ -36,7 +36,7 @@ describe("families/*.toml: parse and derive", () => {
     expect(Object.keys(MANIFEST_VARIANTS)).toEqual([...set.variants.keys()]);
     expect(Object.keys(MODEL_NAMES).length).toBe(set.names.size);
     // Ids, served names and the nine tier aliases; never a recipe_name (what the capabilities report, not a config name).
-    expect(Object.values(MODEL_NAMES).map((n) => n.kind).sort()).toEqual([...Array(35).fill("id"), ...Array(16).fill("served"), ...Array(9).fill("tier")]);
+    expect(Object.values(MODEL_NAMES).map((n) => n.kind).sort()).toEqual([...Array(35).fill("id"), ...Array(17).fill("served"), ...Array(9).fill("tier")]);
     for (const v of set.variants.values()) if (v.recipe_name !== v.id && !v.served_names.includes(v.recipe_name)) expect(MODEL_NAMES[v.recipe_name], v.recipe_name).toBeUndefined();
     // Plan A3: the engine resolves exactly the manifest names; no recipe-alias table and no exception list remain.
     expect("ENGINE_RECIPE_ALIASES" in GEN).toBe(false);
