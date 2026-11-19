@@ -80,7 +80,10 @@ fn pinned_weight(
     pinned(data, shape.to_vec())
 }
 
-/// `Linear::load`, or the same matrix after a Sol-H3 adapter update.
+/// `Linear::load`, or the same matrix after a Sol-H3 adapter update: the
+/// adapter's merge parts folded in ([`super::lora::LoraMode::Merge`]), or,
+/// under [`super::lora::LoraMode::Branch`], the base as loaded with the
+/// pair attached as an unmerged branch ([`Linear::attach_branch`]).
 fn load_linear(
     map: &WeightMap,
     prefix: &str,
@@ -93,13 +96,26 @@ fn load_linear(
         return Linear::load(map, prefix, in_dim, out_dim, has_bias);
     };
     let wkey = format!("{prefix}.weight");
+    let bias_touched = has_bias && fuse.touches(&format!("{prefix}.bias"));
     // Nothing of the adapter lands here: the plain bf16 load gives the same
     // bits (bf16 -> f32 -> bf16 is exact) without the f32 detour.
-    if !fuse.touches(&wkey) && !(has_bias && fuse.touches(&format!("{prefix}.bias"))) {
+    if !fuse.touches(&wkey) && !bias_touched {
         return Linear::load(map, prefix, in_dim, out_dim, has_bias);
     }
     let t = std::time::Instant::now();
-    let parts = fuse.take_parts(&wkey, &[out_dim, in_dim])?;
+    let (parts, branch) = fuse.branch_parts(&wkey, &[out_dim, in_dim])?;
+    if parts.is_empty() && !bias_touched {
+        // The pair is the branch: the base loads as it is on disk.
+        let mut lin = Linear::load(map, prefix, in_dim, out_dim, has_bias)?;
+        if let Some(branch) = branch {
+            lin.attach_branch(branch)?;
+        }
+        fastvideo_loader::prefetch::add_consumer_time(
+            fastvideo_loader::prefetch::ConsumerTime::Lora,
+            t.elapsed(),
+        );
+        return Ok(lin);
+    }
     let bias = if has_bias {
         let bkey = format!("{prefix}.bias");
         let (bs, mut bias) = map.get_f32(&bkey)?;
@@ -118,8 +134,11 @@ fn load_linear(
                 fastvideo_loader::prefetch::ConsumerTime::Lora,
                 t.elapsed(),
             );
-            let lin = Linear::from_device_bf16_bias(w, bias, in_dim, out_dim)?;
+            let mut lin = Linear::from_device_bf16_bias(w, bias, in_dim, out_dim)?;
             dump_merged(prefix, &lin)?;
+            if let Some(branch) = branch {
+                lin.attach_branch(branch)?;
+            }
             return Ok(lin);
         }
         Err(parts) => parts,
@@ -136,8 +155,11 @@ fn load_linear(
         fastvideo_loader::prefetch::ConsumerTime::Lora,
         t.elapsed(),
     );
-    let lin = Linear::from_tensors(CudaTensor::from_vec(weight, vec![out_dim, in_dim])?, bias)?;
+    let mut lin = Linear::from_tensors(CudaTensor::from_vec(weight, vec![out_dim, in_dim])?, bias)?;
     dump_merged(prefix, &lin)?;
+    if let Some(branch) = branch {
+        lin.attach_branch(branch)?;
+    }
     Ok(lin)
 }
 
@@ -1560,6 +1582,22 @@ impl Attention {
             names.push(format!("{prefix}.to_gate_compress"));
         }
         if lora.is_some() {
+            // What the adapter does to each part of the stack: the parts
+            // that merge, and (LoraMode::Branch) the pair as a branch; the
+            // per-section branches become one block-diagonal branch below.
+            let t = std::time::Instant::now();
+            let mut section_parts = Vec::with_capacity(names.len());
+            let mut section_branches = Vec::with_capacity(names.len());
+            for name in &names {
+                let key = format!("{name}.weight");
+                let (parts, branch) = lora
+                    .as_mut()
+                    .unwrap()
+                    .branch_parts(&key, &[inner, hidden])?;
+                section_parts.push(parts);
+                section_branches.push(branch);
+            }
+            let any_merge = section_parts.iter().any(|p| !p.is_empty());
             // One part of the stack on the host: the base (or, absent from
             // the checkpoint, the adapter's `.set_weight`), merged in f32.
             let host_part = |key: &str,
@@ -1586,22 +1624,25 @@ impl Attention {
                 parts.apply_host(key, &mut row, &shape)?;
                 Ok(row)
             };
-            let t = std::time::Instant::now();
             let rows = names.len() * inner;
             #[cfg(feature = "cuda")]
             let device = lora_device::enabled();
             #[cfg(not(feature = "cuda"))]
             let device = false;
-            let qkvg = if device {
+            let mut qkvg = if !any_merge {
+                // Branch mode with no replacement or `.diff` on the stack:
+                // the base as it is on disk.
+                let keys: Vec<&str> = names.iter().map(String::as_str).collect();
+                Linear::load_fused(map, &keys, hidden, inner, false)?
+            } else if device {
                 #[cfg(feature = "cuda")]
                 {
                     let dev = crate::rt::device::global_device().ok_or_else(|| msg("no device"))?;
                     // SAFETY: every part is written below before any read.
                     let mut stacked = unsafe { dev.stream.alloc::<half::bf16>(rows * hidden) }
                         .map_err(|e| msg(format!("qkvg stack: {e}")))?;
-                    for (i, name) in names.iter().enumerate() {
+                    for ((i, name), parts) in names.iter().enumerate().zip(section_parts) {
                         let key = format!("{name}.weight");
-                        let parts = lora.as_mut().unwrap().take_parts(&key, &[inner, hidden])?;
                         let mut view =
                             stacked.slice_mut(i * inner * hidden..(i + 1) * inner * hidden);
                         let check = lora_device::verify_enabled().then(|| parts.clone());
@@ -1624,13 +1665,27 @@ impl Attention {
                 unreachable!()
             } else {
                 let mut stacked = Vec::with_capacity(rows * hidden);
-                for name in &names {
+                for (name, parts) in names.iter().zip(section_parts) {
                     let key = format!("{name}.weight");
-                    let parts = lora.as_mut().unwrap().take_parts(&key, &[inner, hidden])?;
                     stacked.extend(host_part(&key, parts, lora)?);
                 }
                 Linear::from_tensors(CudaTensor::from_vec(stacked, vec![rows, hidden])?, None)?
             };
+            // The per-section pairs as one block-diagonal branch: `A` the
+            // pairs' rows stacked, `B` each section's block in its own row
+            // range and column block, so the stacked GEMM pair equals the
+            // sections' own `B_i (A_i x)`.
+            let sections: Vec<(usize, Option<&fastvideo_models::h3::lora::LowRankBranch>)> =
+                section_branches
+                    .iter()
+                    .map(|b| (inner, b.as_ref()))
+                    .collect();
+            if let Some(branch) =
+                fastvideo_models::h3::lora::LowRankBranch::stack(&sections, hidden)
+                    .map_err(|e| msg(format!("{prefix} qkvg branch: {e}")))?
+            {
+                qkvg.attach_branch(branch)?;
+            }
             fastvideo_loader::prefetch::add_consumer_time(
                 fastvideo_loader::prefetch::ConsumerTime::Lora,
                 t.elapsed(),
@@ -1723,7 +1778,13 @@ impl Attention {
             matches!(mode, AttnMode::SolLayer { policy, .. } if policy.permutation.is_some());
         // VDN reads the bf16 attention input itself (gates, decay, branch).
         let vdn = matches!(mode, AttnMode::Vdn(_));
-        self.qkvg.quant_kind() == Some(QuantKind::Mxfp8) && !self.has_gate && !gathered && !vdn
+        // A low-rank branch reads the bf16 activation: the linear quantizes
+        // it itself (`Linear::forward`) and adds the branch.
+        self.qkvg.quant_kind() == Some(QuantKind::Mxfp8)
+            && !self.qkvg.has_branch()
+            && !self.has_gate
+            && !gathered
+            && !vdn
     }
 
     /// [`Self::forward`] on a fused producer's output.
@@ -2201,6 +2262,7 @@ impl FeedForward {
     /// activation (MXFP8 up projection, one row chunk).
     fn accepts_mx(&self, rows: usize) -> bool {
         self.ff_in.quant_kind() == Some(QuantKind::Mxfp8)
+            && !self.ff_in.has_branch()
             && ffn_row_chunk(rows, self.ffn_dim) >= rows
     }
 
@@ -2246,7 +2308,7 @@ impl FeedForward {
     /// SwiGLU then the down projection for one chunk of `rows`.
     fn down(&self, h: CudaTensor, rows: usize, hidden: usize) -> Result<CudaTensor> {
         #[cfg(feature = "cuda")]
-        if self.ff_out.quant_kind() == Some(QuantKind::Mxfp8) {
+        if self.ff_out.quant_kind() == Some(QuantKind::Mxfp8) && !self.ff_out.has_branch() {
             if let Some(act) = phase("h3_ffn_act", || fused16::swiglu_mx(&h))? {
                 drop(h);
                 return phase("h3_ffn_out", || {

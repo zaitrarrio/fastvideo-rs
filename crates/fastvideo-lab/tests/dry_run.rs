@@ -127,13 +127,15 @@ fn steps(lab: &Lab, cfg: &RunConfig) -> Vec<Step> {
 /// The tiers that are (or were, before fv-lab-retired.sh) runpod-matrix.sh
 /// families: every tier but `gold`, whose cells come from the gold files
 /// (tests/gold_tier.rs holds its dry run), and the tiers made from a port
-/// one-off (`FV_LAB_EXPERIMENTS`, tests/experiment_tiers.rs holds theirs).
+/// one-off (`FV_LAB_EXPERIMENTS`, tests/experiment_tiers.rs holds theirs),
+/// and fv-lab's own tiers (`FV_LAB_OWN`, tests/own_tiers.rs holds theirs).
 fn families(lab: &Lab) -> Vec<String> {
     let experiments = common::experiments();
+    let own = common::own_tiers();
     lab.tiers
         .tiers
         .iter()
-        .filter(|t| t.name != GOLD_TIER && !experiments.contains(&t.name))
+        .filter(|t| t.name != GOLD_TIER && !experiments.contains(&t.name) && !own.contains(&t.name))
         .map(|t| t.name.clone())
         .collect()
 }

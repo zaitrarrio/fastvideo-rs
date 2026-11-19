@@ -31,7 +31,8 @@
 //   node gen-configs.mjs            rewrite them (after the cross-checks below pass)
 //   node gen-configs.mjs --check    exit 1 when they are stale or a cross-check fails
 //                                   (test/unit/payloads.test.ts and families-gen.test.ts run the same)
-// Cross-checks (crossChecks): every family tree is a dest of weights-manifest.tsv / weights-r2.tsv, a variant reading a
+// Cross-checks (crossChecks): every family tree is a dest of weights-manifest.tsv / weights-r2.tsv (or, for a derived tree
+// the owner has not published yet, of weights-sha256.tsv), a variant reading a
 // tree with a verify-weights.sh shared_file entry reads the copy's tree as its text_weights and lists it (sharedFileChecks),
 // src/cluster/catalog.json names only families, models and recipes the manifests know, volumes.sh's trees are
 // published trees; deployChecks: deploy/deploy.toml's configs exist, the hand-written serve-cuda and serve-cpu
@@ -779,7 +780,10 @@ export function imagesMd(set = loadFamilies(), dep = loadDeploy(set)) {
 export function crossChecks(set = loadFamilies()) {
   const out = [];
   const dests = new Set([...tsvRows("weights-manifest.tsv"), ...tsvRows("weights-r2.tsv")].map((r) => r[0]));
-  for (const [id, v] of set.variants) for (const t of v.trees) if (!dests.has(t)) out.push(`families/${v.family}.toml ${id}: tree ${t} is not a dest of scripts/gpu/weights-manifest.tsv or weights-r2.tsv`);
+  // A derived tree recorded by its hashes before the owner publishes it (weights-sha256.tsv, verify-weights.sh
+  // sha:<dest>; history-forcing-1.3b-safetensors): known, not fetchable from the Hub or R2 yet.
+  const recorded = new Set(tsvRows("weights-sha256.tsv").map((r) => r[0]));
+  for (const [id, v] of set.variants) for (const t of v.trees) if (!dests.has(t) && !recorded.has(t)) out.push(`families/${v.family}.toml ${id}: tree ${t} is not a dest of scripts/gpu/weights-manifest.tsv, weights-r2.tsv or weights-sha256.tsv`);
   for (const t of euVolumeTrees()) if (!dests.has(t) && ![...dests].some((d) => d.startsWith(t + "/"))) out.push(`scripts/gpu/volumes.sh FV_EU_VOLUME_TREES: ${t} is not a published tree (weights-manifest.tsv / weights-r2.tsv)`);
   const cat = JSON.parse(readRel("src/cluster/catalog.json"));
   const famIds = set.families.map((f) => f.id);

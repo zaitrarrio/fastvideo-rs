@@ -1,0 +1,64 @@
+# The Real-ESRGAN compact upscaler (`realesr-animevideov3`, SRVGGNetCompact, BSD-3, 2.5 MB; crates/fastvideo-cudarc/
+# src/rt/esrgan.rs, docs/ports/upscaler.md) over both families' outputs: `h3 gen --upscale 2` on the FastH3 4-step VSA
+# 480p recipe decoded by TAEH3 (832x480 -> 1664x960, the h3-rs `cli_factor` rule's x2 above 480p would be x2 at 768p;
+# here x2 is the cheap case: the x4 network box-filtered on the device) and `wan gen --upscale 4` on FastWan2.1 1.3B
+# with TAEHV (832x480x81 -> 3328x1920, the full x4). Each arm reads the checkpoint as {tae}/realesr-animevideov3.pth
+# (`tae = "realesr-animevideov3.pth"`: fetch-tae.sh fetches it beside the TAE files, and the arm is recorded as
+# skipped when it is still missing) and gates on its weight trees. benchmark.json gets `upscale` (factor, in / out
+# sizes, batch, device, read / load / upscale / write seconds, fps, the mp4) and `upscale_s`; the frames land in
+# `{runs}/{arm}/frames/frames-up/` with `output-up.mp4` beside the original (H3: the audio track kept).
+# Reference numbers (no fastvideo-rs GPU run yet): fastwan-rs on an RTX 4090, 81 frames 480x272 -> 1920x1088 in
+# 0.87 s (its CLAUDE.md "Upscaler" bullet); h3-rs on an RTX PRO 6000 Server Edition, 480p x4 to 3328x1920 4.4 s
+# (its CLAUDE.md "Sizes off the 32-pixel grid" bullet). No compare: the upscaled frames are a different size from
+# any baseline's; the numbers are the point. The coordinator adds the tier. Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "upscale"
+description = "Real-ESRGAN realesr-animevideov3 after the clip: FastH3 4-step VSA 480p (TAEH3) x2 and FastWan2.1 1.3B 480p (TAEHV) x4, timed as upscale_s"
+
+[workload]
+model = "h3 wan"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+frames = 81
+width = 832
+height = 480
+note = "runpod-matrix.sh's default PROMPT and SEED; 832x480 on both arms; seconds is the H3 arm's (5 s at 24 fps), frames the Wan arm's (81)"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+up = ["--upscale-weights", "{tae}/realesr-animevideov3.pth"]
+
+# The upscaler's kernels against their host twins (`fv-gpucheck kernels --groups esrgan`: the bias + PReLU epilogue,
+# the pack kernel at every factor, the tiny network device vs host, and the real weights device vs host byte for byte
+# plus a timed 480x272x81 x4 clip). It reads the checkpoint through FASTVIDEO_ESRGAN_WEIGHTS, so it is TAE-gated on the
+# fetched file; the gate's trees are the H3 arm's (the kernels read no weight tree).
+[[arm]]
+name = "esrgan-kernels"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+tae = "realesr-animevideov3.pth"
+env = ["FASTVIDEO_ESRGAN_WEIGHTS={tae}/realesr-animevideov3.pth"]
+argv = ["--keep-going", "--mode", "fast", "kernels", "--groups", "esrgan"]
+
+# FastH3 4-step VSA at 480p decoded by TAEH3 (the fastvideo-h3-480p cell's fasth3-4step-vsa-480p-taeh3 arm), then x2.
+[[arm]]
+name = "upscale-h3-480p"
+gate = "fasth3-4step-vsa"
+trees = ["h3-base", "FastH3-4-step-Preview-v1-LoRA"]
+tae = "realesr-animevideov3.pth"
+argv = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "4step-vsa", "--height",
+  "{height}", "--width", "{width}", "--taeh3-weights", "{tae}/taeh3.safetensors", "--adaln-cache",
+  "{runs}/upscale-h3-480p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames", "{@h3_common}", "--upscale", "2", "{@up}"]
+
+# FastWan2.1 1.3B DMD (VSA) at 832x480x81 decoded by TAEHV (taew2_1 from the fetched {tae} directory), then x4.
+[[arm]]
+name = "upscale-wan-480p"
+gate = "fastwan21-1.3b"
+trees = ["fastwan21-1.3b"]
+tae = "realesr-animevideov3.pth"
+env = ["FASTVIDEO_TAEHV_WEIGHTS={tae}"]
+argv = ["--mode", "fast", "--vsa", "wan", "gen", "--weights", "{weights}/fastwan21-1.3b", "--prompt", "{prompt}",
+  "--seed", "{seed}", "--height", "{height}", "--width", "{width}", "--num-frames", "{frames}", "--warm",
+  "--clip-dir", "{runs}/{arm}/frames", "--upscale", "4", "{@up}"]

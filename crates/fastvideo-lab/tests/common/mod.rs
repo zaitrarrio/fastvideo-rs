@@ -124,6 +124,21 @@ pub fn experiments() -> Vec<String> {
     line.split_whitespace().map(str::to_owned).collect()
 }
 
+/// `FV_LAB_OWN` of `scripts/gpu/fv-lab-retired.sh`: fv-lab's own tiers
+/// (docs/dev/fv-lab.md "fv-lab's own tiers"), gold-like: never script
+/// families, no experiment pod script; their dry run is fv-lab's own golden
+/// (tests/own_tiers.rs), their pod body runpod-http.sh plan's.
+pub fn own_tiers() -> Vec<String> {
+    let p = repo_root().join("scripts/gpu/fv-lab-retired.sh");
+    let t = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let line = t
+        .lines()
+        .find_map(|l| l.strip_prefix("FV_LAB_OWN=\""))
+        .and_then(|l| l.strip_suffix('"'))
+        .expect("FV_LAB_OWN=\"…\"");
+    line.split_whitespace().map(str::to_owned).collect()
+}
+
 /// One `<tier>:<family>` entry of `FV_LAB_SIBLINGS` (ADR-0019 §21): a tier
 /// cut from a live script family's targets that its own tier cannot run
 /// (`oracle-r2`: the `oracle` family's `sfwan13`, its tree from R2). Its

@@ -925,3 +925,208 @@ Device memory rose 0.5-1.6 GiB over these runs, against flat in E7. That
 growth is from the diagnostics (a 12-latent fresh decode every 10 s and the
 kept latents), not the rollout: the sink 15 runs, which had no `keep_s`, passed the
 growth check.
+
+## History Forcing
+
+Date: 2026-11-18. Status: ported, **no GPU run yet** (every number in
+`lab/gold/history-forcing-1.3b.toml` is a gap). Sources: the code repo
+`github.com/ziplab/History-Forcing` (`main`, read 2026-11-18: `README.md`,
+`configs/long_video/{dmd_ar10s_bi1p3b,default_config,inference}.yaml`,
+`dmd/pipeline/causal_inference.py`, `dmd/evaluation/generator.py`,
+`dmd/long_video/inference_memrope.py`), the Hub repo
+`xzxxntxdy/History-Forcing` @ `8604aafe4fada0311c7f5a993e7e620473c8e7ac`
+(`README.md`, `dmd/model.pt`), arXiv 2611.02782, and the checkpoint itself
+(converted and read on a CPU box, below). The fastwan-rs run notes of its own
+History Forcing port (an RTX 4090, 2026-11-17) are summarised under
+"Unverified"; they measure another implementation.
+
+### What it is
+
+History Forcing (Kuang, Wang et al., arXiv 2611.02782, 2026-11-03) is an
+on-policy distillation recipe for few-step autoregressive video generators:
+the teacher predicts the student's noisy chunk with and without extra
+history, and the weighted residual is added to the DMD score (or velocity)
+target, so the student learns to keep what earlier chunks established (one
+subject, one scene) instead of drifting. The released long-video generator
+(`dmd/model.pt`) is **Wan2.1-T2V-1.3B made causal and few-step the
+Self-Forcing way**: the same architecture, the same 4 DMD steps
+`[1000, 750, 500, 250]` warped by shift 5, 3-latent-frame blocks, trained
+from Causal-Forcing's `causal_ode.pt` with a 1.3B bidirectional teacher and
+a 10-second AR teacher. It differs from LongLive-1.3B in three ways that
+matter here: the generator was trained with a **21-frame window and a
+3-frame sink** (`model_kwargs.local_attn_size: 21, sink_size: 3`), it is a
+full checkpoint (**no LoRA**), and its inference has **no prompt-switch
+KV re-cache** (one prompt per rollout). Its code repo is Apache-2.0; its
+weights carry **no stated licence** (nothing on the Hub card, nothing in the
+README or the repo): **evaluation only** until the authors state one. The
+served summary says so (`caps.rs` `LongLivePreset::summary_name`).
+
+### Inference contract (read from the configs, 2026-11-18)
+
+`scripts/long_video/inference.sh` runs `dmd/long_video/inference_memrope.py
+--config configs/long_video/dmd_ar10s_bi1p3b.yaml --checkpoint
+models/History-Forcing/dmd/model.pt`; `utils/paths.py load_config` merges
+that file over `configs/long_video/default_config.yaml`.
+
+| Setting | Value | Where |
+|---|---|---|
+| `denoising_step_list` | `[1000, 750, 500, 250]`, `warp_denoising_step: true` (through the shift-5 scheduler table, as SF-Wan) | `dmd_ar10s_bi1p3b.yaml` |
+| `timestep_shift` | 5.0 (`model_kwargs.timestep_shift` too) | same |
+| `num_frame_per_block` | 3 | same |
+| `model_kwargs.local_attn_size` / `sink_size` | **21** / **3** (`CausalInferencePipeline`: `kv_cache_size = local_attn_size * frame_seq_length`) | same |
+| `context_noise` | 0 (the clean pass after the last step, `causal_inference.py` step 3.3) | `default_config.yaml` |
+| weights | `generator_ema` (`inference.yaml` `generation.weights: ema`; `evaluation/generator.py load_generator` strips `model._fsdp_wrapped_module.` to `model.`) | `inference.yaml` |
+| canvas | 832x480, 16 fps, 252 latent frames (60 s) per prompt, one prompt per rollout | `inference.yaml` |
+| MemRoPE | `cache_frames 12, sink_frames 3, recent_frames 4, long/short EMA memory 1 + 1, use_block_rope` | `inference.yaml` `memrope:` |
+
+**MemRoPE is not implemented.** It is the demo's optional cache (compressed
+EMA memory frames with a re-roped cache, `dmd/long_video/memrope.py` +
+`third_party/memrope/attention.py`, vendored code under CC-BY-NC-SA-4.0).
+This port runs the generator under the plain rolling cache it was trained
+with: window 21, sink 3, absolute RoPE, the cache kept at a prompt switch,
+which is fastwan-rs's reading too (`--cache-frames 21 --sink-frames 3`).
+In code: `wan::longlive::LongLiveConfig::history_forcing()` (unit-tested
+against the table above), laid over the SF-Wan engine exactly as LongLive's
+`interactive()` is (`wan/longlive.rs`; `recache = false` is
+`PromptSwitch::Keep`; a family file may set `recache = true` to borrow
+LongLive's re-cache, untested on these weights).
+
+### Weights
+
+`dmd/model.pt` (11 352 569 509 bytes, sha256
+`9fd236f48acaa0cc4d8115c7b1adb05781945c213a24e028e05227cbf50f9ae3`) is a
+training checkpoint: `{"generator": ..., "generator_ema": ...}`, 825 **f32**
+tensors each (5 675 987 200 bytes per generator), original Wan names behind
+`model.` (raw) / `model._fsdp_wrapped_module.` (EMA), every tensor saved
+with attributes (`torch._tensor._rebuild_from_type_v2`). No `freqs` buffer.
+The Hub repo's `ar_teacher/model.pt` and `opsd/model.pt` (DreamX-World-5B)
+are out of scope and not fetched.
+
+Two ways to read it, both without torch:
+
+- **`scripts/gpu/convert-history-forcing.py`** (stdlib only, ported from
+  fastwan-rs `scripts/convert_self_forcing.py`): reads `generator_ema`
+  (fallback `generator`), strips the wrappers, **keeps the original Wan
+  names** (the Rust loader renames to Diffusers, as for LongLive's
+  `longlive_base.safetensors`), streams the tensors out of the zip in 16 MiB
+  chunks, reads the file back against the source, and writes
+  `<out>/generator_ema.safetensors` + `keys.txt` + `sha256.txt` +
+  `.complete` add-only (`<out>.partial-<stamp>`, renamed at the end; an
+  existing `<out>` is refused). Dtypes as stored: **f32** for this
+  checkpoint. The header's `__metadata__` names the Hub path, the source's
+  SHA-256, the Hub revision and the licence note, so the output is the same
+  file wherever it is converted. Run on the real checkpoint (2026-11-18, a
+  4-core CPU box):
+
+  ```
+  python3 -I scripts/gpu/convert-history-forcing.py dmd/model.pt \
+      <weights>/history-forcing-1.3b-safetensors \
+      --revision 8604aafe4fada0311c7f5a993e7e620473c8e7ac \
+      --expect-sha256 9fd236f48acaa0cc4d8115c7b1adb05781945c213a24e028e05227cbf50f9ae3
+  # wrote generator_ema.safetensors: 825 tensors, 5675987200 tensor bytes, 5676070768 bytes, dtypes ['F32']
+  # read back: 825 tensors equal the source
+  # c3ae7ceaca552dbbd72f3b2dcd3d24101a6fafbec06eaf3bc25ab5abdbb2a723  generator_ema.safetensors
+  # done in 35 s   (16 s of it the source's SHA-256)
+  ```
+
+  Recorded as the derived tree `history-forcing-1.3b-safetensors`
+  (`weights-sha256.tsv`, `verify-weights.sh sha:history-forcing-1.3b-safetensors`
+  and the composite cell `history-forcing-1.3b`); the raw tree
+  `history-forcing-1.3b` is the Hub row of `weights-manifest.tsv` (`README.md
+  dmd/model.pt`, revision in `weights-revisions.tsv`). **Neither is on R2 or
+  the EU volume yet**: the owner publishes (`r2-weights.py publish-hub`
+  for the raw tree, `publish-dir` for the derived one) and then adds the
+  `weights-r2.tsv` rows; until then the gold tier's test lists the derived
+  tree as pending (`tests/gold_tier.rs`).
+- **The Rust `.pt` reader** (`wan::longlive::PthSource`, over
+  `fastvideo_loader::pth::read_pth_nested(path, ["generator_ema",
+  "generator"])`): `LongLiveWeights::in_dir` / `from_file` / `at` accept,
+  in this order, `longlive_base.safetensors`, `generator_ema.safetensors`,
+  `generator.safetensors`, `model.pt`, `dmd/model.pt` (`BASE_FILES`), or a
+  bare file path, and look for `lora.safetensors` only when the config has a
+  LoRA (`LongLiveConfig::has_lora`), so a LongLive dir resolves exactly as
+  before. The `.pt` path reads the EMA generator whole as f32 (5.7 GB of host
+  memory) and `build_transformer_tensors` narrows the 2-D weights to bf16.
+  On the real file (`cargo test -p fastvideo-cudarc --features cuda
+  history_forcing_checkpoint_loads -- --ignored --nocapture` with
+  `FV_HISTORY_FORCING_PT=.../dmd/model.pt`, a **debug** build, the same CPU
+  box): 825 tensors, 23.0 s to read the pickle and storages, 267.5 s for
+  the rename and bf16 narrowing (unoptimised per-element code; the engine
+  runs a release build), output 307 bf16 + 518 f32 tensors = 2 840 506 624
+  bytes, host high-water mark 8.5 GB. The converted safetensors is the
+  cheaper path to load (lazy, 5.7 GB mapped, no f32 round trip); the `.pt`
+  path is for a pod that has only the Hub tree.
+
+### First GPU run (2026-11-18)
+
+On an RTX PRO 6000 Server Edition (docs/perf/variants-2026-11-18.md): the
+generator read from `dmd/model.pt` in 18 s, 30 s of 832×480 at 15.4 fps
+(block p50 0.78 s, 29.7 GB), the same as SF-Wan at window 21; clean at
+15 s where SF-Wan had gone dark, degraded by 30 s under absolute RoPE
+(saturated light streaks) as SF-Wan degrades (a dark melt). The rebased-sink
+arms of the second run test the served policy on this generator.
+
+### Running it
+
+- **`fv-gpucheck wan stream`** (`crates/fastvideo-gpucheck/src/wan_stream.rs`):
+  `--longlive <dir or file> --longlive-no-lora` loads the checkpoint
+  (`generator_ema.safetensors` dir, or `dmd/model.pt` as a file or its dir;
+  without `--longlive-no-lora` the error names History Forcing), and the run
+  key `preset=history-forcing` (first in the run, like `longlive=1`; later
+  keys override it) applies window 21, sink 3, absolute RoPE and
+  `switch=keep`. The lab cell `lab/cells/history-forcing.toml` (not in a
+  tier until the derived tree is staged on the pod) runs it for 30 s with
+  every frame dumped, and plain SF-Wan at the same window / sink / RoPE for
+  comparison:
+
+  ```
+  fv-gpucheck --keep-going --mode fast wan stream --weights $W/sfwan21-1.3b --prompt "<the sfstream prompt>" \
+      --seed 1024 --width 832 --height 480 --longlive $W/history-forcing-1.3b-safetensors --longlive-no-lora \
+      --run hf-30s,preset=history-forcing,seconds=30,dump=1          # env FASTVIDEO_TAE_DIR=$TAE
+  fv-gpucheck --keep-going --mode fast wan stream --weights $W/sfwan21-1.3b --prompt "<the sfstream prompt>" \
+      --seed 1024 --width 832 --height 480 --run sf-w21-30s,seconds=30,window=21,sink=3,rope=abs,dump=1
+  ```
+- **Serve** (`families/wan.toml` variant `history-forcing-1.3b`, served
+  names `history-forcing-1.3b` and `history-forcing`; trees
+  `auxiliary/tae/taew2_1.safetensors`, `history-forcing-1.3b-safetensors`,
+  `sfwan21-1.3b`): the SF-Wan recipe with `local_attn_frames = 21`,
+  `sink_frames = 3` and an `[engine.longlive]` table `preset =
+  "history-forcing"`, `lora = false`, `recache = false`, `global_sink =
+  true`, `relative_rope = false`, `weights =
+  "${weights}/history-forcing-1.3b-safetensors"`. The engine loads the
+  tree's `generator_ema.safetensors` in place of `sfwan21-1.3b/transformer`
+  (`backend.rs longlive_dit`, through `LongLiveWeights::at`); a `[[models]]`
+  entry may point it elsewhere with `longlive = "<dir or file>"`, including
+  the Hub's `dmd/model.pt` itself (`longlive = "$W/history-forcing-1.3b/dmd/model.pt"`),
+  and `longlive_recache = true` borrows LongLive's re-cache. The recipe
+  summary reads `History Forcing (weights with no stated licence: evaluation
+  only) causal rollout, 4 Self-Forcing steps per block, KV window 21 latent
+  frames, sink 3`. The standalone causal backend takes
+  `FV_SFWAN_WEIGHTS=$W/sfwan21-1.3b FV_LONGLIVE_WEIGHTS=<dir or file>
+  FV_LONGLIVE_PRESET=history-forcing` (`FV_LONGLIVE_RECACHE=1` for the
+  re-cache). No serve config or deployment preset serves it (no pool, no
+  fal app): docs/serve/director-causal.md §5.
+- **fv-cli**: no path. `fv-cli` runs the bounded 81-frame SF-Wan clip from
+  a Diffusers tree and has no `--longlive`; the open-ended rollout is the
+  engine's and fv-gpucheck's.
+
+### Unverified (no GPU run of this port yet)
+
+- Nothing above was run on a GPU: no throughput, latency, memory or picture
+  of this port; no parity against ziplab's inference (which runs MemRoPE;
+  a plain-cache oracle would come from its `evaluation/generator.py` path).
+  The gold file lists every field as a gap and the cell has no tier.
+- What fastwan-rs measured with **its own** implementation
+  (`docs/runs/2026-11-17-runpod-4090-history-forcing` there; an RTX 4090,
+  832x480, 60 s, CUDA, 21 / 3): 122 s per 60 s of video, **7.9 fps**, the
+  same speed as Self-Forcing at 21 / 3 (a 21-frame cache costs about 30%
+  more than 12); more faithful to the prompt (one astronaut, as prompted,
+  where Self-Forcing adds a second) and more camera motion, but more
+  saturated and with glowing vertical light streaks around 24-30 s and
+  42-48 s. Expect the same character here, not the same numbers.
+- The LongLive-style re-cache (`recache = true`) and relative RoPE on these
+  weights are untested; the generator was trained with neither.
+- The loader's bf16 narrowing of the f32 checkpoint is the same as for
+  LongLive's f32 `longlive_base.safetensors` (bit-identical to the Diffusers
+  bf16 load path, `renamed_map_loads_the_tiny_dit`); whether History Forcing
+  is any more sensitive to it is unmeasured.

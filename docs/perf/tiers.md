@@ -28,6 +28,8 @@ Tier `gold`, commit `7e580e5`, ended 2026-10-26: 2 runs rendered as one run set 
 | `h3-larry-turbo` | - | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 1344x768x124, 6 steps | same | 52.76 job | 0.53 | 46.98 | 4.80 | 307.2 | 57.3 | 0.03649 | 2026-10-26 `7e580e5`, 0 d before the run set |
 | `h3-lightx2v-turbo-v01` | - | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 1344x768x124, 4 steps | same | 37.07 job | 0.41 | 31.37 | 4.84 | 183.7 | 57.3 | 0.02564 | 2026-10-26 `7e580e5`, 0 d before the run set |
 | `h3-lightx2v-turbo` | - | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 1344x768x124, 4 steps | same | 37.20 job | 0.53 | 31.38 | 4.84 | 295.3 | 57.3 | 0.02573 | 2026-10-26 `7e580e5`, 0 d before the run set |
+| `h3-plug-4step` | - | not measured (no arm in the run set) | - | - | - | - | - | - | - | - | - | - | never |
+| `h3-plug-cfg` | - | not measured (no arm in the run set) | - | - | - | - | - | - | - | - | - | - | never |
 | `h3-ref2v-max` | max | not measured (failed: exit 2) | - | - | - | - | - | - | - | - | - | - | never |
 | `h3-ref2v-turbo` | turbo | not measured (failed: exit 2) | - | - | - | - | - | - | - | - | - | - | never |
 | `sol-h3` | max | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 832x480x124, 4 steps | same | 8.86 job | 0.45 | 5.98 | 2.11 | 178.1 | 54.5 | 0.00613 | 2026-10-26 `7e580e5`, 0 d before the run set |
@@ -52,6 +54,7 @@ Tier `gold`, commit `7e580e5`, ended 2026-10-26: 2 runs rendered as one run set 
 | `fastwan21-1.3b` | - | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 832x480x81, 3 steps | same | 5.70 job | 0.43 | 1.99 | 3.19 | 25.7 | - | 0.00394 | 2026-10-26 `7e580e5`, 0 d before the run set |
 | `fastwan22-ti2v-5b-taehv` | draft | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 832x480x121, 3 steps | same | 2.60 job | 0.43 | 1.64 | 0.41 | 40.2 | - | 0.00180 | 2026-10-26 `7e580e5`, 0 d before the run set |
 | `fastwan22-ti2v-5b` | turbo | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 832x480x121, 3 steps | same | 7.98 job | 0.42 | 1.65 | 5.76 | 41.4 | - | 0.00552 | 2026-10-26 `7e580e5`, 0 d before the run set |
+| `history-forcing-1.3b` | - | not measured (no arm in the run set) | - | - | - | - | - | - | - | - | - | - | never |
 | `longlive-1.3b` | - | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 832x480x81, 4 steps | same | 5.18 job | 0.34 | 4.04 | 0.70 | 35.9 | - | 0.00358 | 2026-10-26 `7e580e5`, 0 d before the run set |
 | `sfwan21-1.3b` | - | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 832x480x81, 4 steps | same | 5.29 job | 0.45 | 4.06 | 0.69 | 28.9 | - | 0.00366 | 2026-10-26 `7e580e5`, 0 d before the run set |
 | `wan14b-plug-4step` | - | measured | NVIDIA RTX PRO 6000 Blackwell Server Edition | 832x480x81, 4 steps | same | 22.27 job | 0.40 | 18.64 | 3.13 | 155.5 | - | 0.01540 | 2026-10-26 `7e580e5`, 0 d before the run set |

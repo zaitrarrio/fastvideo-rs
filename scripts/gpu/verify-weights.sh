@@ -19,7 +19,7 @@
 #                                      ltx25-ic-lora-ingredients ltx25-ref2v
 #                                      ltx25-dev ltx25-a2v-guided ltx2
 #                                      longlive-1.3b longlive2-5b longlive2-5b-nvfp4
-#                                      longlive-plug
+#                                      longlive-plug history-forcing-1.3b
 #                                      wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq
 #                                      lingbot-moe cosmos3-super upsampler-local
 #                                      sha:<dest> (dest in weights-sha256.tsv)
@@ -34,7 +34,8 @@
 #   3. every safetensors file is its full length (header + data, via
 #      verify-safetensors.sh), following HF-cache symlinks.
 # The `aux` cell instead checks every auxiliary/ url: row of weights-manifest.tsv (TAE and
-# LPIPS files): present, the listed size, the listed SHA-256.
+# LPIPS files): present, the listed size, the listed SHA-256. (The Real-ESRGAN upscaler is
+# fetch-tae.sh's, from its pinned URL, until it has an R2 aux tree.)
 # The `upsampler-local` cell checks the prompt upsampler's local GGUF tree
 # (qwen3-vl-4b-instruct-gguf: Q8_0 model + F16 mmproj, R2 only;
 # docs/serve/upsampler-local.md): every file weights-sha256.tsv lists for it,
@@ -67,6 +68,9 @@
 # directories / safetensors as above, plus the sha:<dest> lists of their trees
 # (the .pt checkpoints are only checked that way; about 8.5 GB read for
 # longlive-1.3b, 10 GB for longlive2-5b, 5.9 GB for -nvfp4, 13 GB for -plug).
+# history-forcing-1.3b (docs/ports/wan.md "History Forcing") is the same shape:
+# the derived generator_ema.safetensors (5.7 GB read for its sha: list) and
+# SF-Wan's parts; the raw dmd/model.pt tree is sha:history-forcing-1.3b alone.
 # Exit status is non-zero on the first cell with a gap; the report names it.
 set -euo pipefail
 
@@ -170,6 +174,12 @@ needs() {
     # VAE and scheduler (wan stream --longlive). Plus sha:longlive-1.3b(-safetensors).
     longlive-1.3b)
       echo "longlive-1.3b:models longlive-1.3b:prompts :longlive-1.3b-safetensors/longlive_base.safetensors :longlive-1.3b-safetensors/lora.safetensors sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler" ;;
+    # History Forcing 1.3B (weights with NO STATED LICENCE, evaluation only): the
+    # derived generator (convert-history-forcing.py) and SF-Wan's text encoder,
+    # tokenizer, VAE and scheduler (wan stream --longlive --longlive-no-lora,
+    # the history-forcing-1.3b variant). Plus sha:history-forcing-1.3b-safetensors.
+    history-forcing-1.3b)
+      echo ":history-forcing-1.3b-safetensors/generator_ema.safetensors sfwan21-1.3b:vae sfwan21-1.3b:text_encoder sfwan21-1.3b:tokenizer sfwan21-1.3b:scheduler" ;;
     # LongLive-2.0-5B (merged BF16 .pt) on the Wan2.2-TI2V-5B tree. Plus sha:longlive2-5b.
     longlive2-5b) echo ":longlive2-5b $(needs wan22-ti2v-5b)" ;;
     # The two NVFP4 (FourOverSix) checkpoints. Plus their sha: lists.
@@ -213,7 +223,7 @@ needs() {
 CELLS=(fasth3-8step fasth3-trim-8step fasth3-trim-8step-nvfp4 fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4 vdn-h3 vdn-h3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 fastwan21-1.3b-mmaudio sfwan21-1.3b-mmaudio hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 dit-prequant upscalers
   ltx25-ic-lora-ingredients ltx25-ref2v ltx25-dev ltx25-a2v-guided ltx2 longlive-1.3b longlive2-5b longlive2-5b-nvfp4 longlive-plug
-  sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super upsampler-local
+  history-forcing-1.3b sana-video-2b-480p wan21-t2v-1.3b wan22-t2v-a14b ltx23-hq lingbot-moe cosmos3-super upsampler-local
   h3-turbo-loras ncii-guard)
 
 # BEGIN GENERATED from families/*.toml by control/gen-configs.mjs; do not edit
@@ -233,6 +243,8 @@ variant_trees() {
     h3-larry-turbo) echo "h3-base h3-turbo-loras/larry" ;;
     h3-lightx2v-turbo) echo "h3-base h3-turbo-loras/lightx2v" ;;
     h3-lightx2v-turbo-v01) echo "h3-base h3-turbo-loras/lightx2v-v0.1" ;;
+    h3-plug-4step) echo "h3-base longlive-plug/minimax-h3-few-step" ;;
+    h3-plug-cfg) echo "h3-base longlive-plug/minimax-h3-cfg" ;;
     vdn-h3) echo "h3-base vdn-h3-stage-b-2000" ;;
     vdn-h3-8step) echo "h3-base vdn-h3-dmd-250-turbo vdn-h3-stage-b-2000" ;;
     h3-ref2v-max) echo "h3-base h3-ref2va" ;;
@@ -253,16 +265,18 @@ variant_trees() {
     fastwan21-1.3b-taehv) echo "auxiliary/tae/taew2_1.safetensors fastwan21-1.3b" ;;
     sfwan21-1.3b) echo "auxiliary/tae/taew2_1.safetensors sfwan21-1.3b" ;;
     longlive-1.3b) echo "auxiliary/tae/taew2_1.safetensors longlive-1.3b-safetensors sfwan21-1.3b" ;;
+    history-forcing-1.3b) echo "auxiliary/tae/taew2_1.safetensors history-forcing-1.3b-safetensors sfwan21-1.3b" ;;
     *) return 1 ;;
   esac
 }
-FV_VARIANT_IDS="sol-h3 fasth3-4step-vsa fasth3-4step-vsa-480p-taeh3 fasth3-8step-dense fasth3-trim-8step fasth3-trim-nvfp4 fasth3-trim-nvfp4-fast fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4 h3-larry-turbo h3-lightx2v-turbo h3-lightx2v-turbo-v01 vdn-h3 vdn-h3-8step h3-ref2v-max h3-ref2v-turbo fasth3-v2-nvfp4-taeh3 fasth3-4step-vsa-nvfp4-taeh3 fasth3-4step-vsa-taeh3 ltx25-distill-dense ltx25-distill-sol ltx25-distill-sol-nvfp4-taehv ltx25-ref2v ltx25-a2v-guided wan22-ti2v-5b fastwan22-ti2v-5b fastwan22-ti2v-5b-taehv wan14b-plug-4step fastwan21-1.3b fastwan21-1.3b-taehv sfwan21-1.3b longlive-1.3b"
+FV_VARIANT_IDS="sol-h3 fasth3-4step-vsa fasth3-4step-vsa-480p-taeh3 fasth3-8step-dense fasth3-trim-8step fasth3-trim-nvfp4 fasth3-trim-nvfp4-fast fasth3-v2-nvfp4 fasth3-4step-vsa-nvfp4 h3-larry-turbo h3-lightx2v-turbo h3-lightx2v-turbo-v01 h3-plug-4step h3-plug-cfg vdn-h3 vdn-h3-8step h3-ref2v-max h3-ref2v-turbo fasth3-v2-nvfp4-taeh3 fasth3-4step-vsa-nvfp4-taeh3 fasth3-4step-vsa-taeh3 ltx25-distill-dense ltx25-distill-sol ltx25-distill-sol-nvfp4-taehv ltx25-ref2v ltx25-a2v-guided wan22-ti2v-5b fastwan22-ti2v-5b fastwan22-ti2v-5b-taehv wan14b-plug-4step fastwan21-1.3b fastwan21-1.3b-taehv sfwan21-1.3b longlive-1.3b history-forcing-1.3b"
 # END GENERATED
 
 # The weights-sha256.tsv dests a composite cell also checks (sha:<dest>).
 sha_dests() {
   case "$1" in
     longlive-1.3b) echo "longlive-1.3b longlive-1.3b-safetensors" ;;
+    history-forcing-1.3b) echo "history-forcing-1.3b-safetensors" ;;
     vdn-h3) echo "vdn-h3-stage-b-2000" ;;
     vdn-h3-8step) echo "vdn-h3-stage-b-2000 vdn-h3-dmd-250-turbo" ;;
     longlive2-5b) echo "longlive2-5b" ;;

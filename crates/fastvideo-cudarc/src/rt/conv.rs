@@ -393,10 +393,54 @@ pub fn cudnn_conv_ext(
     dilation: &[usize],
     groups: usize,
 ) -> Result<(CudaSlice<f32>, Vec<usize>)> {
+    cudnn_conv_ext_math(x, x_shape, w, w_shape, pad, stride, dilation, groups, None)
+}
+
+/// [`cudnn_conv`] with FMA math whatever `FASTVIDEO_TF32` says: for a
+/// network whose output is checked byte for byte against an f32 host
+/// reference (the Real-ESRGAN upscaler, `rt::esrgan`): with the TF32
+/// default a 480p ×4 frame had 7 % of its 8-bit output one level off the
+/// host's (`fv-gpucheck kernels --groups esrgan`, 2026-11-18).
+pub fn cudnn_conv_fma(
+    x: &CudaSlice<f32>,
+    x_shape: &[usize],
+    w: &CudaSlice<f32>,
+    w_shape: &[usize],
+    pad: &[usize],
+    stride: &[usize],
+) -> Result<(CudaSlice<f32>, Vec<usize>)> {
+    cudnn_conv_ext_math(
+        x,
+        x_shape,
+        w,
+        w_shape,
+        pad,
+        stride,
+        &vec![1; pad.len()],
+        1,
+        Some(true),
+    )
+}
+
+/// [`cudnn_conv_ext`] with the math type given (`None`: the device's,
+/// [`fma_math`]).
+#[allow(clippy::too_many_arguments)]
+fn cudnn_conv_ext_math(
+    x: &CudaSlice<f32>,
+    x_shape: &[usize],
+    w: &CudaSlice<f32>,
+    w_shape: &[usize],
+    pad: &[usize],
+    stride: &[usize],
+    dilation: &[usize],
+    groups: usize,
+    fma: Option<bool>,
+) -> Result<(CudaSlice<f32>, Vec<usize>)> {
     let dev = global_device()
         .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
     check_buffers(x, x_shape, w, w_shape)?;
-    let mut key = ConvKey::plain(x_shape, w_shape, pad, stride, fma_math(&dev), false);
+    let fma = fma.unwrap_or_else(|| fma_math(&dev));
+    let mut key = ConvKey::plain(x_shape, w_shape, pad, stride, fma, false);
     key.dilation = dilation.to_vec();
     key.groups = groups;
     let mut cache = dev.conv.lock().expect("conv cache lock");

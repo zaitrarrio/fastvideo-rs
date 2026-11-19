@@ -909,6 +909,37 @@ pub fn matmul_linear_wt_bf16(
     k: usize,
     n: usize,
 ) -> Result<()> {
+    matmul_linear_wt_bf16_beta(x, w, out, m, k, n, 0.0)
+}
+
+/// [`matmul_linear_wt_bf16`] accumulating into `out`: `out = X @ W^T + out`
+/// (cuBLAS `beta = 1`, the bf16 `out` read and written once, f32 inside the
+/// kernel). The up-projection of an unmerged low-rank branch
+/// (`rt::nn::Linear::attach_branch`) adds `B (A x)` into the linear's bf16
+/// output this way.
+#[cfg(feature = "cuda")]
+pub fn matmul_linear_wt_bf16_acc(
+    x: &cudarc::driver::CudaSlice<half::bf16>,
+    w: &cudarc::driver::CudaSlice<half::bf16>,
+    out: &mut cudarc::driver::CudaSlice<half::bf16>,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Result<()> {
+    matmul_linear_wt_bf16_beta(x, w, out, m, k, n, 1.0)
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn matmul_linear_wt_bf16_beta(
+    x: &cudarc::driver::CudaSlice<half::bf16>,
+    w: &cudarc::driver::CudaSlice<half::bf16>,
+    out: &mut cudarc::driver::CudaSlice<half::bf16>,
+    m: usize,
+    k: usize,
+    n: usize,
+    beta: f32,
+) -> Result<()> {
     use cudarc::cublas::sys;
     use cudarc::driver::{DevicePtr, DevicePtrMut};
     let dev = global_device().ok_or_else(no_device)?;
@@ -927,7 +958,7 @@ pub fn matmul_linear_wt_bf16(
     let (wp, _rw) = w.device_ptr(&dev.stream);
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
-    let (alpha, beta) = (1.0f32, 0.0f32);
+    let alpha = 1.0f32;
     let bf = sys::cudaDataType_t::CUDA_R_16BF;
     unsafe {
         cudarc::cublas::result::gemm_ex(
@@ -947,6 +978,65 @@ pub fn matmul_linear_wt_bf16(
             (&beta as *const f32).cast(),
             cp as *mut _,
             bf,
+            n as i32,
+            sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT_TENSOR_OP,
+        )?;
+    }
+    Ok(())
+}
+
+/// `out = X @ W^T + out` with bfloat16 `x` / `w` and an f32 `out` (16BF A/B,
+/// 32F C, `CUBLAS_COMPUTE_32F`, `beta = 1`): the up-projection of an
+/// unmerged low-rank branch added into a linear's f32 output.
+#[cfg(feature = "cuda")]
+pub fn matmul_linear_wt_bf16_f32_acc(
+    x: &cudarc::driver::CudaSlice<half::bf16>,
+    w: &cudarc::driver::CudaSlice<half::bf16>,
+    out: &mut cudarc::driver::CudaSlice<f32>,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Result<()> {
+    use cudarc::cublas::sys;
+    use cudarc::driver::{DevicePtr, DevicePtrMut};
+    let dev = global_device().ok_or_else(no_device)?;
+    size_check(
+        "matmul_linear_wt_bf16_f32_acc",
+        x.len() == m * k && w.len() == n * k && out.len() == m * n,
+        || {
+            format!(
+                "x={} w={} out={} m={m} k={k} n={n}",
+                x.len(),
+                w.len(),
+                out.len()
+            )
+        },
+    )?;
+    let (wp, _rw) = w.device_ptr(&dev.stream);
+    let (xp, _rx) = x.device_ptr(&dev.stream);
+    let (cp, _rc) = out.device_ptr_mut(&dev.stream);
+    let (alpha, beta) = (1.0f32, 1.0f32);
+    let bf = sys::cudaDataType_t::CUDA_R_16BF;
+    let r32 = sys::cudaDataType_t::CUDA_R_32F;
+    unsafe {
+        cudarc::cublas::result::gemm_ex(
+            *dev.cublas.handle(),
+            sys::cublasOperation_t::CUBLAS_OP_T,
+            sys::cublasOperation_t::CUBLAS_OP_N,
+            n as i32,
+            m as i32,
+            k as i32,
+            (&alpha as *const f32).cast(),
+            wp as *const _,
+            bf,
+            k as i32,
+            xp as *const _,
+            bf,
+            k as i32,
+            (&beta as *const f32).cast(),
+            cp as *mut _,
+            r32,
             n as i32,
             sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
             sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT_TENSOR_OP,

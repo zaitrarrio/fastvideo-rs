@@ -1,0 +1,42 @@
+[19:27:43] [variants] matrix start image=1634cd9597ead740
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-c7578b1f-0e92-43f5-7a56-f5661e2aa5ed)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.112.07
+[19:27:43] [variants] pod memory: cgroup v2 /sys/fs/cgroup, limit 179290 MiB, oom_kills 0
+[19:27:43] [variants] weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 1 R2 trees (28.93 GB) fetched before the arms that read them, at most 28.93 GB on the container disk at once
+[19:27:43] [variants] ▶ hf-fetch  /opt/fastvideo-rs/target/release/fv-gpucheck fetch --url https://huggingface.co/xzxxntxdy/History-Forcing/resolve/8604aafe4fada0311c7f5a993e7e620473c8e7ac/dmd/model.pt --sha256 9fd236f48acaa0cc4d8115c7b1adb05781945c213a24e028e05227cbf50f9ae3 --size 11352569509 --out /fvscratch/runs/variants/7175f61-1118184447-9576/hf-stage/dmd-model.pt  (wall cap 3600s; 0=none)
+[19:28:41] [variants] ok hf-fetch  58s  
+[19:28:41] [variants] ram hf-fetch: ram 23 MiB of 179290 MiB, oom_kills 0
+[19:28:41] [variants] skip hf-30s (not in FV_CELLS)
+[19:28:41] [variants] r2: no python3 in the image: apt-get install python3 (r2-apt.log)
+[19:28:46] [variants] r2 hf-30s-rebased: fetch sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004 (28.93 GB) into /fvscratch/weights
+[19:29:30] [variants] r2 hf-30s-rebased: weights ready: 1 tree(s), 28.93 GB fetched in 42.6s (679 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 11
+[19:29:30] [variants] ▶ hf-30s-rebased  env FASTVIDEO_TAE_DIR=/fvscratch/weights/auxiliary/tae /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast wan stream --weights /fvscratch/weights/sfwan21-1.3b --prompt A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed --seed 1024 --width 832 --height 480 --longlive /fvscratch/runs/variants/7175f61-1118184447-9576/hf-stage/dmd-model.pt --longlive-no-lora --run hf-30s-rebased,preset=history-forcing,rope=rebased,seconds=30,dump=1  (wall cap 3600s; 0=none)
+[19:30:21] [variants] ok hf-30s-rebased  50s  
+[19:30:21] [variants] ram hf-30s-rebased: ram 51403 MiB of 179290 MiB, oom_kills 0
+[19:30:21] [variants] ▶ hf-60s-rebased  env FASTVIDEO_TAE_DIR=/fvscratch/weights/auxiliary/tae /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast wan stream --weights /fvscratch/weights/sfwan21-1.3b --prompt A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed --seed 1024 --width 832 --height 480 --longlive /fvscratch/runs/variants/7175f61-1118184447-9576/hf-stage/dmd-model.pt --longlive-no-lora --run hf-60s-rebased,preset=history-forcing,rope=rebased,seconds=60,dump=1  (wall cap 3600s; 0=none)
+[19:31:44] [variants] ok hf-60s-rebased  83s  
+[19:31:44] [variants] ram hf-60s-rebased: ram 51650 MiB of 179290 MiB, oom_kills 0
+[19:31:44] [variants] skip sf-w21-30s (not in FV_CELLS)
+[19:31:45] [variants] ▶ esrgan-kernels  env FASTVIDEO_ESRGAN_WEIGHTS=/fvscratch/weights/auxiliary/tae/realesr-animevideov3.pth /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --mode fast kernels --groups esrgan  (wall cap 3600s; 0=none)
+[19:31:47] [variants] FAIL esrgan-kernels  1s  exit=1
+[19:31:47] [variants] ram esrgan-kernels: ram 530 MiB of 179290 MiB, oom_kills 0
+[PASS] kernels/bias_prelu_n3_c48_i33 {"cosine":1.0,"max_abs":0.0,"non_finite":0,"ref_norm":59.66032121776501,"rel_l2":0.0} (limits {"rel_l2":0.0})
+[PASS] kernels/esrgan_pack_f2_9x7_s4_down1 {"mismatched_bytes":0,"n":6048,"want_n":6048} (limits {"mismatched_bytes":0})
+[PASS] kernels/esrgan_pack_f2_9x7_s4_down2 {"mismatched_bytes":0,"n":1512,"want_n":1512} (limits {"mismatched_bytes":0})
+[PASS] kernels/esrgan_pack_f1_6x5_s2_down1 {"mismatched_bytes":0,"n":360,"want_n":360} (limits {"mismatched_bytes":0})
+[PASS] kernels/esrgan_pack_f3_24x16_s4_down4 {"mismatched_bytes":0,"n":3456,"want_n":3456} (limits {"mismatched_bytes":0})
+[PASS] kernels/esrgan_tiny_x4_device_vs_host {"fraction":0.0,"max_levels":0,"mismatched_bytes":0,"n":17280} (limits {"fraction_max":0.01,"max_levels":1})
+[PASS] kernels/esrgan_tiny_x3_device_vs_host {"fraction":0.0,"max_levels":0,"mismatched_bytes":0,"n":9720} (limits {"fraction_max":0.01,"max_levels":1})
+[PASS] kernels/esrgan_tiny_x2_device_vs_host {"fraction":0.0,"max_levels":0,"mismatched_bytes":0,"n":4320} (limits {"fraction_max":0.01,"max_levels":1})
+[FAIL] kernels/esrgan_real_x4_device_vs_host {"fraction":0.0715060763888889,"max_levels":1,"mismatched_bytes":1318,"n":18432} (limits {"fraction_max":0.01,"max_levels":1})
+[INFO] kernels/esrgan_480x272x81_x4 {"bytes":507617280,"fps":179.5997874168225,"out":"1920x1088","seconds":0.451002761,"weights":"/fvscratch/weights/auxiliary/tae/realesr-animevideov3.pth"}
+[FAIL] stage kernels → gpucheck-out/kernels.json (1.4s)
+check failed: 1 check(s) failed: kernels/esrgan_real_x4_device_vs_host: {"fraction":0.0715060763888889,"max_levels":1,"mismatched_bytes":1318,"n":18432} vs limits {"fraction_max":0.01,"max_levels":1}
+[19:31:47] [variants] skip upscale-h3-480p (not in FV_CELLS)
+[19:31:47] [variants] skip upscale-wan-480p (not in FV_CELLS)
+[19:31:47] [variants] skip plug4-branch (not in FV_CELLS)
+[19:31:47] [variants] skip plug4-merged (not in FV_CELLS)
+[19:31:47] [variants] skip plug4-branch-bf16 (not in FV_CELLS)
+[19:31:47] [variants] skip compare plug4-branch--plug4-merged (frames missing)
+[19:31:47] [variants] skip compare plug4-branch--plug4-branch-bf16 (frames missing)
+[19:31:47] [variants] matrix done

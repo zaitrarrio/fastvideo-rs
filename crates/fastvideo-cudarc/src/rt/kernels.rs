@@ -86,6 +86,8 @@ kernel_fns!(
     apply_rotary_bshd,
     repeat_kv,
     pack_rgb_u8,
+    bias_prelu_inplace,
+    esrgan_pack_rgb8,
     vsa_mma_attn,
     vsa_mma_attn_tma,
     vsa_tile_qkv,

@@ -1,0 +1,65 @@
+# LongLive-Plug's few-step adapter on the base H3 as an unmerged branch
+# (FASTVIDEO_H3_LORA_BRANCH, the default for the Plug recipes) against the
+# same adapter merged into the weights, and the branch on MXFP8 against the
+# branch on bf16 weights: docs/techniques.md "LongLive-Plug recipes",
+# docs/serve/research-longlive.md §12.10. A merge keeps only what survives the
+# device weight's rounding (the reference repository measured a third of the
+# adapter in bf16 and a tenth in MXFP8), so plug4-merged is expected far from
+# plug4-branch (the reference repository: 11 dB in bf16, the MXFP8 merge
+# stylised), and plug4-branch close to plug4-branch-bf16 (17 dB luma there).
+# One prompt and seed, 480p and TAEH3 to keep the three arms cheap; the frame
+# compares (compare-clips) follow the arms. Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "h3-plug"
+description = "LongLive-Plug 4-step on H3: the adapter as an unmerged branch against the merge, and the MXFP8 branch against the bf16 branch, at 832x480 with TAEH3"
+
+[workload]
+model = "h3"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+seconds = 5
+width = 832
+height = 480
+note = "runpod-matrix.sh's default PROMPT and SEED; 832x480, TAEH3 decode; the three arms share the base AdaLN cache (the adapter does not touch the AdaLN projections)"
+
+[lists]
+h3_common = ["--prompt", "{prompt}", "--seconds", "{seconds}", "--seed", "{seed}", "--text-encoder", "auto",
+  "--text-cache", "{scratch}/h3-text-cache", "--text-weights", "{weights}/h3-base", "--warm"]
+plug4 = ["--mode", "fast", "h3", "gen", "--weights", "{weights}/h3-base", "--h3-recipe", "h3-plug-4step", "--dense",
+  "--height", "{height}", "--width", "{width}", "--taeh3-weights", "{tae}/taeh3.safetensors", "--adaln-cache",
+  "{runs}/h3-plug-4step-480p-adaln.cache", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "plug4-branch"
+gate = "variant:h3-plug-4step"
+trees = ["h3-base", "longlive-plug/minimax-h3-few-step"]
+tae = "taeh3.safetensors"
+note = "the served default: the adapter as an unmerged branch, the base MXFP8 (sm_120's default FASTVIDEO_H3_QUANT)"
+argv = ["{@plug4}", "{@h3_common}"]
+
+[[arm]]
+name = "plug4-merged"
+gate = "variant:h3-plug-4step"
+trees = ["h3-base", "longlive-plug/minimax-h3-few-step"]
+tae = "taeh3.safetensors"
+note = "the old path: the adapter merged into the bf16 weights, then MXFP8"
+env = ["FASTVIDEO_H3_LORA_BRANCH=0"]
+argv = ["{@plug4}", "{@h3_common}"]
+
+[[arm]]
+name = "plug4-branch-bf16"
+gate = "variant:h3-plug-4step"
+trees = ["h3-base", "longlive-plug/minimax-h3-few-step"]
+tae = "taeh3.safetensors"
+note = "the branch on bf16 weights: the quality anchor the MXFP8 branch is measured against"
+env = ["FASTVIDEO_H3_QUANT=off"]
+argv = ["{@plug4}", "{@h3_common}"]
+
+[[compare]]
+baseline = "plug4-branch"
+candidate = "plug4-merged"
+
+[[compare]]
+baseline = "plug4-branch"
+candidate = "plug4-branch-bf16"

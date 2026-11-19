@@ -15,7 +15,7 @@ mod tests {
     /// `42da2570` (the single file before the split). Changing a kernel
     /// changes this on purpose; update it in the same commit.
     const KERNELS_CU_SHA256: &str =
-        "c9b61cd2b2677292eba5a83b6ec93ba744c69f51de3bec06accbaae9087cc0d3";
+        "1dbd3ac47cc82f83f0cc56511a1821ea9eb4a7721c13a03e0d913385e310a18f";
 
     fn sha256_hex(bytes: &[u8]) -> String {
         Sha256::digest(bytes)

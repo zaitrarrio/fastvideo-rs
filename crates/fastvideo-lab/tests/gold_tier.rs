@@ -219,6 +219,15 @@ fn gold_plan(lab: &Lab) -> (TreeSources, WeightsPlan) {
     (sources, plan)
 }
 
+/// Derived trees recorded in `weights-sha256.tsv` (and converted on a CPU
+/// box) that the owner has not published to R2 yet: the one gold arm that
+/// reads each is gated on it and skips (`weights incomplete`) until the
+/// `weights-r2.tsv` row lands, when this list empties again.
+const PENDING_R2: &[(&str, &str)] = &[(
+    "history-forcing-1.3b-safetensors",
+    "scripts/gpu/convert-history-forcing.py's output (docs/ports/wan.md \"History Forcing\"), hashes recorded 2026-11-18; the owner publishes it with r2-weights.py publish-dir",
+)];
+
 #[test]
 fn every_gold_arm_reads_trees_on_the_volume_or_in_r2() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
@@ -227,9 +236,13 @@ fn every_gold_arm_reads_trees_on_the_volume_or_in_r2() {
     let (sources, plan) = gold_plan(&lab);
     let (_, cells) = lab.resolve(GOLD_TIER, None).expect("tier");
     let mut from_r2 = 0;
+    let mut pending = Vec::new();
     for a in cells.iter().flat_map(|c| &c.arms) {
         for t in &a.trees {
             match sources.source(t) {
+                Source::Missing if PENDING_R2.iter().any(|(p, _)| p == t) => {
+                    pending.push((a.name.as_str(), t.as_str()));
+                }
                 Source::Missing => panic!("{}: {t} is neither on the EU volume nor in R2", a.name),
                 Source::R2(_) => from_r2 += 1,
                 Source::Volume(_) => {}
@@ -237,7 +250,21 @@ fn every_gold_arm_reads_trees_on_the_volume_or_in_r2() {
         }
     }
     assert!(from_r2 > 0);
-    assert_eq!(plan.arms.len(), 32, "every gold variant runs");
+    // Each pending tree is read by exactly its own variant's arm, and a tree
+    // published since must leave the list.
+    for (t, why) in PENDING_R2 {
+        assert_eq!(
+            pending.iter().filter(|(_, p)| p == t).count(),
+            1,
+            "{t}: pending ({why}) but read by {pending:?}"
+        );
+        assert!(
+            matches!(sources.source(t), Source::Missing),
+            "{t} is published: remove it from PENDING_R2"
+        );
+    }
+    assert_eq!(pending.len(), PENDING_R2.len(), "{pending:?}");
+    assert_eq!(plan.arms.len(), 35, "every gold variant runs (one of them, history-forcing-1.3b, skipped at its gate until its tree is published)");
     // The R2-only arms the volume tier skipped now fetch (ADR-0023 §3).
     for arm in [
         "fasth3-8step-dense",
@@ -247,6 +274,8 @@ fn every_gold_arm_reads_trees_on_the_volume_or_in_r2() {
         "vdn-h3",
         "h3-larry-turbo",
         "fasth3-trim-nvfp4",
+        "h3-plug-4step",
+        "h3-plug-cfg",
     ] {
         assert!(
             !plan.arm(arm).expect(arm).reads.is_empty(),
@@ -261,9 +290,10 @@ fn the_gold_container_disk_holds_its_largest_arm() {
     let tier = lab.tier(GOLD_TIER).expect("gold tier");
     let (_, plan) = gold_plan(&lab);
     // h3-8step (fasth3-8step-dense), 147.86 GB, the largest arm; every
-    // distinct tree fetched once (530.74 GB) in the tier's order.
+    // distinct tree fetched once (536.27 GB: 530.74 GB plus the two
+    // LongLive-Plug H3 adapter trees, 2.77 GB each) in the tier's order.
     assert_eq!(plan.peak_bytes, 147_857_050_891);
-    assert_eq!(plan.fetch_bytes, 530_738_800_689);
+    assert_eq!(plan.fetch_bytes, 536_274_519_897);
     let peak_gb = plan.peak_bytes.div_ceil(1_000_000_000);
     assert!(
         u64::from(tier.container_disk_gb) >= peak_gb + DISK_RESERVE_GB,

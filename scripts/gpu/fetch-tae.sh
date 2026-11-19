@@ -21,21 +21,40 @@
 #       fw22-taehv arms; docs/adr/0019-fv-lab.md §22, S6). The pin is
 #       fetch_taehv.sh's and weights-manifest.tsv's auxiliary/tae row.
 #
+#   realesr-animevideov3.pth    (not a TAE: Real-ESRGAN's compact x4 video
+#       upscaler, xinntao/Real-ESRGAN release v0.2.5.0, BSD-3, 2.5 MB; the
+#       `--upscale` of fv-cli generate / fv-gpucheck wan|h3 gen,
+#       crates/fastvideo-cudarc/src/rt/esrgan.rs, docs/ports/upscaler.md. It
+#       rides this same small-pinned-files fetch: a cell's `tae =
+#       "realesr-animevideov3.pth"` arm reads it as {tae}/realesr-animevideov3.pth;
+#       the volume's copy is auxiliary/upscalers/, weights-manifest.tsv's
+#       auxiliary/upscalers/ url: row, verify-weights.sh aux.)
+#
 #   fetch-tae.sh [dest]    -> dest/taeh3.safetensors, dest/taeltx2_3_wide.safetensors,
-#                             dest/taew2_1.safetensors, dest/taew2_2.safetensors
+#                             dest/taew2_1.safetensors, dest/taew2_2.safetensors,
+#                             dest/realesr-animevideov3.pth
 #
 # The weight volume's copy comes first: $FV_AUX_DIR/tae (default
-# <weights>/auxiliary/tae, the auxiliary/ rows of weights-manifest.tsv) is
-# copied when its SHA-256 matches; the pinned URL is the fallback.
+# <weights>/auxiliary/tae, the auxiliary/ rows of weights-manifest.tsv;
+# $FV_AUX_DIR/upscalers for the upscaler) is copied when its SHA-256 matches;
+# the pinned URL is the fallback.
 set -euo pipefail
 dest="${1:-${FV_SCRATCH:-/fvscratch}/tae}"
 raw="https://raw.githubusercontent.com/madebyollin/taehv"
-vol="${FV_AUX_DIR:-${FV_WEIGHTS:-${FV_WORK:-/workspace}/weights}/auxiliary}/tae"
+aux="${FV_AUX_DIR:-${FV_WEIGHTS:-${FV_WORK:-/workspace}/weights}/auxiliary}"
 mkdir -p "$dest"
 
+# fetch NAME COMMIT|URL SHA256 SIZE: a taehv commit (the file at
+# $raw/COMMIT/safetensors/NAME, volume copy $aux/tae/NAME) or a full https URL
+# (volume copy $aux/upscalers/NAME).
 fetch() {
-  local name="$1" commit="$2" sha="$3" size="$4" out part got
+  local name="$1" commit="$2" sha="$3" size="$4" out part got url vol
   out="$dest/$name"
+  if [[ "$commit" == https://* ]]; then
+    url="$commit"; vol="$aux/upscalers"
+  else
+    url="$raw/$commit/safetensors/$name"; vol="$aux/tae"
+  fi
   if [[ -f "$out" ]] && [[ "$(sha256sum "$out" | awk '{print $1}')" == "$sha" ]]; then
     echo "tae ok (cached): $out"
     return 0
@@ -50,7 +69,7 @@ fetch() {
   fi
   rm -f "$part"
   curl -fsSL --proto '=https' --retry 5 --retry-delay 3 --retry-all-errors \
-    -o "$part" "$raw/$commit/safetensors/$name"
+    -o "$part" "$url"
   got="$(sha256sum "$part" | awk '{print $1}')"
   if [[ "$got" != "$sha" ]]; then
     echo "tae FAIL: $name sha256 $got, expected $sha" >&2
@@ -71,4 +90,6 @@ fetch taew2_1.safetensors e589fddc076e77f5ba8cd6baabe4ba3260b261cd \
   04766eac0221b5390b985ae3fdcca652cbb4b1e8b82b28ea7ff89dfad1b1a93f 22642902 || rc=1
 fetch taew2_2.safetensors e589fddc076e77f5ba8cd6baabe4ba3260b261cd \
   b84609b2a133d48434bd9636bfcb44bf05168dc436e2d3cecf26256faa1f5325 22848048 || rc=1
+fetch realesr-animevideov3.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth \
+  b8a8376811077954d82ca3fcf476f1ac3da3e8a68a4f4d71363008000a18b75d 2504012 || rc=1
 exit $rc
