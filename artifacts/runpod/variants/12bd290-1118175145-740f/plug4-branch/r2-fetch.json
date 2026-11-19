@@ -1,1 +1,0 @@
-{"state": "done", "bytes_done": 2768406790, "bytes_total": 2768406790, "elapsed_s": 31.7, "mb_per_s": 87.3, "trees": {"longlive-plug/minimax-h3-few-step": "ready"}, "error": null, "stream": false, "ready": false, "retries": 0, "corrupt_parts": 0, "refreshes": 0, "resumed_parts": 0, "slow_restarts": 1, "boosts": 0}

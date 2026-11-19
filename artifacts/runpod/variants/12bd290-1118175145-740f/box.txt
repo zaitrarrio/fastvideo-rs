@@ -1,4 +1,0 @@
-image_build_id=62c14761ff37278a
-NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.112.07
-cpus=27 mem=755G
-cgroup=v2 /sys/fs/cgroup pod_ram_limit_mib=89645 oom_kills=0
