@@ -54,7 +54,9 @@ source "$ROOT/scripts/gpu/runpod-price.sh"
 source "$ROOT/scripts/gpu/runpod-cuda.sh"
 # shellcheck source-path=SCRIPTDIR source=../../../gpu/volumes.sh
 source "$ROOT/scripts/gpu/volumes.sh"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod's REST API v2 (api.runpod.io/v2; v1 at rest.runpod.io is retired and
+# its name no longer resolves). Pods: POST /pods, GET /pods/{id}, DELETE /pods/{id}.
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GQL="https://api.runpod.io/graphql"
 PRESET="${FV_DEMO_PRESET:-sfwan}"
 WEIGHTS="${FV_DEMO_WEIGHTS:-volume}"
@@ -155,7 +157,7 @@ payload() { # image gpu name keyhash
   local src_env='{}' vol='{}' dcs='[]'
   case "$WEIGHTS" in
     volume)
-      vol="$(plan '{networkVolumeId: .volume.id, volumeMountPath: .volume.mount}')"
+      vol="$(plan '{mounts: {network: [{volumeId: .volume.id, path: .volume.mount}]}}')"
       dcs="$(plan '[.volume.dc]')"
       src_env='{"FV_WEIGHTS_SOURCE": "volume"}' ;;
     r2)
@@ -175,10 +177,11 @@ payload() { # image gpu name keyhash
     --arg weights "$WEIGHTS_DIR" --arg cf_account "$CF_ACCOUNT" --arg cf_token "$CF_TOKEN" \
     --argjson src "$src_env" --argjson vol "$vol" --argjson dcs "$dcs" \
     --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
-    name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
-    gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: $disk, volumeInGb: 0,
+    name: $name, image: $image, cloud: "SECURE",
+    gpu: ({id: $gpu, count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
+    disk: $disk,
     ports: ["8000/http", "8001/http"],
-    dockerEntrypoint: ["/bin/bash", "-c"], dockerStartCmd: [$cmd],
+    entrypoint: ["/bin/bash", "-c"], cmd: [$cmd],
     env: ({
       NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video",
       FV_WORKER_TOML_B64: $toml, FV_WEIGHTS: $weights, FV_STATE_DIR: "/fvstate",
@@ -187,8 +190,7 @@ payload() { # image gpu name keyhash
       FV_CF_ACCOUNT_ID: $cf_account, FV_CF_STREAM_API_TOKEN: $cf_token,
       FV_DEMO_HTML_B64: $html
     } + $src)}
-    + $vol + (if $dcs == [] then {} else {dataCenterIds: $dcs} end)
-    + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)'
+    + $vol + (if $dcs == [] then {} else {dataCenterIds: $dcs} end)'
 }
 
 describe() {
@@ -206,7 +208,7 @@ cmd_plan() {
   describe
   IFS='|' read -r -a types <<<"${GPUS//,/|}"
   payload "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda" "${types[0]}" "fv-stream-demo-plan" "<sha256 of the run key>" \
-    | jq '.env.FV_DEMO_HTML_B64 = "<demo.html>" | .env.FV_CF_STREAM_API_TOKEN = "<the Cloudflare Stream token>" | .env.FV_WORKER_TOML_B64 = "<\(.env.FV_WORKER_TOML_B64 | @base64d | length) bytes of config>" | .dockerStartCmd = ["<\(.dockerStartCmd[0] | length) bytes>"]'
+    | jq '.env.FV_DEMO_HTML_B64 = "<demo.html>" | .env.FV_CF_STREAM_API_TOKEN = "<the Cloudflare Stream token>" | .env.FV_WORKER_TOML_B64 = "<\(.env.FV_WORKER_TOML_B64 | @base64d | length) bytes of config>" | .cmd = ["<\(.cmd[0] | length) bytes>"]'
 }
 
 cmd_up() {
@@ -232,7 +234,7 @@ cmd_up() {
     if ! resp="$(rest POST /pods "$(payload "$image" "$gpu" "$name" "$keyhash")" 2>&1)"; then
       log "no pod on $gpu: $(head -c 200 <<<"$resp")"; continue
     fi
-    pod="$(jq -r '.id // empty' <<<"$resp")"; dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
+    pod="$(jq -r '.id // empty' <<<"$resp")"; dph="$(jq -r '.cost // 0' <<<"$resp")"
     [[ -n "$pod" ]] || { log "no id: $(head -c 200 <<<"$resp")"; continue; }
     ledger "pod-created $pod $name gpu=$gpu dph=$dph image=$image demo preset=$(plan .preset) weights=$WEIGHTS"
     if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then
@@ -264,7 +266,7 @@ cmd_up() {
 cmd_status() {
   : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
   local pod; pod="$(st pod)"; [[ -n "$pod" ]] || die "no pod in $STATE"
-  rest GET "/pods/$pod" | jq -c '{id, desiredStatus, costPerHr, machine: .machine.gpuTypeId}'
+  rest GET "/pods/$pod" | jq -c '{id, status, cost, gpu: .gpu.id, dc: .dataCenterId}'
   curl -sS --max-time 20 -H "Authorization: Bearer $(st key)" "https://$pod-8000.proxy.runpod.net/fv/v1/streams" | jq -c '.data[]? | {id, mode, state: .status.state, output: .status.output_state, playback: .playback.whep_url}' 2>/dev/null || true
 }
 
