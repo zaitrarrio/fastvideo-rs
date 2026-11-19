@@ -2,6 +2,47 @@
 
 Project code: FVID
 
+### FVID · 2026-11-12 · FVID-2026-11-12-defer-wo-1b
+- Trigger: after WO-1a (PR #245) every module of a built SM loads embedded cubins; WO-1b (a `jit` feature gating run-time NVRTC) was next
+- Options: implement WO-1b now; defer it to ADR-0024 step 4
+- Decision: **(owner) defer WO-1b** to step 4 (when libnvrtc leaves the image); FVID-2026-11-07-no-jit-build-gate (D3) is suspended with it
+- Reason: owner chose to defer: WO-1b removes no library (cuBLASLt / cuDNN engines still load libnvrtc until steps 2–3 and a measurement say otherwise) and would drop the NVRTC fallback that lets an unbuilt GPU generation (e.g. sm_110) run; its cost (seven call sites, build.rs gate, CI feature changes, feature-unification risk) is better spent at step 4
+- Reversibility: cheap (the work order stays in docs/plan, unchanged)
+- Executed by: this PR (docs only)
+- ADR: docs/adr/0024-driver-only-runtime.md (step 1b, D3)
+- Verification: n/a (no code)
+
+### FVID · 2026-11-12 · FVID-2026-11-12-moe-aot-build-time-nvrtc
+- Trigger: the WO-1a GPU gate (fv-gpucheck `moe_aot`, RTX PRO 6000, PR #245 at `045bc79`): nvcc `-O3 --use_fast_math --ftz=true` cubins differed from the run-time NVRTC module in 4 of 12 checks (sigmoid_f 1652/4105, topk_last_norm/val 107/296, scatter_add_rows 352/1824, moe_group_topk/plain val 220/328). Root of the premise error: cudarc 0.17's `CompileOptions { use_fast_math: Some(true) }` emits only `--fmad=true`, so the served MoE module was never fast math (it is `--ftz=true --fmad=true`, IEEE div/sqrt/expf)
+- Options: compile `AOT_MOE` with libnvrtc at build time using the runtime's exact option strings; keep nvcc fast math and re-measure LingBot gold with tolerances; diff nvcc vs NVRTC PTX first, then choose
+- Decision: **(owner) compile the MoE AOT cubins with NVRTC at build time** (pinned libnvrtc 13.4 of the build image, option strings shared with the runtime in `rt/moe_nvrtc_opts.rs`); supersedes the flags of FVID-2026-11-07-moe-aot-flags
+- Reason: owner chose option 1: same compiler, same source, same options as the served path, so outputs match by construction and the served binary still needs no NVRTC
+- Reversibility: cheap (build.rs helper; `fastvideo-cudarc` gains a cudarc build-dependency, same crate and version as the runtime one)
+- Executed by: PR #245
+- ADR: docs/adr/0024-driver-only-runtime.md (D1)
+- Verification: done 2026-11-12: fv-gpucheck `moe_aot` on one RTX PRO 6000 at `a9e6fa5`, 12/12 bit-equal (origin `cubin sm120 nvrtc 13.4` vs `nvrtc sass sm_120`); CI green. The b9ee5a9 run's one difference (scatter_add_rows) was the gate's own repeated destination indices racing in the non-atomic kernel, fixed in the gate
+
+### FVID · 2026-11-07 · FVID-2026-11-07-moe-aot-flags
+- Trigger: ADR-0024 step 1a: the MoE kernels (`rt/ops.rs` `load_moe_kernels`) always NVRTC-compile `moe_kernel_src()` with fast math + FTZ, while the same region in the main AOT module is compiled with the reference (non-fast) flags
+- Options: own AOT table compiled with fast math + FTZ to match the NVRTC options; load the MoE entry points from the main AOT module (reference flags) and re-measure LingBot gold numbers
+- Decision: **(owner) compile the MoE AOT cubins with fast math** (+ FTZ, the nvcc equivalent of the NVRTC options), as their own `AOT_MOE` table. Superseded 2026-11-12 by FVID-2026-11-12-moe-aot-build-time-nvrtc (the GPU gate failed: the NVRTC module was never fast math)
+- Reason: owner chose the option that keeps served outputs bit-identical (plan §1); flag equivalence is proven by the gpucheck `moe_aot` bit-equality group, not assumed
+- Reversibility: cheap (one build.rs helper and one loader)
+- Executed by: pending (WO-1a, docs/plan/2026-11-07-driver-only-runtime-wo.md)
+- ADR: docs/adr/0024-driver-only-runtime.md (D1)
+- Verification: pending (WO-1a acceptance criteria)
+
+### FVID · 2026-11-07 · FVID-2026-11-07-no-jit-build-gate
+- Status: suspended 2026-11-12 with WO-1b (FVID-2026-11-12-defer-wo-1b)
+- Trigger: ADR-0024 step 1b: without the new `jit` feature a `cuda` build with no nvcc would embed no kernels, and `task build:cuda` runs `cargo check` with no nvcc
+- Options: `build:cuda` checks with `--features cuda,jit` and build.rs fails a `cuda` build without `jit` and without nvcc; keep the build.rs warning and rely on the runtime `KernelsUnavailable` error
+- Decision: **(owner) adopt the recommendation: `task build:cuda` checks `--features cuda,jit`; build.rs panics for `cuda` without `jit` when no nvcc is found, naming `NVCC` and the `jit` feature**
+- Reason: owner adopted the recommendation: a kernel-less served binary is caught at build time, not on a rented GPU
+- Reversibility: cheap (Taskfile line, one build.rs check)
+- Executed by: pending (WO-1b)
+- ADR: docs/adr/0024-driver-only-runtime.md (D3)
+- Verification: pending (WO-1b acceptance criteria)
+
 ### FVID · 2026-10-24 · FVID-2026-10-24-metronome-deadline-slack
 - Trigger: `stream_causal`'s paused-time session-limit tests hung twice (CI job 120998352681, `check.sh` on the build pod). Root cause: when the first block reaches the causal pacer while tokio's paused clock stands at a timer-wheel slot boundary (e.g. 1.984 s) rather than a whole second, the metronome schedule is anchored on a millisecond that f64 cannot represent; later the clock lands exactly on a deadline that the f64 schedule places a few ulps later (64.109 s vs 64.10900000000001 s), `Metronome::poll` asks for a 7e-15 s wait, `Duration::from_secs_f64` makes it 0 ns, tokio fires that sleep at once without advancing the paused clock, and the pacer spins forever without ticking or closing `ticks`
 - Options: a tokio timeout or retry in the test; round the wait up in the causal pacer only; let `Metronome::poll` treat a deadline within a small slack as reached

@@ -29,6 +29,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The MoE module's NVRTC option strings, shared with the runtime
+/// (`rt::moe_nvrtc_opts`).
+#[path = "src/rt/moe_nvrtc_opts.rs"]
+mod moe_nvrtc_opts;
+
 /// The NVRTC / nvcc kernel source, one region per file, in this order. The
 /// concatenation is byte for byte the former `src/wan/kernels.cu` (sha256
 /// `c9b61cd2b2677292eba5a83b6ec93ba744c69f51de3bec06accbaae9087cc0d3`, checked
@@ -73,6 +78,12 @@ fn dc_wanted(sm: u32, sms: &[u32]) -> bool {
     sms.contains(&sm) || (sm == 103 && sms.contains(&100))
 }
 const DEFAULT_SMS: &str = "75,80,86,89,90,100,120";
+/// What `rt::ops::moe_kernel_src()` puts before the MoE region; the
+/// `moe_aot_source_is_moe_kernel_src` test keeps the two in step.
+const MOE_PREFIX: &str =
+    "#ifndef IDX\n#define IDX() ((long)blockIdx.x * (long)blockDim.x + (long)threadIdx.x)\n#endif\n";
+const MOE_BEGIN: &str = "// ==== region: moe ====";
+const MOE_END: &str = "// ==== end region: moe ====";
 
 fn find_nvcc() -> Option<PathBuf> {
     if let Ok(p) = env::var("NVCC") {
@@ -239,6 +250,8 @@ fn main() {
     let sage_table = out.join("aot_attn_sage.rs");
     let vdn_table = out.join("aot_h3_vdn.rs");
     let fp4_table = out.join("aot_attn_fp4.rs");
+    let moe_table = out.join("aot_moe.rs");
+    let moe_cu = write_moe_src(&out, &kernel_cu);
     let cuda_on = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let nvcc = if cuda_on { find_nvcc() } else { None };
     // The oxide Tile-IR cubins are embedded with the `oxide` feature only
@@ -277,6 +290,7 @@ fn main() {
         write_module_table(&sage_table, "AOT_ATTN_SAGE", "");
         write_module_table(&vdn_table, "AOT_H3_VDN", "");
         write_cubin_table(&fp4_table, "AOT_ATTN_FP4", "");
+        write_moe_table(&moe_table, "", None, "");
         write_aot(&table, "", &oxide, "");
         return;
     };
@@ -388,6 +402,13 @@ fn main() {
         &precise_module_entries(&nvcc, &out, &sms, SRC_VDN, "h3_vdn"),
     );
     write_cubin_table(&fp4_table, "AOT_ATTN_FP4", &fp4_entries(&nvcc, &out, &sms));
+    let moe_nvrtc = nvrtc_version();
+    write_moe_table(
+        &moe_table,
+        &moe_entries(&out, &sms, &moe_cu),
+        Some(&sms),
+        &moe_nvrtc,
+    );
     println!(
         "cargo:warning=fastvideo-cudarc: embedded cubins for sm {:?} via {}",
         sms,
@@ -419,6 +440,135 @@ fn write_kernel_src(out: &Path) -> PathBuf {
     let gen = out.join("kernel_src.rs");
     fs::write(&gen, rs).unwrap_or_else(|e| panic!("write {}: {e}", gen.display()));
     cu
+}
+
+/// `$OUT_DIR/moe_aot.cu`: the MoE region of `kernels.cu` with the prefix
+/// `rt::ops::moe_kernel_src()` adds, i.e. exactly the string NVRTC compiles.
+fn write_moe_src(out: &Path, kernel_cu: &Path) -> PathBuf {
+    let all = fs::read_to_string(kernel_cu)
+        .unwrap_or_else(|e| panic!("read {}: {e}", kernel_cu.display()));
+    let start = all.find(MOE_BEGIN).expect("kernels.cu moe region");
+    let end = all.find(MOE_END).expect("kernels.cu moe end");
+    let cu = out.join("moe_aot.cu");
+    fs::write(&cu, format!("{MOE_PREFIX}{}", &all[start..end]))
+        .unwrap_or_else(|e| panic!("write {}: {e}", cu.display()));
+    cu
+}
+
+/// `$OUT_DIR/aot_moe.rs`: `AOT_MOE` (sm, cubin, ptx), whether it was built
+/// (only where nvcc, i.e. the toolkit, was found), the SMs it was asked for
+/// (the coverage test's input) and the libnvrtc that compiled it.
+fn write_moe_table(table: &Path, entries: &str, sms: Option<&[u32]>, nvrtc: &str) {
+    let list = sms
+        .unwrap_or(&[])
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    fs::write(
+        table,
+        format!(
+            "pub static AOT_MOE: &[(u32, &[u8], &str)] = &[\n{entries}];\n\
+             pub const AOT_MOE_BUILT: bool = {};\n\
+             pub const AOT_MOE_SMS: &[u32] = &[{list}];\n\
+             pub const AOT_MOE_NVRTC: &str = {nvrtc:?};\n",
+            sms.is_some()
+        ),
+    )
+    .unwrap_or_else(|e| panic!("write {}: {e}", table.display()));
+}
+
+/// The LingBot MoE module (`moe_aot.cu`) for every SM in the list, cubin +
+/// PTX, compiled by NVRTC itself (the pinned libnvrtc of the build image, the
+/// same 13.4 the runtime image ships) with exactly the option strings the
+/// runtime NVRTC path passes ([`moe_nvrtc_opts::MOE_NVRTC_OPTIONS`]): owner
+/// decision FVID-2026-11-12-moe-aot-build-time-nvrtc, ADR-0024 step 1a. The
+/// cubin is then the bytes the runtime would have compiled, so the served
+/// outputs cannot move; fv-gpucheck's `moe_aot` group checks it bit for bit.
+/// (nvcc `--use_fast_math --ftz=true` did not: 4 of 12 checks differed on an
+/// RTX PRO 6000, because cudarc's `use_fast_math` only adds `--fmad=true`.)
+fn moe_entries(out: &Path, sms: &[u32], src: &Path) -> String {
+    let text = fs::read_to_string(src).unwrap_or_else(|e| panic!("read {}: {e}", src.display()));
+    let mut entries = String::new();
+    for sm in sms {
+        let cubin = out.join(format!("moe_sm{sm}.cubin"));
+        let ptx = out.join(format!("moe_compute{sm}.ptx"));
+        let bytes = nvrtc_compile(&text, &format!("sm_{sm}"), true);
+        fs::write(&cubin, bytes).unwrap_or_else(|e| panic!("write {}: {e}", cubin.display()));
+        let bytes = nvrtc_compile(&text, &format!("compute_{sm}"), false);
+        fs::write(&ptx, bytes).unwrap_or_else(|e| panic!("write {}: {e}", ptx.display()));
+        entries.push_str(&format!(
+            "    ({sm}, include_bytes!({:?}), include_str!({:?})),\n",
+            cubin.display(),
+            ptx.display()
+        ));
+    }
+    entries
+}
+
+/// The libnvrtc version the MoE table was compiled with, as `major.minor`.
+fn nvrtc_version() -> String {
+    use cudarc::nvrtc::sys;
+    // SAFETY: two valid out-pointers; the library loads on first use (and
+    // panics inside cudarc when it is missing, hence catch_unwind).
+    let ok = std::panic::catch_unwind(|| {
+        let (mut major, mut minor) = (0i32, 0i32);
+        let r = unsafe { sys::nvrtcVersion(&mut major, &mut minor) };
+        (r, major, minor)
+    });
+    match ok {
+        Ok((r, major, minor)) if r == sys::nvrtcResult::NVRTC_SUCCESS => format!("{major}.{minor}"),
+        Ok((r, _, _)) => panic!("nvrtcVersion: {r:?}"),
+        Err(_) => panic!(
+            "the MoE AOT table needs libnvrtc at build time (nvcc was found, so the \
+             CUDA toolkit is expected): libnvrtc.so did not load"
+        ),
+    }
+}
+
+/// NVRTC `src` for `arch` with the MoE option strings: a cubin for a real
+/// `sm_XY` (`sass`), PTX for a `compute_XY`. Any failure is a build error.
+fn nvrtc_compile(src: &str, arch: &str, sass: bool) -> Vec<u8> {
+    use cudarc::nvrtc::{result, sys};
+    use std::ffi::{CStr, CString};
+    let c_src = CString::new(src).expect("moe source has no NUL");
+    let mut options: Vec<String> = moe_nvrtc_opts::MOE_NVRTC_OPTIONS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    options.push(format!("--gpu-architecture={arch}"));
+    let prog = result::create_program(&c_src, None)
+        .unwrap_or_else(|e| panic!("nvrtc create (moe {arch}): {e:?}"));
+    // SAFETY: `prog` comes from `create_program`, `c_src` outlives it, and it
+    // is destroyed exactly once at the end.
+    let out = unsafe {
+        if let Err(e) = result::compile_program(prog, &options) {
+            let log = result::get_program_log(prog)
+                .ok()
+                .map(|l| CStr::from_ptr(l.as_ptr()).to_string_lossy().into_owned())
+                .unwrap_or_default();
+            panic!("nvrtc moe {arch} {options:?}: {e:?}\n{log}");
+        }
+        if sass {
+            let mut size = 0usize;
+            sys::nvrtcGetCUBINSize(prog, &mut size)
+                .result()
+                .unwrap_or_else(|e| panic!("nvrtcGetCUBINSize moe {arch}: {e:?}"));
+            assert!(size > 0, "nvrtc moe {arch}: empty cubin");
+            let mut buf = vec![0u8; size];
+            sys::nvrtcGetCUBIN(prog, buf.as_mut_ptr().cast())
+                .result()
+                .unwrap_or_else(|e| panic!("nvrtcGetCUBIN moe {arch}: {e:?}"));
+            buf
+        } else {
+            let ptx =
+                result::get_ptx(prog).unwrap_or_else(|e| panic!("nvrtc ptx moe {arch}: {e:?}"));
+            CStr::from_ptr(ptx.as_ptr()).to_bytes().to_vec()
+        }
+    };
+    // SAFETY: created above, not destroyed yet.
+    let _ = unsafe { result::destroy_program(prog) };
+    out
 }
 
 fn write_fp8(table: &Path, entries: &str) {

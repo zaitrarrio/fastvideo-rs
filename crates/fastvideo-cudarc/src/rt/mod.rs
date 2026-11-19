@@ -51,6 +51,9 @@ pub mod nvfp4_gemm;
 pub mod nvfp4_linear;
 #[cfg(feature = "cuda")]
 pub mod nvrtc_sass;
+// Read by build.rs (`#[path]`) and the cuda-gated MoE test, not by crate code.
+#[allow(dead_code)]
+pub(crate) mod moe_nvrtc_opts;
 pub mod offload;
 pub mod ops;
 pub mod prompt_cache;
