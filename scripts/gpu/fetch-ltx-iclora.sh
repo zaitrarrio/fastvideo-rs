@@ -33,7 +33,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=volumes.sh
 source "$HERE/volumes.sh"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 CAP_S="${FV_POD_CAP_S:-3600}"
 PREFIX="${FV_POD_PREFIX:-fv-ltxi}"
 FLAVORS="${FV_CPU_FLAVORS:-cpu3c cpu5c cpu3g}"
@@ -53,7 +54,7 @@ rest() {
   curl -sS --fail-with-body -X "$method" -H "Authorization: Bearer $RUNPOD_API_KEY" \
     -H 'content-type: application/json' ${body:+-d "$body"} "$API$path"
 }
-vol() { rest GET /networkvolumes | jq -r --arg n "$1" '.[] | select(.name==$n) | "\(.id) \(.dataCenterId)"' | head -1; }
+vol() { rest GET /network-volumes | jq -r --arg n "$1" '.networkVolumes[] | select(.name==$n) | "\(.id) \(.dataCenter)"' | head -1; }
 
 py_b64="$(base64 -w0 "$HERE/fetch-ltx-iclora.py")"
 pods=()
@@ -75,20 +76,27 @@ start() {
   local run='mkdir -p /srv && (python -m http.server 8000 --directory /srv >/dev/null 2>&1 &) && echo "$FETCH_PY" | base64 -d > /opt/fetch.py && python /opt/fetch.py; sleep infinity'
   payload="$(jq -n --arg name "$PREFIX-fetch-$role-$(date -u +%m%d%H%M)" --arg vol "$id" --arg dc "$dc" \
     --arg run "$run" --arg py "$py_b64" --arg role "$role" --arg src "$src" \
-    --argjson fl "$(jq -nc --arg f "$FLAVORS" '$f|split(" ")')" --argjson vc "$VCPUS" \
+    --arg fl "${FLAVORS%% *}" --argjson vc "$VCPUS" \
     --arg repo "$IC_REPO" --arg rev "$IC_REV" --arg dest "$IC_DEST" --arg files "$IC_FILES" '{
-      name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
-      cpuFlavorIds: $fl, cpuFlavorPriority: "availability", vcpuCount: $vc,
-      containerDiskInGb: 10, networkVolumeId: $vol, volumeMountPath: "/workspace",
+      name: $name, image: "python:3.12-slim", cloud: "SECURE",
+      cpu: {id: $fl, vcpuCount: $vc},
+      disk: 10, mounts: {network: [{volumeId: $vol, path: "/workspace"}]},
       dataCenterIds: [$dc], ports: ["8000/http"],
-      dockerStartCmd: ["/bin/bash","-lc",$run],
+      cmd: ["/bin/bash","-lc",$run],
       env: {FETCH_PY: $py, ROLE: $role, SRC_URL: $src, IC_REPO: $repo, IC_REV: $rev, IC_DEST: $dest, IC_FILES: $files}
     }')"
-  resp="$(rest POST /pods "$payload")"
+  # v2 takes one CPU flavor per create (v1 listed FV_CPU_FLAVORS with
+  # cpuFlavorPriority "availability"): the flavors are tried in order.
+  local flavor resp=""
+  for flavor in $FLAVORS; do
+    if resp="$(rest POST /pods "$(jq -c --arg f "$flavor" '.cpu.id = $f' <<<"$payload")" 2>&1)"; then break; fi
+    log "no $flavor pod in $dc: $(head -c 200 <<<"$resp")"; resp=""
+  done
+  [[ -n "$resp" ]] || { log "pod create failed (every flavor)"; exit 1; }
   local pid
   pid="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$pid" ]] || { log "pod create failed: $resp"; exit 1; }
-  log "pod $pid ($role on $name, dc $dc) \$$(jq -r '.costPerHr' <<<"$resp")/hr"
+  log "pod $pid ($role on $name, dc $dc) \$$(jq -r '.cost' <<<"$resp")/hr"
   ( sleep "$CAP_S"; rest DELETE "/pods/$pid" >/dev/null 2>&1 || true ) >/dev/null 2>&1 &
   disown || true
   echo "$pid"
@@ -106,7 +114,7 @@ wait_done() {
     fi
     (( $(date +%s) - t0 < CAP_S )) || { log "pod $p: no DONE within ${CAP_S}s"; return 1; }
     # A pod Runpod exits at start (no CPU stock in the DC) never answers.
-    if [[ "$(rest GET "/pods/$p" 2>/dev/null | jq -r '.desiredStatus // empty')" == EXITED ]]; then
+    if [[ "$(rest GET "/pods/$p" 2>/dev/null | jq -r '.status // empty')" == EXITED ]]; then
       log "pod $p exited without DONE"; echo '{"ok": false, "error": "pod exited"}'; return 1
     fi
     sleep 20

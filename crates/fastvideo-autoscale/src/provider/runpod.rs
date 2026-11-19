@@ -1,13 +1,14 @@
 //! Runpod over its public APIs (feature `runpod`).
 //!
-//! - [`RunpodServerless`]: steers a serverless endpoint. Observes REST v1
-//!   `GET /endpoints/{id}` (settings) and the queue API `GET /{id}/health`
-//!   (workers idle / running / initializing); applies `PATCH /endpoints/{id}`
-//!   with only the changed fields (`workersMin`, `workersMax`,
-//!   `idleTimeout`, `scalerType`, `scalerValue`). Runpod starts and reaps
-//!   the workers; lowering `workersMin` never stops a busy one, and the
-//!   policy never sets `workersMax` below the busy workers.
-//! - [`RunpodPods`]: pods from a template (REST v1 `POST /pods`), named
+//! - [`RunpodServerless`]: steers a serverless endpoint. Observes REST v2
+//!   `GET /serverless/{id}` (settings: `workers: {min, max, idleTimeout}`,
+//!   `scaling: {type, queueDelay | requestCount}`) and the queue API
+//!   `GET /{id}/health` (workers idle / running / initializing); applies
+//!   `PATCH /serverless/{id}` with only the changed fields, in the same
+//!   nested shape. Runpod starts and reaps the workers; lowering
+//!   `workers.min` never stops a busy one, and the policy never sets
+//!   `workers.max` below the busy workers.
+//! - [`RunpodPods`]: pods from a template (REST v2 `POST /pods`), named
 //!   `fv-as-<pool>-<n>`, across the pool's GPU types and region+volume
 //!   placements in preference order (out of stock → next; no
 //!   `allowedCudaVersions` filter). Ready = the worker URL answers the
@@ -194,10 +195,26 @@ impl RunpodApi {
         Ok(shared::account_of(ProviderKind::RunpodPod, &data)?.balance_usd)
     }
 
+    /// Every pod of the account: the v2 listing's `pods` items, every page
+    /// (`pagination.nextCursor`, fv-deploy's `list_items` / `next_cursor`).
+    /// An answer that is not a listing is an error, never "no pods" (read
+    /// as empty, every pod of the pool would look gone).
     pub async fn pods(&self) -> Result<Vec<Value>, ProviderError> {
-        match self.json(&self.requests().pods(), "GET pods").await? {
-            Value::Array(v) => Ok(v),
-            _ => Ok(Vec::new()),
+        let what = "GET pods";
+        let mut items = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let v = self
+                .json(&self.requests().list_page("/pods", cursor.as_deref()), what)
+                .await?;
+            let page = shared::list_items(&v, "pods").ok_or_else(|| {
+                ProviderError::Api(format!("{what}: the answer is not a list of `pods`"))
+            })?;
+            items.extend(page);
+            match shared::next_cursor(&v) {
+                Some(c) if Some(&c) != cursor.as_ref() => cursor = Some(c),
+                _ => return Ok(items),
+            }
         }
     }
 
@@ -206,7 +223,7 @@ impl RunpodApi {
             .await
     }
 
-    /// A template's `env` (REST v1 `GET /templates/{templateId}`; an absent `env` is empty).
+    /// A template's `env` (REST v2 `GET /templates/{templateId}`; an absent `env` is empty).
     pub async fn template_env(&self, id: &str) -> Result<Map<String, Value>, ProviderError> {
         let v = self
             .json(&self.requests().template(id), "GET template")
@@ -225,43 +242,82 @@ impl RunpodApi {
 /// Shared with fv-deploy (`fastvideo_deploy::provider::runpod`).
 pub use fastvideo_deploy::provider::runpod::template_env_of;
 
-/// Endpoint settings from a REST v1 endpoint object.
+/// Endpoint settings from a REST v2 endpoint object: `workers: {min, max,
+/// idleTimeout}` (v1's flat `workersMin` / `workersMax` / `idleTimeout`;
+/// v2 omits `idleTimeout` with `REQUEST_COUNT`, read as 0) and `scaling:
+/// {type, queueDelay | requestCount}` (v1's `scalerType` / `scalerValue`;
+/// `queueDelay` is a float in v2, read as whole seconds).
 pub fn endpoint_settings(v: &Value) -> EndpointSettings {
-    let u = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0) as u32;
+    let u = |p: &str| {
+        v.pointer(p)
+            .and_then(Value::as_f64)
+            .filter(|x| x.is_finite() && *x >= 0.0)
+            .unwrap_or(0.0) as u32
+    };
+    let scaler_type = v
+        .pointer("/scaling/type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let scaler_value = if scaler_type == "REQUEST_COUNT" {
+        u("/scaling/requestCount")
+    } else {
+        u("/scaling/queueDelay")
+    };
     EndpointSettings {
-        workers_min: u("workersMin"),
-        workers_max: u("workersMax"),
-        idle_timeout_s: u("idleTimeout"),
-        scaler_type: v
-            .get("scalerType")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
-        scaler_value: u("scalerValue"),
+        workers_min: u("/workers/min"),
+        workers_max: u("/workers/max"),
+        idle_timeout_s: u("/workers/idleTimeout"),
+        scaler_type,
+        scaler_value,
     }
 }
 
-/// The PATCH body: only fields that differ.
+/// The v2 scaler object of a settings pair: `QUEUE_DELAY` carries
+/// `queueDelay`, `REQUEST_COUNT` `requestCount` (both required with the
+/// type, so a change to either sends both).
+fn scaling_of(e: &EndpointSettings) -> Value {
+    if e.scaler_type == "REQUEST_COUNT" {
+        json!({"type": "REQUEST_COUNT", "requestCount": e.scaler_value})
+    } else {
+        json!({"type": e.scaler_type, "queueDelay": e.scaler_value})
+    }
+}
+
+/// The PATCH body: only fields that differ, in v2's shape (`workers: {min,
+/// max, idleTimeout}`, `scaling: {type, …}`). `idleTimeout` goes only with
+/// `QUEUE_DELAY` (v2 refuses it with `REQUEST_COUNT`); `scaling` is sent
+/// whole when its type or value differs (v2 takes the discriminated object,
+/// not one field of it), and only with a type (an endpoint whose type is
+/// unknown keeps its scaler, as before).
 pub fn endpoint_patch(
     cur: Option<&EndpointSettings>,
     want: &EndpointSettings,
 ) -> Map<String, Value> {
     let mut m = Map::new();
     let differs = |f: &dyn Fn(&EndpointSettings) -> Value| cur.is_none_or(|c| f(c) != f(want));
+    let mut w = Map::new();
     if differs(&|e| json!(e.workers_min)) {
-        m.insert("workersMin".into(), json!(want.workers_min));
+        w.insert("min".into(), json!(want.workers_min));
     }
     if differs(&|e| json!(e.workers_max)) {
-        m.insert("workersMax".into(), json!(want.workers_max));
+        w.insert("max".into(), json!(want.workers_max));
     }
-    if want.idle_timeout_s > 0 && differs(&|e| json!(e.idle_timeout_s)) {
-        m.insert("idleTimeout".into(), json!(want.idle_timeout_s));
+    let request_count = (if want.scaler_type.is_empty() {
+        cur.map(|c| c.scaler_type.as_str())
+    } else {
+        Some(want.scaler_type.as_str())
+    }) == Some("REQUEST_COUNT");
+    if want.idle_timeout_s > 0 && !request_count && differs(&|e| json!(e.idle_timeout_s)) {
+        w.insert("idleTimeout".into(), json!(want.idle_timeout_s));
     }
-    if !want.scaler_type.is_empty() && differs(&|e| json!(e.scaler_type)) {
-        m.insert("scalerType".into(), json!(want.scaler_type));
+    if !w.is_empty() {
+        m.insert("workers".into(), Value::Object(w));
     }
-    if want.scaler_value > 0 && differs(&|e| json!(e.scaler_value)) {
-        m.insert("scalerValue".into(), json!(want.scaler_value));
+    let type_differs = differs(&|e| json!(e.scaler_type));
+    let value_differs = want.scaler_value > 0 && differs(&|e| json!(e.scaler_value));
+    if !want.scaler_type.is_empty() && (type_differs || value_differs) {
+        m.insert("scaling".into(), scaling_of(want));
     }
     m
 }
@@ -607,10 +663,10 @@ impl RunpodPods {
     }
 
     /// Pod create payloads in preference order: every GPU type in every placement. `template_env` is the
-    /// template's own env: REST v1 `POST /pods` documents no rule for a body `env` next to a `templateId`
+    /// template's own env: REST v2 `POST /pods` merges a body `env` into the template's per key (v1 documented no rule)
     /// (the v2 create documents a per-key merge, body values winning), so a body that sends the worker
     /// config carries the template's env too (the secret references, the image identity), with the config
-    /// on top: the same pod whichever rule v1 applies.
+    /// on top: the same pod whichever rule applies.
     pub fn payloads(
         pool: &PoolConfig,
         name: &str,
@@ -681,11 +737,11 @@ impl RunpodPods {
                         last = Some(ProviderError::Api(format!("create on {label}: no id")));
                         continue;
                     };
-                    // A number or a numeric string (fv-deploy's `parse_usd`; Runpod's
-                    // REST docs show `'0.74'`); missing stays 0 here (the pool's cap
+                    // v2's `cost` (v1's `costPerHr`), a number or a numeric string
+                    // (fv-deploy's `parse_usd`); missing stays 0 here (the pool's cap
                     // applies to a reported price; ADR-0018 §9 open decision).
-                    let dph = parse_usd(v.get("costPerHr")).unwrap_or(0.0);
-                    let gpu = body["gpuTypeIds"][0].as_str().unwrap_or("");
+                    let dph = parse_usd(v.get("cost")).unwrap_or(0.0);
+                    let gpu = body["gpu"]["id"].as_str().unwrap_or("");
                     let cap = if pool.pod.max_usd_per_hr > 0.0 {
                         pool.pod.max_usd_per_hr
                     } else {
@@ -740,7 +796,8 @@ impl Provider for RunpodPods {
                     .and_then(Value::as_str)
                     .is_some_and(|n| n.starts_with(&prefix))
             })
-            .filter(|p| p.get("desiredStatus").and_then(Value::as_str) != Some("TERMINATED"))
+            // v2's `status` (v1's `desiredStatus`).
+            .filter(|p| p.get("status").and_then(Value::as_str) != Some("TERMINATED"))
             .collect();
         let load = self.registry.in_flight(&pool.name).await;
         let mut workers = Vec::new();
@@ -786,11 +843,12 @@ impl Provider for RunpodPods {
                 created_at_s: created,
                 ready_at_s: ready_at,
                 url: Some(url),
+                // v2's `gpu.id` and `cost` (v1's `machine.gpuTypeId`, `costPerHr`).
                 gpu_type: p
-                    .pointer("/machine/gpuTypeId")
+                    .pointer("/gpu/id")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
-                usd_per_hr: parse_usd(p.get("costPerHr")),
+                usd_per_hr: parse_usd(p.get("cost")),
             });
         }
         Ok(PoolObservation {
@@ -879,11 +937,58 @@ mod tests {
         let p = endpoint_patch(Some(&cur), &want);
         assert_eq!(
             Value::Object(p),
-            json!({"workersMin": 2, "idleTimeout": 60})
+            json!({"workers": {"min": 2, "idleTimeout": 60}})
         );
         assert!(endpoint_patch(Some(&cur), &cur).is_empty());
-        let v = json!({"workersMin": 1, "workersMax": 3, "idleTimeout": 300, "scalerType": "QUEUE_DELAY", "scalerValue": 4});
-        assert_eq!(endpoint_settings(&v).workers_max, 3);
+        // A scaler change sends the whole v2 scaling object.
+        let faster = EndpointSettings {
+            scaler_value: 3,
+            ..cur.clone()
+        };
+        assert_eq!(
+            Value::Object(endpoint_patch(Some(&cur), &faster)),
+            json!({"scaling": {"type": "QUEUE_DELAY", "queueDelay": 3}})
+        );
+        let counted = EndpointSettings {
+            scaler_type: "REQUEST_COUNT".into(),
+            scaler_value: 2,
+            idle_timeout_s: 60,
+            ..cur.clone()
+        };
+        // No idleTimeout with REQUEST_COUNT (v2 refuses it).
+        assert_eq!(
+            Value::Object(endpoint_patch(Some(&cur), &counted)),
+            json!({"scaling": {"type": "REQUEST_COUNT", "requestCount": 2}})
+        );
+        // Nothing known yet: everything but an empty scaler type.
+        assert_eq!(
+            Value::Object(endpoint_patch(None, &want)),
+            json!({"workers": {"min": 2, "max": 1, "idleTimeout": 60},
+                   "scaling": {"type": "QUEUE_DELAY", "queueDelay": 1}})
+        );
+        // v2's endpoint object.
+        let v = json!({"workers": {"min": 1, "max": 3, "idleTimeout": 300, "initTimeout": null},
+                       "scaling": {"type": "QUEUE_DELAY", "queueDelay": 4}});
+        let s = endpoint_settings(&v);
+        assert_eq!(
+            (
+                s.workers_min,
+                s.workers_max,
+                s.idle_timeout_s,
+                s.scaler_type.as_str(),
+                s.scaler_value
+            ),
+            (1, 3, 300, "QUEUE_DELAY", 4)
+        );
+        let v = json!({"workers": {"min": 0, "max": 2}, "scaling": {"type": "REQUEST_COUNT", "requestCount": 5}});
+        let s = endpoint_settings(&v);
+        assert_eq!(
+            (s.idle_timeout_s, s.scaler_type.as_str(), s.scaler_value),
+            (0, "REQUEST_COUNT", 5)
+        );
+        // A v1 object reads as nothing (never as a v2 one).
+        let v1 = json!({"workersMin": 1, "workersMax": 3, "scalerType": "QUEUE_DELAY", "scalerValue": 4});
+        assert_eq!(endpoint_settings(&v1), EndpointSettings::default());
     }
 
     #[test]
@@ -957,14 +1062,15 @@ mod tests {
             ]
         );
         let b = &p[2].1;
-        assert_eq!(b["networkVolumeId"], "bz0ofkfx45");
+        assert_eq!(b["mounts"]["network"][0]["volumeId"], "bz0ofkfx45");
+        assert_eq!(b["gpu"], json!({"id": "NVIDIA H100 80GB HBM3", "count": 1}));
         assert_eq!(b["templateId"], "tpl");
-        assert!(b.get("allowedCudaVersions").is_none());
+        assert!(b["gpu"].get("allowedCudaVersions").is_none());
         // No resolved config: no env (the binary always resolves one).
         assert!(b.get("env").is_none());
         let mut with = pool.clone();
         with.pod.worker_toml_b64 = "W3NlcnZlcl0K".into();
-        // The template's env rides along (REST v1 documents no merge rule), the config on top.
+        // The template's env rides along (as under v1, which documented no merge rule), the config on top.
         let tpl = template_env_of(&json!({"env": {
             "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
             "FV_WORKER_TOML_B64": "b2xk",
@@ -984,10 +1090,10 @@ mod tests {
             .is_none());
     }
 
-    /// A local fake Runpod: `POST /v1/pods` says no stock, `DELETE` of a
-    /// gone pod is a 404, a 500 echoes the key, GraphQL answers a balance,
-    /// a template has an env. Every request's method, path and
-    /// authorization are recorded.
+    /// A local fake Runpod (REST v2): `POST /v2/pods` says no stock,
+    /// `DELETE` of a gone pod is a 404, a 500 echoes the key, GraphQL
+    /// answers a balance, a template has an env, `GET /v2/pods` lists two
+    /// pages. Every request's method, path and authorization are recorded.
     async fn fake_runpod() -> (RunpodUrls, Arc<Mutex<Vec<String>>>) {
         use axum::extract::{OriginalUri, Request as AxRequest};
         use axum::http::StatusCode;
@@ -1002,21 +1108,33 @@ mod tests {
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("")
                     .to_owned();
+                let query = uri.0.query().unwrap_or("").to_owned();
                 let line = format!("{} {} {auth}", req.method(), uri.0.path());
                 s.lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .push(line.clone());
                 match line.split(' ').take(2).collect::<Vec<_>>().as_slice() {
-                    ["POST", "/v1/pods"] => (
+                    ["POST", "/v2/pods"] => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "There are no longer any instances available".to_owned(),
                     ),
-                    ["DELETE", "/v1/pods/gone"] => (StatusCode::NOT_FOUND, String::new()),
-                    ["DELETE", _] => (StatusCode::OK, "{}".to_owned()),
-                    ["GET", "/v1/endpoints/boom"] => {
+                    ["GET", "/v2/pods"] if query.is_empty() => (
+                        StatusCode::OK,
+                        r#"{"pods":[{"id":"a","status":"RUNNING","cost":0.5,"gpu":{"id":"NVIDIA H200","count":1}}],
+                            "pagination":{"nextCursor":"c2","hasNextPage":true}}"#
+                            .to_owned(),
+                    ),
+                    ["GET", "/v2/pods"] if query == "cursor=c2" => (
+                        StatusCode::OK,
+                        r#"{"pods":[{"id":"b","status":"TERMINATED"}],"pagination":{"nextCursor":null,"hasNextPage":false}}"#
+                            .to_owned(),
+                    ),
+                    ["DELETE", "/v2/pods/gone"] => (StatusCode::NOT_FOUND, String::new()),
+                    ["DELETE", _] => (StatusCode::NO_CONTENT, String::new()),
+                    ["GET", "/v2/serverless/boom"] => {
                         (StatusCode::INTERNAL_SERVER_ERROR, format!("echo {auth}"))
                     }
-                    ["GET", "/v1/templates/tpl"] => (
+                    ["GET", "/v2/templates/tpl"] => (
                         StatusCode::OK,
                         r#"{"env":{"FV_CF_ACCOUNT_ID":"{{ RUNPOD_SECRET_fv_cf_account_id }}"}}"#
                             .to_owned(),
@@ -1041,8 +1159,8 @@ mod tests {
             let _ = axum::serve(l, app).await;
         });
         let urls = RunpodUrls {
-            rest: format!("{base}/v1"),
-            queue: format!("{base}/v2"),
+            rest: format!("{base}/v2"),
+            queue: format!("{base}/queue"),
             graphql: format!("{base}/graphql"),
             ..RunpodUrls::default()
         };
@@ -1079,6 +1197,14 @@ mod tests {
             .map(|e| e.to_string())
             .unwrap_or_default();
         assert!(e.contains("HTTP 500") && !e.contains(KEY), "{e}");
+        // The pod listing: both pages, under `pods`.
+        let pods = api.pods().await.unwrap_or_default();
+        assert_eq!(
+            pods.iter()
+                .filter_map(|p| p["id"].as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
         let got = seen.lock().map(|g| g.clone()).unwrap_or_default();
         let bearer = format!("Bearer {KEY}");
         assert!(got.iter().all(|l| l.ends_with(&bearer)), "{got:?}");
@@ -1091,11 +1217,14 @@ mod tests {
             r.balance(),
             r.template("tpl"),
             r.endpoint("boom"),
+            r.list_page("/pods", None),
+            r.list_page("/pods", Some("c2")),
         ]
         .iter()
         .map(|q| {
             let path = q.url.split_once("://").map_or("", |x| x.1);
             let path = &path[path.find('/').unwrap_or(0)..];
+            let path = path.split('?').next().unwrap_or(path);
             format!("{} {path} {bearer}", q.method.as_str())
         })
         .collect();

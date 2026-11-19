@@ -1427,7 +1427,7 @@ fn watchdog_loops() {
         .filter(|r| r.method == sys::Method::Delete)
         .collect();
     assert_eq!(del.len(), 2);
-    assert_eq!(del[0].url, "https://rest.runpod.io/v1/pods/p1");
+    assert_eq!(del[0].url, "https://api.runpod.io/v2/pods/p1");
     assert_eq!(del[0].headers[0].1, "Bearer k");
     assert!(log.has("[watchdog] balance 7.5 below 8: deleting p1"));
 
@@ -1554,7 +1554,7 @@ fn watchdog_retries_a_refused_runpod_delete() {
         assert_eq!(del.len(), attempts, "HTTP {status}");
         assert!(del
             .iter()
-            .all(|r| r.url == "https://rest.runpod.io/v1/pods/p9"));
+            .all(|r| r.url == "https://api.runpod.io/v2/pods/p9"));
         // 5 s between attempts, then the deadline round's minute.
         let mut want = vec![Duration::from_secs(5); attempts - 1];
         want.push(Duration::from_secs(60));

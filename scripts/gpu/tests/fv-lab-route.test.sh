@@ -120,13 +120,13 @@ done
 dry "refused: FV_MIN_RAM_GB names the tier's min_ram_gb" 1 "a pod's host-RAM floor is its tier's min_ram_gb in lab/tiers.toml" \
   FV_FAMILY=trace FV_MIN_RAM_GB=192
 # FV_MIN_RAM_GB in runpod-http.sh's own body (gold's plan, the script body
-# since oracle went, §22.20): minRAMPerGPU; anything but a whole positive
-# number of GB stops before jq or the API.
+# since oracle went, §22.20): gpu.minRamPerGpu (REST v2); anything but a whole
+# positive number of GB stops before jq or the API.
 plan_env=(RUNPOD_API_KEY=t FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_FAMILY=gold)
-expect "plan: FV_MIN_RAM_GB=192 is minRAMPerGPU" 0 '"minRAMPerGPU": 192' -- \
+expect "plan: FV_MIN_RAM_GB=192 is gpu.minRamPerGpu" 0 '"minRamPerGpu": 192' -- \
   "${plan_env[@]}" FV_MIN_RAM_GB=192 bash "$HTTP" plan abc1234 abc1234-10261200
 for v in 0 012 12.5 abc -1 "1 2"; do
-  expect "refused: FV_MIN_RAM_GB='$v'" 1 "FV_MIN_RAM_GB is the pod's minRAMPerGPU in whole GB" -- \
+  expect "refused: FV_MIN_RAM_GB='$v'" 1 "FV_MIN_RAM_GB is the pod's gpu.minRamPerGpu in whole GB" -- \
     "${plan_env[@]}" FV_MIN_RAM_GB="$v" bash "$HTTP" plan abc1234 abc1234-10261200
 done
 # FV_FETCH_TREE=1 is fv-lab's --fetch-tree (ADR-0019 §13); its settings act only with it.

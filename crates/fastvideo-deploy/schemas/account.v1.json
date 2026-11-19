@@ -29,12 +29,12 @@
       "description": "Which provider, and which kind of instance on it (C3a: the two Runpod\nkinds; C3b: `vast` and `gcp`, docs/adr/0018-fv-deploy.md §8).",
       "oneOf": [
         {
-          "description": "A Runpod GPU pod (REST v1 `POST /pods`).",
+          "description": "A Runpod GPU pod (REST v2 `POST /pods`).",
           "type": "string",
           "const": "runpod-pod"
         },
         {
-          "description": "A Runpod serverless queue endpoint (REST v1 `POST /templates` +\n`POST /endpoints`).",
+          "description": "A Runpod serverless queue endpoint (REST v2 `POST /templates` +\n`POST /serverless`).",
           "type": "string",
           "const": "runpod-serverless"
         },

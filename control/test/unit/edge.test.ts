@@ -87,13 +87,13 @@ describe("worker env", () => {
     expect(e.FV_WORKER_DIRECT).toBe("1");
     expect(e.FV_R2_BUCKET).toBeDefined();
     const pl = workerPlacements(spec, spec.pools[0]!)[0]!;
-    expect(workerCreatePayload("n", "img", spec.pools[0]!, pl, e).dockerStartCmd).toEqual([WORKER_BOOT]);
+    expect(workerCreatePayload("n", "img", spec.pools[0]!, pl, e).cmd).toEqual([WORKER_BOOT]);
   });
   it("the create payload runs the edge boot", () => {
     const c = ctx();
     const p = c.spec.pools[0]!;
     const e = workerSystemEnv(c, p, "img");
-    expect(workerCreatePayload("n", "img", p, workerPlacements(c.spec, p)[0]!, e).dockerStartCmd).toEqual([EDGE_WORKER_BOOT]);
+    expect(workerCreatePayload("n", "img", p, workerPlacements(c.spec, p)[0]!, e).cmd).toEqual([EDGE_WORKER_BOOT]);
   });
 });
 
@@ -120,12 +120,12 @@ describe("the edge boot", () => {
         timeout: 1500,
       });
     run("0");
-    expect(readFileSync(log, "utf8")).toContain("-X DELETE -H Authorization: Bearer rpa_K https://rest.runpod.io/v1/pods/pod42");
+    expect(readFileSync(log, "utf8")).toContain("-X DELETE -H Authorization: Bearer rpa_K https://api.runpod.io/v2/pods/pod42");
     writeFileSync(log, "");
     run(String(Math.floor(Date.now() / 1000) + 3600));
     const l = readFileSync(log, "utf8");
     expect(l).toContain("graphql");
-    expect(l).toContain("-X DELETE -H Authorization: Bearer rpa_K https://rest.runpod.io/v1/pods/pod42");
+    expect(l).toContain("-X DELETE -H Authorization: Bearer rpa_K https://api.runpod.io/v2/pods/pod42");
   });
   it("counts only a 2xx or a 404 as deleted and retries anything else (a 403 included)", () => {
     const dir = mkdtempSync(join(tmpdir(), "fvwd-"));

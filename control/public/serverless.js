@@ -280,7 +280,7 @@
       } catch (err) { out.replaceChildren(h("span", { style: "color:var(--critical-text)" }, err.message)); }
     };
     return card("Workers and logs",
-      table([{ label: "worker", get: (w) => w.id }, { label: "state", get: (w) => w.desiredStatus || "–" }, { label: "$/hr", get: (w) => fmt$(w.costPerHr, 3), num: true }, { label: "dc", get: (w) => w.dc || "–" }, { label: "", get: (w) => h("button", { class: "ghost", onclick: () => load(w.id) }, "Logs") }], ws, "No worker is up (the endpoint scales from zero)."),
+      table([{ label: "worker", get: (w) => w.id }, { label: "state", get: (w) => w.status || "–" }, { label: "$/hr", get: (w) => fmt$(w.cost, 3), num: true }, { label: "dc", get: (w) => w.dc || "–" }, { label: "", get: (w) => h("button", { class: "ghost", onclick: () => load(w.id) }, "Logs") }], ws, "No worker is up (the endpoint scales from zero)."),
       out);
   }
 

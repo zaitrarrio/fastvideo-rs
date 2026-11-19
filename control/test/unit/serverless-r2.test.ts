@@ -16,7 +16,7 @@ import { R2_FETCH_PY, R2_FETCH_SHA256 } from "../../src/r2-fetch-script";
 import { manifestKey, objectKey, R2_DOWNLOAD_GBPS } from "../../src/r2weights";
 import { slsReport, slsTokenRow } from "../../src/serverless/ingest";
 import { deleteEndpoint, getRow, updateEndpoint } from "../../src/serverless/ops";
-import { endpointCreatePayload, templateCreatePayload, templateUpdatePayload, v2CreatePayload, v2TemplateBoot } from "../../src/serverless/payloads";
+import { endpointCreatePayload, templateCreatePayload, templateUpdatePayload } from "../../src/serverless/payloads";
 import { DEFAULT_SLS_WEIGHTS_SOURCE, defaultEndpointSpec, normalizeEndpointSpec, placementIssues, specDiff, type EndpointSpec } from "../../src/serverless/spec";
 import { applyReport, newWeightsToken, SLS_R2_SH, SLS_TOKEN_GRACE_MS, slsOutlook, slsR2DiskGb, slsTrees, slsWeightsEnv, slsWeightsIssues, type BootRow } from "../../src/serverless/weights";
 import { weightsPlanRequest } from "../../src/weights-plan";
@@ -114,8 +114,8 @@ describe("payloads and the checks", () => {
   it("the template: the bash r2 boot, the weights token and the trees in the env, no volume, never an R2 key", () => {
     const w = slsWeightsEnv(env, s, "fvw_" + "1".repeat(64));
     const t = templateCreatePayload(s, "img@sha256:" + "0".repeat(64), "fvc-a-1", w);
-    expect(t.dockerEntrypoint).toEqual(["bash", "-c", expect.stringContaining("r2-fetch.py")]);
-    expect(t.dockerEntrypoint![2]).toMatch(/exec \/opt\/fastvideo-rs\/bin\/fv-serve/);
+    expect(t.entrypoint).toEqual(["bash", "-c", expect.stringContaining("r2-fetch.py")]);
+    expect(t.entrypoint![2]).toMatch(/exec \/opt\/fastvideo-rs\/bin\/fv-serve/);
     expect(t.env.FV_WEIGHTS_TOKEN).toBe("fvw_" + "1".repeat(64));
     expect(t.env.FV_WEIGHTS).toBe("/workspace/weights");
     expect(t.env.FV_R2_TREE_REVS).toBe("demo@rev1");
@@ -124,20 +124,21 @@ describe("payloads and the checks", () => {
     expect(t.env.FV_R2_FETCH_SHA256).toBe(R2_FETCH_SHA256);
     expect(JSON.stringify(t)).not.toContain(SECRET);
     expect(JSON.stringify(t)).not.toContain(ACCESS);
-    expect(t.containerDiskInGb).toBe(s.container_disk_gb);
+    expect(t.disk).toBe(s.container_disk_gb);
+    expect(t).not.toHaveProperty("mounts");
     const e = endpointCreatePayload(s, "tpl");
-    expect(e).not.toHaveProperty("networkVolumeId");
+    expect(e).not.toHaveProperty("networkVolumes");
     expect(e).not.toHaveProperty("dataCenterIds");
-    expect(v2CreatePayload({ ...s, mode: "lb", scaler_type: "REQUEST_COUNT" }, "img", [], w)).not.toHaveProperty("networkVolumes");
-    expect(v2TemplateBoot({ ...s, mode: "lb" })!.dockerEntrypoint[0]).toBe("bash");
-    expect(templateUpdatePayload(s, "img", w).dockerEntrypoint![0]).toBe("bash");
+    expect(endpointCreatePayload({ ...s, mode: "lb", scaler_type: "REQUEST_COUNT" }, "tpl", { pools: ["BLACKWELL_96"] })).not.toHaveProperty("networkVolumes");
+    expect(templateCreatePayload({ ...s, mode: "lb" }, "img", "n", w).entrypoint[0]).toBe("bash");
+    expect(templateUpdatePayload(s, "img", w).entrypoint![0]).toBe("bash");
   });
   it("a volume endpoint is unchanged: no token, the volume's weights", () => {
     const v = normalizeEndpointSpec({ name: "w", preset: "ltx" });
     const t = templateCreatePayload(v, "img", "n", slsWeightsEnv(env, s, "fvw_x"));
     expect(t.env.FV_WEIGHTS_TOKEN).toBeUndefined();
     expect(t.env.FV_WEIGHTS).toBe("/runpod-volume/weights");
-    expect(endpointCreatePayload(v, "tpl")).toMatchObject({ networkVolumeId: EU, dataCenterIds: ["EU-RO-1"] });
+    expect(endpointCreatePayload(v, "tpl")).toMatchObject({ networkVolumes: [EU], dataCenterIds: ["EU-RO-1"] });
   });
   it("refuses unpublished trees, a store not configured, a volume that is not a listed cache; a listed cache is pinned to its DC", () => {
     expect(slsWeightsIssues(env, s).issues).toEqual([]);
@@ -216,10 +217,11 @@ describe("the weights token: the plan and the reports", () => {
     await insert("se_a", "a", r2Spec("a", "demo"), a.hash);
     await insert("se_b", "b", r2Spec("b", "other"), b.hash);
     await insert("se_v", "v", normalizeEndpointSpec({ name: "v", preset: "ltx" }), (await newWeightsToken()).hash);
-    // The Runpod REST calls of update and delete (fv-control only touches its own fvc-… endpoints).
+    // The Runpod REST v2 calls of update and delete (fv-control only touches its own fvc-… endpoints).
     const json = (res: any, code: number, body: unknown) => res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(body));
-    r2.routes["/rest/endpoints/rpa"] = (req, res) => (req.method === "GET" ? json(res, 200, { id: "rpa", name: "fvc-a", workers: [] }) : json(res, 200, {}));
-    r2.routes["/rest/endpoints/rpb"] = (req, res) => (req.method === "GET" ? json(res, 404, { error: "not found" }) : json(res, 200, {}));
+    r2.routes["/rest/serverless/rpa"] = (req, res) => (req.method === "GET" ? json(res, 200, { id: "rpa", name: "fvc-a", workers: { min: 0, max: 1 } }) : json(res, 200, {}));
+    r2.routes["/rest/serverless/rpa/workers"] = (_req, res) => json(res, 200, { workers: [], summary: { running: 0, idle: 0, initializing: 0, throttled: 0, unhealthy: 0, total: 0 } });
+    r2.routes["/rest/serverless/rpb"] = (req, res) => (req.method === "GET" ? json(res, 404, { title: "Not Found", status: 404, detail: "endpoint not found" }) : json(res, 200, {}));
     r2.routes["/rest/templates/tpla"] = (req, res) => {
       let body = "";
       req.on("data", (d: Buffer) => (body += d));
@@ -276,7 +278,7 @@ describe("the weights token: the plan and the reports", () => {
     const fresh = patch.env.FV_WEIGHTS_TOKEN as string;
     expect(fresh).toMatch(/^fvw_[0-9a-f]{64}$/);
     expect(fresh).not.toBe(tokA);
-    expect(patch.dockerEntrypoint[0]).toBe("bash");
+    expect(patch.entrypoint[0]).toBe("bash");
     const after = await getRow(env, "a");
     expect(after.weights_token_hash).toBe(await sha256Hex(fresh));
     expect(after.weights_token_prev_hash).toBe(await sha256Hex(tokA));

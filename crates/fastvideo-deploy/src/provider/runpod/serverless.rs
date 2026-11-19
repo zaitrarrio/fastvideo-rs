@@ -1,9 +1,10 @@
-//! A Runpod serverless queue endpoint: a template (REST v1 `POST /templates`)
-//! and an endpoint on it (REST v1 `POST /endpoints`), the bodies
-//! `runpod-endpoint.sh`'s `template_payload` / `endpoint_payload` build;
-//! reached through the queue API, one native job per call (the envelope of
-//! `crate::dispatch`). The instance id is `<endpoint>/<template>`: fv-deploy
-//! always creates its own template and deletes it with the endpoint.
+//! A Runpod serverless queue endpoint: a template (REST v2 `POST /templates`)
+//! and an endpoint on it (REST v2 `POST /serverless`, v1's `/endpoints`), the
+//! v2 form of the bodies `runpod-endpoint.sh`'s `template_payload` /
+//! `endpoint_payload` build (ADR-0018 §11); reached through the queue API,
+//! one native job per call (the envelope of `crate::dispatch`). The instance
+//! id is `<endpoint>/<template>`: fv-deploy always creates its own template
+//! and deletes it with the endpoint.
 
 use std::time::Duration;
 
@@ -20,27 +21,130 @@ use crate::provider::{
 pub const SERVERLESS_DELETE_ATTEMPTS: u32 = 6;
 
 /// The serverless template of a launch (`template_payload`,
-/// `fixtures/deploy/runpod-template.json`).
+/// `fixtures/deploy/runpod-template.json`) in v2's shape: `imageName` →
+/// `image`, `isServerless` → `serverless`, `containerDiskInGb` → `disk`,
+/// `dockerEntrypoint` / `dockerStartCmd` → `entrypoint` / `cmd`,
+/// `volumeInGb` → `mounts.persistent {size, path}` only when not 0 (v2 has
+/// no "no disk" value, [`super::pod::mounts_of`]).
 pub fn template_body(l: &Launch) -> Value {
     let mut m = Map::new();
     m.insert("name".into(), json!(l.name));
-    m.insert("imageName".into(), json!(l.image));
-    m.insert("isServerless".into(), json!(true));
-    m.insert("containerDiskInGb".into(), json!(l.disk.container_gb));
-    m.insert("volumeInGb".into(), json!(l.disk.volume_gb));
+    m.insert("image".into(), json!(l.image));
+    m.insert("serverless".into(), json!(true));
+    m.insert("disk".into(), json!(l.disk.container_gb));
+    if l.disk.volume_gb > 0 {
+        m.insert(
+            "mounts".into(),
+            json!({"persistent": {"size": l.disk.volume_gb, "path": crate::launch::POD_VOLUME_MOUNT}}),
+        );
+    }
     if !l.entrypoint.is_empty() {
-        m.insert("dockerEntrypoint".into(), json!(l.entrypoint));
+        m.insert("entrypoint".into(), json!(l.entrypoint));
     }
     if !l.args.is_empty() {
-        m.insert("dockerStartCmd".into(), json!(l.args));
+        m.insert("cmd".into(), json!(l.args));
     }
     m.insert("env".into(), json!(l.env));
     Value::Object(m)
 }
 
+/// A v2 endpoint's GPU selection. v1's `gpuTypeIds` named GPU **types**
+/// (`NVIDIA RTX PRO 6000 Blackwell Server Edition`, the ids the price quotes
+/// use); v2's `gpu.pools` names serverless **pools** (`ADA_24`,
+/// `BLACKWELL_96`: `GET /catalog/gpus` `pool`) and narrows one with
+/// `excludedTypes`, with no inclusive allowlist. A launch's types are
+/// resolved against the catalog ([`EndpointGpu::resolve`]): a type is its
+/// pool with the pool's other types excluded; a name that is itself a pool
+/// is the whole pool.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EndpointGpu {
+    pub pools: Vec<String>,
+    pub excluded_types: Vec<String>,
+}
+
+impl EndpointGpu {
+    /// The selection a launch's GPU names make over the catalog's GPU types
+    /// (`GET /catalog/gpus` `gpus[] {id, pool}`): a name equal to a pool id
+    /// selects the pool whole; a name equal to a type id selects its pool
+    /// and excludes the pool's other types (unless they are named too); a
+    /// name that is neither, or a type outside every serverless pool, is
+    /// refused (`Unsupported`), never silently widened.
+    pub fn resolve(names: &[String], catalog: &[Value]) -> Result<Self, ProviderError> {
+        fn pool_of(v: &Value) -> Option<&str> {
+            v.get("pool")
+                .and_then(Value::as_str)
+                .filter(|p| !p.is_empty())
+        }
+        fn id_of(v: &Value) -> Option<&str> {
+            v.get("id").and_then(Value::as_str)
+        }
+        let mut pools: Vec<String> = Vec::new();
+        // Pools named as such: every type of theirs stays.
+        let mut whole: Vec<String> = Vec::new();
+        for n in names {
+            if catalog.iter().any(|g| pool_of(g) == Some(n.as_str())) {
+                if !pools.contains(n) {
+                    pools.push(n.clone());
+                }
+                whole.push(n.clone());
+                continue;
+            }
+            let Some(g) = catalog.iter().find(|g| id_of(g) == Some(n.as_str())) else {
+                return Err(ProviderError::Unsupported(format!(
+                    "serverless GPU {n}: neither a GPU type nor a pool of GET /catalog/gpus"
+                )));
+            };
+            let Some(p) = pool_of(g) else {
+                return Err(ProviderError::Unsupported(format!(
+                    "serverless GPU {n}: not in any serverless pool (GET /catalog/gpus pool is null)"
+                )));
+            };
+            if !pools.iter().any(|x| x == p) {
+                pools.push(p.to_owned());
+            }
+        }
+        let mut excluded: Vec<String> = catalog
+            .iter()
+            .filter(|g| {
+                pool_of(g)
+                    .is_some_and(|p| pools.iter().any(|x| x == p) && !whole.iter().any(|w| w == p))
+            })
+            .filter_map(id_of)
+            .filter(|id| !names.iter().any(|n| n == id))
+            .map(str::to_owned)
+            .collect();
+        excluded.sort();
+        excluded.dedup();
+        Ok(Self {
+            pools,
+            excluded_types: excluded,
+        })
+    }
+
+    /// The selection a plan shows without the catalog (`fv-deploy plan`
+    /// makes no request): `runpod-endpoint.sh gpu_pools_json`'s fallback,
+    /// the `ADA_24` pool, so the plan's body is the script's. A create never
+    /// uses it: [`Self::resolve`] over the catalog, or a refusal.
+    pub fn unresolved(_names: &[String]) -> Self {
+        Self {
+            pools: vec!["ADA_24".into()],
+            excluded_types: Vec::new(),
+        }
+    }
+}
+
 /// The queue endpoint of a launch on template `template_id`
-/// (`endpoint_payload`, `fixtures/deploy/runpod-endpoint.json`).
-pub fn endpoint_body(l: &Launch, template_id: &str) -> Value {
+/// (`endpoint_payload`, `fixtures/deploy/runpod-endpoint.json`) in v2's
+/// shape: `type: QUEUE` (required), `gpuTypeIds` + `gpuCount` +
+/// `minCudaVersion` + `allowedCudaVersions` → `gpu: {pools, excludedTypes,
+/// count, minCudaVersion, allowedCudaVersions}` (`gpu`: [`EndpointGpu`]),
+/// `networkVolumeId` → `networkVolumes: [id]`, `workersMin` / `workersMax` /
+/// `idleTimeout` → `workers: {min, max, idleTimeout}` (`idleTimeout` only
+/// with `QUEUE_DELAY`: v2 refuses it with `REQUEST_COUNT`), `scalerType` +
+/// `scalerValue` → `scaling: {type, queueDelay | requestCount}`, `flashboot`
+/// `false` / `true` → `"OFF"` / `"FLASHBOOT"`, `executionTimeoutMs` →
+/// `timeout` (ms); `computeType` gone.
+pub fn endpoint_body(l: &Launch, template_id: &str, gpu: &EndpointGpu) -> Value {
     let s = l
         .serverless
         .clone()
@@ -48,28 +152,46 @@ pub fn endpoint_body(l: &Launch, template_id: &str) -> Value {
     let mut m = Map::new();
     m.insert("name".into(), json!(l.name));
     m.insert("templateId".into(), json!(template_id));
-    m.insert("computeType".into(), json!("GPU"));
-    m.insert("gpuTypeIds".into(), json!(l.gpu.types));
-    m.insert("gpuCount".into(), json!(l.gpu.count));
+    m.insert("type".into(), json!("QUEUE"));
+    let mut g = Map::new();
+    g.insert("pools".into(), json!(gpu.pools));
+    if !gpu.excluded_types.is_empty() {
+        g.insert("excludedTypes".into(), json!(gpu.excluded_types));
+    }
+    g.insert("count".into(), json!(l.gpu.count));
+    if !l.gpu.allowed_cuda.is_empty() {
+        g.insert("allowedCudaVersions".into(), json!(l.gpu.allowed_cuda));
+    } else if let Some(c) = &l.gpu.min_cuda {
+        g.insert("minCudaVersion".into(), json!(c));
+    }
+    m.insert("gpu".into(), Value::Object(g));
     if let Some(v) = &l.placement.volume {
-        m.insert("networkVolumeId".into(), json!(v.id));
+        m.insert("networkVolumes".into(), json!([v.id]));
     }
     if !l.placement.data_centers.is_empty() {
         m.insert("dataCenterIds".into(), json!(l.placement.data_centers));
     }
-    m.insert("workersMin".into(), json!(s.workers_min));
-    m.insert("workersMax".into(), json!(s.workers_max));
-    m.insert("idleTimeout".into(), json!(s.idle_timeout_s));
-    m.insert("flashboot".into(), json!(s.flashboot));
-    m.insert("executionTimeoutMs".into(), json!(s.execution_timeout_ms));
-    m.insert("scalerType".into(), json!(s.scaler_type));
-    m.insert("scalerValue".into(), json!(s.scaler_value));
-    if let Some(c) = &l.gpu.min_cuda {
-        m.insert("minCudaVersion".into(), json!(c));
+    let request_count = s.scaler_type == "REQUEST_COUNT";
+    let mut w = Map::new();
+    w.insert("min".into(), json!(s.workers_min));
+    w.insert("max".into(), json!(s.workers_max));
+    if !request_count {
+        w.insert("idleTimeout".into(), json!(s.idle_timeout_s));
     }
-    if !l.gpu.allowed_cuda.is_empty() {
-        m.insert("allowedCudaVersions".into(), json!(l.gpu.allowed_cuda));
-    }
+    m.insert("workers".into(), Value::Object(w));
+    m.insert(
+        "scaling".into(),
+        if request_count {
+            json!({"type": "REQUEST_COUNT", "requestCount": s.scaler_value})
+        } else {
+            json!({"type": s.scaler_type, "queueDelay": s.scaler_value})
+        },
+    );
+    m.insert(
+        "flashboot".into(),
+        json!(if s.flashboot { "FLASHBOOT" } else { "OFF" }),
+    );
+    m.insert("timeout".into(), json!(s.execution_timeout_ms));
     Value::Object(m)
 }
 
@@ -144,13 +266,21 @@ impl Provider for Serverless<'_> {
             },
             ApiCall {
                 method: "POST".into(),
-                url: format!("{}/endpoints", self.api.urls.rest),
-                body: endpoint_body(launch, "<template id>"),
+                url: format!("{}/serverless", self.api.urls.rest),
+                body: endpoint_body(
+                    launch,
+                    "<template id>",
+                    &EndpointGpu::unresolved(&launch.gpu.types),
+                ),
             },
         ])
     }
 
     fn create(&self, launch: &Launch) -> Result<Instance, ProviderError> {
+        // The GPU types' pools, before anything is created: an unknown type
+        // refuses the launch with nothing to sweep.
+        let catalog = self.api.list("/catalog/gpus", "gpus", "GET catalog gpus")?;
+        let gpu = EndpointGpu::resolve(&launch.gpu.types, &catalog)?;
         let t = self.api.rest(
             Method::Post,
             "/templates",
@@ -160,9 +290,9 @@ impl Provider for Serverless<'_> {
         let tpl = id_of(&t, "POST templates")?;
         let e = match self.api.rest(
             Method::Post,
-            "/endpoints",
-            Some(&endpoint_body(launch, &tpl)),
-            "POST endpoints",
+            "/serverless",
+            Some(&endpoint_body(launch, &tpl, &gpu)),
+            "POST serverless",
         ) {
             Ok(e) => e,
             Err(err) => {
@@ -176,7 +306,7 @@ impl Provider for Serverless<'_> {
             }
         };
         // A 2xx without an id: the endpoint may exist (the caller sweeps).
-        let ep = id_of(&e, "POST endpoints")?;
+        let ep = id_of(&e, "POST serverless")?;
         Ok(Instance {
             id: InstanceId::new(format!("{ep}/{tpl}")),
             provider: self.kind(),
@@ -194,7 +324,7 @@ impl Provider for Serverless<'_> {
 
     fn status(&self, id: &InstanceId) -> Result<InstanceState, ProviderError> {
         let (ep, _) = split_id(id);
-        let url = format!("{}/endpoints/{ep}", self.api.urls.rest);
+        let url = format!("{}/serverless/{ep}", self.api.urls.rest);
         let r = self.api.raw(
             Method::Get,
             &url,
@@ -235,15 +365,16 @@ impl Provider for Serverless<'_> {
         })
     }
 
-    /// `runpod-endpoint.sh down`: workers to 0, then DELETE the endpoint
-    /// (6 attempts, `i * 5` s apart; gone is fine), then our template.
+    /// `runpod-endpoint.sh down`: workers to 0 (v2 `workers: {min, max}`),
+    /// then DELETE the endpoint (6 attempts, `i * 5` s apart; gone is fine),
+    /// then our template.
     fn destroy(&self, id: &InstanceId) -> Result<(), ProviderError> {
         let (ep, tpl) = split_id(id);
-        let url = format!("{}/endpoints/{ep}", self.api.urls.rest);
+        let url = format!("{}/serverless/{ep}", self.api.urls.rest);
         let _ = self.api.raw(
             Method::Patch,
             &url,
-            Some(&json!({"workersMin": 0, "workersMax": 0})),
+            Some(&json!({"workers": {"min": 0, "max": 0}})),
             Duration::from_secs(60),
             "PATCH endpoint",
         );
@@ -284,7 +415,9 @@ impl Provider for Serverless<'_> {
 
     /// Endpoints named `name` (with their templates), then templates named
     /// `name` that no endpoint uses any more (a create whose endpoint answer
-    /// was lost).
+    /// was lost). A v2 endpoint does not name its template (v1's
+    /// `templateId`): fv-deploy's template carries the endpoint's name, so
+    /// the second pass removes it.
     fn sweep(
         &self,
         name: &str,
@@ -295,8 +428,8 @@ impl Provider for Serverless<'_> {
         let mut last = None;
         let eps = self
             .api
-            .rest(Method::Get, "/endpoints", None, "GET endpoints")?;
-        for e in eps.as_array().map(Vec::as_slice).unwrap_or_default() {
+            .list("/serverless", "endpoints", "GET serverless")?;
+        for e in &eps {
             let Some(ep) = e.get("id").and_then(Value::as_str) else {
                 continue;
             };
@@ -314,10 +447,8 @@ impl Provider for Serverless<'_> {
                 Err(err) => last = Some(err),
             }
         }
-        let tpls = self
-            .api
-            .rest(Method::Get, "/templates", None, "GET templates")?;
-        for t in tpls.as_array().map(Vec::as_slice).unwrap_or_default() {
+        let tpls = self.api.list("/templates", "templates", "GET templates")?;
+        for t in &tpls {
             let Some(tid) = t.get("id").and_then(Value::as_str) else {
                 continue;
             };
@@ -404,7 +535,7 @@ fn job_status(v: &Value) -> &str {
 
 impl Reach for QueueReach<'_> {
     /// Ready once a cold `info` job has completed (a queue endpoint with
-    /// `workersMin` 0 starts a worker only for a job).
+    /// `workers.min` 0 starts a worker only for a job).
     fn ping(&mut self) -> Probe {
         let job = match &self.info_job {
             Some(j) => j.clone(),
@@ -480,5 +611,113 @@ impl Reach for QueueReach<'_> {
             }
             clock.sleep(self.poll);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn catalog() -> Vec<Value> {
+        vec![
+            json!({"id": "NVIDIA RTX PRO 6000 Blackwell Server Edition", "pool": "BLACKWELL_96"}),
+            json!({"id": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "pool": "BLACKWELL_96"}),
+            json!({"id": "NVIDIA L40S", "pool": "ADA_48_PRO"}),
+            json!({"id": "NVIDIA L40", "pool": "ADA_48_PRO"}),
+            json!({"id": "NVIDIA H200", "pool": "H200"}),
+            json!({"id": "NVIDIA A2", "pool": null}),
+        ]
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn gpu_types_resolve_to_their_pools_with_the_other_types_excluded() {
+        let g = EndpointGpu::resolve(
+            &names(&[
+                "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+                "NVIDIA H200",
+            ]),
+            &catalog(),
+        )
+        .unwrap_or_default();
+        assert_eq!(g.pools, names(&["BLACKWELL_96", "H200"]));
+        assert_eq!(
+            g.excluded_types,
+            names(&["NVIDIA RTX PRO 6000 Blackwell Workstation Edition"])
+        );
+        // Both types of a pool: nothing excluded; a pool by name: whole.
+        let g = EndpointGpu::resolve(&names(&["NVIDIA L40S", "NVIDIA L40"]), &catalog())
+            .unwrap_or_default();
+        assert_eq!(
+            (g.pools, g.excluded_types),
+            (names(&["ADA_48_PRO"]), vec![])
+        );
+        let g = EndpointGpu::resolve(&names(&["ADA_48_PRO"]), &catalog()).unwrap_or_default();
+        assert_eq!(
+            (g.pools, g.excluded_types),
+            (names(&["ADA_48_PRO"]), vec![])
+        );
+        // A type outside every pool, or unknown: refused.
+        assert!(EndpointGpu::resolve(&names(&["NVIDIA A2"]), &catalog()).is_err());
+        assert!(EndpointGpu::resolve(&names(&["NVIDIA B300"]), &catalog()).is_err());
+        assert_eq!(
+            EndpointGpu::unresolved(&names(&["NVIDIA H200"])).pools,
+            names(&["ADA_24"])
+        );
+    }
+
+    #[test]
+    fn the_endpoint_body_is_v2s_shape() {
+        let mut l = crate::launch::script_endpoint(&crate::launch::ScriptEndpoint {
+            name: "n",
+            image: "img",
+            gpus: &["NVIDIA H200"],
+            config: "/etc/fv/x.toml",
+            inline: None,
+            volume: "vol",
+            data_center: "EU-RO-1",
+            guards: crate::guard::default_guards(),
+        });
+        let gpu = EndpointGpu {
+            pools: names(&["H200"]),
+            excluded_types: vec![],
+        };
+        let b = endpoint_body(&l, "tpl", &gpu);
+        assert_eq!(b["type"], "QUEUE");
+        assert_eq!(
+            b["gpu"],
+            json!({"pools": ["H200"], "count": 1, "minCudaVersion": "13.0"})
+        );
+        assert_eq!(b["networkVolumes"], json!(["vol"]));
+        assert_eq!(b["workers"], json!({"min": 0, "max": 1, "idleTimeout": 5}));
+        assert_eq!(
+            b["scaling"],
+            json!({"type": "QUEUE_DELAY", "queueDelay": 1})
+        );
+        assert_eq!(
+            (b["flashboot"].as_str(), b["timeout"].as_u64()),
+            (Some("OFF"), Some(1_800_000))
+        );
+        assert!(b.get("computeType").is_none() && b.get("gpuTypeIds").is_none());
+        let mut s = crate::launch::default_serverless();
+        s.scaler_type = "REQUEST_COUNT".into();
+        s.scaler_value = 4;
+        s.flashboot = true;
+        l.serverless = Some(s);
+        let b = endpoint_body(&l, "tpl", &gpu);
+        assert_eq!(
+            b["scaling"],
+            json!({"type": "REQUEST_COUNT", "requestCount": 4})
+        );
+        assert_eq!(b["workers"], json!({"min": 0, "max": 1}));
+        assert_eq!(b["flashboot"], "FLASHBOOT");
+        // An exact CUDA set replaces the floor (mutually exclusive in v2).
+        l.gpu.allowed_cuda = vec!["12.8".into()];
+        let b = endpoint_body(&l, "tpl", &gpu);
+        assert_eq!(b["gpu"]["allowedCudaVersions"], json!(["12.8"]));
+        assert!(b["gpu"].get("minCudaVersion").is_none());
     }
 }

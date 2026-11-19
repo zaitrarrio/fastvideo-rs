@@ -145,30 +145,27 @@ fn the_upstream_pod_body_equals_runpod_http_sh_plan_upstream_but_the_cap_watchdo
             "fastvideo-wan22" => 210,
             _ => stack.container_disk_gb,
         };
-        assert_eq!(ours["containerDiskInGb"], json!(disk), "{golden}");
+        assert_eq!(ours["disk"], json!(disk), "{golden}");
         // Difference 2: fv-deploy sends `env` always, the script only with an entry.
         ours.as_object_mut().and_then(|m| m.remove("env"));
         theirs.as_object_mut().and_then(|m| m.remove("env"));
         // Difference 1.
-        let cmd = ours["dockerStartCmd"][2]
-            .as_str()
-            .expect("a command")
-            .to_owned();
+        let cmd = ours["cmd"][2].as_str().expect("a command").to_owned();
         let block = cap_block();
         let block = block.replace("@CAP_S@", &stack.wall_cap_s.to_string());
         assert_eq!(cmd.matches(&block).count(), 1, "{golden}: one cap watchdog");
         assert!(cmd.contains(&format!("set -u\n{block}OUT=/root/runs/upstream/{TAG}\n")));
-        ours["dockerStartCmd"][2] = Value::String(cmd.replace(&block, ""));
+        ours["cmd"][2] = Value::String(cmd.replace(&block, ""));
         if ours != theirs {
-            let a = ours["dockerStartCmd"][2].as_str().unwrap_or("");
-            let b = theirs["dockerStartCmd"][2].as_str().unwrap_or("");
+            let a = ours["cmd"][2].as_str().unwrap_or("");
+            let b = theirs["cmd"][2].as_str().unwrap_or("");
             for (i, (x, y)) in a.lines().zip(b.lines()).enumerate() {
                 assert_eq!(x, y, "{golden}: start command line {i}");
             }
             assert_eq!(ours, theirs, "{golden}");
         }
         assert_eq!(
-            ours["minRAMPerGPU"].as_u64(),
+            ours["gpu"]["minRamPerGpu"].as_u64(),
             stack.min_ram_gb.map(u64::from),
             "{golden}"
         );

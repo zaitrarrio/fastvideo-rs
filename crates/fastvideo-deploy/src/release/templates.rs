@@ -21,7 +21,7 @@ use crate::provider::runpod::{
 /// registry; the GHCR package is public, so none is set).
 pub const REGISTRY_AUTH_VAR: &str = "RUNPOD_REGISTRY_AUTH_ID";
 
-/// The REST v1 body of one serve template (`payload`), `create` with the
+/// The REST v2 body of one serve template (`payload`), `create` with the
 /// fields only a create takes.
 pub fn body(
     ctx: &Ctx<'_>,
@@ -53,11 +53,13 @@ fn unknown_image(ctx: &Ctx<'_>, id: &str) -> ReleaseError {
     ))
 }
 
-/// Every template of the account (`GET /templates`).
+/// Every template of the account (`GET /templates`, every page).
 pub fn all(api: &RunpodApi<'_>) -> Result<Vec<Value>, ReleaseError> {
-    let v = api.rest(Method::Get, "/templates", None, "GET templates")?;
     // Not a listing: an error (read as empty, `sync` would create duplicates).
-    super::listing(v, "GET templates")
+    super::listing(
+        api.list("/templates", "templates", "GET templates")?,
+        "GET templates",
+    )
 }
 
 /// The template named `name` (`fv_template_get`).
@@ -103,7 +105,7 @@ pub fn sync(
                     .to_owned();
                 let cur_channel = env_str(&cur, "FV_RELEASE_CHANNEL");
                 let want_channel = channel.filter(|c| !c.is_empty()).unwrap_or(cur_channel);
-                if cur.get("imageName").and_then(Value::as_str) == Some(image)
+                if cur.get("image").and_then(Value::as_str) == Some(image)
                     && cur_channel == want_channel
                     && env_str(&cur, "FV_IMAGE_REF") == image
                 {
@@ -167,7 +169,7 @@ pub fn list(api: &RunpodApi<'_>) -> Result<Vec<String>, ReleaseError> {
                     format!(
                         "{}\t{name}\t{}",
                         t.get("id").and_then(Value::as_str).unwrap_or(""),
-                        t.get("imageName").and_then(Value::as_str).unwrap_or("")
+                        t.get("image").and_then(Value::as_str).unwrap_or("")
                     )
                 })
         })
@@ -180,9 +182,5 @@ pub fn current_image(api: &RunpodApi<'_>, image_id: &str, f: Flavour) -> Option<
     by_name(api, &serve_template_name(image_id, f))
         .ok()
         .flatten()
-        .and_then(|t| {
-            t.get("imageName")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
+        .and_then(|t| t.get("image").and_then(Value::as_str).map(str::to_owned))
 }

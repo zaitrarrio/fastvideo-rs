@@ -94,13 +94,15 @@ describe("what a pod runs", () => {
   });
   it("payload: CPU secure cloud, one DC and flavor, the server and limits in env; no volume: caches on the container disk", () => {
     const p = buildPodPayload({ name: "fv-build-eu-abc123", image: "img:1", flavor: "cpu3c", vcpu: 32, disk_gb: 200, dc: "EU-RO-1", token_sha: "f".repeat(64), server_b64: "SRV", pol }) as any;
-    expect(p).toMatchObject({ computeType: "CPU", cloudType: "SECURE", cpuFlavorIds: ["cpu3c"], vcpuCount: 32, containerDiskInGb: 200, volumeInGb: 0, dataCenterIds: ["EU-RO-1"], ports: ["8000/http"] });
-    expect(p.networkVolumeId).toBeUndefined();
-    expect(p.dockerStartCmd).toEqual(["/bin/bash", "-c", BUILD_POD_START_CMD]);
+    // REST v2: a `cpu` block (flavor and vCPUs), `cloud`, `disk`; no `mounts` (no pod volume, no network volume).
+    expect(p).toMatchObject({ cloud: "SECURE", cpu: { id: "cpu3c", vcpuCount: 32 }, disk: 200, dataCenterIds: ["EU-RO-1"], ports: ["8000/http"] });
+    expect(p.mounts).toBeUndefined();
+    expect(p).not.toHaveProperty("gpu");
+    expect(p.cmd).toEqual(["/bin/bash", "-c", BUILD_POD_START_CMD]);
     expect(p.env).toMatchObject({ FV_BUILD_TOKEN_SHA256: "f".repeat(64), FV_BUILD_SERVER_B64: "SRV", FV_BUILD_IDLE_MIN: "20", FV_BUILD_MAX_HOURS: "8", FV_BUILD_MAX_GRACE_MIN: "30", FV_BUILD_EVICT_FREE_GB: "40", FV_BUILD_ROOT: "/root/fvb-cache", FV_BUILD_MANAGED: "fv-control" });
     expect(Object.keys(p.env).some((k) => k.startsWith("FV_BUILD_R2_"))).toBe(false);
     const v = buildPodPayload({ name: "n", image: "i", flavor: "cpu3c", vcpu: 16, disk_gb: 80, dc: "EU-RO-1", volume_id: "pxy4hlsnwq", token_sha: "x", server_b64: "y", pol, r2: { endpoint: "https://a.r2", bucket: "fv-build-cache", key_id: "K", secret: "S" } }) as any;
-    expect(v).toMatchObject({ networkVolumeId: "pxy4hlsnwq", volumeMountPath: "/workspace" });
+    expect(v).toMatchObject({ mounts: { network: [{ volumeId: "pxy4hlsnwq", path: "/workspace" }] } });
     expect(v.env.FV_BUILD_ROOT).toBeUndefined();
     expect(v.env.FV_BUILD_EVICT_FREE_GB).toBe("16");
     expect(v.env).toMatchObject({ FV_BUILD_R2_ENDPOINT: "https://a.r2", FV_BUILD_R2_BUCKET: "fv-build-cache", FV_BUILD_R2_ACCESS_KEY_ID: "K", FV_BUILD_R2_SECRET_ACCESS_KEY: "S" });
@@ -108,6 +110,10 @@ describe("what a pod runs", () => {
   it("the start command unpacks the server, runs the curl watchdog and the server loop", () => {
     expect(BUILD_POD_START_CMD).toContain('base64 -d | gunzip >/opt/fvb/server.py');
     expect(BUILD_POD_START_CMD).toContain("podTerminate");
+    // REST v2 (v1's rest.runpod.io is retired): the stop is POST /pods/<id>/action {action: stop}, then DELETE /pods/<id>.
+    expect(BUILD_POD_START_CMD).toContain('-X POST -d \'{"action":"stop"}\' "https://api.runpod.io/v2/pods/$RUNPOD_POD_ID/action"');
+    expect(BUILD_POD_START_CMD).toContain('-X DELETE "https://api.runpod.io/v2/pods/$RUNPOD_POD_ID"');
+    expect(BUILD_POD_START_CMD).not.toContain("rest.runpod.io");
     expect(BUILD_POD_START_CMD).toContain("while true; do python3 /opt/fvb/server.py");
   });
 });

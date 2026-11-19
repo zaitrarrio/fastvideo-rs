@@ -27,8 +27,8 @@
 //! 6. **Global budget** across pools (busy workers first, then floors, then
 //!    the rest by priority and queue urgency), and the **balance floor**:
 //!    below it only busy workers survive (hard stop).
-//! 7. **Actions**: serverless → endpoint `workersMin = target`,
-//!    `workersMax = cap` (never below busy); pods → create / drain / undrain
+//! 7. **Actions**: serverless → endpoint `workers.min = target`,
+//!    `workers.max = cap` (never below busy); pods → create / drain / undrain
 //!    / delete, with drain-before-delete, a boot timeout and a max lifetime
 //!    (expired workers are replaced first, drained once the replacement is
 //!    ready).
@@ -279,7 +279,7 @@ fn want(
                 && !boot_timed_out(pool, w, now)
         })
         .count() as u32;
-    // Serverless: the control variable is the endpoint's `workersMin`
+    // Serverless: the control variable is the endpoint's `workers.min`
     // (Runpod adds and reaps workers above it itself).
     let current = match (pool.kind, obs.endpoint.as_ref()) {
         (PoolKind::Serverless, Some(e)) => e.workers_min,

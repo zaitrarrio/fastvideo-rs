@@ -10,9 +10,10 @@ Status: 2026-10-06, branch `feat/fvc-serverless`. Code: `control/src/serverless/
 `serves.ts`), the CLI `scripts/serve/fv-control.sh endpoint …`.
 
 Since 2026-10-25 (plan C3c, [ADR-0018 §7](../adr/0018-fv-deploy.md)) a GPU endpoint is a `Launch` of fv-deploy's schema
-(`payloads.ts endpointLaunch`): its template, endpoint, both REST v1 PATCHes and the fields of the REST v2 create
-come from that one value, the template and endpoint by the Rust provider's rules (`control/src/launch.ts`). CPU
-endpoints and the v2 envelope keep their own shapes (Launch v1 has no CPU compute; LB mode is an open owner decision).
+(`payloads.ts endpointLaunch`): its template, endpoint and both PATCHes come from that one value, the template and
+endpoint by the Rust provider's rules (`control/src/launch.ts`). CPU endpoints keep their own shape (Launch v1 has no
+CPU compute; LB mode is an open owner decision). Since 2026-11-19 every call is REST v2 (`api.runpod.io/v2`): REST v1
+(`rest.runpod.io/v1`) is retired (its host no longer resolves; "deprecated and no longer available").
 
 fv-control creates, updates, scales, invokes and deletes Runpod serverless
 endpoints of fv-serve: one image variant behind Runpod's **queue** (`/run`,
@@ -78,8 +79,9 @@ store (docs/ops/r2-weights.md). A GPU endpoint takes `weights_source`:
   (docs/ops/r2-bench-2026-10-12.md finding 2). Runpod labels each host by its driver's CUDA version. On 2026-10-14
   (GraphQL `lowestPrice` by `allowedCudaVersions`) every Secure RTX PRO 6000 host was labelled `"13.2"`, H100 hosts
   `"13.0"`, and H200 hosts `"13.0"` or `"13.2"`. So the old default `allowed_cuda: ["13.0"]` hid every RTX PRO 6000
-  ("no capacity", or workers that never started). REST v1 cannot list the newer hosts either: it refuses `"13.1"`
-  and `"13.2"` (400, enum ends at `"13.0"`). Hence:
+  ("no capacity", or workers that never started). REST v1 could not list the newer hosts either: it refused `"13.1"`
+  and `"13.2"` (400, enum ends at `"13.0"`; REST v2 takes any `major.minor`, but the rule below stands until a v2
+  run says otherwise). Hence:
   - every GPU endpoint gets **`minCudaVersion: "13.0"`** (create and every PATCH; `MIN_CUDA` in `src/enums.ts`).
     Runpod applies it as a minimum, so a `"13.2"` host passes and a 12.x host does not;
   - **`allowed_cuda` defaults to `[]`** (no exact list) for every weights source (`DEFAULT_ALLOWED_CUDA`). It becomes
@@ -378,32 +380,46 @@ Ref2VA): it needs a new worker config whose three-DiT swap (memory on a 96 GB
 card, swap latency) was never measured on a GPU, so it is left for a GPU run.
 `h3-ref2v` already swaps its two Ref2VA DiTs.
 
-## 2. Runpod API (checked live 2026-10-06)
+## 2. Runpod API (REST v2 since 2026-11-19; v1 checked live 2026-10-06)
+
+Every REST call is v2, `https://api.runpod.io/v2` (`RUNPOD_REST`; the older `RUNPOD_REST2` name still works). v1
+(`rest.runpod.io/v1`, the `/endpoints` and `/billing/endpoints` routes) is retired: its host has no DNS record. The
+v1 → v2 field mapping is documented on the builders (`control/src/launch.ts`, `serverless/payloads.ts`):
+`imageName` → `image`, `containerDiskInGb` → `disk`, `dockerEntrypoint` / `dockerStartCmd` → `entrypoint` / `cmd`,
+`isServerless` → `serverless`, `computeType` + `gpuTypeIds` + `gpuCount` → `gpu: {pools, excludedTypes, count}` (pools
+from the catalog, see below) or `cpu: [{id, vcpuCount}]`, `workersMin` / `workersMax` / `idleTimeout` → `workers`,
+`scalerType` + `scalerValue` → `scaling: {type, queueDelay | requestCount}`, `flashboot` → `"OFF"` / `"FLASHBOOT"`,
+`executionTimeoutMs` → `timeout`, `networkVolumeId` → `networkVolumes: [id]`, `type: QUEUE | LOAD_BALANCER` required.
 
 | call | used for |
 |---|---|
-| REST v1 `POST /templates` + `POST /endpoints` | GPU queue endpoints (`runpod-endpoint.sh`'s path) |
-| REST v2 `POST https://api.runpod.io/v2/serverless` | CPU queue endpoints (`type: QUEUE`, `cpu: [{id, vcpuCount}]`) and load balancers (`type: LOAD_BALANCER`, `gpu.pools` from `GET /v2/catalog/gpus`). v2 makes the endpoint's template and Runpod deletes it with the endpoint |
-| REST v1 `PATCH /endpoints/<id>` | every update and scale (also of v2-made endpoints), and the reconcile after create |
-| REST v1 `PATCH /templates/<id>` | image / env / config updates (also of v2-made templates) |
-| REST v1 `DELETE /endpoints/<id>`, `DELETE /templates/<id>` | delete |
-| REST v1 `GET /endpoints/<id>?includeWorkers=true` | the endpoint and its workers (never its template's env, which Runpod returns in clear: views pick named fields) |
-| REST v1 `GET /billing/endpoints?bucketSize=day&grouping=endpointId` | spend per endpoint and day: `amount` ($), `timeBilledMs` |
+| `GET /catalog/gpus` | the serverless **pool** of each GPU type (`pool`): v2 names pools, not types. A GPU endpoint's `gpu.pools` are its types' pools, the pools' other types in `excludedTypes`, so the workers run on exactly the types asked for (`launch.ts gpuPools`, the Rust provider's `EndpointGpu::resolve`); a type in no pool is refused (409) before anything is created |
+| `POST /templates` + `POST /serverless` (`templateId`) | every endpoint: GPU and CPU, queue and load balancer alike (the template carries image, env, boot and, for an LB, `ports: ["8000/http"]`; the endpoint its `type`, `gpu` or `cpu`, scaling and placement). The template is resolved into the endpoint at create: v2 keeps no link |
+| `PATCH /serverless/<id>` | every update and scale, and the reconcile after create; with `templateId` after a template change, which re-applies the template's image / env / boot to the workers (one-time, no link kept) |
+| `PATCH /templates/<id>` | image / env / config updates (kept current for the re-apply and the next recreate) |
+| `DELETE /serverless/<id>`, `DELETE /templates/<id>` | delete |
+| `GET /serverless/<id>` + `GET /serverless/<id>/workers` | the endpoint and its workers (never its env, which Runpod returns in clear: views pick named fields; v1's `?includeWorkers=true` is two calls) |
+| `GET /billing/serverless?bucketSize=day&startTime=…` | spend per endpoint and day: `serverlessId`, `startTime`, `totalAmount` ($). v2 reports no billed time (v1's `timeBilledMs`): the ledger's `minutes` for serverless is 0. (v2's `/billing/endpoints` is a different product, Runpod's public endpoints) |
 | `https://api.runpod.ai/v2/<id>/health`, `/runsync`, `/run`, `/status/<job>` | health (jobs, workers idle/running/initializing/throttled/unhealthy), test invokes |
 | `https://<id>.api.runpod.ai/<path>` | load-balancer test invokes |
-| GraphQL `myself { clientBalance endpoints { id name type pods { id desiredStatus costPerHr } } }` | the balance and live workers with $/hr, one call per tick |
+| GraphQL `myself { clientBalance endpoints { id name type pods { id desiredStatus costPerHr } } }` | the balance and live workers with $/hr, one call per tick (also the per-worker $/hr of the endpoint page: v2's worker list carries none) |
 | `hapi.runpod.net/v1/pod/<worker>/logs` | a worker's container and system log tail (the pods' log endpoint works for serverless workers) |
 
-Runpod quirks found live, and handled:
+v2 refuses unknown body keys (`errors: ["$: additional properties … not allowed"]`), so v1's `readme` on a template
+and `cpuFlavorPriority` on a build pod have no v2 field and are not sent; `workers.idleTimeout` is not sent under
+the `REQUEST_COUNT` scaler and a CUDA list is not sent beside `minCudaVersion` (both 400 in v2).
 
-- **REST v1 ignores `computeType: CPU`**: the endpoint gets GPU workers (the
-  first live run's "CPU" worker was an RTX 2000 Ada). CPU endpoints go through v2.
-- **REST v1 create drops `flashboot: false` and `workersMax: 0`** (FlashBoot
-  on, max 3). Every create is followed by a `PATCH` with the spec's scaling
-  fields.
-- **`computeType` is not an update field**: `PATCH` refuses it ("Extra input keys").
-- A v2-made template is deleted with its endpoint; its `DELETE` then answers
-  400 "template not found", which counts as gone.
+Runpod quirks found live on v1, and how they stand on v2:
+
+- **REST v1 ignored `computeType: CPU`**: the endpoint got GPU workers (the first live run's "CPU" worker was an
+  RTX 2000 Ada). v2 places CPU workers from the endpoint's `cpu` list; every endpoint now goes through the one
+  template + endpoint path.
+- **REST v1's create dropped `flashboot: false` and `workersMax: 0`** (FlashBoot on, max 3). Every create is still
+  followed by a `PATCH` with the spec's scaling fields (harmless if v2 keeps them; not yet checked live on v2).
+- **`computeType` was not an update field** (v1 `PATCH` refused it): v2 has no such field; the `cpu` list is never
+  PATCHed (fv-control recreates for new flavors or vCPUs).
+- A template Runpod had deleted with its endpoint answered 400 "template not found" on `DELETE`, which counts as
+  gone (v2 answers 404; both count).
 - Serverless workers are **not** in `myself { pods }`, so the per-minute pod
   collector never double-counts them; their cost comes only from billing.
 
@@ -659,7 +675,7 @@ Driver: `control/test/live/serverless-live.ts` (`npx vite-node …`). It runs
 the same `ops.ts` / `payloads.ts` against the real Runpod API, with an
 in-memory D1 (staging's D1 untouched). It also starts a detached 45-min backstop.
 
-**Run 1 (the `fvc-sls-live` endpoint, `yjy0sfsbk1o9l8`, REST v1 path).**
+**Run 1 (the `fvc-sls-live` endpoint, `yjy0sfsbk1o9l8`, the then REST v1 path; not yet re-run on v2).**
 
 - Create took 2.3 s.
 - Cold info job: queue wait 14.3 s, exec 0.18 s.

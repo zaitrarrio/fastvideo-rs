@@ -62,7 +62,10 @@ export interface Env {
   RELEASE_WORKFLOW?: string; // release.yml
   SERVE_REPO?: string; // ghcr.io/zaitrarrio/fastvideo-rs-serve
   // Upstream bases (tests point them at a mock server).
+  /** Runpod REST v2 (`https://api.runpod.io/v2`: pods, templates, serverless endpoints, billing, the catalog). v1
+   * (`rest.runpod.io/v1`) is retired. `RUNPOD_REST2` was the v2 base while v1 was still in use and is still read. */
   RUNPOD_REST?: string;
+  RUNPOD_REST2?: string;
   RUNPOD_GRAPHQL?: string;
   RUNPOD_HAPI?: string;
   GITHUB_API?: string;
@@ -170,7 +173,7 @@ export type Vars = {
 };
 
 export const defaults = {
-  runpodRest: (e: Env) => e.RUNPOD_REST || "https://rest.runpod.io/v1",
+  runpodRest: (e: Env) => e.RUNPOD_REST || e.RUNPOD_REST2 || "https://api.runpod.io/v2",
   runpodGraphql: (e: Env) => e.RUNPOD_GRAPHQL || "https://api.runpod.io/graphql",
   runpodHapi: (e: Env) => e.RUNPOD_HAPI || "https://hapi.runpod.net/v1",
   githubApi: (e: Env) => e.GITHUB_API || "https://api.github.com",

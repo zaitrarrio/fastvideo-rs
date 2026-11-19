@@ -1,13 +1,17 @@
-// Runpod's refusals made readable. REST v1 answers a schema violation with
-// {"error": …, "problems": ["At /endpoints/properties/gpuTypeIds/items/enum:
-// value must be one of 'AMD Instinct MI300X OAM', …"]}: dozens of allowed
-// values before anything useful, which the 300- and 500-character cuts used to
-// lose. This puts the field, the value we sent and the closest allowed values
-// first, then the rest of the list.
+// Runpod's refusals made readable. REST v2 answers with an ErrorResponse
+// {"title": "Bad Request", "status": 400, "detail": "…", "errors": ["$:
+// additional properties 'bogus' not allowed", …]}; REST v1 answered a schema
+// violation with {"error": …, "problems": ["At /endpoints/properties/
+// gpuTypeIds/items/enum: value must be one of 'AMD Instinct MI300X OAM', …"]}:
+// dozens of allowed values before anything useful, which the 300- and
+// 500-character cuts used to lose. GraphQL, the queue API and hapi still
+// answer {"error": …} / {"message": …}. This puts the field, the value we sent
+// and the closest allowed values first, then the rest of the list.
 import { closeMatches } from "./enums";
 
 const ENUM_RE = /^At\s+(\S+?):\s*value must be one of\s+(.*)$/s;
-/** One `problems` entry → "gpuTypeIds: sent "RTX 6000 PRO" (did you mean …); allowed: …". */
+/** One `problems` / `errors` entry → "gpuTypeIds: sent "RTX 6000 PRO" (did you mean …); allowed: …" (an entry in
+ * another form is returned as is). */
 export function readableProblem(p: string, sent?: unknown): string {
   const m = ENUM_RE.exec(String(p).trim());
   if (!m) return String(p);
@@ -23,7 +27,8 @@ export function readableProblem(p: string, sent?: unknown): string {
   });
   return `${field}: ${bad.length ? `Runpod refused ${parts.join(", ")}` : "a value Runpod does not accept"}; allowed (${allowed.length}): ${allowed.join(", ")}`;
 }
-/** The message of a Runpod error body: its `problems` made readable first, then `error` / `message`. `sent`: the JSON we posted. */
+/** The message of a Runpod error body: its validation failures (v2 `errors`, v1 `problems`) made readable first,
+ * then `detail` / `error` / `message` (v2's `title` when nothing else says more). `sent`: the JSON we posted. */
 export function runpodErrorText(body: unknown, sentJson?: string | null): string {
   let sent: unknown;
   try {
@@ -33,8 +38,9 @@ export function runpodErrorText(body: unknown, sentJson?: string | null): string
   }
   if (body && typeof body === "object") {
     const b = body as Record<string, any>;
-    const problems = Array.isArray(b.problems) ? b.problems.map((p: unknown) => readableProblem(typeof p === "string" ? p : JSON.stringify(p), sent)) : [];
-    const head = typeof b.error === "string" ? b.error : typeof b.message === "string" ? b.message : "";
+    const list = Array.isArray(b.errors) ? b.errors : Array.isArray(b.problems) ? b.problems : [];
+    const problems = list.map((p: unknown) => readableProblem(typeof p === "string" ? p : JSON.stringify(p), sent));
+    const head = typeof b.detail === "string" ? b.detail : typeof b.error === "string" ? b.error : typeof b.message === "string" ? b.message : typeof b.title === "string" ? b.title : "";
     if (problems.length) return `${problems.join("; ")}${head && !/^At /.test(head) ? ` (${head})` : ""}`;
     if (head) return head;
     return JSON.stringify(b).slice(0, 2000);

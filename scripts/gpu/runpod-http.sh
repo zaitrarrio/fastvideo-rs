@@ -75,7 +75,7 @@
 # fv-weights-h3-ltx-500), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
 # (per-cell cap, default 3600), FV_PROMPTS / FV_LPIPS (forwarded to
 # runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells),
-# FV_MIN_RAM_GB (PodCreateInput minRAMPerGPU, whole GB: the pod's host RAM floor;
+# FV_MIN_RAM_GB (CreatePodRequest gpu.minRamPerGpu, whole GB: the pod's host RAM floor;
 # unset = Runpod's default floor of 8 GB per GPU, above which the host's share
 # decides; too small a share is the suspected cause of the 2026-10-26 upstream
 # H3 LoRA failure, docs/oracle.md "Upstream cells: host RAM"; an fv-lab tier's
@@ -118,7 +118,8 @@ source "$HERE/runpod-cuda.sh"
 # shellcheck source-path=SCRIPTDIR source=fv-lab-retired.sh
 source "$HERE/fv-lab-retired.sh"
 ROOT="$(cd "$HERE/../.." && pwd)"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GPU="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
 # EU only since 2026-10 (scripts/gpu/volumes.sh); the US name joins the list
 # again once FV_US_VOLUME_NAME is set there.
@@ -179,7 +180,7 @@ esac
 [[ -z "${UP_HUB_TOKEN:-}" || "$UP_HUB_TOKEN" == 0 || "$UP_HUB_TOKEN" == 1 ]] \
   || die "UP_HUB_TOKEN is 1 (pass the Hub token's secret reference), 0 (do not) or unset (for weights:ltx25* steps), not '$UP_HUB_TOKEN'"
 [[ -z "${FV_MIN_RAM_GB:-}" || "$FV_MIN_RAM_GB" =~ ^[1-9][0-9]*$ ]] \
-  || die "FV_MIN_RAM_GB is the pod's minRAMPerGPU in whole GB (e.g. 192), not '$FV_MIN_RAM_GB'"
+  || die "FV_MIN_RAM_GB is the pod's gpu.minRamPerGpu in whole GB (e.g. 192), not '$FV_MIN_RAM_GB'"
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 rest() {
   local method="$1" path="$2" body="${3:-}"
@@ -193,13 +194,13 @@ proxy() { curl -sS --max-time 30 --fail "https://$1-8000.proxy.runpod.net/$2"; }
 # whose datacenter currently reports stock for $GPU wins, else the first.
 volume() {
   if [[ -n "${RUNPOD_VOLUME_ID:-}" ]]; then
-    rest GET "/networkvolumes/$RUNPOD_VOLUME_ID" | jq -r '"\(.id) \(.dataCenterId)"'
+    rest GET "/network-volumes/$RUNPOD_VOLUME_ID" | jq -r '"\(.id) \(.dataCenter)"'
     return
   fi
   local vols name line first="" dc stock
-  vols="$(rest GET /networkvolumes)"
+  vols="$(rest GET /network-volumes)"
   for name in $VOL_NAME; do
-    line="$(jq -r --arg n "$name" '.[] | select(.name==$n) | "\(.id) \(.dataCenterId)"' <<<"$vols" | head -1)"
+    line="$(jq -r --arg n "$name" '.networkVolumes[] | select(.name==$n) | "\(.id) \(.dataCenter)"' <<<"$vols" | head -1)"
     [[ -n "$line" ]] || continue
     first="${first:-$line}"
     dc="${line#* }"
@@ -427,7 +428,7 @@ EOF
 }
 
 # $1 = image, $2 = run tag, $3 = mode, $4 = volume id, $5 = its datacentre:
-# the PodCreateInput `create_pod` sends (and `plan` prints).
+# the REST v2 CreatePodRequest `create_pod` sends (and `plan` prints).
 # upstream_hub_token: whether an upstream pod gets HF_TOKEN as the Runpod
 # secret reference {{ RUNPOD_SECRET_fv_hf_token }} (the owner's secret, never
 # its value; docs/ops/runpod-secrets.md). UP_HUB_TOKEN=1 / 0 forces it;
@@ -469,14 +470,15 @@ pod_payload() {
       + (if $r2 then {FV_WEIGHTS_R2_ACCESS_KEY_ID: "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
           FV_WEIGHTS_R2_SECRET_ACCESS_KEY: "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}"} else {} end)) as $env
     | {
-      name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
-      gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
-      ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
-    } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)
-      + (if $ram == "" then {} else {minRAMPerGPU: ($ram|tonumber)} end)
-      + (if $env == {} then {} else {env: $env} end)
+      name: $name, image: $image, cloud: $cloud,
+      gpu: ({id: $gpu, count: 1}
+        + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)
+        + (if $ram == "" then {} else {minRamPerGpu: ($ram|tonumber)} end)),
+      disk: ($disk|tonumber),
+      ports: ["8000/http"], cmd: ["/bin/bash", "-c", $cmd]
+    } + (if $env == {} then {} else {env: $env} end)
       + (if $vol == "" then {} else
-      {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)'
+      {mounts: {network: [{volumeId: $vol, path: "/workspace"}]}, dataCenterIds: [$dc]} end)'
 }
 
 create_pod() {
@@ -508,9 +510,10 @@ create_pod() {
     done
     id="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$id" ]] || die "pod create returned no id: $resp"
+    # REST v2 has no machine id on a pod: GraphQL still reports it.
     local machine
-    machine="$(jq -r '.machineId // empty' <<<"$resp")"
-    [[ -n "$machine" ]] || machine="$(rest GET "/pods/$id" 2>/dev/null | jq -r '.machineId // empty' 2>/dev/null || true)"
+    machine="$(curl -sS -H "Authorization: Bearer $RUNPOD_API_KEY" -H 'content-type: application/json' https://api.runpod.io/graphql \
+      -d "{\"query\":\"{ pod(input: {podId: \\\"$id\\\"}) { machineId } }\"}" 2>/dev/null | jq -r '.data.pod.machineId // empty' 2>/dev/null || true)"
     if [[ -n "$machine" && " ${FV_AVOID_MACHINES:-} " == *" $machine "* ]]; then
       rest DELETE "/pods/$id" >/dev/null || true
       (( $(date +%s) - t0 < wait )) || die "only avoided hosts ($machine) offered within ${wait}s"
@@ -520,12 +523,12 @@ create_pod() {
     fi
     break
   done
-  dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
+  dph="$(jq -r '.cost // 0' <<<"$resp")"
   if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then
     rest DELETE "/pods/$id" >/dev/null || true
     die "pod $id at \$$dph/hr exceeds cap \$$MAX_DPH"
   fi
-  log "pod $id  \$$dph/hr  (hard cap ${CAP_S}s)  ram=$(jq -r '.memoryInGb // "?"' <<<"$resp")GB vcpu=$(jq -r '.vcpuCount // "?"' <<<"$resp")"
+  log "pod $id  \$$dph/hr  (hard cap ${CAP_S}s)  ram=$(jq -r '.gpu.memory // "?"' <<<"$resp")GB vcpu=$(jq -r '.gpu.vcpuCount // "?"' <<<"$resp")"
   # Wall-clock backstop independent of this shell's lifetime.
   nohup bash -c "sleep $CAP_S; curl -sS -X DELETE -H 'Authorization: Bearer $RUNPOD_API_KEY' '$API/pods/$id' >/dev/null" >/dev/null 2>&1 &
   echo "$id"
@@ -604,7 +607,7 @@ wait_done() {
     if [[ "$FAMILY" == upstream ]] && curl -sS --max-time 30 --fail -o /dev/null -w '%{size_download}' \
       "https://$id-8000.proxy.runpod.net/$FAMILY/$tag/DONE" 2>/dev/null | grep -qx 0; then return 0; fi
     local status
-    status="$(rest GET "/pods/$id" 2>/dev/null | jq -r '.desiredStatus // "GONE"' 2>/dev/null || echo UNKNOWN)"
+    status="$(rest GET "/pods/$id" 2>/dev/null | jq -r '.status // "GONE"' 2>/dev/null || echo UNKNOWN)"
     if [[ "$status" == "GONE" || "$status" == "EXITED" || "$status" == "TERMINATED" ]]; then
       log "pod $id is $status before finishing (deleted outside this driver?)"
       return 1

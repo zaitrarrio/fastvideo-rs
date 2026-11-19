@@ -176,7 +176,7 @@ for FAMILY in $FAMILIES; do
     idle=$(( (600 + cell + 59) / 60 + 15 )); (( idle >= 30 )) || idle=30
     r2_body=(FV_CONTAINER_DISK_GB="$disk" FV_IDLE_GPU_MIN="$idle" FV_IDLE_GPU_GRACE_MIN="$idle")
     # Its host-RAM floor (min_ram_gb, ADR-0019 §16.10) is the script's
-    # FV_MIN_RAM_GB: minRAMPerGPU in both bodies.
+    # FV_MIN_RAM_GB: gpu.minRamPerGpu (REST v2) in both bodies.
     ram="$(tv min_ram_gb)"
     if [[ -n "$ram" ]]; then
       [[ "$ram" =~ ^[1-9][0-9]*$ ]] || { echo "fv-lab-goldens: the $FAMILY tier's min_ram_gb '$ram' is not a positive whole number" >&2; exit 2; }

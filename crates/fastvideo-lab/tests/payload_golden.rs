@@ -18,7 +18,7 @@
 //! The name is equal because the golden is made with `FV_POD_PREFIX=fv-lab`.
 //! A tier's host-RAM floor (`min_ram_gb`, ADR-0019 §16.10) is no difference:
 //! the golden passes it as the script's `FV_MIN_RAM_GB`, and both bodies
-//! carry `minRAMPerGPU`; a tier without one has the field in neither.
+//! carry `gpu.minRamPerGpu`; a tier without one has the field in neither.
 //!
 //! For the tiers of `scripts/gpu/fv-lab-retired.sh` the fixture is frozen
 //! (ADR-0019 §10): `runpod-http.sh run` hands them to `fv-lab pod up`, so the
@@ -83,14 +83,14 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         );
         r2_tiers += usize::from(tier.weights == TierWeights::VolumeR2);
         assert_eq!(
-            ours.get("minRAMPerGPU").and_then(Value::as_u64),
+            ours["gpu"].get("minRamPerGpu").and_then(Value::as_u64),
             tier.min_ram_gb.map(u64::from),
-            "{family}: minRAMPerGPU is the tier's min_ram_gb"
+            "{family}: gpu.minRamPerGpu is the tier's min_ram_gb"
         );
         floors += usize::from(tier.min_ram_gb.is_some());
         // Difference 1.
         let mut theirs = fixture(family);
-        let mut cmd = theirs["dockerStartCmd"][2]
+        let mut cmd = theirs["cmd"][2]
             .as_str()
             .expect("a start command")
             .to_owned();
@@ -110,11 +110,11 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
             1,
             "{family}: the runner line moved"
         );
-        theirs["dockerStartCmd"][2] = Value::String(cmd.replace(&script, &lab_run));
+        theirs["cmd"][2] = Value::String(cmd.replace(&script, &lab_run));
         restored += usize::from(common::restored_tier(family).is_some());
         if ours != theirs {
-            let a = ours["dockerStartCmd"][2].as_str().unwrap_or("");
-            let b = theirs["dockerStartCmd"][2].as_str().unwrap_or("");
+            let a = ours["cmd"][2].as_str().unwrap_or("");
+            let b = theirs["cmd"][2].as_str().unwrap_or("");
             for (i, (x, y)) in a.lines().zip(b.lines()).enumerate() {
                 assert_eq!(x, y, "{family}: start command line {i}");
             }
@@ -144,7 +144,7 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
         .filter(|t| t.name.starts_with("sol-bench-"))
     {
         let f = fixture(&t.name);
-        let cmd = f["dockerStartCmd"][2].as_str().unwrap_or("");
+        let cmd = f["cmd"][2].as_str().unwrap_or("");
         assert!(
             cmd.contains(
                 "if [ \"1\" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then"
@@ -162,21 +162,16 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
             "{}: the cell cap",
             t.name
         );
-        assert_eq!(
-            f["containerDiskInGb"],
-            json!(t.container_disk_gb),
-            "{}",
-            t.name
-        );
+        assert_eq!(f["disk"], json!(t.container_disk_gb), "{}", t.name);
         if t.weights == TierWeights::VolumeR2 {
             assert!(
                 cmd.contains("lim=80; [ \"$used\" = 1 ] && lim=80"),
                 "{}: the idle limit",
                 t.name
             );
-            assert_eq!(f["minRAMPerGPU"], json!(188), "{}", t.name);
+            assert_eq!(f["gpu"]["minRamPerGpu"], json!(188), "{}", t.name);
         } else {
-            assert_eq!(f["containerDiskInGb"], json!(120), "{}", t.name);
+            assert_eq!(f["disk"], json!(120), "{}", t.name);
         }
     }
     assert_eq!(fastvideo_lab::weights::r2_idle_min(3300), 80);
@@ -199,9 +194,9 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     // its 5400 s cell cap: 115 min), as runpod-http.sh plan's with those.
     let r2 = fixture("oracle-r2");
     let vol = fixture("oracle");
-    assert_eq!(r2["containerDiskInGb"], json!(150));
-    assert_eq!(vol["containerDiskInGb"], json!(120));
-    let cmd = r2["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert_eq!(r2["disk"], json!(150));
+    assert_eq!(vol["disk"], json!(120));
+    let cmd = r2["cmd"][2].as_str().unwrap_or("");
     assert!(
         cmd.contains("lim=115; [ \"$used\" = 1 ] && lim=115"),
         "the idle limit"
@@ -211,8 +206,8 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     // disk (150 GB: fastwan21-1.3b's 29.21 GB and the 120 GB) and the idle
     // limit (r2_idle_min of its 3600 s cell cap: 85 min).
     let se = fixture("serve-engine");
-    assert_eq!(se["containerDiskInGb"], json!(150));
-    let cmd = se["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert_eq!(se["disk"], json!(150));
+    let cmd = se["cmd"][2].as_str().unwrap_or("");
     assert!(
         cmd.contains("lim=85; [ \"$used\" = 1 ] && lim=85"),
         "the idle limit"
@@ -222,8 +217,8 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     // 28.93 GB and the 120 GB), 85 min, and the TAE fetch at start (`tae =
     // true`: its arms read `{tae}` without a TAE gate, Addition 16).
     let sf = fixture("sfstream");
-    assert_eq!(sf["containerDiskInGb"], json!(150));
-    let cmd = sf["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert_eq!(sf["disk"], json!(150));
+    let cmd = sf["cmd"][2].as_str().unwrap_or("");
     assert!(
         cmd.contains("lim=85; [ \"$used\" = 1 ] && lim=85"),
         "the idle limit"
@@ -239,8 +234,8 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     // and mmaudio-44k-v2 at once, 50.68 GB, and the 120 GB), 85 min, and the
     // TAE fetch at start (its Wan arms read `{tae}` without a TAE gate).
     let mm = fixture("mmaudio");
-    assert_eq!(mm["containerDiskInGb"], json!(180));
-    let cmd = mm["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert_eq!(mm["disk"], json!(180));
+    let cmd = mm["cmd"][2].as_str().unwrap_or("");
     assert!(
         cmd.contains("lim=85; [ \"$used\" = 1 ] && lim=85"),
         "the idle limit"
@@ -255,8 +250,8 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     // fv-lab's drop-then-fetch plan holds at once, and the 120 GB), 85 min,
     // the TAE fetch at start (its 45 gated arms read `{tae}`, Addition 16).
     let wan = fixture("wan");
-    assert_eq!(wan["containerDiskInGb"], json!(210));
-    let cmd = wan["dockerStartCmd"][2].as_str().unwrap_or("");
+    assert_eq!(wan["disk"], json!(210));
+    let cmd = wan["cmd"][2].as_str().unwrap_or("");
     assert!(
         cmd.contains("lim=85; [ \"$used\" = 1 ] && lim=85"),
         "the idle limit"
@@ -277,7 +272,7 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     );
     assert_eq!(lab.tier("gold").and_then(|t| t.min_ram_gb), Some(256));
     assert_eq!(lab.tier("wan").and_then(|t| t.min_ram_gb), Some(256));
-    assert_eq!(wan["minRAMPerGPU"], json!(256));
+    assert_eq!(wan["gpu"]["minRamPerGpu"], json!(256));
 }
 
 /// The script runner's pod for a `volume+r2` tier's GPU check (ADR-0019
@@ -313,12 +308,8 @@ fn script_side_r2_pod_on(tier: &str, golden: &str, plain: &str, trees: &[&str], 
         .map(|(k, v)| (k, Value::String(v)))
         .collect();
     assert_eq!(body["env"], Value::Object(refs), "{tier}");
-    assert_eq!(
-        body["containerDiskInGb"].as_u64(),
-        Some(u64::from(disk)),
-        "{tier}"
-    );
-    let cmd = body["dockerStartCmd"][2].as_str().expect("a start command");
+    assert_eq!(body["disk"].as_u64(), Some(u64::from(disk)), "{tier}");
+    let cmd = body["cmd"][2].as_str().expect("a start command");
     let idle = fastvideo_lab::weights::r2_idle_min(t.cell_timeout_s);
     assert!(
         cmd.contains(&format!("lim={idle}; [ \"$used\" = 1 ] && lim={idle}")),
@@ -353,7 +344,7 @@ fn script_side_r2_pod_on(tier: &str, golden: &str, plain: &str, trees: &[&str], 
     // Without FV_R2_TREES: no env, the volume's root.
     let plain = fixture(plain);
     assert!(plain.get("env").is_none(), "{tier}");
-    let pcmd = plain["dockerStartCmd"][2].as_str().unwrap_or("");
+    let pcmd = plain["cmd"][2].as_str().unwrap_or("");
     assert!(
         pcmd.contains("env  FV_WORK=/workspace FV_SCRATCH=$SCRATCH "),
         "{tier}"
@@ -369,7 +360,7 @@ fn the_script_side_r2_pod_reads_its_trees_as_the_oracle_r2_tier() {
         &["sfwan21-1.3b"],
     );
     // The oracle tier's 120 GB body plus the tree.
-    assert_eq!(fixture("oracle")["containerDiskInGb"].as_u64(), Some(120));
+    assert_eq!(fixture("oracle")["disk"].as_u64(), Some(120));
 }
 
 #[test]
@@ -381,16 +372,13 @@ fn the_script_side_r2_pod_reads_its_trees_as_the_serve_engine_tier() {
         &["fastwan21-1.3b"],
     );
     // The tier's own body already has its 150 GB.
-    assert_eq!(
-        fixture("serve-engine")["containerDiskInGb"].as_u64(),
-        Some(150)
-    );
+    assert_eq!(fixture("serve-engine")["disk"].as_u64(), Some(150));
 }
 
 #[test]
 fn the_script_side_r2_pod_reads_its_trees_as_the_sfstream_tier() {
     script_side_r2_pod("sfstream", "sfstream-r2", "sfstream", &["sfwan21-1.3b"]);
-    assert_eq!(fixture("sfstream")["containerDiskInGb"].as_u64(), Some(150));
+    assert_eq!(fixture("sfstream")["disk"].as_u64(), Some(150));
 }
 
 /// `mmaudio`'s GPU check (ADR-0019 §22, S5, §22.16): the script side stages
@@ -407,7 +395,7 @@ fn the_script_side_r2_pod_reads_its_trees_as_the_mmaudio_tier() {
         "mmaudio",
         &["fastwan21-1.3b", "mmaudio-44k-v2"],
     );
-    assert_eq!(fixture("mmaudio")["containerDiskInGb"].as_u64(), Some(180));
+    assert_eq!(fixture("mmaudio")["disk"].as_u64(), Some(180));
     let sources = fastvideo_lab::weights::TreeSources::load(&repo_root()).expect("trees");
     let bytes: u64 = ["fastwan21-1.3b", "mmaudio-44k-v2"]
         .iter()
@@ -427,8 +415,8 @@ fn the_script_side_r2_pod_reads_its_trees_as_the_mmaudio_tier() {
 fn the_script_side_r2_pod_reads_its_trees_as_the_wan_tier() {
     let trees = ["fastwan21-1.3b", "fastwan22-ti2v-5b"];
     script_side_r2_pod_on("wan", "wan-r2", "wan", &trees, 174);
-    assert_eq!(fixture("wan")["containerDiskInGb"].as_u64(), Some(210));
-    assert_eq!(fixture("wan-r2")["minRAMPerGPU"].as_u64(), Some(256));
+    assert_eq!(fixture("wan")["disk"].as_u64(), Some(210));
+    assert_eq!(fixture("wan-r2")["gpu"]["minRamPerGpu"].as_u64(), Some(256));
     let sources = fastvideo_lab::weights::TreeSources::load(&repo_root()).expect("trees");
     let bytes: u64 = trees
         .iter()

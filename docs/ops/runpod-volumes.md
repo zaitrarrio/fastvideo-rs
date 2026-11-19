@@ -18,7 +18,7 @@ new volume in EUR-IS-1) "create the 500 GB H3+LTX volume in EU-RO-1 and move fv-
   writes. Every other tree comes from the R2 weights store: fv-control's `eu` region (GPU pods and serverless)
   is EU-RO-1, and a preset whose trees are not on the volume (wan, fastwan21, sfwan, longlive) defaults to
   `weights_source r2` (control `providers.ts weightsSource`, `serverless/spec.ts defaultEndpointSpec`).
-- **Why EU-RO-1.** Runpod no longer creates network volumes in EUR-IS-1 (`POST /networkvolumes`: "Data center
+- **Why EU-RO-1.** Runpod no longer creates network volumes in EUR-IS-1 (`POST /network-volumes`, then v1's `POST /networkvolumes`: "Data center
   EUR-IS-1 not found or does not support network volumes"; GraphQL `dataCenters.storageSupport: false`). Of the
   EU data centres with volumes (EU-RO-1, EU-FR-1, EUR-IS-3, EUR-NO-1, EUR-NO-2), only EU-RO-1 listed RTX PRO 6000
   Server stock ("Low"). `fv-build` is in EU-RO-1 too.
@@ -426,9 +426,11 @@ has one. A fresh volume does not.
 ```bash
 # Owner approval first. US (deleted ~2026-10-05; rebuild deferred, §5.0): fv-weights-b200-us,
 # US-CA-2. EU: fv-weights-h3-ltx-hy, EUR-IS-1.
-curl -sS -X POST https://rest.runpod.io/v1/networkvolumes \
+# REST API v2 (api.runpod.io/v2; v1 at rest.runpod.io is retired and its name no
+# longer resolves): the volume's data centre is `dataCenter`, in the body and the answer.
+curl -sS -X POST https://api.runpod.io/v2/network-volumes \
   -H @<(printf 'Authorization: Bearer %s\n' "$RUNPOD_API_KEY") -H 'content-type: application/json' \
-  -d '{"name":"fv-weights-b200-us","size":2000,"dataCenterId":"US-CA-2"}' | jq '{id,name,size,dataCenterId}'
+  -d '{"name":"fv-weights-b200-us","size":2000,"dataCenter":"US-CA-2"}' | jq '{id,name,size,dataCenter}'
 ```
 
 Size: 1500 GB would hold the 1165 GB rebuild set with room for about
@@ -454,14 +456,18 @@ START='mkdir -p /srv/rebuild /opt/fv && cd /opt/fv && echo "$FV_TGZ" | base64 -d
   && (python -m http.server 8000 --directory /srv >/dev/null 2>&1 &) \
   && apt-get update -qq && apt-get install -y -qq curl >/dev/null \
   && bash /opt/fv/rebuild-volume.sh "$FV_SIDE" >/srv/rebuild/run.log 2>&1; echo $? >/srv/rebuild/EXIT; sleep infinity'
+# The REST v2 body (POST https://api.runpod.io/v2/pods). v2 takes one CPU flavor
+# per create (v1 listed cpu3c/cpu5c/cpu3g with cpuFlavorPriority "availability"):
+# fetch-hub-tree.sh tries the flavors in order on a refused create.
 jq -n --arg vol "$VOL_ID" --arg dc "$DC" --arg tgz "$TGZ" --arg start "$START" --arg side us --arg hf "$HF_TOKEN" '{
-  name: "fv-rebuild-\($side)", imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
-  cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: 8,
-  containerDiskInGb: 30, networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
-  ports: ["8000/http"], dockerStartCmd: ["/bin/bash","-lc",$start],
+  name: "fv-rebuild-\($side)", image: "python:3.12-slim", cloud: "SECURE",
+  cpu: {id: "cpu3c", vcpuCount: 8},
+  disk: 30, mounts: {network: [{volumeId: $vol, path: "/workspace"}]}, dataCenterIds: [$dc],
+  ports: ["8000/http"], cmd: ["/bin/bash","-lc",$start],
   env: {FV_TGZ: $tgz, FV_SIDE: $side, HF_TOKEN: $hf, HF_HUB_DISABLE_PROGRESS_BARS: "1"}}' > payload.json
-# POST /pods with payload.json. Then arm a detached backstop that DELETEs the pod after
-# about 4 h, as fetch-hub-tree.sh does (setsid nohup … sleep; curl -X DELETE …/pods/$id).
+# POST /pods with payload.json (the answer's hourly rate is `cost`). Then arm a detached
+# backstop that DELETEs the pod after about 4 h, as fetch-hub-tree.sh does
+# (setsid nohup … sleep; curl -X DELETE …/pods/$id).
 ```
 
 The 31 KB environment variable has not been tried on Runpod
@@ -630,7 +636,7 @@ pod-side ledger (the local copy is in `~/.config/fv-build/ledger.tsv`).
 Rebuild:
 
 ```bash
-# Runpod console (or POST /networkvolumes {name: fv-build, size: 200, dataCenterId: EU-RO-1}),
+# Runpod console (or POST /v2/network-volumes {name: fv-build, size: 200, dataCenter: EU-RO-1}),
 # then map it in fv-control's build_pods policy: {"volumes": {"EU-RO-1": "<volume id>"}}
 # (build-pod.sh volume-create is gone: fv-control manages build pods, docs/dev/build-pods-fv-control.md)
 scripts/dev/build-pod.sh up              # fv-control places a pod on it

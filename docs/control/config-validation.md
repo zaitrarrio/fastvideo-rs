@@ -71,12 +71,15 @@ because the form took free text and the spec accepted any 3–80 characters.
 Runpod REST v1 refused the create with
 `At /endpoints/properties/gpuTypeIds/items/enum: value must be one of …`.
 Only `…"problems":["At /endp` was visible, because fv-control cut errors at
-300 and 500 characters.
+300 and 500 characters. (REST v2, since 2026-11-19, answers an `ErrorResponse`
+`{title, status, detail, errors: [...]}`; `runpoderr.ts` reads both shapes.)
 
 The fix:
 
 - **GPU types are an enum of Runpod's GPU type ids** in the serverless spec,
-  cluster pools and standalone pods (`RUNPOD_GPU_TYPES`, REST v1 openapi).
+  cluster pools and standalone pods (`RUNPOD_GPU_TYPES`, from REST v1's
+  openapi; REST v2 takes the same ids as a pod's `gpu.id` and resolves a
+  serverless endpoint's to catalog pools, `GET /v2/catalog/gpus`).
   - The forms offer them as chips from the live catalog, with price and
     stock, and flag a type that is missing from the catalog.
   - A wrong value is refused with close matches, e.g.
@@ -110,7 +113,7 @@ The fix:
 
 | Name | Rule | Unique among | Reserved | Sources |
 |---|---|---|---|---|
-| Cluster, standalone pod | `^[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?$`: 1–31 characters, a DNS label (RFC 1123) that starts with a letter and does not end with `-` | Clusters and standalone pods together (D1 `clusters.name UNIQUE`, `GET /api/names/cluster`) | `new`, `validate` (`#/clusters/new`, `/api/clusters/new/price`, `POST /api/clusters/validate`) | `enums.ts NAME_RE`. The name goes into Runpod pod names `fv-ctl-<cluster>-<pool>-<MMDDHHMMSS>` (at most 81 characters; Runpod REST v1 allows 191), Durable Object names and URLs. |
+| Cluster, standalone pod | `^[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?$`: 1–31 characters, a DNS label (RFC 1123) that starts with a letter and does not end with `-` | Clusters and standalone pods together (D1 `clusters.name UNIQUE`, `GET /api/names/cluster`) | `new`, `validate` (`#/clusters/new`, `/api/clusters/new/price`, `POST /api/clusters/validate`) | `enums.ts NAME_RE`. The name goes into Runpod pod names `fv-ctl-<cluster>-<pool>-<MMDDHHMMSS>` (at most 81 characters; Runpod's REST v1 allowed 191), Durable Object names and URLs. |
 | Pool id | Same as cluster | Within the cluster (schema `superRefine`) | `gateway` (the retired role; `pool:gateway` in restart) | as above |
 | Serverless endpoint | Same as cluster | Live endpoints (D1 `serverless_endpoints_live_name`, `GET /api/names/endpoint`) | `defaults`, `policy`, `validate`, `tick` (routes under `/api/serverless/`) | The Runpod endpoint is `fvc-<name>` and the template `fvc-<name>-<stamp>`, both within 191 characters. |
 | API token | `^[A-Za-z0-9._-]{1,40}$` | Active tokens (not revoked, not expired); new server rule, 409 | — | `TokenCreateZ` |
@@ -314,5 +317,6 @@ Free text remains only for values with a pattern and an inline check:
 - **No server-side image preflight on define or save.** Start, Launch and
   Create run it.
 - **The GPU type and data centre enums are a copy of Runpod's REST v1
-  openapi (2026-10).** A new Runpod GPU needs a line in `enums.ts`. The live
-  list flags types that are in the enum but missing from Runpod's catalog.
+  openapi (2026-10; v2 has no enum, its catalog is the live list).** A new
+  Runpod GPU needs a line in `enums.ts`. The live list flags types that are
+  in the enum but missing from Runpod's catalog.

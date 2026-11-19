@@ -11,7 +11,6 @@ use serde_json::{json, Value};
 
 use super::registry::{Digests, Registry};
 use super::{dshort, Ctx, ReleaseError};
-use crate::boot::sys::Method;
 use crate::launch::SERVE_REPO;
 use crate::provider::runpod::{serve_template_name, RunpodApi};
 
@@ -23,7 +22,7 @@ pub struct Options {
     pub fix: bool,
 }
 
-/// What the account holds (REST v1 lists).
+/// What the account holds (REST v2 lists, every page).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Account {
     pub pods: Vec<Value>,
@@ -35,14 +34,14 @@ pub struct Account {
 pub fn fetch(api: &RunpodApi<'_>) -> Result<Account, ReleaseError> {
     // A listing that is not one (an error object, an id-less entry) is an
     // error, never "nothing": read as empty it would mark every row gone.
-    let list = |p: &str| -> Result<Vec<Value>, ReleaseError> {
+    let list = |p: &str, key: &str| -> Result<Vec<Value>, ReleaseError> {
         let what = format!("Runpod: {}", &p[1..]);
-        super::listing(api.rest(Method::Get, p, None, &what)?, &what)
+        super::listing(api.list(p, key, &what)?, &what)
     };
     Ok(Account {
-        pods: list("/pods")?,
-        endpoints: list("/endpoints")?,
-        templates: list("/templates")?,
+        pods: list("/pods", "pods")?,
+        endpoints: list("/serverless", "endpoints")?,
+        templates: list("/templates", "templates")?,
     })
 }
 
@@ -55,7 +54,7 @@ pub struct Live {
     pub name: Option<String>,
     pub image: Option<String>,
     pub template: Option<String>,
-    /// `desiredStatus`, `ENDPOINT` for an endpoint.
+    /// A pod's `status` (v1's `desiredStatus`), `ENDPOINT` for an endpoint.
     pub status: Option<String>,
     pub gpu: Option<String>,
     pub dc: Option<String>,
@@ -78,8 +77,9 @@ fn joined(v: &Value, k: &str) -> String {
 }
 
 /// A pod counts when it runs an image of the serve repository or is named
-/// `fv-serve-*`, `fv-cluster-*` or `fv-gw-*`; an endpoint when its template's
-/// image does or it is named `fv-*`.
+/// `fv-serve-*`, `fv-cluster-*` or `fv-gw-*`; an endpoint when its image
+/// does (v2 endpoints carry their container config; v1's named a
+/// `templateId`, read when an answer still has one) or it is named `fv-*`.
 pub fn live_resources(a: &Account, repo: &str) -> Vec<Live> {
     let fv_pod = |n: &str| {
         ["fv-serve-", "fv-cluster-", "fv-gw-"]
@@ -89,7 +89,7 @@ pub fn live_resources(a: &Account, repo: &str) -> Vec<Live> {
     let mut out = Vec::new();
     for p in &a.pods {
         let name = s(p, "name").unwrap_or_default();
-        let image = s(p, "imageName").unwrap_or_default();
+        let image = s(p, "image").unwrap_or_default();
         if !(image.starts_with(repo) || fv_pod(&name)) {
             continue;
         }
@@ -101,19 +101,16 @@ pub fn live_resources(a: &Account, repo: &str) -> Vec<Live> {
             },
             id: s(p, "id").unwrap_or_default(),
             name: s(p, "name"),
-            image: s(p, "imageName"),
+            image: s(p, "image"),
             template: None,
-            status: s(p, "desiredStatus"),
+            status: s(p, "status"),
+            // v2's `gpu.id` (v1's `machine.gpuDisplayName`) and
+            // `dataCenterId` (v1's `machine.dataCenterId`).
             gpu: p
-                .pointer("/machine/gpuDisplayName")
-                .or_else(|| p.pointer("/gpu/displayName"))
+                .pointer("/gpu/id")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            dc: p
-                .pointer("/machine/dataCenterId")
-                .or_else(|| p.get("dataCenterId"))
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            dc: s(p, "dataCenterId"),
         });
     }
     for e in &a.endpoints {
@@ -123,7 +120,7 @@ pub fn live_resources(a: &Account, repo: &str) -> Vec<Live> {
                 .iter()
                 .find(|x| x.get("id").and_then(Value::as_str) == Some(t))
         });
-        let image = tp.and_then(|t| s(t, "imageName"));
+        let image = s(e, "image").or_else(|| tp.and_then(|t| s(t, "image")));
         let name = s(e, "name").unwrap_or_default();
         if !(image.as_deref().unwrap_or("").starts_with(repo) || name.starts_with("fv-")) {
             continue;
@@ -135,7 +132,8 @@ pub fn live_resources(a: &Account, repo: &str) -> Vec<Live> {
             image,
             template: tid,
             status: Some("ENDPOINT".into()),
-            gpu: Some(joined(e, "gpuTypeIds")),
+            // v2's `gpu.pools` (v1's `gpuTypeIds` named GPU types).
+            gpu: Some(joined(e.get("gpu").unwrap_or(&Value::Null), "pools")),
             dc: Some(joined(e, "dataCenterIds")),
         });
     }
@@ -274,7 +272,7 @@ pub fn reconcile(ctx: &Ctx<'_>, o: &Options) -> Result<(usize, usize, usize), Re
                 .templates
                 .iter()
                 .find(|t| t.get("name").and_then(Value::as_str) == Some(name.as_str()))
-                .and_then(|t| t.get("imageName").and_then(Value::as_str))
+                .and_then(|t| t.get("image").and_then(Value::as_str))
                 .filter(|s| !s.is_empty());
             let Some(cur) = cur else {
                 ctx.print(&format!("template  {name} missing"));
@@ -314,26 +312,44 @@ mod tests {
     fn only_fv_resources_are_live() {
         let a = Account {
             pods: vec![
-                json!({"id": "p1", "name": "fv-serve-x", "imageName": "other/img", "desiredStatus": "RUNNING"}),
-                json!({"id": "p2", "name": "someone", "imageName": "daydream/scope"}),
-                json!({"id": "p3", "name": "fv-gw-1", "imageName": "r/serve@sha256:1"}),
+                json!({"id": "p1", "name": "fv-serve-x", "image": "other/img", "status": "RUNNING",
+                    "gpu": {"id": "NVIDIA H200"}, "dataCenterId": "EU-RO-1"}),
+                json!({"id": "p2", "name": "someone", "image": "daydream/scope"}),
+                json!({"id": "p3", "name": "fv-gw-1", "image": "r/serve@sha256:1"}),
             ],
             endpoints: vec![
-                json!({"id": "e1", "name": "x", "templateId": "t1", "gpuTypeIds": ["A", "B"]}),
-                json!({"id": "e2", "name": "y", "templateId": "t2"}),
+                json!({"id": "e1", "name": "x", "image": "r/serve@sha256:2", "gpu": {"pools": ["A", "B"]}}),
+                json!({"id": "e2", "name": "y", "image": "z"}),
+                // A v1-shaped answer names a template instead of an image.
+                json!({"id": "e3", "name": "z", "templateId": "t1"}),
             ],
             templates: vec![
-                json!({"id": "t1", "name": "fv-serve-cuda-sls", "imageName": "r/serve@sha256:2"}),
-                json!({"id": "t2", "name": "other", "imageName": "z"}),
+                json!({"id": "t1", "name": "fv-serve-cuda-sls", "image": "r/serve@sha256:2"}),
+                json!({"id": "t2", "name": "other", "image": "z"}),
             ],
         };
         let l = live_resources(&a, "r/serve");
         let got: Vec<(&str, &str)> = l.iter().map(|x| (x.kind, x.id.as_str())).collect();
         assert_eq!(
             got,
-            vec![("pod", "p1"), ("gateway", "p3"), ("endpoint", "e1")]
+            vec![
+                ("pod", "p1"),
+                ("gateway", "p3"),
+                ("endpoint", "e1"),
+                ("endpoint", "e3")
+            ]
+        );
+        assert_eq!(
+            (
+                l[0].gpu.as_deref(),
+                l[0].dc.as_deref(),
+                l[0].status.as_deref()
+            ),
+            (Some("NVIDIA H200"), Some("EU-RO-1"), Some("RUNNING"))
         );
         assert_eq!(l[2].gpu.as_deref(), Some("A,B"));
         assert_eq!(l[2].image.as_deref(), Some("r/serve@sha256:2"));
+        assert_eq!(l[3].image.as_deref(), Some("r/serve@sha256:2"));
+        assert_eq!(l[3].template.as_deref(), Some("t1"));
     }
 }

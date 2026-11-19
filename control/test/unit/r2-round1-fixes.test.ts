@@ -88,18 +88,18 @@ describe("the CUDA host filter: at least CUDA 13.0, never exactly 13.0", () => {
     expect([MIN_CUDA, [...DEFAULT_ALLOWED_CUDA]]).toEqual(["13.0", []]);
     const r2 = normalizeEndpointSpec({ name: "a", preset: "wan", weights_source: "r2" });
     expect(r2.allowed_cuda).toEqual([]);
-    expect(endpointCreatePayload(r2, "tpl")).toMatchObject({ minCudaVersion: "13.0" });
-    expect(endpointCreatePayload(r2, "tpl")).not.toHaveProperty("allowedCudaVersions");
+    expect(endpointCreatePayload(r2, "tpl")).toMatchObject({ gpu: { minCudaVersion: "13.0" } });
+    expect((endpointCreatePayload(r2, "tpl") as any).gpu).not.toHaveProperty("allowedCudaVersions");
     expect(endpointCreatePayload(r2, "tpl")).not.toHaveProperty("dataCenterIds");
     const vol = normalizeEndpointSpec({ name: "b", preset: "ltx" });
     expect(vol.allowed_cuda).toEqual([]);
-    expect(endpointCreatePayload(vol, "tpl")).not.toHaveProperty("allowedCudaVersions");
-    expect(endpointUpdatePayload(vol)).toMatchObject({ minCudaVersion: "13.0" });
-    expect(endpointUpdatePayload(vol)).not.toHaveProperty("allowedCudaVersions");
+    expect((endpointCreatePayload(vol, "tpl") as any).gpu).not.toHaveProperty("allowedCudaVersions");
+    expect(endpointUpdatePayload(vol)).toMatchObject({ gpu: { minCudaVersion: "13.0" } });
+    expect((endpointUpdatePayload(vol) as any).gpu).not.toHaveProperty("allowedCudaVersions");
     const open = normalizeEndpointSpec({ name: "c", preset: "wan", weights_source: "r2", allowed_cuda: [] });
     expect(open.allowed_cuda).toEqual([]);
     // An endpoint that had a list: [] clears it (Runpod: not set = any version), never the REST enum (it stops at 13.0).
-    expect(endpointUpdatePayload(open, { ...open, allowed_cuda: ["13.0"] } as any).allowedCudaVersions).toEqual([]);
+    expect((endpointUpdatePayload(open, { ...open, allowed_cuda: ["13.0"] } as any) as any).gpu.allowedCudaVersions).toEqual([]);
     expect(withWeightsSource(r2, "volume").allowed_cuda).toEqual([]);
     expect(withWeightsSource({ ...r2, allowed_cuda: ["12.8", "13.0"] } as any, "volume").allowed_cuda).toEqual(["12.8", "13.0"]);
   });

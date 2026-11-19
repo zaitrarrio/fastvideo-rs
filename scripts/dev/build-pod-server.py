@@ -75,9 +75,12 @@ podStop / podTerminate (everything worth keeping lives on the volume). Every
 failure is logged with its HTTP status and body, and the whole sequence is
 retried (1, 2, 4 ... 10 min apart) until the pod is gone; after an accepted
 call it is retried 10 min later should the pod still be running. All calls send
-an explicit User-Agent: Cloudflare in front of rest.runpod.io and
-api.runpod.io answers Python's default "Python-urllib/3.x" with 403 "error
-code: 1010", which is why no self-stop ever worked before 2026-10-02.
+an explicit User-Agent: Cloudflare in front of api.runpod.io (and of the
+retired rest.runpod.io before it) answers Python's default "Python-urllib/3.x"
+with 403 "error code: 1010", which is why no self-stop ever worked before
+2026-10-02. The REST calls go to REST API v2 (api.runpod.io/v2; v1 at
+rest.runpod.io is retired and its name no longer resolves): a stop is
+`POST /pods/<id>/action {"action": "stop"}`, a terminate `DELETE /pods/<id>`.
 
 Eviction (the container disk fills up with agents' target dirs): a background
 pass every FV_BUILD_EVICT_INTERVAL_S (60) seconds, and after every job,
@@ -125,10 +128,11 @@ TOKEN_SHA = os.environ.get("FV_BUILD_TOKEN_SHA256", "").strip().lower()
 IDLE_S = float(os.environ.get("FV_BUILD_IDLE_MIN", "20")) * 60
 MAX_S = float(os.environ.get("FV_BUILD_MAX_HOURS", "8")) * 3600
 MAX_GRACE_S = float(os.environ.get("FV_BUILD_MAX_GRACE_MIN", "30")) * 60
-# Cloudflare (rest.runpod.io, api.runpod.io) rejects urllib's default
-# "Python-urllib/3.x" with 403 / error code 1010.
+# Cloudflare (api.runpod.io) rejects urllib's default "Python-urllib/3.x"
+# with 403 / error code 1010.
 USER_AGENT = "fv-build-pod/1 (+scripts/dev/build-pod-server.py)"
-RUNPOD_REST = os.environ.get("FV_BUILD_RUNPOD_REST", "https://rest.runpod.io/v1")
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+RUNPOD_REST = os.environ.get("FV_BUILD_RUNPOD_REST", "https://api.runpod.io/v2")
 RUNPOD_GRAPHQL = os.environ.get("FV_BUILD_RUNPOD_GRAPHQL", "https://api.runpod.io/graphql")
 MAX_JOBS = int(os.environ.get("FV_BUILD_MAX_JOBS", "4"))
 EVICT_S = float(os.environ.get("FV_BUILD_EVICT_HOURS", "6")) * 3600  # 0 disables
@@ -1537,7 +1541,7 @@ def stop_calls(pod):
     GraphQL mutations are what runpodctl uses with the same key."""
     q = json.dumps(pod)
     return [
-        ("REST stop", "POST", f"{RUNPOD_REST}/pods/{pod}/stop", None),
+        ("REST stop", "POST", f"{RUNPOD_REST}/pods/{pod}/action", {"action": "stop"}),
         ("REST terminate", "DELETE", f"{RUNPOD_REST}/pods/{pod}", None),
         ("GraphQL podStop", "POST", RUNPOD_GRAPHQL,
          {"query": f"mutation {{ podStop(input: {{podId: {q}}}) {{ id desiredStatus }} }}"}),

@@ -33,7 +33,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=volumes.sh
 source "$HERE/volumes.sh"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 VOL_NAME="${RUNPOD_VOLUME_NAME:-$FV_EU_VOLUME_NAME}"
 fv_check_volume "$VOL_NAME"
@@ -57,7 +58,7 @@ bal="$(curl -sS -H "Authorization: Bearer $RUNPOD_API_KEY" -H 'content-type: app
   -d '{"query":"{ myself { clientBalance } }"}' | jq -r '.data.myself.clientBalance // empty')"
 awk -v b="$bal" -v m="$MIN_BALANCE" 'BEGIN{exit !(b+0 >= m+0)}' || { echo "balance \$$bal below \$$MIN_BALANCE" >&2; exit 1; }
 log "balance \$$bal; $repo@$rev -> $VOL_NAME:weights/$dest"
-vol="$(rest GET /networkvolumes | jq -r --arg n "$VOL_NAME" '.[] | select(.name==$n) | "\(.id) \(.dataCenterId) \(.size)"' | head -1)"
+vol="$(rest GET /network-volumes | jq -r --arg n "$VOL_NAME" '.networkVolumes[] | select(.name==$n) | "\(.id) \(.dataCenter) \(.size)"' | head -1)"
 [[ -n "$vol" ]] || { echo "no volume named $VOL_NAME" >&2; exit 1; }
 read -r vol_id dc vol_gb <<<"$vol"
 py_b64="$(base64 -w0 "$HERE/fetch-hub-tree.py")"
@@ -66,20 +67,27 @@ start='mkdir -p /srv && cd /srv && (python -m http.server 8000 --directory /srv 
 payload="$(jq -n --arg name "${FV_POD_PREFIX:-fv-p0-fetch}-${dest##*/}-$(date -u +%m%d%H%M)" --arg vol "$vol_id" --arg dc "$dc" \
   --arg start "$start" --arg py "$py_b64" --arg repo "$repo" --arg rev "$rev" --arg dest "$dest" \
   --arg globs "$globs" --arg minfree "${FETCH_MIN_FREE_GB:-50}" --arg volgb "$vol_gb" --arg workers "${FETCH_WORKERS:-4}" --arg addinto "${FETCH_ADD_INTO:-0}" --arg vcpu "${FV_FETCH_VCPU:-8}" --arg exp "$exp_b64" --arg hf "${HF_TOKEN:-}" '{
-    name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
-    cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: ($vcpu|tonumber),
-    containerDiskInGb: 20, networkVolumeId: $vol, volumeMountPath: "/workspace",
+    name: $name, image: "python:3.12-slim", cloud: "SECURE",
+    cpu: {id: "cpu3c", vcpuCount: ($vcpu|tonumber)},
+    disk: 20, mounts: {network: [{volumeId: $vol, path: "/workspace"}]},
     dataCenterIds: [$dc], ports: ["8000/http"],
-    dockerStartCmd: ["/bin/bash","-lc",$start],
+    cmd: ["/bin/bash","-lc",$start],
     env: ({FETCH_PY: $py, FETCH_REPO: $repo, FETCH_REVISION: $rev, FETCH_DEST: $dest, FETCH_GLOBS: $globs, FETCH_MIN_FREE_GB: $minfree, FETCH_VOLUME_GB: $volgb, FETCH_WORKERS: $workers, FETCH_ADD_INTO: $addinto}
       + (if $exp != "" then {EXPECT_SHA256: $exp} else {} end)
       + (if $hf != "" then {HF_TOKEN: $hf} else {} end))
   }')"
-resp="$(rest POST /pods "$payload")" || { echo "pod create failed: $resp" >&2; exit 1; }
+# v2 takes one CPU flavor per create (v1 listed several with cpuFlavorPriority
+# "availability"): the flavors of FV_CPU_FLAVORS are tried in order.
+resp=""
+for flavor in ${FV_CPU_FLAVORS:-cpu3c cpu5c cpu3g}; do
+  if resp="$(rest POST /pods "$(jq -c --arg f "$flavor" '.cpu.id = $f' <<<"$payload")" 2>&1)"; then break; fi
+  log "no $flavor pod in $dc: $(head -c 200 <<<"$resp")"; resp=""
+done
+[[ -n "$resp" ]] || { echo "pod create failed (every flavor)" >&2; exit 1; }
 id="$(jq -r '.id // empty' <<<"$resp")"
 [[ -n "$id" ]] || { echo "pod create failed: $resp" >&2; exit 1; }
 mkdir -p "$OUT"; echo "$id" >"$OUT/pod-id"
-log "pod $id \$$(jq -r '.costPerHr' <<<"$resp")/hr dc=$dc vol=$vol_id"
+log "pod $id \$$(jq -r '.cost' <<<"$resp")/hr dc=$dc vol=$vol_id"
 # Detached backstop: deletes the pod after CAP_S even if this shell dies.
 setsid nohup bash -c "sleep $CAP_S; curl -sS -X DELETE -H \"Authorization: Bearer \$RUNPOD_API_KEY\" '$API/pods/$id' >/dev/null 2>&1" \
   >/dev/null 2>&1 < /dev/null &

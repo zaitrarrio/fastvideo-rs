@@ -48,10 +48,10 @@ export function legacyVariant<T extends Record<string, any>>(x: T, opts: { fillC
 }
 /** Fake-engine model ids the `cpu` image serves (crates/fastvideo-serve fake engine). */
 export const FAKE_MODELS = ["fake-h3-max", "fake-h3-turbo", "fake-sol-h3", "fake-ltx-pro", "fake-ltx-turbo", "fake-wan", "fake-sfwan"] as const;
-/** Runpod CPU flavors (REST v1 PodCreateInput.cpuFlavorIds). */
+/** Runpod CPU flavors (REST v2 CreateCpuConfig.id, `GET /catalog/cpus`). */
 export const CPU_FLAVORS = ["cpu3c", "cpu3g", "cpu3m", "cpu5c", "cpu5g", "cpu5m"] as const;
 export type CpuFlavor = (typeof CPU_FLAVORS)[number];
-/** Runpod serverless CPU flavors (REST v1 EndpointCreateInput.cpuFlavorIds). */
+/** Runpod serverless CPU flavors (REST v2 CreateEndpointRequest.cpu[].id). */
 export const SLS_CPU_FLAVORS = ["cpu3c", "cpu3g", "cpu5c", "cpu5g"] as const;
 /** vCPU sizes of a Runpod CPU instance (instance ids cpuXy-<vcpu>-<ram>): powers of two. */
 export const CPU_VCPUS = [2, 4, 8, 16, 32] as const;
@@ -106,7 +106,7 @@ export function noVolumePod(x: { compute?: string; weights_source?: string; volu
   const cpu = x.compute === "CPU";
   return cpu ? x.volume !== true : (x.weights_source === "r2" || x.weights_source === "hub" || x.weights_source === "none") && x.volume !== true;
 }
-/** Runpod GPU type ids (REST v1 openapi, PodCreateInput.gpuTypeIds, 2026-10). The live catalog (prices, stock) is /api/v1/schemas/dynamic. */
+/** Runpod GPU type ids (REST v1 openapi's PodCreateInput.gpuTypeIds enum, 2026-10; REST v2 takes them as `gpu.id` on a pod and names them in `GET /catalog/gpus`). The live catalog (prices, stock) is /api/v1/schemas/dynamic. */
 export const RUNPOD_GPU_TYPES = [
   "AMD Instinct MI300X OAM", "NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-40GB", "NVIDIA A100-SXM4-80GB", "NVIDIA A40", "NVIDIA B200", "NVIDIA B300 SXM6 AC", "NVIDIA B300 SXM6 AC MIG 1g.34gb",
   "NVIDIA GeForce RTX 3070", "NVIDIA GeForce RTX 3080", "NVIDIA GeForce RTX 3080 Ti", "NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 3090 Ti", "NVIDIA GeForce RTX 4070 Ti", "NVIDIA GeForce RTX 4080",

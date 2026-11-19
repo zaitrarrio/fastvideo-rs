@@ -5,7 +5,7 @@
 # Every script that creates a GPU pod calls `fv_runpod_price_ok <gpu type id>
 # <cap $/hr> [SECURE|COMMUNITY] [datacenter]` before its `POST /pods` and
 # skips the GPU type (or stops) when it fails. The old pattern (create, read
-# `costPerHr` from the reply, delete when over the cap) created and deleted
+# `cost` (v1: `costPerHr`) from the reply, delete when over the cap) created and deleted
 # 18 H100 pods above a director-debug run's cap within seconds; each one was
 # billed and briefly held a machine.
 #

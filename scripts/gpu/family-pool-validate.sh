@@ -24,7 +24,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=runpod-cuda.sh
 source "$HERE/runpod-cuda.sh"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CAP_S="${FV_POD_CAP_S:-4200}"
 MIN_BALANCE="${FV_MIN_BALANCE:-10}"
@@ -70,7 +71,8 @@ case "$cmd" in
     gj="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     with_stock='.data.dataCenters[] | select([.gpuAvailability[]? | select((.gpuTypeId | IN($g[])) and (.stockStatus // "None") != "None")] | length > 0) | .id'
     mapfile -t dcs < <(jq -r --argjson g "$gj" "$with_stock" <<<"$stock")
-    # The REST API's dataCenterIds enum is narrower than GraphQL's list.
+    # REST v1's dataCenterIds enum was narrower than GraphQL's list; v2 takes any
+    # id, and the list stays as a known-good filter.
     rest_dcs=" EU-RO-1 CA-MTL-1 CA-MTL-2 CA-MTL-3 EU-SE-1 EU-CZ-1 EU-NL-1 EUR-IS-1 EUR-IS-2 EUR-IS-3 US-IL-1 US-TX-1 US-TX-3 US-TX-4 US-KS-2 US-GA-2 US-WA-1 US-CA-2 US-NC-1 US-DE-1 OC-AU-1 AP-JP-1 "
     mapfile -t dcs < <(for d in "${dcs[@]}"; do [[ "$rest_dcs" == *" $d "* ]] && echo "$d"; done)
     (( ${#gpus[@]} && ${#dcs[@]} )) || { log "no RTX PRO 6000 in stock at or under \$$MAX_DPH/hr"; exit 1; }
@@ -90,21 +92,28 @@ case "$cmd" in
     # backstop deletes it regardless.
     start="$(start_cmd)"
     export FVX_URL="$url"
-    gpus_json="$(printf '%s\n' "${gpus[@]}" | jq -R . | jq -s .)"
     dcs_json="$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s .)"
+    # v2 takes one GPU type per create (v1 listed both with gpuTypePriority
+    # "custom"): the types are tried in order.
     payload="$(jq -n --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" --arg name "fv-familypool-$(date -u +%m%d%H%M)" --arg image "$IMAGE" --argjson dcs "$dcs_json" \
-      --arg start "$start" --arg sha "$sha" --argjson gpus "$gpus_json" --arg prompt "${FV_PROMPT:-}" '{
-        name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuCount: 1, gpuTypeIds: $gpus,
-        gpuTypePriority: "custom", dataCenterIds: $dcs, ports: ["8000/http"],
-        dockerEntrypoint: ["bash", "-c", $start], dockerStartCmd: [], containerDiskInGb: 260,
+      --arg start "$start" --arg sha "$sha" --arg gpu "${gpus[0]}" --arg prompt "${FV_PROMPT:-}" '{
+        name: $name, image: $image, cloud: "SECURE",
+        gpu: ({id: $gpu, count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
+        dataCenterIds: $dcs, ports: ["8000/http"],
+        entrypoint: ["bash", "-c", $start], cmd: [], disk: 260,
         env: ({FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha} + (if $prompt != "" then {FV_PROMPT: $prompt} else {} end))
-      } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)')"
+      }')"
     unset FVX_URL
-    resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(head -c 600 <<<"$resp")"; exit 1; }
+    resp=""
+    for g in "${gpus[@]}"; do
+      if resp="$(rest POST /pods <<<"$(jq -c --arg g "$g" '.gpu.id = $g' <<<"$payload")" 2>&1)"; then break; fi
+      log "no pod on $g: $(head -c 300 <<<"$resp")"; resp=""
+    done
+    [[ -n "$resp" ]] || { log "pod create failed (every GPU type)"; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$id" ]] || { log "pod create failed: $(head -c 400 <<<"$resp")"; exit 1; }
     setsid nohup bash -c "sleep $CAP_S; curl -sS -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' \"\$RUNPOD_API_KEY\") '$API/pods/$id' >/dev/null 2>&1" >/dev/null 2>&1 </dev/null &
-    log "pod $id $(jq -r '.machine.gpuDisplayName // .gpuTypeId // "?"' <<<"$resp") \$$(jq -r '.costPerHr' <<<"$resp")/hr; backstop pid $! deletes it after ${CAP_S}s; https://$id-8000.proxy.runpod.net/"
+    log "pod $id $(jq -r '.gpu.id // "?"' <<<"$resp") \$$(jq -r '.cost' <<<"$resp")/hr; backstop pid $! deletes it after ${CAP_S}s; https://$id-8000.proxy.runpod.net/"
     echo "$id"
     ;;
   status)

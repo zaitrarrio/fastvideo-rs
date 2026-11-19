@@ -5,7 +5,7 @@
 //! - [`types`]: [`Launch`], [`Instance`], [`InstanceState`], [`Offer`],
 //!   [`Account`] (serde + schemars; [`schema`] exports them).
 //! - [`runpod`]: [`runpod::Pod`] and [`runpod::Serverless`] over the Runpod
-//!   REST v1 / GraphQL APIs, on the blocking [`Http`] seam fv-boot uses.
+//!   REST v2 / GraphQL APIs, on the blocking [`Http`] seam fv-boot uses.
 //! - [`vast`]: [`vast::Vast`] instances over the Vast REST API (C3b).
 //! - [`gcp`]: [`gcp::GcpVm`] Compute Engine VMs over its REST API (C3b).
 //! - [`Reach`]: how the readiness poll and the smoke reach a running instance
@@ -98,9 +98,9 @@ impl Default for ReachOptions<'_> {
     }
 }
 
-/// A price the API gave as a number or a numeric string (Runpod's REST
-/// docs show `costPerHr` as `'0.74'`); `None` when missing, unparseable,
-/// negative or not finite.
+/// A price the API gave as a number or a numeric string (Runpod's REST v1
+/// docs showed `costPerHr` as `'0.74'`; v2's `cost` is a number); `None`
+/// when missing, unparseable, negative or not finite.
 pub fn parse_usd(v: Option<&Value>) -> Option<f64> {
     let x = match v? {
         Value::Number(n) => n.as_f64()?,

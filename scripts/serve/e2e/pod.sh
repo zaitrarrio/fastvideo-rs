@@ -36,7 +36,8 @@ source "$ROOT/scripts/gpu/runpod-price.sh"
 # shellcheck source-path=SCRIPTDIR source=../../gpu/volumes.sh
 source "$ROOT/scripts/gpu/volumes.sh"
 fv_check_volume "${RUNPOD_VOLUME_ID:-}" # the deleted US volume: refuse (EU only since 2026-10)
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GQL="https://api.runpod.io/graphql"
 STATE="${FV_E2E_STATE:?FV_E2E_STATE (state file path) missing}"
 CAP_S="${FV_POD_CAP_S:-5400}"
@@ -70,8 +71,8 @@ cmd_up() {
     '{key: $key, admin: $admin, sidecar: $sidecar, image: $image}' > "$STATE"
   if [[ -n "${RUNPOD_VOLUME_ID:-}" ]]; then
     local dc
-    dc="$(rest GET "/networkvolumes/$RUNPOD_VOLUME_ID" | jq -r '.dataCenterId')"
-    vol="$(jq -n --arg v "$RUNPOD_VOLUME_ID" --arg dc "$dc" '{networkVolumeId: $v, volumeMountPath: "/workspace", dataCenterIds: [$dc]}')"
+    dc="$(rest GET "/network-volumes/$RUNPOD_VOLUME_ID" | jq -r '.dataCenter')"
+    vol="$(jq -n --arg v "$RUNPOD_VOLUME_ID" --arg dc "$dc" '{mounts: {network: [{volumeId: $v, path: "/workspace"}]}, dataCenterIds: [$dc]}')"
   fi
   name="${FV_E2E_NAME:-fv-e2e-a-}$(date -u +%m%d%H%M%S)"
   IFS=',' read -r -a types <<<"${RUNPOD_GPU_TYPES:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
@@ -85,10 +86,10 @@ cmd_up() {
       --arg keyhash "$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)" --arg admin "$admin" --arg sidecar "$sidecar" \
       --argjson vol "$vol" --argjson extra "${FV_E2E_ENV_JSON:-{\}}" --argjson disk "${FV_E2E_DISK_GB:-40}" \
       --arg nosecrets "${FV_E2E_NO_SECRETS:-0}" --arg allow "${FV_E2E_SECRETS_ALLOW:-}" '{
-        name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
-        gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: $disk, volumeInGb: 0,
+        name: $name, image: $image, cloud: "SECURE",
+        gpu: {id: $gpu, count: 1}, disk: $disk,
         ports: ["8000/http", "8001/http"],
-        dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [$boot],
+        entrypoint: ["bash", "-c"], cmd: [$boot],
         env: ({
           FV_CF_ACCOUNT_ID: "{{ RUNPOD_SECRET_fv_cf_account_id }}",
           FV_CF_API_TOKEN: "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -107,7 +108,7 @@ cmd_up() {
       } + $vol')"
     if [[ "$gpu" == cpu:* ]]; then
       payload="$(jq --arg f "${gpu#cpu:}" --argjson n "${FV_E2E_VCPUS:-8}" \
-        'del(.gpuTypeIds, .gpuCount) | .computeType = "CPU" | .cpuFlavorIds = [$f] | .vcpuCount = $n' <<<"$payload")"
+        'del(.gpu) | .cpu = {id: $f, vcpuCount: $n}' <<<"$payload")"
     fi
     # The price cap on Runpod's quote, BEFORE the create (scripts/gpu/runpod-price.sh).
     [[ "$gpu" == cpu:* ]] || fv_runpod_price_ok "$gpu" "$MAX_DPH" SECURE || continue
@@ -116,7 +117,7 @@ cmd_up() {
     fi
     pod="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$pod" ]] || { log "no id: $(head -c 200 <<<"$resp")"; continue; }
-    dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
+    dph="$(jq -r '.cost // 0' <<<"$resp")"
     ledger "pod-created $pod $name gpu=$gpu dph=$dph image=$image"
     # The marker ($0 of the backstop shell, `fv-e2e-backstop-<pod>`) finds exactly this backstop later
     # (`pgrep -f fv-e2e-backstop-<pod>`), never another process.

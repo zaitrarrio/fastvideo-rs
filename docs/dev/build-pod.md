@@ -361,9 +361,12 @@ cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
      **Cap:** `FV_BUILD_MAX_HOURS` (default 8) after boot it stops at once if
      no job is active; otherwise it refuses new jobs (HTTP 503), writes a
      warning into the active jobs' logs and stops `FV_BUILD_MAX_GRACE_MIN`
-     (default 30) later even if they still run. The stop tries REST stop,
-     REST terminate, GraphQL `podStop`, GraphQL `podTerminate` with the
-     pod-scoped `RUNPOD_API_KEY`, logs every failure with its HTTP status and
+     (default 30) later even if they still run. The stop tries REST stop
+     (`POST /v2/pods/<id>/action {"action": "stop"}`), REST terminate
+     (`DELETE /v2/pods/<id>`), GraphQL `podStop`, GraphQL `podTerminate` with the
+     pod-scoped `RUNPOD_API_KEY` (REST API v2 at `api.runpod.io/v2`,
+     `FV_BUILD_RUNPOD_REST`; v1 at `rest.runpod.io` is retired since
+     2026-11 and its name no longer resolves), logs every failure with its HTTP status and
      body (`GET /v1/log`, and Runpod's container log), and retries 1, 2, 4 …
      10 min apart; 10 min after an accepted call it tries again if the pod
      still runs.
@@ -387,8 +390,9 @@ cpu5g for 15+ minutes while 16 vCPU had stock. `up` therefore tries 32, then
   without stopping. Its container log shows the watchdog *did* fire, 65
   times from 04:24 on (`self-stop (idle 20 min)`, later `self-stop
   (wall-clock cap 8h)`), and every call failed: `POST /pods/<id>/stop
-  failed: HTTP Error 403` and the same for `DELETE`. Cause: Cloudflare in
-  front of `rest.runpod.io` and `api.runpod.io` answers Python's default
+  failed: HTTP Error 403` (v1's stop path; v2's is `POST /pods/<id>/action`)
+  and the same for `DELETE`. Cause: Cloudflare in
+  front of `rest.runpod.io` (then the REST host) and `api.runpod.io` answers Python's default
   `User-Agent: Python-urllib/3.x` with 403 `error code: 1010` (reproduced
   with the account key: 403 with the default agent, 200 with any explicit
   one). The old code did not log the response body, so the 403 looked like

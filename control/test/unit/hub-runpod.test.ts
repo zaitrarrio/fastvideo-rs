@@ -58,7 +58,7 @@ describe("the pod: env, disk, payload and boot", () => {
     const pl = workerPlacements(spec, pool);
     expect(pl).toEqual([{ dc: "US-TX-3", gpu: H100 }]);
     const body = workerCreatePayload("n", "img", pool, pl[0]!, e);
-    expect([body.containerDiskInGb, body.dataCenterIds, (body as any).networkVolumeId]).toEqual([Number(e.FV_HUB_DISK_GB), ["US-TX-3"], undefined]);
+    expect([body.disk, body.dataCenterIds, (body as any).mounts]).toEqual([Number(e.FV_HUB_DISK_GB), ["US-TX-3"], undefined]);
     const boot = bootFor(e);
     expect(boot).toContain(HUB_RUNPOD_SH);
     expect(boot.indexOf("fetch-hub-tree.py")).toBeLessThan(boot.indexOf("exec /opt/fastvideo-rs/bin/fv-serve"));
