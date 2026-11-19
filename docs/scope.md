@@ -74,6 +74,15 @@ Samplers: UniPC, DMD, causal DMD, TurboDiffusion rCM.
 QAD checkpoints are the same architecture as FastWan 1.3B and ship
 unquantized. They are listed so they do not fall through to UniPC.
 
+| Variant on `sf_wan_t2v_1_3b` | Checkpoint | Stream shape | Licence |
+|---|---|---|---|
+| `longlive-1.3b` | `Efficient-Large-Model/LongLive-1.3B` (`longlive_base` + LoRA, converted) | window 12, sink 3, KV re-cache at a prompt switch | CC-BY-NC-SA-4.0 (non-commercial) |
+| `history-forcing-1.3b` | `xzxxntxdy/History-Forcing` `dmd/model.pt` (EMA generator, converted or read as `.pt`) | window 21, sink 3, no LoRA, no re-cache | **none stated** (evaluation only) |
+
+Both run the SF-Wan causal engine with another transformer
+(`families/wan.toml`, [ports/wan.md](ports/wan.md) "History Forcing",
+[serve/research-longlive.md](serve/research-longlive.md)).
+
 The distilled presets (DMD, rCM, causal DMD) decode through TAEHV
 (`taew2_1`) by default when its weights are found; `FASTVIDEO_WAN_VAE=full`
 opts out to the Wan VAE (2 latent frames per pass by default). The mp4 is
@@ -335,6 +344,8 @@ process: the first read is cached).
 | `FASTVIDEO_DIT_OFFLOAD_LOOKAHEAD` | env, then profile | usize: clamped to 1..=8 | `1` | per load | runtime | `residency` | Streamed DiT blocks copied ahead of the one computing. |
 | `FASTVIDEO_DUMP_DIR` | env | text: a directory (empty = unset) | unset | once per process | runtime | `debug` | Dump named intermediate tensors here (parity runs). |
 | `FASTVIDEO_DUMP_OPS` | env | text: block indices whose ops are dumped | `0` | once per process | runtime | `debug` | Blocks whose per-op tensors are dumped. |
+| `FASTVIDEO_ESRGAN_BUDGET_GIB` | env | text: a positive number of GiB (trimmed; anything else is unset) | `2` | per call | runtime | `upscaler` | Device-memory budget of one batch of the Real-ESRGAN upscaler's activations (`rt::esrgan`, docs/ports/upscaler.md). |
+| `FASTVIDEO_ESRGAN_WEIGHTS` | env | text: a path (empty = unset) | `$FASTVIDEO_TAE_DIR/realesr-animevideov3.pth`, else `auxiliary/upscalers/realesr-animevideov3.pth` under the weights roots | per call | runtime | `upscaler` | The Real-ESRGAN `realesr-animevideov3` checkpoint of `--upscale` (`.pth` or safetensors). |
 | `FASTVIDEO_FFMPEG` | env | text: a program | `ffmpeg` | per call | LTX-2 | `io` | ffmpeg binary for the LTX image-conditioning recompression. |
 | `FASTVIDEO_FLASH_KERNEL` | env, then profile | keyword | `auto` | per call | runtime | `kernel_choice` | Dense attention kernel (profile `[kernels] dense_attention`). |
 | `FASTVIDEO_FLUX1_DUMMY_TEXT` | env | text: `1`, `true` or `TRUE` (exact) | `0` | per load | FLUX.1 | `text_encoder` | FLUX.1: zero text embeddings instead of the T5/CLIP encoders (smoke runs). |
@@ -356,6 +367,7 @@ process: the first read is cached).
 | `FASTVIDEO_H3_FUSE` | env, then profile | flag | `1` | once per process | H3 | `kernel_fusion` | H3 fused MXFP8 activation and residual-plus-norm kernels (bit-identical); `0` runs the separate ops. |
 | `FASTVIDEO_H3_GLUE` | env, then profile | flag | `1` | once per process | H3 | `kernel_fusion` | H3 glue kernels between the fused ops (bit-identical); `0` runs the separate ops. |
 | `FASTVIDEO_H3_GRAPHS` | env, then profile | flag | `0` | per call | H3 | `cuda_graphs` | CUDA-graph capture of the H3 denoise step. |
+| `FASTVIDEO_H3_LORA_BRANCH` | env, then profile | text: `1` / `on` / `true` / `branch`, or `0` / `off` / `false` / `merge` (trimmed; empty is unset); anything else is an error | `1` for the LongLive-Plug recipes (`h3-plug-4step`, `h3-plug-cfg`), `0` for every other adapter | per load | H3 | `lora` | Run an H3 adapter's low-rank pairs as an unmerged branch (`y = W x + B (A x)`, the base quantized alone) instead of merging them into the weights. |
 | `FASTVIDEO_H3_LORA_DEVICE` | env, then profile | flag | `1` | once per process | H3 | `lora` | Fuse H3 LoRAs on the device. |
 | `FASTVIDEO_H3_LORA_VERIFY` | env, then profile | flag | `0` | once per process | H3 | `debug` | Check the device LoRA fusion against the host. |
 | `FASTVIDEO_H3_LTX_ADAPTER` | env | text: a path | found beside the H3 weights | per load | H3 | `weights` | Spark bridge LTX adapter checkpoint. |

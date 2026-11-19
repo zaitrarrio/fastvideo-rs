@@ -1,0 +1,110 @@
+# Gold standard of `h3-plug-4step` (h3, untiered): docs/adr/0009-gold-standard-files.md.
+# Every number is copied from the [[source]] that cites it; absent numbers are listed under [[gap]].
+# `fv-lab run gold` (plan D1/D3) fills [last_validated] and replaces these with its own run record.
+# MiniMax-H3 + the LongLive-Plug few-step LoRA (rank 128) as an unmerged branch: 4 forwards (fresh-noise sampler, shifts 12 / 3, no CFG), dense attention, MXFP8 base.
+
+schema = 1
+
+[model]
+variant = "h3-plug-4step"
+family = "h3"
+profile = "h3/plug_h3_4step_dense"
+
+[tier]
+gpu = "RTX PRO 6000 Blackwell"
+sm = 120
+vram_gib = 96
+offer = "runpod: NVIDIA RTX PRO 6000 Blackwell Server Edition, EU-RO-1 (plan §1: the gold-standard GPU)"
+
+[workload]
+width = 1344
+height = 768
+frames = 124
+fps = 24
+steps = 4
+prompt_set = "scripts/gpu/prompts-eval.json (the five gate prompts)"
+note = "No gold run yet: the variant was added on 2026-11-18 with the adapter as an unmerged branch (FASTVIDEO_H3_LORA_BRANCH). The reference repository's branch run (h3-rs, docs/runs/2026-11-15-runpod-6000s-longlive-plug, its own binary and recipe) made a 1344x768x124 clip in 34.7 s after load on this GPU class; not a fastvideo-rs number."
+
+[latency]
+
+[quality]
+
+[cost]
+usd_per_hr = 2.49
+
+[[source]]
+fields = []
+path = "docs/techniques.md"
+heading = "LongLive-Plug recipes"
+date = "2026-11-18"
+note = "The recipe (base MiniMax-H3 + the LongLive-Plug adapter), the branch-against-merge rule and the env knob; the served variants. Not a D2 source; named here so D3 knows where to look."
+
+[[source]]
+fields = []
+path = "docs/serve/research-longlive.md"
+heading = "12.7 Five-prompt check against base H3: results"
+date = "2026-10-06"
+note = "The existing Plug numbers, measured with the adapter MERGED into the bf16 weights before MXFP8 (the old path), on an earlier binary: h3-plug-4step dense 4 forwards 32.65 s denoise / 39.7 s per clip at 1344x768x124, peak 57.7 GiB; h3-plug-cfg 98.50 s denoise / 101.8 s (§12.3, 480p). Not this variant's path (the branch keeps the whole adapter; the merge kept a third of it in bf16 and a tenth in MXFP8, docs/techniques.md), so no field is copied; the gold run measures the served default."
+
+[[source]]
+fields = ["cost.usd_per_hr"]
+path = "docs/perf/h3-nvfp4-tier-options.md"
+heading = "H3 NVFP4 tier: three speed / quality options (2026-10-14)"
+date = "2026-10-14"
+note = "RTX PRO 6000 at $2.49/hr in EU-RO-1, the most recent dated price of the class. Older: $2.09/hr in EUR-IS-1 (docs/perf/raw-inference.md 2026-09-30, docs/perf/sol-bench.md 2026-10-06); $2.59/hr for the Workstation Edition in EU-RO-1 (docs/perf/h3-vae-decode-speed.md 2026-10-14). usd_per_clip = usd_per_hr x latency.p50_s / 3600, derived once a gold run gives p50_s."
+
+[[gap]]
+field = "latency.p50_s"
+why = "no gold run of this variant yet (added 2026-11-18 with the branch path); the merged-adapter numbers of docs/serve/research-longlive.md §12 are another path and are not copied"
+
+[[gap]]
+field = "latency.min_s"
+why = "no gold run of this variant yet"
+
+[[gap]]
+field = "latency.max_s"
+why = "no gold run of this variant yet"
+
+[[gap]]
+field = "latency.denoise_s"
+why = "no gold run of this variant yet; the branch costs about 8 % of a dense forward in the reference repository's run (h3-rs docs/runs/2026-11-15-runpod-6000s-longlive-plug: 6.5 to 7.0 s per forward on the Server Edition), unmeasured here"
+
+[[gap]]
+field = "latency.decode_s"
+why = "no gold run of this variant yet"
+
+[[gap]]
+field = "latency.load_s"
+why = "no gold run of this variant yet"
+
+[[gap]]
+field = "latency.peak_gib"
+why = "no gold run of this variant yet; the branch adds about 0.4 GiB of bf16 factors (312 rank-128 pairs) to the merged path's residency"
+
+[[gap]]
+field = "latency.fps"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "latency.ttff_s"
+why = "a clip, not a stream"
+
+[[gap]]
+field = "quality.psnr_vs_upstream_min_db"
+why = "no measurement against the release's fp32-branch PyTorch run (needs the base weights in a PyTorch environment on a GPU); lab/cells/h3-plug.toml compares the branch against the merged path and against bf16 weights"
+
+[[gap]]
+field = "quality.lpips_vs_upstream_max"
+why = "no measurement against the release's PyTorch run; docs/serve/research-longlive.md §12.7 has LPIPS against the base H3 for the merged path only"
+
+[[gap]]
+field = "quality.sharpness_ratio"
+why = "no measurement for the branch path; §12.7 has the merged path's"
+
+[[gap]]
+field = "quality.jitter_ratio"
+why = "no measurement for the branch path; §12.7 has the merged path's"
+
+[[gap]]
+field = "cost.usd_per_clip"
+why = "derived from latency.p50_s, which has no gold run yet"

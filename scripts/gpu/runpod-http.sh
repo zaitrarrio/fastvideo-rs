@@ -143,7 +143,7 @@ fi
 # fv-lab's plan. For any other name it would start the deleted
 # runpod-matrix.sh (ADR-0019 §22.20): refused (exit 2) before the key, as
 # `run` and `all` refuse it before any pod.
-if [[ "${1:-}" == plan && "$FAMILY" != gold ]] && ! fv_lab_experiment "$FAMILY" && ! fv_lab_retired "$FAMILY"; then
+if [[ "${1:-}" == plan && "$FAMILY" != gold ]] && ! fv_lab_experiment "$FAMILY" && ! fv_lab_own "$FAMILY" && ! fv_lab_retired "$FAMILY"; then
   echo "runpod-http: $FAMILY is no fv-lab tier of fv-lab-retired.sh, gold or an experiment tier, and the script path is gone (runpod-matrix.sh had no family left and was deleted, docs/adr/0019-fv-lab.md §22.20): no body to plan; an fv-lab tier: FV_FAMILY=<tier> runpod-http.sh plan, or fv-lab pod up --sha <sha> --family <tier>" >&2
   exit 2
 fi
@@ -958,6 +958,10 @@ cmd_run() {
   # Nor were the tiers made from a port one-off (fv-lab-retired.sh FV_LAB_EXPERIMENTS).
   if fv_lab_experiment "$FAMILY" && [[ "$mode" == run || "$mode" == all ]]; then
     die "$FAMILY is no runpod-matrix.sh family: an fv-lab tier made from a port one-off (docs/adr/0019-fv-lab.md §14): fv-lab pod up --sha $sha --family $FAMILY --yes --wait"
+  fi
+  # Nor fv-lab's own tiers (fv-lab-retired.sh FV_LAB_OWN): gold-like, run by fv-lab alone.
+  if fv_lab_own "$FAMILY" && [[ "$mode" == run || "$mode" == all ]]; then
+    die "$FAMILY is no runpod-matrix.sh family: one of fv-lab's own tiers (docs/dev/fv-lab.md): fv-lab pod up --sha $sha --family $FAMILY --yes --wait"
   fi
   if [[ "$mode" == run || "$mode" == all ]] && fv_lab_retired "$FAMILY"; then
     refuse_retired_sibling_mode

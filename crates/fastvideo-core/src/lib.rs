@@ -8,6 +8,7 @@ pub mod family;
 pub mod generator;
 pub mod request;
 pub mod sampling;
+pub mod upscale;
 
 pub use backend_kind::BackendKind;
 pub use error::{FastVideoError, Result};

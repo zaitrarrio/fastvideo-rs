@@ -106,6 +106,16 @@ pub enum Stage {
         /// `$FASTVIDEO_PLUG_ROOT`, else `<weights>/../longlive-plug`).
         #[arg(long)]
         plug_root: Option<PathBuf>,
+        /// After the clip is written: Real-ESRGAN `realesr-animevideov3`
+        /// (`rt::esrgan`) ×2, ×3 or ×4 of its frames into `frames-up/` and
+        /// `output-up.mp4`, timed as `upscale_s` in benchmark.json.
+        #[arg(long)]
+        upscale: Option<usize>,
+        /// The upscaler checkpoint (default: FASTVIDEO_ESRGAN_WEIGHTS,
+        /// $FASTVIDEO_TAE_DIR/realesr-animevideov3.pth, then
+        /// `<weights>/../auxiliary/upscalers/realesr-animevideov3.pth`).
+        #[arg(long)]
+        upscale_weights: Option<PathBuf>,
     },
     /// The open-ended causal SF-Wan rollout (`wan::stream`): `--parity`
     /// against the bounded 81-frame path, then each `--run` for its video
@@ -128,10 +138,13 @@ pub enum Stage {
         #[arg(long, default_value_t = 0)]
         switch_prompts_line: usize,
         /// LongLive-1.3B: the converted checkpoint dir (`longlive_base.safetensors`,
-        /// `lora.safetensors`) replacing `--weights/transformer`.
+        /// `lora.safetensors`) replacing `--weights/transformer`; or History
+        /// Forcing's (`generator_ema.safetensors` dir, the Hub's `dmd/model.pt`
+        /// file or its dir), with `--longlive-no-lora` (it has no LoRA).
         #[arg(long)]
         longlive: Option<PathBuf>,
-        /// With `--longlive`: the base generator without the LoRA.
+        /// With `--longlive`: no LoRA merged (LongLive's base generator, or
+        /// History Forcing's checkpoint, which has none).
         #[arg(long)]
         longlive_no_lora: bool,
         #[arg(long, default_value_t = 1024)]
@@ -144,7 +157,7 @@ pub enum Stage {
         fps: u32,
         #[arg(long)]
         parity: bool,
-        /// `name,[longlive=1,]seconds=S[,rope=rel|abs|rebased][,sink=N][,window=N][,switch_at=S[/S2..]][,switch=keep|reset|recache|recache_sink][,drop_rgb=1]`
+        /// `name,[longlive=1 | preset=longlive|history-forcing,]seconds=S[,rope=rel|abs|rebased][,sink=N][,window=N][,switch_at=S[/S2..]][,switch=keep|reset|recache|recache_sink][,drop_rgb=1]`
         #[arg(long = "run")]
         runs: Vec<String>,
         /// Video seconds per statistics window.
@@ -215,6 +228,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             audio,
             plug,
             plug_root,
+            upscale,
+            upscale_weights,
         } => {
             let plug = match plug.as_deref() {
                 None => None,
@@ -326,6 +341,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     plug: plug.as_ref(),
                     plug_root: plug_root.as_deref(),
                     step_distill,
+                    upscale: crate::upscale::UpscaleArgs::resolve(
+                        *upscale,
+                        upscale_weights.as_deref(),
+                        Some(weights),
+                    )?,
                 },
             )
         }
@@ -435,6 +455,8 @@ struct GenArgs<'a> {
     plug: Option<&'a PlugRecipe>,
     plug_root: Option<&'a Path>,
     step_distill: Option<StepDistill>,
+    /// `--upscale N`: the frames upscaled after each clip.
+    upscale: Option<crate::upscale::UpscaleArgs>,
 }
 
 /// SHA-256 over every PNG frame's bytes in order: two clips with the same
@@ -612,6 +634,13 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
         let mut values = timings_json(&out, total);
         values["peak_mib"] = json!(peak_mib);
         values["frames_sha256"] = json!(digest);
+        let upscaled = match &a.upscale {
+            Some(u) => Some(u.run(&dir, Some(a.base.fps), None)?),
+            None => None,
+        };
+        if let Some(u) = &upscaled {
+            values["upscale"] = u.clone();
+        }
         report.note(
             if a.multi {
                 format!("timings/{}", spec.name)
@@ -671,6 +700,8 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
             "max_device_memory_used_mib": peak_mib,
             "frames_sha256": digest,
             "audio": audio_json(&out, total, a.base.num_frames, a.base.fps),
+            "upscale": upscaled.clone().unwrap_or(json!(false)),
+            "upscale_s": upscaled.as_ref().map(|u| u["upscale_s"].clone()).unwrap_or(json!(null)),
         });
         let doc = crate::benchmark::merge(crate::benchmark::common("wan", a.warm), doc);
         docs.push((spec.clone(), crate::benchmark::merge(doc, counters)));

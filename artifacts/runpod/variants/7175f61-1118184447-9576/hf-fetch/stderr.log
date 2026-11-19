@@ -1,0 +1,4 @@
+[INFO] fetch/fetch {"bytes":11352569509,"cached":false,"mb_per_s":195.22153919549373,"out":"/fvscratch/runs/variants/7175f61-1118184447-9576/hf-stage/dmd-model.pt","seconds":58.152238507,"url":"https://huggingface.co/xzxxntxdy/History-Forcing/resolve/8604aafe4fada0311c7f5a993e7e620473c8e7ac/dmd/model.pt"}
+fetch ok: /fvscratch/runs/variants/7175f61-1118184447-9576/hf-stage/dmd-model.pt (11352569509 bytes, 58.2s)
+warn: could not write /fvscratch/runs/variants/7175f61-1118184447-9576/hf-stage/dmd-model.pt/fetch.json: Not a directory (os error 20)
+[PASS] stage fetch → /fvscratch/runs/variants/7175f61-1118184447-9576/hf-stage/dmd-model.pt/fetch.json (58.2s)

@@ -39,10 +39,23 @@
 //! Schedule, shift and context pass are SF-Wan's: denoising steps
 //! `[1000, 750, 500, 250]` warped onto `FlowMatchScheduler(shift=5,
 //! sigma_min=0, extra_one_step=True)`, then the clean pass at `t = 0`.
+//!
+//! **History Forcing** (ziplab, arXiv 2611.02782; Hub
+//! `xzxxntxdy/History-Forcing` `dmd/model.pt`) runs on the same engine
+//! through [`LongLiveConfig::history_forcing`]: the same architecture and
+//! recipe (Wan2.1-T2V-1.3B, 4 DMD steps, 3-frame blocks, shift 5), the
+//! generator trained with `local_attn_size 21, sink_size 3`, no LoRA and no
+//! prompt-switch re-cache. Its checkpoint is a training `.pt` (`generator`
+//! and `generator_ema`, f32, FSDP-wrapped original Wan names) that
+//! [`LongLiveWeights`] reads directly ([`PthSource`]) or through the
+//! torch-free `scripts/gpu/convert-history-forcing.py`
+//! (`generator_ema.safetensors`, same keys). docs/ports/wan.md "History
+//! Forcing".
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+use fastvideo_loader::pth::{read_pth_nested, PthTensor};
 use fastvideo_loader::{LazyDType, LazyStore, RawDType, RawTensor};
 use rayon::prelude::*;
 
@@ -111,6 +124,45 @@ impl LongLiveConfig {
             relative_rope: true,
             ..Self::interactive()
         }
+    }
+
+    /// History Forcing's long-video generator (`github.com/ziplab/History-Forcing`
+    /// `configs/long_video/dmd_ar10s_bi1p3b.yaml`, the config of the released
+    /// `dmd/model.pt`, over `configs/long_video/default_config.yaml`; read
+    /// 2026-11-18): `denoising_step_list: [1000, 750, 500, 250]`,
+    /// `warp_denoising_step: true`, `timestep_shift: 5.0`,
+    /// `num_frame_per_block: 3`, `model_kwargs.local_attn_size: 21`,
+    /// `model_kwargs.sink_size: 3`, `context_noise: 0` (the default config).
+    /// The generator is a full checkpoint (`generator_ema`, `inference.yaml`
+    /// `weights: ema`): no LoRA. Its inference (`inference_memrope.py`,
+    /// `CausalInferencePipeline`) rolls one prompt out with the sink kept for
+    /// the whole run (`global_sink`) and has no prompt-switch re-cache
+    /// (`recache: false`: our [`PromptSwitch::Keep`]; a family file may still
+    /// set `recache = true` to borrow LongLive's). Absolute RoPE, as the
+    /// pipeline ropes keys at their frame. MemRoPE (`inference.yaml`'s
+    /// `memrope:` table, the optional demo cache; vendored code CC-BY-NC-SA)
+    /// is not implemented: this is the plain 21 / 3 rolling cache the
+    /// generator was trained with (docs/ports/wan.md "History Forcing").
+    pub fn history_forcing() -> Self {
+        Self {
+            denoising_steps: vec![1000, 750, 500, 250],
+            frames_per_block: 3,
+            local_attn_frames: 21,
+            sink_frames: 3,
+            timestep_shift: 5.0,
+            global_sink: true,
+            context_noise: 0,
+            lora_rank: 0,
+            lora_alpha: 0.0,
+            relative_rope: false,
+            recache: false,
+        }
+    }
+
+    /// Whether the checkpoint comes with a LoRA to merge (`lora.safetensors`):
+    /// LongLive yes, History Forcing no.
+    pub fn has_lora(&self) -> bool {
+        self.lora_rank > 0
     }
 
     /// `alpha / rank`, the PEFT LoRA scale.
@@ -373,14 +425,18 @@ pub fn merge_lora(
     Ok(())
 }
 
-/// Where the converted LongLive-1.3B checkpoint lives (the fetch's
-/// safetensors conversion of `models/longlive_base.pt` and `models/lora.pt`,
-/// same keys, the `generator` / `generator_lora` sub-dicts).
+/// Where a LongLive / History Forcing generator lives: `base` is a
+/// safetensors file with original Wan names (the fetch's conversion of
+/// `models/longlive_base.pt`, `convert-history-forcing.py`'s
+/// `generator_ema.safetensors`) or a torch `.pt` training checkpoint read
+/// directly ([`PthSource`]); `lora` is LongLive's `lora.safetensors`
+/// (`models/lora.pt`'s `generator_lora` sub-dict, same keys).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LongLiveWeights {
     pub base: PathBuf,
-    /// `None`: the base generator alone (`longlive_init` without the long
-    /// tuning; not what LongLive serves).
+    /// `None`: the base generator alone (LongLive's `longlive_init` without
+    /// the long tuning, not what LongLive serves; History Forcing, which has
+    /// no LoRA).
     pub lora: Option<PathBuf>,
     /// LoRA scale (`alpha / rank`, 1.0 for the release).
     pub lora_scale: f32,
@@ -389,13 +445,63 @@ pub struct LongLiveWeights {
     pub bf16: bool,
 }
 
+/// The generator files [`LongLiveWeights::in_dir`] looks for, in order:
+/// LongLive's conversion, History Forcing's conversion (EMA, then raw), a
+/// torch checkpoint at the root, the Hub's `dmd/model.pt` layout.
+pub const BASE_FILES: [&str; 5] = [
+    "longlive_base.safetensors",
+    "generator_ema.safetensors",
+    "generator.safetensors",
+    "model.pt",
+    "dmd/model.pt",
+];
+
+/// A torch `.pt` / `.pth` checkpoint (read with [`PthSource`]) rather than
+/// safetensors.
+pub fn is_torch_checkpoint(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("pt") | Some("pth")
+    )
+}
+
 impl LongLiveWeights {
-    /// `<dir>/longlive_base.safetensors` and `<dir>/lora.safetensors`.
+    /// The generator in `dir`: the first of [`BASE_FILES`] that exists
+    /// (`longlive_base.safetensors` when none does, so the load names it),
+    /// and `<dir>/lora.safetensors` when `cfg` has a LoRA
+    /// ([`LongLiveConfig::has_lora`]) and the file exists. A LongLive dir
+    /// resolves exactly as before History Forcing joined.
     pub fn in_dir(dir: &Path, cfg: &LongLiveConfig) -> Self {
+        let base = BASE_FILES
+            .iter()
+            .map(|f| dir.join(f))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| dir.join(BASE_FILES[0]));
+        Self::with_lora_beside(base, dir, cfg)
+    }
+
+    /// A bare generator file (`.pt`, `.pth` or safetensors); a LoRA, when
+    /// `cfg` has one, is `lora.safetensors` beside it.
+    pub fn from_file(path: &Path, cfg: &LongLiveConfig) -> Self {
+        let dir = path.parent().unwrap_or(Path::new("."));
+        Self::with_lora_beside(path.to_path_buf(), dir, cfg)
+    }
+
+    /// [`Self::from_file`] for a file, [`Self::in_dir`] for a directory (or
+    /// anything else, so a missing dir fails at the load with its name).
+    pub fn at(path: &Path, cfg: &LongLiveConfig) -> Self {
+        if path.is_file() {
+            Self::from_file(path, cfg)
+        } else {
+            Self::in_dir(path, cfg)
+        }
+    }
+
+    fn with_lora_beside(base: PathBuf, dir: &Path, cfg: &LongLiveConfig) -> Self {
         let lora = dir.join("lora.safetensors");
         Self {
-            base: dir.join("longlive_base.safetensors"),
-            lora: lora.is_file().then_some(lora),
+            base,
+            lora: (cfg.has_lora() && lora.is_file()).then_some(lora),
             lora_scale: cfg.lora_scale(),
             bf16: true,
         }
@@ -425,6 +531,63 @@ impl TensorSource for LazyStore {
     fn get(&self, key: &str) -> Result<(Vec<usize>, LazyDType, Vec<u8>)> {
         let v = self.view(key).map_err(|e| msg(e.to_string()))?;
         Ok((v.shape.to_vec(), v.dtype.clone(), v.bytes.to_vec()))
+    }
+}
+
+/// A generator read whole from a torch `.pt` / `.pth` checkpoint
+/// (`fastvideo_loader::pth`): the root's tensors, else `generator_ema`,
+/// else `generator` (History Forcing's `dmd/model.pt`, Self-Forcing's
+/// `self_forcing_dmd.pt`, LongLive's `longlive_base.pt`). Tensors come out
+/// as f32 (bf16 / f16 storages widened), so a 1.3B generator holds 5.7 GB of
+/// host memory until [`build_transformer_tensors`] has narrowed it; the
+/// keys keep their wrappers (`model._fsdp_wrapped_module.`), which
+/// [`diffusers_key`] strips.
+#[derive(Debug)]
+pub struct PthSource {
+    tensors: BTreeMap<String, PthTensor>,
+}
+
+/// The sub-dicts a generator checkpoint keeps its state dict under, in
+/// order of preference (the EMA weights are what the released inference
+/// runs: History Forcing `inference.yaml` `weights: ema`).
+pub const PTH_GENERATOR_KEYS: [&str; 2] = ["generator_ema", "generator"];
+
+impl PthSource {
+    pub fn open(path: &Path) -> Result<Self> {
+        let tensors = read_pth_nested(path, &PTH_GENERATOR_KEYS, |_| true)
+            .map_err(|e| msg(format!("longlive: {e}")))?;
+        if tensors.is_empty() {
+            return Err(msg(format!(
+                "longlive: {} holds no tensors",
+                path.display()
+            )));
+        }
+        Ok(Self { tensors })
+    }
+
+    pub fn len(&self) -> usize {
+        self.tensors.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tensors.is_empty()
+    }
+}
+
+impl TensorSource for PthSource {
+    fn keys(&self) -> Vec<String> {
+        self.tensors.keys().cloned().collect()
+    }
+    fn get(&self, key: &str) -> Result<(Vec<usize>, LazyDType, Vec<u8>)> {
+        let t = self
+            .tensors
+            .get(key)
+            .ok_or_else(|| msg(format!("missing {key}")))?;
+        Ok((
+            t.shape.clone(),
+            LazyDType::F32,
+            t.data.iter().flat_map(|x| x.to_le_bytes()).collect(),
+        ))
     }
 }
 
@@ -572,12 +735,23 @@ pub fn build_transformer_tensors(
     Ok((out, report))
 }
 
-/// The LongLive transformer as a Diffusers-named [`WeightMap`] (for
-/// [`super::pipeline::WanPipeline::load_with_dit`]): `base` renamed, `lora`
-/// merged.
+/// `base` opened by its kind: a torch checkpoint whole ([`PthSource`]), a
+/// safetensors file lazily.
+fn open_base(base: &Path) -> Result<Box<dyn TensorSource>> {
+    if is_torch_checkpoint(base) {
+        return Ok(Box::new(PthSource::open(base)?));
+    }
+    Ok(Box::new(
+        LazyStore::open_files(&[base.to_path_buf()])
+            .map_err(|e| msg(format!("{}: {e}", base.display())))?,
+    ))
+}
+
+/// The LongLive / History Forcing transformer as a Diffusers-named
+/// [`WeightMap`] (for [`super::pipeline::WanPipeline::load_with_dit`]):
+/// `base` renamed (safetensors or a torch `.pt`), `lora` merged if any.
 pub fn load_transformer_map(w: &LongLiveWeights) -> Result<(WeightMap, MergeReport)> {
-    let base = LazyStore::open_files(std::slice::from_ref(&w.base))
-        .map_err(|e| msg(format!("{}: {e}", w.base.display())))?;
+    let base = open_base(&w.base)?;
     let lora = match &w.lora {
         Some(p) => Some(
             LazyStore::open_files(std::slice::from_ref(p))
@@ -586,7 +760,7 @@ pub fn load_transformer_map(w: &LongLiveWeights) -> Result<(WeightMap, MergeRepo
         None => None,
     };
     let (tensors, report) = build_transformer_tensors(
-        &base,
+        base.as_ref(),
         lora.as_ref().map(|l| l as &dyn TensorSource),
         w.lora_scale,
         w.bf16,
@@ -631,6 +805,326 @@ mod tests {
             ..c
         };
         assert_eq!(off.prompt_switch(), PromptSwitch::Keep);
+    }
+
+    /// `configs/long_video/dmd_ar10s_bi1p3b.yaml` over `default_config.yaml`
+    /// (ziplab/History-Forcing, 2026-11-18): window 21, sink 3, no LoRA, no
+    /// switch re-cache, the Self-Forcing schedule.
+    #[test]
+    fn history_forcing_matches_its_config() {
+        let h = LongLiveConfig::history_forcing();
+        assert_eq!(h.denoising_steps, [1000, 750, 500, 250]);
+        assert_eq!(
+            (h.frames_per_block, h.local_attn_frames, h.sink_frames),
+            (3, 21, 3)
+        );
+        assert_eq!(
+            (h.timestep_shift, h.context_noise, h.global_sink),
+            (5.0, 0, true)
+        );
+        assert!(!h.has_lora());
+        assert_eq!((h.lora_rank, h.lora_alpha, h.lora_scale()), (0, 0.0, 0.0));
+        assert!(!h.relative_rope && !h.recache);
+        assert_eq!(h.rope(false), RopePolicy::Absolute);
+        assert_eq!(h.prompt_switch(), PromptSwitch::Keep);
+        let r = h.rollout(RolloutConfig::default());
+        assert_eq!(
+            (r.local_attn_frames, r.sink_frames, r.flow_shift),
+            (21, 3, 5.0)
+        );
+        assert_eq!(r.dmd_steps, [1000, 750, 500, 250]);
+        assert_eq!(
+            (r.rope, r.prompt_switch),
+            (RopePolicy::Absolute, PromptSwitch::Keep)
+        );
+        assert!(r.recache.is_none());
+        // A family file may borrow LongLive's switch re-cache.
+        let with = LongLiveConfig { recache: true, ..h };
+        assert_eq!(
+            with.prompt_switch(),
+            PromptSwitch::Recache { global_sink: true }
+        );
+        assert!(LongLiveConfig::interactive().has_lora());
+        assert!(LongLiveConfig::infinity().has_lora());
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("fv-longlive-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// `in_dir` takes the first generator file of `BASE_FILES` and the LoRA
+    /// only under a config that has one; `from_file` / `at` take a bare
+    /// path. A LongLive dir resolves as it always did.
+    #[test]
+    fn weights_in_dir_pick_the_generator_and_the_lora_by_config() {
+        let ll = LongLiveConfig::interactive();
+        let hf = LongLiveConfig::history_forcing();
+        let d = scratch("in-dir");
+        // Empty dir: LongLive's names (the load names the missing file).
+        let w = LongLiveWeights::in_dir(&d, &ll);
+        assert_eq!(w.base, d.join("longlive_base.safetensors"));
+        assert_eq!((w.lora, w.lora_scale, w.bf16), (None, 1.0, true));
+        assert_eq!(
+            LongLiveWeights::in_dir(&d, &hf).base,
+            d.join("longlive_base.safetensors")
+        );
+        // History Forcing's conversion: the EMA generator first; no LoRA is
+        // looked for, even with a lora.safetensors in the dir.
+        std::fs::write(d.join("generator.safetensors"), b"").unwrap();
+        std::fs::write(d.join("lora.safetensors"), b"").unwrap();
+        let w = LongLiveWeights::in_dir(&d, &hf);
+        assert_eq!(w.base, d.join("generator.safetensors"));
+        assert_eq!((w.lora, w.lora_scale), (None, 0.0));
+        std::fs::write(d.join("generator_ema.safetensors"), b"").unwrap();
+        assert_eq!(
+            LongLiveWeights::in_dir(&d, &hf).base,
+            d.join("generator_ema.safetensors")
+        );
+        // The same dir under the LongLive config takes the LoRA (rank 256);
+        // longlive_base.safetensors wins once it is there.
+        let w = LongLiveWeights::in_dir(&d, &ll);
+        assert_eq!(w.base, d.join("generator_ema.safetensors"));
+        assert_eq!(w.lora, Some(d.join("lora.safetensors")));
+        std::fs::write(d.join("longlive_base.safetensors"), b"").unwrap();
+        let w = LongLiveWeights::in_dir(&d, &ll);
+        assert_eq!(w.base, d.join("longlive_base.safetensors"));
+        assert_eq!(w.lora, Some(d.join("lora.safetensors")));
+        // The Hub layout of History Forcing (dmd/model.pt), and bare files.
+        let h = scratch("hub");
+        std::fs::create_dir_all(h.join("dmd")).unwrap();
+        std::fs::write(h.join("dmd").join("model.pt"), b"").unwrap();
+        let pt = h.join("dmd").join("model.pt");
+        let w = LongLiveWeights::in_dir(&h, &hf);
+        assert_eq!(w.base, pt);
+        assert!(is_torch_checkpoint(&w.base));
+        assert!(!is_torch_checkpoint(&d.join("generator_ema.safetensors")));
+        let f = LongLiveWeights::from_file(&pt, &hf);
+        assert_eq!((f.base.clone(), f.lora.clone()), (pt.clone(), None));
+        assert_eq!(LongLiveWeights::at(&pt, &hf), f);
+        assert_eq!(LongLiveWeights::at(&h, &hf), f);
+        assert_eq!(
+            LongLiveWeights::at(&d, &ll),
+            LongLiveWeights::in_dir(&d, &ll)
+        );
+        // A LongLive dir handed as a file path: the LoRA beside it.
+        let f = LongLiveWeights::from_file(&d.join("longlive_base.safetensors"), &ll);
+        assert_eq!(f.lora, Some(d.join("lora.safetensors")));
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::remove_dir_all(&h);
+    }
+
+    /// A stored zip of `files`, as torch writes a checkpoint.
+    fn torch_zip(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        let (mut out, mut cd) = (Vec::new(), Vec::new());
+        for (name, data) in files {
+            let off = out.len() as u32;
+            out.extend([
+                0x50, 0x4b, 0x03, 0x04, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ]);
+            out.extend((data.len() as u32).to_le_bytes());
+            out.extend((data.len() as u32).to_le_bytes());
+            out.extend((name.len() as u16).to_le_bytes());
+            out.extend(0u16.to_le_bytes());
+            out.extend(name.as_bytes());
+            out.extend(data);
+            cd.extend([
+                0x50, 0x4b, 0x01, 0x02, 20, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ]);
+            cd.extend((data.len() as u32).to_le_bytes());
+            cd.extend((data.len() as u32).to_le_bytes());
+            cd.extend((name.len() as u16).to_le_bytes());
+            cd.extend([0u8; 12]);
+            cd.extend(off.to_le_bytes());
+            cd.extend(name.as_bytes());
+        }
+        let cd_off = out.len() as u32;
+        out.extend(&cd);
+        out.extend([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0]);
+        out.extend((files.len() as u16).to_le_bytes());
+        out.extend((files.len() as u16).to_le_bytes());
+        out.extend((cd.len() as u32).to_le_bytes());
+        out.extend(cd_off.to_le_bytes());
+        out.extend([0u8; 2]);
+        out
+    }
+
+    fn pickle_str(s: &str) -> Vec<u8> {
+        let mut p = vec![b'X'];
+        p.extend((s.len() as u32).to_le_bytes());
+        p.extend(s.as_bytes());
+        p
+    }
+
+    /// A tensor as History Forcing's checkpoint saves it:
+    /// `_rebuild_from_type_v2(_rebuild_tensor_v2, torch.Tensor,
+    /// ((storage, FloatStorage, key, cpu, n), 0, shape, stride, False,
+    /// OrderedDict()), {})`, row-major and contiguous.
+    fn pickle_f32_tensor(key: &str, shape: &[u8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend(b"ctorch._tensor\n_rebuild_from_type_v2\n(");
+        p.extend(b"ctorch._utils\n_rebuild_tensor_v2\nctorch\nTensor\n(");
+        p.extend(b"(X\x07\x00\x00\x00storagectorch\nFloatStorage\n");
+        p.extend(pickle_str(key));
+        p.extend(b"X\x03\x00\x00\x00cpu");
+        p.extend([b'K', shape.iter().product::<u8>(), b't', b'Q', b'K', 0]);
+        let tuple = |items: &[u8], p: &mut Vec<u8>| {
+            for &i in items {
+                p.extend([b'K', i]);
+            }
+            p.push(match items.len() {
+                1 => 0x85,
+                2 => 0x86,
+                3 => 0x87,
+                _ => unreachable!(),
+            });
+        };
+        tuple(shape, &mut p);
+        let mut stride = vec![1u8; shape.len()];
+        for i in (0..shape.len().saturating_sub(1)).rev() {
+            stride[i] = stride[i + 1] * shape[i + 1];
+        }
+        tuple(&stride, &mut p);
+        p.extend(b"\x89ccollections\nOrderedDict\n)Rt}tR");
+        p
+    }
+
+    /// `PthSource` reads the EMA generator of a training checkpoint (both
+    /// sub-dicts present, FSDP wrappers on the keys) and feeds the same
+    /// rename / narrowing as a safetensors source.
+    #[test]
+    fn pth_source_reads_the_ema_generator() {
+        let f32s = |v: &[f32]| -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() };
+        // {"generator": {...raw...}, "generator_ema": {...ema...}}
+        let mut p: Vec<u8> = vec![0x80, 2, b'}', b'('];
+        p.extend(pickle_str("generator"));
+        p.extend(b"}(");
+        p.extend(pickle_str("model.blocks.0.self_attn.q.weight"));
+        p.extend(pickle_f32_tensor("0", &[2, 2]));
+        p.extend(pickle_str("model.head.modulation"));
+        p.extend(pickle_f32_tensor("1", &[1, 2, 2]));
+        p.extend(b"u");
+        p.extend(pickle_str("generator_ema"));
+        p.extend(b"}(");
+        p.extend(pickle_str(
+            "model._fsdp_wrapped_module.blocks.0.self_attn.q.weight",
+        ));
+        p.extend(pickle_f32_tensor("2", &[2, 2]));
+        p.extend(pickle_str("model._fsdp_wrapped_module.head.modulation"));
+        p.extend(pickle_f32_tensor("3", &[1, 2, 2]));
+        p.extend(b"uu.");
+        let zip = torch_zip(&[
+            ("model/data.pkl", p),
+            ("model/data/0", f32s(&[9.0, 9.0, 9.0, 9.0])),
+            ("model/data/1", f32s(&[9.0, 9.0, 9.0, 9.0])),
+            ("model/data/2", f32s(&[1.0, 0.5, -0.25, 2.0])),
+            ("model/data/3", f32s(&[0.125, 0.25, 0.5, 1.0])),
+        ]);
+        let d = scratch("pth");
+        std::fs::create_dir_all(d.join("dmd")).unwrap();
+        let pt = d.join("dmd").join("model.pt");
+        std::fs::write(&pt, zip).unwrap();
+        let src = PthSource::open(&pt).unwrap();
+        assert_eq!(src.len(), 2);
+        assert_eq!(
+            src.keys(),
+            [
+                "model._fsdp_wrapped_module.blocks.0.self_attn.q.weight",
+                "model._fsdp_wrapped_module.head.modulation"
+            ]
+        );
+        let (shape, dtype, bytes) = src
+            .get("model._fsdp_wrapped_module.blocks.0.self_attn.q.weight")
+            .unwrap();
+        assert_eq!((shape, dtype), (vec![2, 2], LazyDType::F32));
+        assert_eq!(
+            to_f32(&LazyDType::F32, &bytes, "q").unwrap(),
+            [1.0, 0.5, -0.25, 2.0]
+        );
+        // Through the loader: the EMA values, renamed, matrices in bf16.
+        let w = LongLiveWeights::in_dir(&d, &LongLiveConfig::history_forcing());
+        assert_eq!(w.base, pt);
+        let (map, r) = load_transformer_map(&w).unwrap();
+        assert_eq!((r.tensors, r.merged), (2, 0));
+        assert!(r.skipped.is_empty());
+        let base = open_base(&w.base).unwrap();
+        let (t, _) = build_transformer_tensors(base.as_ref(), None, w.lora_scale, true).unwrap();
+        assert_eq!(t["blocks.0.attn1.to_q.weight"].dtype, RawDType::BF16);
+        assert_eq!(
+            t["blocks.0.attn1.to_q.weight"].to_f32_vec().unwrap(),
+            [1.0, 0.5, -0.25, 2.0]
+        );
+        assert_eq!(t["scale_shift_table"].dtype, RawDType::F32);
+        assert_eq!(
+            t["scale_shift_table"].to_f32_vec().unwrap(),
+            [0.125, 0.25, 0.5, 1.0]
+        );
+        drop(map);
+        // A file that is no checkpoint fails with its name.
+        std::fs::write(d.join("model.pt"), b"not a checkpoint").unwrap();
+        let e = PthSource::open(&d.join("model.pt"))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("model.pt"), "{e}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The real History Forcing checkpoint, `FV_HISTORY_FORCING_PT=<path to
+    /// dmd/model.pt>` (11.35 GB on disk, about 6 GB of host memory while the
+    /// EMA generator is read as f32):
+    /// `cargo test -p fastvideo-cudarc --features cuda history_forcing_checkpoint_loads -- --ignored --nocapture`.
+    /// Prints the tensor count, the dtypes, the time and the host high-water mark.
+    #[test]
+    #[ignore = "needs FV_HISTORY_FORCING_PT (the 11 GB checkpoint)"]
+    fn history_forcing_checkpoint_loads() {
+        let Some(p) = std::env::var_os("FV_HISTORY_FORCING_PT") else {
+            eprintln!("FV_HISTORY_FORCING_PT unset: skipped");
+            return;
+        };
+        let p = PathBuf::from(p);
+        let hf = LongLiveConfig::history_forcing();
+        let w = LongLiveWeights::at(&p, &hf);
+        assert!(is_torch_checkpoint(&w.base), "{}", w.base.display());
+        assert_eq!(w.lora, None);
+        let t0 = std::time::Instant::now();
+        let src = PthSource::open(&w.base).unwrap();
+        let read_s = t0.elapsed().as_secs_f64();
+        // Wan2.1-T2V-1.3B as Diffusers names it: 30 blocks x 27 tensors + 15
+        // (patch, text / time embedders, time projection, head, its table).
+        // The checkpoint keeps no `freqs` buffer.
+        assert_eq!(src.len(), 825);
+        let (t, r) = build_transformer_tensors(&src, None, w.lora_scale, w.bf16).unwrap();
+        let build_s = t0.elapsed().as_secs_f64() - read_s;
+        assert_eq!((r.tensors, r.merged), (825, 0));
+        assert!(r.skipped.is_empty(), "{:?}", r.skipped);
+        let mut dtypes: BTreeMap<String, usize> = BTreeMap::new();
+        let mut bytes = 0usize;
+        for v in t.values() {
+            *dtypes.entry(format!("{:?}", v.dtype)).or_default() += 1;
+            bytes += v.data.len();
+        }
+        assert_eq!(t["blocks.29.attn2.to_out.0.weight"].dtype, RawDType::BF16);
+        assert_eq!(t["blocks.29.attn2.to_out.0.weight"].shape, [1536, 1536]);
+        assert_eq!(t["scale_shift_table"].dtype, RawDType::F32);
+        assert_eq!(t["scale_shift_table"].shape, [1, 2, 1536]);
+        assert_eq!(t["proj_out.bias"].dtype, RawDType::F32);
+        let hwm = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("VmHWM"))
+                    .map(str::to_owned)
+            });
+        eprintln!(
+            "history forcing {}: {} tensors (pth read {read_s:.1} s, rename + bf16 {build_s:.1} s), out dtypes {dtypes:?}, {bytes} bytes, {}",
+            p.display(),
+            r.tensors,
+            hwm.unwrap_or_default()
+        );
+        let map = WeightMap::from_raw_tensors(t);
+        drop(map);
     }
 
     /// `_recache_after_switch` with `local_attn_size = 12`, `sink_size = 3`,

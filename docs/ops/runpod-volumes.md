@@ -194,6 +194,8 @@ The "sha256 source" column says where file hashes can be checked.
 | `sfwan21-1.3b` | wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers @ `4b44356` short | manifest row | 28 928 823 445 | Hub LFS 9/9 (sync), not listed | yes | yes | `sfwan21-1.3b` | apache-2.0 |
 | `longlive-1.3b` | Efficient-Large-Model/LongLive-1.3B @ `cda9138` rec | `README.md`, `models/longlive_base.pt`, `models/lora.pt`, `prompts/interactive_example.jsonl` | 8 476 402 298 | `weights-sha256.tsv` (4 files, US = EU) → `sha:longlive-1.3b` | yes | yes | `longlive-1.3b` (LongLive on the SF-Wan causal engine, `wip/longlive`) | **NON-COMMERCIAL: treat as research/evaluation only** (HF card `cc-by-nc-sa-4.0`; card body CC-BY-NC 4.0; the code repo moved to Apache-2.0 on 2025-11-01 but the card was not updated; docs/serve/research-longlive.md §4.3) |
 | `longlive-1.3b-safetensors` | **derived** (§3): `convert-longlive.py` from `longlive-1.3b` | `longlive_base.safetensors` (825 f32 tensors), `lora.safetensors` (600 f32, PEFT rank 256), `keys-*.txt`, `sha256.txt` | 5 676 075 416 + 1 399 924 800 | `weights-sha256.tsv` → `sha:longlive-1.3b-safetensors` (base: per-volume hashes, metadata order only; §3) | yes | yes | `longlive-1.3b` (`wan stream --longlive`, `FV_LONGLIVE_WEIGHTS`) | as `longlive-1.3b` (non-commercial) |
+| `history-forcing-1.3b` | xzxxntxdy/History-Forcing @ `8604aaf` rec | `README.md`, `dmd/model.pt` (the raw + EMA f32 generators; `ar_teacher/`, `opsd/` not fetched) | 2 460 + 11 352 569 509 | `weights-sha256.tsv` → `sha:history-forcing-1.3b` | — | **no** (2026-11-18: fetched to a CPU box only; not on R2 either: the owner publishes) | `history-forcing-1.3b` (the converter's source; `wan stream --longlive` reads the `.pt` directly too; ports/wan.md "History Forcing") | **NO STATED LICENCE: evaluation only** |
+| `history-forcing-1.3b-safetensors` | **derived** (§3): `convert-history-forcing.py` (torch-free) from `history-forcing-1.3b` | `generator_ema.safetensors` (825 f32 tensors, original Wan names), `keys.txt`, `sha256.txt` | 5 676 070 768 | `weights-sha256.tsv` → `sha:history-forcing-1.3b-safetensors` (the same bytes wherever it is converted: the header names the Hub path, not the local file) | — | **no** (the owner publishes to R2 with `publish-dir`) | `history-forcing-1.3b` (`wan stream --longlive <tree> --longlive-no-lora`, `FV_LONGLIVE_PRESET=history-forcing`) | as `history-forcing-1.3b` |
 | `longlive2-5b` | Efficient-Large-Model/LongLive-2.0-5B @ `8521079` rec | `README.md`, `model_bf16.pt` (LoRA merged) | 9 999 858 697 | `weights-sha256.tsv` → `sha:longlive2-5b` | yes | yes | `longlive2-5b` (not ported yet; needs `wan22-ti2v-5b`) | NVIDIA Open Model License (read the card's "API Trial Terms" line before serving) |
 | `longlive2-5b-nvfp4-s4`, `longlive2-5b-nvfp4-s2` | …/LongLive-2.0-5B-NVFP4-S4 @ `427ffb7`, -S2 @ `9ab6c9c` rec | `README.md`, `model_4o6.pt` (FourOverSix NVFP4) each | 2 945 864 769 each | `weights-sha256.tsv` → `sha:longlive2-5b-nvfp4-s{4,2}` | yes | yes | `longlive2-5b-nvfp4` (not ported; Blackwell NVFP4) | NVIDIA Open Model License |
 | `longlive-plug/minimax-h3-few-step` | …/LongLive-Plug-MiniMax-H3-few-step @ `b3686f4` rec | the whole repo (`*`): `generator_lora.pt` 2 767 464 857 + 54 small files (code snapshot, recipe, configs, LICENSE) 941 933 | 2 768 406 790 | `weights-sha256.tsv` (55 files) → `sha:longlive-plug/minimax-h3-few-step` | yes | yes | `longlive-plug` (H3 few-step LoRA; not ported) | MiniMax H3 Community (territory clause as H3: not EU/UK/KR/US without a MiniMax licence) |
@@ -336,6 +338,30 @@ both volumes the same day. `weights-sha256.tsv` lists both file hashes
 (`a|b`). `lora.safetensors` happens to match (`7ec78e63…`). The converter
 now writes a single metadata entry, so a rebuild gives one hash per run
 (a new value; record it).
+
+### History Forcing safetensors (`history-forcing-1.3b-safetensors`)
+
+Derived from `history-forcing-1.3b`'s `dmd/model.pt` by
+`scripts/gpu/convert-history-forcing.py` (stdlib Python, no torch; 35 s and
+a few hundred MB of memory on a 4-core CPU box, 2026-11-18): the
+`generator_ema` sub-dict with its wrappers stripped and its original Wan
+names kept, as stored (825 f32 tensors, 5 676 070 768 bytes), plus
+`keys.txt`, `sha256.txt` and `.complete`. Written as
+`.history-forcing-1.3b-safetensors.partial-<stamp>`, read back against the
+source tensor by tensor, then renamed; an existing output is refused. The
+header's metadata names the Hub path (`dmd/model.pt#generator_ema`), the
+source's SHA-256, the revision and the licence note, so a rebuild anywhere
+gives the same file and hash (`weights-sha256.tsv`). Not on any volume or
+R2 as of 2026-11-18 (docs/ports/wan.md "History Forcing"):
+
+```bash
+python3 -I scripts/gpu/convert-history-forcing.py \
+    /workspace/weights/history-forcing-1.3b/dmd/model.pt \
+    /workspace/weights/history-forcing-1.3b-safetensors \
+    --revision 8604aafe4fada0311c7f5a993e7e620473c8e7ac \
+    --expect-sha256 9fd236f48acaa0cc4d8115c7b1adb05781945c213a24e028e05227cbf50f9ae3
+verify-weights.sh sha:history-forcing-1.3b-safetensors
+```
 
 ### Layout note
 

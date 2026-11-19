@@ -31,7 +31,8 @@ describe("catalog.json", () => {
     expect(src).toMatch(/FASTVIDEO_H3_QUANT=w8a8\|mxfp8\|off/);
     expect(src).toMatch(/FASTVIDEO_DIT_OFFLOAD=auto\|resident\|streamed/);
     expect(src).toMatch(/FASTVIDEO_WAN_AUDIO=mmaudio/);
-    expect(src).toMatch(/flag\("FV_LONGLIVE_RECACHE", true\)/);
+    expect(src).toMatch(/flag\("FV_LONGLIVE_RECACHE", base\.recache\)/); // the preset's default: LongLive on, History Forcing off
+    expect(src).toMatch(/var\("FV_LONGLIVE_PRESET"\)/);
     expect(src).toMatch(/flag\("FV_LONGLIVE_INFINITY", false\)/);
   });
   it("recipes: unique, a known family, the Plug recipes marked as not servable", () => {

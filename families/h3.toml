@@ -816,6 +816,146 @@ warmup = false
 warmup_blocking = false
 weights = "${weights}/h3-base"
 
+# LongLive-Plug on the base MiniMax-H3 (docs/techniques.md "LongLive-Plug recipes",
+# docs/serve/research-longlive.md §12): the adapter runs as an unmerged branch
+# (`y = W x + B (A x)`), the base quantized alone. Untiered: the h3 draft tier is
+# fasth3-4step-vsa-480p-taeh3 and a second draft binding would shadow it; the
+# coordinator decides the tier. T2VA, FL2VA / Ref2VA by transfer (h3-rs); the
+# plug path takes keyframes, Ref2VA is refused (transformer_ref). Licence: MiniMax
+# H3 Community (the adapters follow the base's licence).
+[[variants]]
+id = "h3-plug-4step"
+served_names = ["h3-plug"]
+public_names = ["MiniMax-H3-Plug"]
+resident_default = true
+recipe_name = "h3-plug-4step-dense"
+trees = ["h3-base", "longlive-plug/minimax-h3-few-step"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
+[variants.engine]
+dense = true
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+profile = "h3/plug_h3_4step_dense"
+recipe = "h3-plug-4step"
+ref2va = false
+short_edge = 768
+steps = 4
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
+[[variants]]
+id = "h3-plug-cfg"
+public_names = ["MiniMax-H3-Plug-CFG"]
+resident_default = true
+recipe_name = "h3-plug-cfg-dense"
+trees = ["h3-base", "longlive-plug/minimax-h3-cfg"]
+
+[variants.gpu]
+min_vram_gib = 80
+min_sm = 89
+needs = ["fp8"]
+
+[variants.caps.frames]
+step = 17
+offset = 5
+min = 107
+max = 362
+
+[variants.caps.canvas]
+multiple = 32
+max_area = 1032192
+aspect = [0.25, 4.0]
+short_edges = [768, 480]
+
+[variants.caps.fps]
+allowed = [24]
+default = 24
+
+[variants.caps.refs]
+images = 9
+videos = 3
+audios = 3
+total = 12
+
+[variants.caps.knobs]
+seed = true
+negative = false
+steps = false
+guidance = false
+guidance_2 = false
+flow_shift = false
+
+[variants.serving]
+tasks = ["t2v", "i2v", "keyframes"]
+frames_default = 124
+
+[variants.serving.audio]
+native_rate = 32000
+channels = 2
+
+[variants.engine]
+dense = true
+family = "h3"
+hd_1080p = false
+i2v_encoder = "auto"
+profile = "h3/plug_h3_cfg_dense"
+recipe = "h3-plug-cfg"
+ref2va = false
+short_edge = 768
+steps = 49
+text_encoder = "auto"
+text_weights = "${weights}/h3-base"
+warmup = false
+warmup_blocking = false
+weights = "${weights}/h3-base"
+
 [[variants]]
 id = "vdn-h3"
 served_names = ["vdn-h3-50step"]

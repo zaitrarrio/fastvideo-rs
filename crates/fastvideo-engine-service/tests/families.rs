@@ -207,6 +207,14 @@ fn trees_name_what_the_recipes_read() {
             &["h3-base", "vdn-h3-dmd-250-turbo", "vdn-h3-stage-b-2000"][..],
         ),
         ("h3-ref2v-turbo", &["h3-base", "h3-ref2va"][..]),
+        (
+            "h3-plug-4step",
+            &["h3-base", "longlive-plug/minimax-h3-few-step"][..],
+        ),
+        (
+            "h3-plug-cfg",
+            &["h3-base", "longlive-plug/minimax-h3-cfg"][..],
+        ),
         ("ltx25-a2v-guided", &["ltx25", "ltx25-dev"][..]),
         ("ltx25-ref2v", &["ltx25", "ltx25-ic-lora-ingredients"][..]),
         (
@@ -231,6 +239,14 @@ fn trees_name_what_the_recipes_read() {
             &[
                 "auxiliary/tae/taew2_1.safetensors",
                 "longlive-1.3b-safetensors",
+                "sfwan21-1.3b",
+            ][..],
+        ),
+        (
+            "history-forcing-1.3b",
+            &[
+                "auxiliary/tae/taew2_1.safetensors",
+                "history-forcing-1.3b-safetensors",
                 "sfwan21-1.3b",
             ][..],
         ),
@@ -262,15 +278,32 @@ fn trees_name_what_the_recipes_read() {
                         m.id
                     );
                 }
+                if let Some(plug) = fastvideo_models::plug::PlugRecipe::named(&r.recipe) {
+                    // The H3 Plug adapter resolves at `<weights>/../longlive-plug/<dir>`.
+                    for a in &plug.adapters {
+                        let want = format!("longlive-plug/{}", a.dir);
+                        assert!(t.contains(&want), "{}: {t:?} lacks {want}", m.id);
+                    }
+                    assert!(t.contains(&plug.base.to_owned()), "{}", m.id);
+                }
             }
             CudaRecipe::Wan(w) => wan_trees(m.id.as_str(), w, &t),
             CudaRecipe::SfWan(s) => {
                 wan_trees(m.id.as_str(), &s.wan, &t);
-                if s.longlive.is_some() {
+                // The LongLive / History Forcing checkpoint tree (the last
+                // component of `longlive.weights`: `<weights>/<tree>`).
+                if let Some(l) = &s.longlive {
+                    let tree = l
+                        .weights
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or_default()
+                        .to_owned();
                     assert!(
-                        t.contains(&"longlive-1.3b-safetensors".to_owned()),
-                        "{}",
-                        m.id
+                        t.contains(&tree),
+                        "{}: {t:?} lacks {tree} ({})",
+                        m.id,
+                        l.weights.display()
                     );
                 }
             }
@@ -356,6 +389,78 @@ fn variant_counts() {
         .collect();
     eprintln!("variants per family: {counts:?}");
     let total: usize = counts.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 32);
+    assert_eq!(total, 35);
     assert_eq!(total, catalog(&WeightLayout::default()).unwrap().len());
+}
+
+/// The LongLive-Plug H3 variants (families/h3.toml `h3-plug-4step`,
+/// `h3-plug-cfg`): the family file's `recipe` is the Plug recipe name the H3
+/// pipeline resolves (`PlugRecipe::named`, `H3AdapterPlan::Plug`), served
+/// dense on the base tree with the adapter beside it, T2VA and keyframes
+/// (the plug path refuses Ref2VA only), their technique profile the dense
+/// MXFP8 one, untiered (the h3 draft tier stays fasth3-4step-vsa-480p-taeh3).
+#[test]
+fn plug_variants_carry_the_plug_recipe_to_the_engine() {
+    use fastvideo_models::plug::{PlugRecipe, PlugSampler};
+    let layout = WeightLayout::new("/w");
+    let cat = catalog(&layout).unwrap();
+    for (id, served, recipe, steps, profile, sampler) in [
+        (
+            "h3-plug-4step",
+            Some("h3-plug"),
+            "h3-plug-4step",
+            4,
+            "h3/plug_h3_4step_dense",
+            PlugSampler::H3FreshNoise4,
+        ),
+        (
+            "h3-plug-cfg",
+            None,
+            "h3-plug-cfg",
+            49,
+            "h3/plug_h3_cfg_dense",
+            PlugSampler::H3Base { points: 50 },
+        ),
+    ] {
+        let m = fastvideo_engine_service::cuda::find(&cat, id).unwrap_or_else(|| panic!("{id}"));
+        if let Some(name) = served {
+            assert_eq!(
+                fastvideo_engine_service::cuda::find(&cat, name).map(|m| m.id.clone()),
+                Some(m.id.clone())
+            );
+        }
+        let CudaRecipe::H3(r) = &m.recipe else {
+            panic!("{id}: not an H3 recipe");
+        };
+        assert_eq!(r.recipe, recipe);
+        let plug = PlugRecipe::named(&r.recipe).expect("a Plug recipe");
+        assert_eq!(plug.sampler, sampler);
+        assert_eq!(plug.base, "h3-base");
+        assert!(r.dense, "{id}");
+        assert!(!r.ref2va && !r.hd_1080p, "{id}");
+        assert_eq!(r.steps, steps);
+        assert_eq!(r.short_edge, 768);
+        assert!(r.taeh3.is_none());
+        assert_eq!(r.profile.as_deref(), Some(profile));
+        assert_eq!(r.weights, PathBuf::from("/w/h3-base"));
+        assert_eq!(r.text_weights.as_deref(), Some(Path::new("/w/h3-base")));
+        assert_eq!(
+            m.tier, None,
+            "{id}: untiered (the h3 draft tier is fasth3-4step-vsa-480p-taeh3)"
+        );
+        let caps = m.caps();
+        assert_eq!(
+            caps.tasks,
+            [Task::T2V, Task::I2V, Task::Keyframes]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(caps.canvas.short_edges, [768, 480]);
+        assert_eq!(caps.frames.default, 124);
+        assert!(
+            plug.licence.contains("MiniMax H3 Community"),
+            "{}",
+            plug.licence
+        );
+    }
 }

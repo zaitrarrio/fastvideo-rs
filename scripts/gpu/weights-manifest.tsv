@@ -70,7 +70,7 @@ sana-video-2b-480p	Efficient-Large-Model/SANA-Video_2B_480p_diffusers	model_inde
 # apple/DFN5B-CLIP-ViT-H-14-384) plus converted safetensors: fetch it with scripts/gpu/fetch-mmaudio.sh.
 # The row below is the MMAudio part for hf-fm fetchers.
 mmaudio-44k-v2	hkchengrex/MMAudio	weights/mmaudio_large_44k_v2.pth ext_weights/v1-44.pth ext_weights/synchformer_state_dict.pth
-# auxiliary/: small pinned non-Hub weights (TAE decoders, LPIPS). dest<TAB>url:<pinned url><TAB>sha256:<hex> size:<bytes>.
+# auxiliary/: small pinned non-Hub weights (TAE decoders, LPIPS, the Real-ESRGAN upscaler). dest<TAB>url:<pinned url><TAB>sha256:<hex> size:<bytes>.
 # Same files and hashes as fetch-tae.sh / fetch_taehv.sh / fetch-lpips.sh; runpod.sh's Hub fetch skips auxiliary/ rows,
 # verify-weights.sh aux checks each file's size and SHA-256.
 auxiliary/tae/taeh3.safetensors	url:https://raw.githubusercontent.com/madebyollin/taehv/e589fddc076e77f5ba8cd6baabe4ba3260b261cd/safetensors/taeh3.safetensors	sha256:4fd022bfcab08772fe0536b17ea1a3bbb5625be11e397868d1c5d891863d4c13 size:22709752
@@ -79,6 +79,13 @@ auxiliary/tae/taew2_1.safetensors	url:https://raw.githubusercontent.com/madebyol
 auxiliary/tae/taew2_2.safetensors	url:https://raw.githubusercontent.com/madebyollin/taehv/e589fddc076e77f5ba8cd6baabe4ba3260b261cd/safetensors/taew2_2.safetensors	sha256:b84609b2a133d48434bd9636bfcb44bf05168dc436e2d3cecf26256faa1f5325 size:22848048
 auxiliary/lpips/alexnet-owt-7be5be79.pth	url:https://download.pytorch.org/models/alexnet-owt-7be5be79.pth	sha256:7be5be791159472b1fbf3c69796f7cb30dca7ad8466c2df70058c37116cdee02 size:244408911
 auxiliary/lpips/lpips_v0.1_alex.pth	url:https://raw.githubusercontent.com/richzhang/PerceptualSimilarity/082bb24f84c091ea94de2867d34c4544f68e0963/lpips/weights/v0.1/alex.pth	sha256:df73285e35b22355a2df87cdb6b70b343713b667eddbda73e1977e0c860835c0 size:6009
+# auxiliary/upscalers/realesr-animevideov3.pth: Real-ESRGAN's compact x4 video upscaler (SRVGGNetCompact, BSD-3, 2.5 MB),
+# `--upscale` of fv-cli generate / fv-gpucheck wan|h3 gen (crates/fastvideo-cudarc/src/rt/esrgan.rs, docs/ports/upscaler.md),
+# is fetched by fetch-tae.sh onto a pod's container disk from its pinned GitHub release URL
+# (https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth, sha256 b8a83768…18b75d,
+# 2504012 bytes; a lab cell's `tae = "realesr-animevideov3.pth"` arm). No auxiliary/ row until the owner publishes an
+# `auxiliary/upscalers/realesr-animevideov3` tree to R2: every auxiliary/ url: row must be one of R2's aux trees
+# (control/test/unit/preset-trees.test.ts, the pod boots fetch them).
 # h3-base/text_encoder_fp8 and ltx25/text_encoder_fp8: optional pre-quantized FP8 text encoders (E13), derived with
 # `fv-gpucheck quantize-text-encoder`, not fetched (no row here). On both volumes; sizes and SHA-256 in
 # verify-weights.sh (cell text-fp8). Without them the loader quantizes at load.
@@ -123,6 +130,14 @@ longlive-plug/wan21-t2v-14b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.1-
 longlive-plug/wan21-t2v-14b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.1-T2V-14B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
 longlive-plug/wan22-ti2v-5b-few-step	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-few-step	README.md adapter_config.json adapter_model.safetensors inference_config.yaml load_generator_lora.py provenance.json training_config.yaml
 longlive-plug/wan22-ti2v-5b-cfg	Efficient-Large-Model/LongLive-Plug-Wan2.2-TI2V-5B-cfg	README.md SHA256SUMS adapter_config.json adapter_model.safetensors inference_overrides.yaml provenance.json release_metadata.json training_config.yaml
+# history-forcing-1.3b (docs/ports/wan.md "History Forcing"; ziplab/History-Forcing, arXiv 2611.02782): the Wan2.1-T2V-1.3B
+# long-video generator, raw + EMA, as the training checkpoint dmd/model.pt (11 352 569 509 B, f32, sha256 9fd236f4…f9ae3;
+# the Hub repo's ar_teacher/ and opsd/ are not fetched). LICENCE: NONE STATED on the Hub card or in the code repo
+# (the code is Apache-2.0): evaluation only until the authors state one. history-forcing-1.3b-safetensors (not a hub
+# row) is derived by scripts/gpu/convert-history-forcing.py (torch-free): generator_ema.safetensors, the EMA generator
+# with its original Wan names (5 676 070 768 B); hashes in weights-sha256.tsv (sha:history-forcing-1.3b-safetensors).
+# Neither tree is on R2 or the EU volume yet (2026-11-18): the owner publishes (r2-weights.py publish-hub / publish-dir).
+history-forcing-1.3b	xzxxntxdy/History-Forcing	README.md dmd/model.pt
 # sol-engine benchmark trees, fetched to EU 2026-10-06 (owner-approved; docs/ops/runpod-volumes.md §2). Hub rows added
 # add-only by fetch-hub-tree.sh at the revisions in weights-revisions.tsv; every file checked against the Hub (LFS SHA-256 /
 # git blob SHA-1) and its SHA-256 recorded in weights-sha256.tsv (verify-weights.sh sha:<dest>). Names and globs as the

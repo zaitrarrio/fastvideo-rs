@@ -1,0 +1,99 @@
+# History Forcing (docs/ports/wan.md "History Forcing"; ziplab/History-Forcing, arXiv 2611.02782) on the open-ended
+# causal SF-Wan rollout (`fv-gpucheck wan stream`, wan::stream::CausalRollout, the sfstream-rollout cell's harness).
+# `hf-30s`: the History Forcing generator (`--longlive {weights}/history-forcing-1.3b-safetensors --longlive-no-lora`:
+# the converted generator_ema.safetensors replaces sfwan21-1.3b's transformer; it has no LoRA) under its trained
+# contract (`preset=history-forcing`: window 21, sink 3, absolute RoPE, the cache kept at a prompt switch), 30 s of
+# video at 16 fps, every frame dumped (`frames/hf-30s/`) for offline metrics. `sf-w21-30s`: plain SF-Wan
+# (sfwan21-1.3b's own transformer) at the same window 21, sink 3 and absolute RoPE, same prompt, seed and canvas, for
+# the comparison (the served SF-Wan default is window 21, sink 15, rebased: docs/ports/wan.md "Long-run quality").
+# The `variants` tier runs it. history-forcing-1.3b-safetensors is not published to R2 or staged on a volume (the
+# owner publishes), so the ungated `hf-fetch` arm stages the Hub's raw `dmd/model.pt` (11.35 GB, pinned by SHA-256)
+# on the container disk with `fv-gpucheck fetch`, and `hf-30s` reads it there (`--longlive <file>`: the generator_ema
+# dict read by fastvideo_loader::pth, docs/ports/wan.md "History Forcing") instead of the converted tree; once the
+# tree is on R2, point `--longlive` at `{weights}/history-forcing-1.3b-safetensors`, gate on `history-forcing-1.3b`
+# and drop the fetch arm. TAEHV (taew2_1) decodes every block,
+# found through FASTVIDEO_TAE_DIR={tae} (each arm's env entry, as sfstream-rollout.toml); the arms gate on their
+# trees only (verify-weights.sh history-forcing-1.3b checks the derived file and SF-Wan's parts; sfwan21-1.3b
+# SF-Wan's tree). Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "history-forcing"
+description = "History Forcing 1.3B on the SF-Wan causal rollout (wan stream: window 21, sink 3, no LoRA, no re-cache) for 30 s with every frame dumped, against plain SF-Wan 1.3B at the same window, sink and RoPE"
+
+[workload]
+model = "wan stream"
+prompt = "A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed"
+seed = 1024
+width = 832
+height = 480
+note = "The sfstream-rollout cell's prompt (runpod-matrix.sh sfstream's default SF_PROMPT) and seed, at the SF-Wan default canvas 832x480 and 16 fps; both arms run 30 s (480 frames: block 0 gives 9, every later block 12) and dump every frame"
+
+[lists]
+stream = ["--keep-going", "--mode", "fast", "wan", "stream", "--weights", "{weights}/sfwan21-1.3b", "--prompt", "{prompt}",
+  "--seed", "{seed}", "--width", "{width}", "--height", "{height}"]
+
+# Staged from the Hub (xzxxntxdy/History-Forcing @ 8604aafe, dmd/model.pt: raw + EMA generator, no stated licence):
+# an ungated arm reads no weight tree; `hf-30s` requires its directory.
+[[arm]]
+name = "hf-fetch"
+argv = ["fetch", "--url", "https://huggingface.co/xzxxntxdy/History-Forcing/resolve/8604aafe4fada0311c7f5a993e7e620473c8e7ac/dmd/model.pt",
+  "--sha256", "9fd236f48acaa0cc4d8115c7b1adb05781945c213a24e028e05227cbf50f9ae3", "--size", "11352569509",
+  "--out", "{runs}/hf-stage/dmd-model.pt"]
+
+[[arm]]
+name = "hf-30s"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+requires = ["{runs}/hf-stage"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
+  "hf-30s,preset=history-forcing,seconds=30,dump=1"]
+
+# The same generator under fastvideo-rs's rebased-sink RoPE (the served SF-Wan policy, docs/ports/wan.md "Long-run
+# quality"): the sink keys re-roped to sit just before the rolled window, so every query-key offset stays within the
+# trained 21 frames however long the rollout runs. The first GPU run (12bd290, 2026-11-18) found both absolute-RoPE
+# arms clean at 15 s and degraded by 30 s (History Forcing into saturated light streaks, SF-Wan into a dark melt).
+[[arm]]
+name = "hf-30s-rebased"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+requires = ["{runs}/hf-stage"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
+  "hf-30s-rebased,preset=history-forcing,rope=rebased,seconds=30,dump=1"]
+
+[[arm]]
+name = "hf-60s-rebased"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+requires = ["{runs}/hf-stage"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
+  "hf-60s-rebased,preset=history-forcing,rope=rebased,seconds=60,dump=1"]
+
+# Diagnostics after the second run (7175f61): the rebased sink degraded exactly as the absolute policy did (the 30 s
+# frames alike), so the RoPE policy is not the cause. A pure sliding window (no sink) and FastVideo's literal
+# relativistic policy, 30 s each.
+[[arm]]
+name = "hf-30s-sink0"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+requires = ["{runs}/hf-stage"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
+  "hf-30s-sink0,preset=history-forcing,sink=0,rope=abs,seconds=30,dump=1"]
+
+[[arm]]
+name = "hf-30s-rel"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+requires = ["{runs}/hf-stage"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--longlive", "{runs}/hf-stage/dmd-model.pt", "--longlive-no-lora", "--run",
+  "hf-30s-rel,preset=history-forcing,rope=rel,seconds=30,dump=1"]
+
+[[arm]]
+name = "sf-w21-30s"
+gate = "sfwan21-1.3b"
+trees = ["sfwan21-1.3b"]
+env = ["FASTVIDEO_TAE_DIR={tae}"]
+argv = ["{@stream}", "--run", "sf-w21-30s,seconds=30,window=21,sink=3,rope=abs,dump=1"]

@@ -417,7 +417,7 @@ for fam in no-such-family upstream; do
   expect "no tier: plan refused ($fam)" 2 "$fam is no fv-lab tier of fv-lab-retired.sh, gold or an experiment tier, and the script path is gone" -- \
     FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-t
 done
-for fam in gold h3-graphs sol-bench-a1; do
+for fam in gold h3-graphs sol-bench-a1 variants; do
   expect "plan: $fam is still runpod-http.sh's body" 0 "\"name\": \"fv-lab-$fam-abc1234-t\"" -- RUNPOD_API_KEY=x \
     FV_PLAN_VOLUME="bz0ofkfx45 EU-RO-1" FV_POD_PREFIX=fv-lab FV_FAMILY="$fam" bash "$HTTP" plan abc1234 abc1234-t
 done

@@ -1201,6 +1201,35 @@ impl H3LoadPlan {
                 Some(fuse)
             }
         };
+        // How the pairs reach the linears: an unmerged branch for the Plug
+        // recipes (a merge keeps only what survives the device weight's
+        // rounding; docs/techniques.md "LongLive-Plug recipes"), the merge
+        // for everything else; `FASTVIDEO_H3_LORA_BRANCH` overrides.
+        if let Some(fuse) = lora.as_mut() {
+            let plug = matches!(self.adapter, H3AdapterPlan::Plug(_));
+            let mode =
+                crate::h3::lora::LoraMode::from_settings(&fastvideo_models::settings::Live, plug)?;
+            fuse.set_mode(mode);
+            crate::rt::log::info(format_args!(
+                "h3 lora mode: {} ({} pairs, rank {}): {} ({}={}; default {} for {})",
+                mode.as_str(),
+                fuse.pairs_total,
+                fuse.rank,
+                match mode {
+                    crate::h3::lora::LoraMode::Branch => format!(
+                        "y = W x + B (A x), the base quantized alone, {:.1} MiB of bf16 factors resident",
+                        fuse.factor_bytes() as f64 / f64::from(1u32 << 20)
+                    ),
+                    crate::h3::lora::LoraMode::Merge =>
+                        "W += s B A before quantization".to_owned(),
+                },
+                crate::h3::lora::BRANCH_ENV,
+                fastvideo_models::settings::var(crate::h3::lora::BRANCH_ENV)
+                    .unwrap_or_else(|| "unset".into()),
+                if plug { "branch" } else { "merge" },
+                self.adapter.describe()
+            ));
+        }
         // The multimodal (FL2VA / Ref2VA) text encoder: the vision tower
         // beside the resident language model, decided before the DiT
         // placement so the placement sees what it leaves.

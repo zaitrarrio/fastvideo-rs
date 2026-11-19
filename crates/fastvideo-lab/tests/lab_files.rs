@@ -15,17 +15,21 @@ use fastvideo_lab::weights::{Source, TreeSources, WeightsPlan, DISK_RESERVE_GB};
 /// on `variant:<id>` cells and read the trees of their family variant
 /// (tests/gold_tier.rs), and `oracle-r2`'s, whose R2 trees are fetched
 /// (`a_volume_r2_script_tier_reads_trees_on_the_volume_or_in_r2`).
+/// The cells runpod-matrix.sh runs from the EU volume: every cell of a
+/// `weights = "volume"` tier. A cell of a volume+r2 tier fetches R2-only
+/// trees onto the pod, and a cell in no tier yet (PENDING_TIER) runs
+/// nowhere, so neither is held to the volume's trees.
 fn script_cells(lab: &Lab) -> Vec<&CellFile> {
-    let r2: BTreeSet<&str> = lab
+    let volume: BTreeSet<&str> = lab
         .tiers
         .tiers
         .iter()
-        .filter(|t| t.weights == TierWeights::VolumeR2)
+        .filter(|t| t.weights == TierWeights::Volume)
         .flat_map(|t| t.all_cells().map(String::as_str))
         .collect();
     lab.cells
         .values()
-        .filter(|c| !r2.contains(c.name.as_str()))
+        .filter(|c| volume.contains(c.name.as_str()))
         .collect()
 }
 
@@ -397,7 +401,7 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
     }
     // Addition 16 (ADR-0019 §22.4): the arms that read `{tae}` without a
     // `tae` file are sfstream's two and mmaudio's two Wan arms (§22, S5)
-    // (`FASTVIDEO_TAE_DIR={tae}`), in a `tae = true` tier (`Lab::load`
+    // (`FASTVIDEO_TAE_DIR={tae}`), plus the variants tier's six History Forcing arms, in a `tae = true` tier (`Lab::load`
     // refuses any other), and the file they need, taew2_1, is one
     // fetch-tae.sh fetches.
     let readers: Vec<(&str, &str)> = lab
@@ -427,11 +431,20 @@ fn every_tae_file_is_one_fetch_tae_sh_fetches() {
             ("sfstream", "sfstream-main"),
             ("sfstream", "sfstream-10min"),
             ("mmaudio", "wan13-audio"),
-            ("mmaudio", "sfwan13-audio")
+            ("mmaudio", "sfwan13-audio"),
+            // The variants tier's History Forcing cell: two `wan stream`
+            // arms on taew2_1, like sfstream's (docs/ports/variants-parity.md).
+            ("variants", "hf-30s"),
+            ("variants", "hf-30s-rebased"),
+            ("variants", "hf-60s-rebased"),
+            ("variants", "hf-30s-sink0"),
+            ("variants", "hf-30s-rel"),
+            ("variants", "sf-w21-30s")
         ]
     );
     assert!(lab.tier("sfstream").is_some_and(|t| t.tae));
     assert!(lab.tier("mmaudio").is_some_and(|t| t.tae));
+    assert!(lab.tier("variants").is_some_and(|t| t.tae));
     // sfstream's arms read the directory; `wan stream` reads taew2_1 in it,
     // and so does mmaudio's `wan gen` (the distilled presets' TAEHV).
     assert!(fetch.contains("\nfetch taew2_1.safetensors "));
@@ -574,6 +587,12 @@ fn every_cell_file_belongs_to_exactly_one_tier() {
     }
 }
 
+/// Cells committed ahead of their tier, each with why: a cell whose weights
+/// are not yet staged anywhere a tier could run it (the tier is added when
+/// they are, and the entry leaves this list then; a listed cell that is in
+/// a tier fails below).
+const PENDING_TIER: &[(&str, &str)] = &[];
+
 #[test]
 fn every_cell_file_belongs_to_a_tier() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
@@ -584,9 +603,20 @@ fn every_cell_file_belongs_to_a_tier() {
         .flat_map(|t| t.all_cells().map(String::as_str))
         .collect();
     for name in lab.cells.keys() {
+        let pending = PENDING_TIER.iter().find(|(c, _)| c == name);
+        match (used.contains(name.as_str()), pending) {
+            (true, None) => {}
+            (true, Some((_, why))) => {
+                panic!("lab/cells/{name}.toml is in a tier now: drop it from PENDING_TIER ({why})")
+            }
+            (false, Some(_)) => {}
+            (false, None) => panic!("lab/cells/{name}.toml is in no tier"),
+        }
+    }
+    for (c, _) in PENDING_TIER {
         assert!(
-            used.contains(name.as_str()),
-            "lab/cells/{name}.toml is in no tier"
+            lab.cells.contains_key(*c),
+            "PENDING_TIER names no cell: {c}"
         );
     }
 }
