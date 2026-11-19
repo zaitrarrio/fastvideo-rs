@@ -83,7 +83,7 @@
           "format": "double"
         },
         "min_ram_gb": {
-          "description": "The pod's host-RAM floor, whole GB per GPU (Runpod `minRAMPerGPU`).",
+          "description": "The pod's host-RAM floor, whole GB per GPU (Runpod `gpu.minRamPerGpu`).",
           "type": [
             "integer",
             "null"
