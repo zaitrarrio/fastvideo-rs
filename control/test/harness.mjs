@@ -59,7 +59,7 @@ export function startMock() {
     edgeEpoch: 1,
     // Runpod's serverless queue API (api.runpod.ai/v2/<endpoint>/…): jobs by id, the queue, the live workers, /run bodies.
     queue: { jobs: new Map(), queued: 0, running: 0, workers: 0, ran: [], purges: 0 },
-    // Runpod serverless endpoints and templates (REST v1 /templates, /endpoints; REST v2 /serverless).
+    // Runpod serverless endpoints and templates (REST v2 /templates, /serverless).
     sls: { templates: new Map(), endpoints: new Map() },
     // Workers' internal job route (DELETE /fv/v1/internal/jobs/{id}): the answer per job id, and the calls.
     internalJobs: {},
@@ -388,77 +388,87 @@ export function startMock() {
       return cfErr(res, 404, 7000, `mock: no Cloudflare route ${req.method} ${rest}`);
     }
 
-    // ---- Runpod REST
+    // ---- Runpod REST v2 (api.runpod.io/v2; v1's rest.runpod.io is retired). Errors are v2's ErrorResponse.
     if (p.startsWith("/rp/rest/")) {
-      if (bearer !== m.runpodKey) return json(res, 401, { error: "bad key" });
+      const rpErr = (status, detail, errors) => json(res, status, { title: status === 404 ? "Not Found" : status === 401 ? "Unauthorized" : "Bad Request", status, detail, ...(errors ? { errors } : {}) });
+      if (bearer !== m.runpodKey) return rpErr(401, "bad key");
       const rest = p.slice("/rp/rest".length);
       if (rest === "/pods" && req.method === "POST") {
-        if (m.failCreate > 0) { m.failCreate--; return json(res, 500, { error: "There are no instances currently available" }); }
-        if (body.computeType === "CPU" && m.cpuDiskCap && body.containerDiskInGb > m.cpuDiskCap) return json(res, 400, { error: `create pod: Container Disk must be less than or equal to ${m.cpuDiskCap} GB for this instance` });
-        if (body.computeType === "CPU" && m.noStockDcs.has((body.dataCenterIds || [])[0])) return json(res, 500, { error: "This machine does not have the resources to deploy your pod. There are no longer any instances available with the requested specifications." });
+        const cpu = !!body.cpu && !body.gpu;
+        if (!cpu && !body.gpu) return rpErr(400, "request validation failed", ["$: one of gpu or cpu is required"]);
+        if (m.failCreate > 0) { m.failCreate--; return rpErr(500, "There are no instances currently available"); }
+        if (cpu && m.cpuDiskCap && body.disk > m.cpuDiskCap) return rpErr(400, `create pod: Container Disk must be less than or equal to ${m.cpuDiskCap} GB for this instance`);
+        if (cpu && m.noStockDcs.has((body.dataCenterIds || [])[0])) return rpErr(500, "This machine does not have the resources to deploy your pod. There are no longer any instances available with the requested specifications.");
         const id = newId();
-        const cpu = body.computeType === "CPU";
-        const pod = { id, name: body.name, payload: body, env: body.env, image: body.imageName, desiredStatus: "RUNNING", costPerHr: cpu ? 0.06 * (body.vcpuCount || 2) / 2 : 2.09, created: Date.now() };
+        const pod = { id, name: body.name, payload: body, env: body.env, image: body.image, desiredStatus: "RUNNING", costPerHr: cpu ? 0.06 * (body.cpu.vcpuCount || 2) / 2 : 2.09, created: Date.now() };
         m.pods.set(id, pod);
-        return json(res, 200, { id, name: body.name, costPerHr: pod.costPerHr, desiredStatus: "RUNNING", machine: { dataCenterId: (body.dataCenterIds || ["EU-RO-1"])[0] }, env: body.env });
+        return json(res, 201, { id, name: body.name, cost: pod.costPerHr, status: "RUNNING", image: pod.image, dataCenterId: (body.dataCenterIds || ["EU-RO-1"])[0], env: body.env });
       }
-      const mm = /^\/pods\/([^/]+)(\/(stop|start))?$/.exec(rest);
+      const mm = /^\/pods\/([^/]+)(\/action)?$/.exec(rest);
       if (mm) {
         const pod = m.pods.get(mm[1]);
-        if (!pod) return json(res, 404, { error: "pod not found" });
-        if (req.method === "GET") return json(res, 200, { id: pod.id, name: pod.name, desiredStatus: pod.desiredStatus, costPerHr: pod.costPerHr, imageName: pod.image, env: pod.env });
+        if (!pod) return rpErr(404, "pod not found");
+        if (mm[2] && req.method === "POST") {
+          if (body.action === "stop") { pod.desiredStatus = "EXITED"; return json(res, 200, { id: pod.id, status: "EXITED" }); }
+          if (body.action === "start") { if (pod.refuseStart) return rpErr(500, "not enough free CPU on the host"); pod.desiredStatus = "RUNNING"; pod.startedAt = Date.now(); return json(res, 200, { id: pod.id, status: "RUNNING" }); }
+          return rpErr(400, "request validation failed", [`$.action: value must be one of start, stop, restart, terminate (got ${body.action})`]);
+        }
+        if (mm[2]) return rpErr(404, "no route");
+        if (req.method === "GET") return json(res, 200, { id: pod.id, name: pod.name, status: pod.desiredStatus, cost: pod.costPerHr, image: pod.image, env: pod.env });
         if (req.method === "PATCH") {
           if (body.env) pod.env = body.env;
-          if (body.imageName) pod.image = body.imageName;
+          if (body.image) pod.image = body.image;
           pod.patches = (pod.patches || 0) + 1;
-          return json(res, 200, { id: pod.id });
+          return json(res, 200, { id: pod.id, name: pod.name, status: pod.desiredStatus, cost: pod.costPerHr, image: pod.image });
         }
-        if (req.method === "DELETE") { m.pods.delete(pod.id); return json(res, 200, {}); }
-        if (req.method === "POST" && mm[3] === "stop") { pod.desiredStatus = "EXITED"; return json(res, 200, {}); }
-        if (req.method === "POST" && mm[3] === "start") { if (pod.refuseStart) return json(res, 500, { error: "not enough free CPU on the host" }); pod.desiredStatus = "RUNNING"; pod.startedAt = Date.now(); return json(res, 200, {}); }
+        if (req.method === "DELETE") { m.pods.delete(pod.id); res.writeHead(204); return res.end(); }
       }
+      if (rest === "/catalog/gpus") return json(res, 200, { gpus: [{ id: "NVIDIA RTX PRO 6000 Blackwell Server Edition", pool: "BLACKWELL_96" }, { id: "NVIDIA H100 80GB HBM3", pool: "HOPPER_141" }] });
       // Serverless templates and endpoints (src/serverless/runpod-sls.ts).
       const sls = m.sls;
       if (rest === "/templates" && req.method === "POST") {
         const id = `tpl${newId()}`;
         sls.templates.set(id, { id, ...body });
-        return json(res, 200, { id, ...body });
+        return json(res, 201, { id, ...body });
       }
       let st = /^\/templates\/([^/]+)$/.exec(rest);
       if (st) {
         const t = sls.templates.get(st[1]);
-        if (!t) return json(res, 400, { error: "template not found" });
+        if (!t) return rpErr(404, "template not found");
+        if (req.method === "GET") return json(res, 200, t);
         if (req.method === "PATCH") { Object.assign(t, body); t.patches = (t.patches || 0) + 1; return json(res, 200, t); }
-        if (req.method === "DELETE") { sls.templates.delete(st[1]); return json(res, 200, {}); }
+        if (req.method === "DELETE") { sls.templates.delete(st[1]); res.writeHead(204); return res.end(); }
       }
-      if (rest === "/endpoints" && req.method === "POST") {
+      if (rest === "/serverless" && req.method === "POST") {
+        // The template resolves into the endpoint's container settings at create (no link kept).
+        const tpl = sls.templates.get(body.templateId);
+        if (!tpl) return rpErr(404, "template not found");
         const id = newId();
-        sls.endpoints.set(id, { id, ...body, workers: [] });
-        return json(res, 200, { id, name: body.name });
+        const { templateId: _t, ...rest2 } = body;
+        sls.endpoints.set(id, { id, ...rest2, image: tpl.image, env: tpl.env, entrypoint: tpl.entrypoint, cmd: tpl.cmd, disk: tpl.disk, ports: tpl.ports, workers: body.workers || { min: 0, max: 0 }, workerList: [] });
+        return json(res, 201, { id, name: body.name });
       }
-      st = /^\/endpoints\/([^/]+)$/.exec(rest);
+      st = /^\/serverless\/([^/]+)(\/workers)?$/.exec(rest);
       if (st) {
         const e = sls.endpoints.get(st[1]);
-        if (!e) return json(res, 404, { error: "endpoint not found" });
-        if (req.method === "GET") return json(res, 200, e);
-        if (req.method === "PATCH") { Object.assign(e, body); return json(res, 200, e); }
-        if (req.method === "DELETE") { sls.endpoints.delete(st[1]); return json(res, 200, {}); }
+        if (!e) return rpErr(404, "endpoint not found");
+        if (st[2] && req.method === "GET") return json(res, 200, { workers: e.workerList, summary: { running: e.workerList.length, idle: 0, initializing: 0, throttled: 0, unhealthy: 0, total: e.workerList.length } });
+        if (st[2]) return rpErr(404, "no route");
+        if (req.method === "GET") { const { workerList: _w, ...view } = e; return json(res, 200, view); }
+        if (req.method === "PATCH") {
+          const { templateId, ...patch } = body;
+          if (templateId) {
+            const tpl = sls.templates.get(templateId);
+            if (!tpl) return rpErr(404, "template not found");
+            Object.assign(e, { image: tpl.image, env: tpl.env, entrypoint: tpl.entrypoint, cmd: tpl.cmd, disk: tpl.disk, ports: tpl.ports, reapplied: (e.reapplied || 0) + 1 });
+          }
+          for (const [k, v] of Object.entries(patch)) e[k] = v && typeof v === "object" && !Array.isArray(v) && e[k] && typeof e[k] === "object" && !Array.isArray(e[k]) ? { ...e[k], ...v } : v;
+          return json(res, 200, e);
+        }
+        if (req.method === "DELETE") { sls.endpoints.delete(st[1]); res.writeHead(204); return res.end(); }
       }
-      return json(res, 404, { error: "no route" });
-    }
-    if (p.startsWith("/rp/rest2/")) {
-      if (bearer !== m.runpodKey) return json(res, 401, { error: "bad key" });
-      const rest = p.slice("/rp/rest2".length);
-      if (rest === "/catalog/gpus") return json(res, 200, { gpus: [{ id: "NVIDIA RTX PRO 6000 Blackwell Server Edition", pool: "BLACKWELL_96" }, { id: "NVIDIA H100 80GB HBM3", pool: "HOPPER_141" }] });
-      if (rest === "/serverless" && req.method === "POST") {
-        // v2 makes the endpoint's template itself.
-        const id = newId();
-        const tid = `tpl${newId()}`;
-        m.sls.templates.set(tid, { id: tid, v2: true, name: `${body.name}-template`, imageName: body.image, env: body.env, args: body.args });
-        m.sls.endpoints.set(id, { id, name: body.name, templateId: tid, v2: body, workers: [] });
-        return json(res, 200, { id, name: body.name, templateId: tid });
-      }
-      return json(res, 404, { error: "no route" });
+      if (rest.startsWith("/billing/serverless")) return json(res, 200, { records: [], metadata: { query: { startTime: url.searchParams.get("startTime"), endTime: new Date().toISOString(), bucketSize: "day" }, recordCount: 0, uniqueServerlessCount: 0, totals: { totalAmount: 0, gpuAmount: 0, cpuAmount: 0, diskAmount: 0, feeAmount: 0 } } });
+      return rpErr(404, "no route");
     }
     if (p === "/rp/graphql") {
       if (bearer !== m.runpodKey) return json(res, 401, { errors: [{ message: "bad key" }] });
@@ -496,9 +506,9 @@ export function startMock() {
         ] } });
       if (q.includes("gpuTypes")) return json(res, 200, { data: { gpuTypes: [{ id: body.variables?.id, securePrice: body.variables?.id?.includes("H200") ? 3.59 : 2.09, lowestPrice: { stockStatus: "High" } }] } });
       const pods = [...m.pods.values()].map((x) => ({
-        id: x.id, name: x.name, desiredStatus: x.desiredStatus, costPerHr: x.costPerHr, imageName: x.image, gpuCount: x.payload.computeType === "CPU" ? 0 : 1, vcpuCount: 2,
-        machine: { gpuDisplayName: x.payload.computeType === "CPU" ? "unknown" : "RTX PRO 6000", dataCenterId: (x.payload.dataCenterIds || ["EU-RO-1"])[0] },
-        runtime: x.desiredStatus === "RUNNING" ? { uptimeInSeconds: 120, gpus: x.payload.computeType === "CPU" ? [] : [{ id: "g", gpuUtilPercent: 3, memoryUtilPercent: 40 }], container: { cpuPercent: 12, memoryPercent: 20 } } : null,
+        id: x.id, name: x.name, desiredStatus: x.desiredStatus, costPerHr: x.costPerHr, imageName: x.image, gpuCount: x.payload.gpu ? 1 : 0, vcpuCount: 2,
+        machine: { gpuDisplayName: x.payload.gpu ? "RTX PRO 6000" : "unknown", dataCenterId: (x.payload.dataCenterIds || ["EU-RO-1"])[0] },
+        runtime: x.desiredStatus === "RUNNING" ? { uptimeInSeconds: 120, gpus: x.payload.gpu ? [{ id: "g", gpuUtilPercent: 3, memoryUtilPercent: 40 }] : [], container: { cpuPercent: 12, memoryPercent: 20 } } : null,
       }));
       return json(res, 200, { data: { myself: { clientBalance: m.balance, currentSpendPerHr: m.spend, spendLimit: 80, pods: [...pods, ...m.external] } } });
     }
@@ -805,7 +815,7 @@ export async function startWorker(mock, secrets) {
   const port = 18000 + Math.floor(Math.random() * 2000);
   const base = `http://127.0.0.1:${mock.port}`;
   const vars = {
-    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_REST2: `${base}/rp/rest2`, RUNPOD_QUEUE: `${base}/rpq/v2`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GMI_API: `${base}/gmi`, BREV_API_URL: `${base}/brev`, FV_ENDPOINT_URL_RE: "^http://127\\.0\\.0\\.1:\\d+/pod/(gmi|brev):fv-[a-z0-9-]+$", GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
+    RUNPOD_REST: `${base}/rp/rest`, RUNPOD_QUEUE: `${base}/rpq/v2`, RUNPOD_GRAPHQL: `${base}/rp/graphql`, RUNPOD_HAPI: `${base}/rp/hapi`, CLOUDRIFT_API: `${base}/cr`, GMI_API: `${base}/gmi`, BREV_API_URL: `${base}/brev`, FV_ENDPOINT_URL_RE: "^http://127\\.0\\.0\\.1:\\d+/pod/(gmi|brev):fv-[a-z0-9-]+$", GITHUB_API: `${base}/gh`, GHCR: `${base}/ghcr`, CF_API: `${base}/cf`,
     POD_URL_TEMPLATE: `${base}/pod/{pod}`, PUBLIC_URL: `http://127.0.0.1:${port}`, CRON_DISABLED: "1", ENVIRONMENT: "test", CF_ACCOUNT_ID: "acct",
     ...secrets,
   };

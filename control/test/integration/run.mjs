@@ -197,8 +197,8 @@ await step("start: one front worker behind the edge; registered; ready", async (
   worker = pods[0];
   const edge = `http://127.0.0.1:${mock.port}/edge`;
   // The worker: CPU, the boot command (watchdog), fake engine config inline, a front behind the edge.
-  assert.equal(worker.payload.computeType, "CPU");
-  assert.match(worker.payload.dockerStartCmd[0], /\[watchdog\]/);
+  assert.ok(worker.payload.cpu && !worker.payload.gpu, "a CPU pod (REST v2: a cpu block, no gpu)");
+  assert.match(worker.payload.cmd[0], /\[watchdog\]/);
   assert.equal(worker.env.FV_SERVE_ROLE, "worker");
   assert.equal(worker.env.FV_DISPATCH_FRONT, "1");
   assert.equal(worker.env.FV_INTERNAL_TOKEN, mock.edgeInternal);
@@ -362,13 +362,15 @@ await step("serverless presets: an h3-ref2v endpoint (queue and lb) carries the 
   assert.equal(q.j.endpoint.spec.preset, "h3-ref2v");
   const qt = tplOf(q.j.endpoint.template_id);
   assert.equal(Buffer.from(qt.env.FV_WORKER_TOML_B64, "base64").toString(), want, "the queue template carries the ref2v config");
-  assert.deepEqual(qt.dockerEntrypoint.slice(0, 2), ["/bin/sh", "-c"]);
+  assert.deepEqual(qt.entrypoint.slice(0, 2), ["/bin/sh", "-c"]);
   assert.equal(qt.env.FV_SERVE_MODE, "runpod-queue");
   const lb = await call("/api/v1/serverless", { method: "POST", body: { spec: { name: "r2v-lb", preset: "h3-ref2v", mode: "lb" } }, headers: T() });
   assert.equal(lb.status, 201, JSON.stringify(lb.j));
   const lt = tplOf(lb.j.endpoint.template_id);
   assert.equal(Buffer.from(lt.env.FV_WORKER_TOML_B64, "base64").toString(), want, "the lb template carries the ref2v config");
-  assert.ok(lt.patches >= 1 && lt.dockerEntrypoint[2].includes("FV_WORKER_TOML_B64"), "the lb template got the boot that decodes it");
+  assert.ok(lt.entrypoint[2].includes("FV_WORKER_TOML_B64"), "the lb template carries the boot that decodes it");
+  assert.deepEqual(lt.ports, ["8000/http"]);
+  assert.equal(mock.sls.endpoints.get(lb.j.endpoint.endpoint_id).type, "LOAD_BALANCER");
   assert.equal(lt.env.FV_SERVE_MODE, "http");
   // The endpoint page: what it serves and ready-made invokes in the endpoint's mode.
   const page = await call(`/api/v1/serverless/${lb.j.endpoint.id}`, { headers: T() });
@@ -1018,7 +1020,7 @@ await step("a second edge cluster: fronts behind the edge; register, ready from 
   assert.equal(w1.env.FV_D1_DATABASE_ID, "d1-edge-staging");
   assert.equal(w1.env.FV_WORKER_DIRECT, undefined);
   assert.equal(w1.env.FV_R2_BUCKET, undefined);
-  assert.match(w1.payload.dockerStartCmd[0], /FV_DISPATCH_ENDPOINT=.*\[watchdog\]/s);
+  assert.match(w1.payload.cmd[0], /FV_DISPATCH_ENDPOINT=.*\[watchdog\]/s);
   // The cluster card and the families view.
   const detail = (await call(`/api/v1/clusters/${id}`, { headers: T() })).j;
   assert.equal(detail.edge_url, edge);
@@ -1101,7 +1103,7 @@ await step("build pods: policy, placement, up (create / reuse / start / replace)
   assert.equal(bp1.dc, "EUR-IS-1");
   assert.match(bp1.name, /^fv-build-eu-[0-9a-f]{6}$/);
   const rp = mock.pods.get(bp1.pod_id);
-  assert.deepEqual([rp.payload.computeType, rp.payload.cpuFlavorIds[0], rp.payload.vcpuCount, rp.payload.dataCenterIds[0]], ["CPU", "cpu3c", 32, "EUR-IS-1"]);
+  assert.deepEqual([!!rp.payload.cpu && !rp.payload.gpu, rp.payload.cpu.id, rp.payload.cpu.vcpuCount, rp.payload.dataCenterIds[0]], [true, "cpu3c", 32, "EUR-IS-1"]);
   const { createHash } = await import("node:crypto");
   const { gunzipSync } = await import("node:zlib");
   assert.equal(rp.env.FV_BUILD_TOKEN_SHA256, createHash("sha256").update(up1.j.token).digest("hex"));
@@ -1210,8 +1212,8 @@ await step("standalone pod: launch, the same up (direct, watchdog boot), costs u
   assert.equal(p1.env.FV_WORKER_DIRECT, "1");
   assert.equal(p1.env.SOLO_FOO, "bar");
   assert.ok(Number(p1.env.FV_CLUSTER_DEADLINE) > Date.now() / 1000, "its own backstop deadline");
-  assert.match(p1.payload.dockerStartCmd[0], /\[watchdog\]/);
-  assert.match(p1.payload.dockerStartCmd[0], /\[fv-boot\] start/);
+  assert.match(p1.payload.cmd[0], /\[watchdog\]/);
+  assert.match(p1.payload.cmd[0], /\[fv-boot\] start/);
   // Listed as a standalone pod with its pod, not among clusters.
   const list = (await call("/api/v1/standalone", { headers: T() })).j.pods;
   assert.deepEqual(list.map((x) => [x.name, x.pod?.pod_id]), [["solo1", p1.id]]);
@@ -1269,7 +1271,7 @@ await step("standalone Runpod pod with weights_source r2 in a data centre withou
   assert.equal(op.status, "done", op.error + JSON.stringify(op.log.slice(-6)));
   assert.equal(mine().length, 1);
   const p = mine()[0].payload;
-  assert.deepEqual([p.gpuTypeIds, p.dataCenterIds, p.networkVolumeId, p.env.FV_WEIGHTS_SOURCE, p.allowedCudaVersions], [["NVIDIA H100 80GB HBM3"], ["US-TX-3"], undefined, "r2", undefined]);
+  assert.deepEqual([p.gpu.id, p.dataCenterIds, p.mounts, p.env.FV_WEIGHTS_SOURCE, p.gpu.allowedCudaVersions], ["NVIDIA H100 80GB HBM3", ["US-TX-3"], undefined, "r2", undefined]);
   assert.ok(op.log.some((l) => /no NVIDIA H200 in US-TX-3/.test(typeof l === "string" ? l : l.msg || JSON.stringify(l))), JSON.stringify(op.log));
   const sp = (await call("/api/v1/standalone/r2us", { headers: T() })).j.pod;
   assert.deepEqual([sp.definition.weights_source, sp.definition.dc, sp.definition.volume, sp.pod.dc], ["r2", "US-TX-3, any", null, "US-TX-3"]);
@@ -1322,12 +1324,12 @@ await step("standalone Runpod pod with weights_source hub in a data centre witho
     const pods = [...mock.pods.values()].filter((p) => !before.has(p.id));
     assert.equal(pods.length, 1);
     const p = pods[0].payload;
-    assert.deepEqual([p.dataCenterIds, p.networkVolumeId, p.env.FV_WEIGHTS_SOURCE], [["US-TX-3"], undefined, "hub"]);
-    assert.equal(p.containerDiskInGb, Number(p.env.FV_HUB_DISK_GB));
-    assert.ok(p.containerDiskInGb > 40, `sized from the trees: ${p.containerDiskInGb}`);
+    assert.deepEqual([p.dataCenterIds, p.mounts, p.env.FV_WEIGHTS_SOURCE], [["US-TX-3"], undefined, "hub"]);
+    assert.equal(p.disk, Number(p.env.FV_HUB_DISK_GB));
+    assert.ok(p.disk > 40, `sized from the trees: ${p.disk}`);
     assert.match(atob(p.env.FV_WEIGHTS_TREES_B64), /^tree\twan22-ti2v-5b\tWan-AI\/Wan2\.2-TI2V-5B-Diffusers\tb8fff7315c768468a5333511427288870b2e9635\t/m);
     assert.match(p.env.FV_SCRIPTS_URL, /^https:\/\/raw\.githubusercontent\.com\/.+\/scripts\/gpu$/);
-    assert.match(p.dockerStartCmd[0], /fetch-hub-tree\.py[\s\S]*step weights: [\s\S]*exec \/opt\/fastvideo-rs\/bin\/fv-serve/);
+    assert.match(p.cmd[0], /fetch-hub-tree\.py[\s\S]*step weights: [\s\S]*exec \/opt\/fastvideo-rs\/bin\/fv-serve/);
     const sp = (await call4("/api/v1/standalone/hubus", { headers: H })).j.pod;
     assert.deepEqual([sp.definition.weights_source, sp.definition.hub_download_approved, sp.definition.volume, sp.definition.dc], ["hub", true, null, "US-TX-3"]);
     assert.equal((await call4("/api/v1/standalone/hubus", { method: "DELETE", headers: H })).status, 202);
@@ -1650,9 +1652,9 @@ await step("serverless weights_source r2: an endpoint without a volume (any DC),
   const ep = r.j.endpoint;
   const tpl = [...mock.sls.templates.values()].find((t) => !before.has(t.id));
   const rpe = mock.sls.endpoints.get(ep.endpoint_id);
-  assert.equal(rpe.networkVolumeId, undefined);
+  assert.equal(rpe.networkVolumes, undefined);
   assert.equal(rpe.dataCenterIds, undefined);
-  assert.deepEqual(tpl.dockerEntrypoint.slice(0, 2), ["bash", "-c"]);
+  assert.deepEqual(tpl.entrypoint.slice(0, 2), ["bash", "-c"]);
   assert.match(tpl.env.FV_WEIGHTS_TOKEN, /^fvw_[0-9a-f]{64}$/);
   assert.equal(tpl.env.FV_R2_TREE_REVS, "r2demo@rev1");
   assert.equal(tpl.env.FV_WEIGHTS_PLAN_URL, `${B}/ingest/v1/weights-plan`);
@@ -1665,7 +1667,7 @@ await step("serverless weights_source r2: an endpoint without a volume (any DC),
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const tmp = mkdtempSync(`${tmpdir()}/fvc-slsr2-`);
-  const script = tpl.dockerEntrypoint[2].replace("mkdir -p /fvstate\n", `mkdir -p ${tmp}/fvstate\n`).replaceAll("/fv-worker.toml", `${tmp}/fv-worker.toml`).replaceAll("/opt/fastvideo-rs/bin/fv-serve", "echo FV-SERVE-START");
+  const script = tpl.entrypoint[2].replace("mkdir -p /fvstate\n", `mkdir -p ${tmp}/fvstate\n`).replaceAll("/fv-worker.toml", `${tmp}/fv-worker.toml`).replaceAll("/opt/fastvideo-rs/bin/fv-serve", "echo FV-SERVE-START");
   const runBoot = (worker, env = tpl.env) =>
     promisify(execFile)("bash", ["-c", script], {
       env: { ...env, PATH: process.env.PATH, NO_PROXY: "127.0.0.1", no_proxy: "127.0.0.1", FV_WEIGHTS: `${tmp}/weights`, FV_R2_STATE: `${tmp}/fvstate`, FV_R2_TOOLS: `${tmp}/tools`, FV_R2_MIN_FREE_GB: "0", FV_FAIL_SLEEP_S: "0", FV_WEIGHTS_TREES_B64: "", RUNPOD_POD_ID: worker },
@@ -1774,10 +1776,10 @@ await step("serverless weights_source hub (owner 2026-10-14: \"get the weights a
     const ep = r.j.endpoint;
     const tpl = [...mock.sls.templates.values()].find((t) => !before.has(t.id));
     const rpe = mock.sls.endpoints.get(ep.endpoint_id);
-    assert.deepEqual([rpe.networkVolumeId, rpe.dataCenterIds, rpe.flashboot], [undefined, undefined, true]);
-    assert.equal(tpl.containerDiskInGb, v.spec.container_disk_gb);
-    assert.deepEqual(tpl.dockerEntrypoint.slice(0, 2), ["bash", "-c"]);
-    assert.match(tpl.dockerEntrypoint[2], /weights-sha256\.tsv[\s\S]*fetch-hub-tree\.py[\s\S]*step weights [\s\S]*exec \/opt\/fastvideo-rs\/bin\/fv-serve/);
+    assert.deepEqual([rpe.networkVolumes, rpe.dataCenterIds, rpe.flashboot], [undefined, undefined, "FLASHBOOT"]);
+    assert.equal(tpl.disk, v.spec.container_disk_gb);
+    assert.deepEqual(tpl.entrypoint.slice(0, 2), ["bash", "-c"]);
+    assert.match(tpl.entrypoint[2], /weights-sha256\.tsv[\s\S]*fetch-hub-tree\.py[\s\S]*step weights [\s\S]*exec \/opt\/fastvideo-rs\/bin\/fv-serve/);
     assert.equal(tpl.env.FV_WEIGHTS_SOURCE, "hub");
     assert.match(atob(tpl.env.FV_WEIGHTS_TREES_B64), /^tree\twan22-ti2v-5b\tWan-AI\/Wan2\.2-TI2V-5B-Diffusers\tb8fff7315c768468a5333511427288870b2e9635\t/m);
     assert.match(atob(tpl.env.FV_HUB_SHA256_B64), /^fastwan22-ti2v-5b\ttransformer\/diffusion_pytorch_model\.safetensors\t9999660080\t[0-9a-f]{64}$/m);

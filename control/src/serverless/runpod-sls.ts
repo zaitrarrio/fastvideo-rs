@@ -1,28 +1,29 @@
 // Runpod's serverless APIs (docs/control/serverless.md "Runpod API"):
-//   REST v1 rest.runpod.io/v1   /templates, /endpoints, /billing/endpoints
-//   REST v2 api.runpod.io/v2    /serverless (load-balancer create), /catalog/gpus
+//   REST v2 api.runpod.io/v2   /templates, /serverless (+ /<id>/workers), /billing/serverless, /catalog/gpus
+//                              (REST v1, rest.runpod.io/v1, is retired: /endpoints, /billing/endpoints are gone)
 //   queue   api.runpod.ai/v2    /<id>/health, /run, /runsync, /status/<job>, /cancel/<job>, /purge-queue
 //   LB      https://<id>.api.runpod.ai/<path>
 //   GraphQL myself { clientBalance endpoints { … pods } } (live workers and their $/hr)
 // The API key only goes in an Authorization header; every upstream text is
-// scrubbed. Nothing here returns a template's env (Runpod returns it in
-// clear): views pick named fields (payloads.ts endpointView).
+// scrubbed. Nothing here returns an endpoint's or a template's env (Runpod
+// returns it in clear): views pick named fields (payloads.ts endpointView).
 import { runpodErrorText } from "../runpoderr";
 import { defaults, type Env } from "../env";
 import { runpod } from "../runpod";
 import { fetchWithTimeout, HttpError, scrub } from "../util";
 
-/** Upstream bases; tests point them at a mock. */
-export type SlsEnv = Env & { RUNPOD_REST2?: string; RUNPOD_QUEUE?: string; RUNPOD_LB_URL?: string };
+/** Upstream bases; tests point them at a mock. The REST base is `RUNPOD_REST` (env.ts defaults.runpodRest; its older
+ * name `RUNPOD_REST2` still works). */
+export type SlsEnv = Env & { RUNPOD_QUEUE?: string; RUNPOD_LB_URL?: string };
 export const slsBases = (e: SlsEnv) => ({
-  rest2: e.RUNPOD_REST2 || "https://api.runpod.io/v2",
+  rest: defaults.runpodRest(e),
   queue: e.RUNPOD_QUEUE || "https://api.runpod.ai/v2",
   lb: (id: string) => (e.RUNPOD_LB_URL || "https://{id}.api.runpod.ai").replaceAll("{id}", id),
 });
 
 const enc = encodeURIComponent;
-/** Runpod answers a template or endpoint that is already gone with 404, or with 400/500 and "… not found"
- * (a v2 endpoint's template, which Runpod deletes with the endpoint: live 2026-10-06). */
+/** Runpod answers a template or endpoint that is already gone with 404, or with 400/500 and "… not found" (live
+ * 2026-10-06 on v1: a template Runpod had deleted with its endpoint). */
 export const isGone = (e: unknown) => e instanceof HttpError && (e.status === 404 || /not found/i.test(e.message));
 
 async function raw(env: Env, url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<{ status: number; body: any; ms: number }> {
@@ -60,10 +61,34 @@ export interface LiveEndpoint {
   pods: { id: string; desiredStatus?: string; costPerHr?: number }[];
 }
 
+/** A worker of REST v2 `GET /serverless/<id>/workers` (its id is the pod's). */
+export interface SlsWorker {
+  id: string;
+  status: string; // RUNNING | IDLE | INITIALIZING | THROTTLED | UNHEALTHY
+  isStale?: boolean;
+  version?: number | null;
+  gpuCount?: number;
+  image?: string | null;
+  uptimeSeconds?: number | null;
+  gpuTypeId?: string | null;
+  dataCenterId?: string | null;
+  startedAt?: string | null;
+}
+
 export const sls = {
-  // ---- templates and endpoints (REST v1)
+  // ---- templates and endpoints (REST v2)
   createTemplate: (env: Env, payload: unknown) => runpod.rest(env, "POST", "/templates", payload),
   updateTemplate: (env: Env, id: string, payload: unknown) => runpod.rest(env, "PATCH", `/templates/${enc(id)}`, payload),
+  /** A template, or null when Runpod has none with that id. */
+  async getTemplate(env: Env, id: string): Promise<any | null> {
+    try {
+      const t = await runpod.rest(env, "GET", `/templates/${enc(id)}`);
+      return t && t.id ? t : null;
+    } catch (e) {
+      if (isGone(e) || (e instanceof HttpError && e.status === 400)) return null;
+      throw e;
+    }
+  },
   async deleteTemplate(env: Env, id: string): Promise<boolean> {
     try {
       await runpod.rest(env, "DELETE", `/templates/${enc(id)}`);
@@ -73,37 +98,53 @@ export const sls = {
       throw e;
     }
   },
-  createEndpoint: (env: Env, payload: unknown) => runpod.rest(env, "POST", "/endpoints", payload),
-  patchEndpoint: (env: Env, id: string, body: unknown) => runpod.rest(env, "PATCH", `/endpoints/${enc(id)}`, body),
-  /** An endpoint with its workers, or null when Runpod has none with that id. */
+  /** `POST /serverless`: a queue or load-balancer endpoint (payloads.ts endpointCreatePayload). */
+  createEndpoint: (env: Env, payload: unknown) => runpod.rest(env, "POST", "/serverless", payload),
+  /** `PATCH /serverless/<id>`: scaling, placement, the GPU block, or `templateId` to re-apply a template's container
+   * settings (v2 keeps no link to the template). */
+  patchEndpoint: (env: Env, id: string, body: unknown) => runpod.rest(env, "PATCH", `/serverless/${enc(id)}`, body),
+  /** The live workers of an endpoint (`GET /serverless/<id>/workers`; v1's `?includeWorkers=true`). */
+  async workers(env: Env, id: string): Promise<SlsWorker[]> {
+    const r = await runpod.rest(env, "GET", `/serverless/${enc(id)}/workers`);
+    return Array.isArray(r?.workers) ? r.workers : [];
+  },
+  /** An endpoint with its workers (`workerList`: v2 names the min / max block `workers`), or null when Runpod has
+   * none with that id. */
   async getEndpoint(env: Env, id: string): Promise<any | null> {
+    let e: any;
     try {
-      const e = await runpod.rest(env, "GET", `/endpoints/${enc(id)}?includeWorkers=true&includeTemplate=true`);
-      return e && e.id ? e : null;
+      e = await runpod.rest(env, "GET", `/serverless/${enc(id)}`);
     } catch (e) {
       if (e instanceof HttpError && (e.status === 404 || e.status === 400)) return null;
       throw e;
     }
+    if (!e || !e.id) return null;
+    const workerList = await sls.workers(env, id).catch((err) => {
+      if (isGone(err)) return [] as SlsWorker[];
+      throw err;
+    });
+    return { ...e, workerList };
   },
   async deleteEndpoint(env: Env, id: string): Promise<boolean> {
     try {
-      await runpod.rest(env, "DELETE", `/endpoints/${enc(id)}`);
+      await runpod.rest(env, "DELETE", `/serverless/${enc(id)}`);
       return true;
     } catch (e) {
       if (isGone(e)) return true;
       throw e;
     }
   },
-  /** Serverless spend per endpoint and UTC day since `startIso` (REST v1 /billing/endpoints). */
-  async billing(env: Env, startIso: string): Promise<{ endpointId: string; time: string; amount: number; timeBilledMs: number }[]> {
-    const r = await runpod.rest(env, "GET", `/billing/endpoints?bucketSize=day&grouping=endpointId&startTime=${enc(startIso)}`);
-    return (Array.isArray(r) ? r : []).filter((x: any) => x && x.endpointId).map((x: any) => ({ endpointId: String(x.endpointId), time: String(x.time || ""), amount: Number(x.amount || 0), timeBilledMs: Number(x.timeBilledMs || 0) }));
+  /** Serverless spend per endpoint and UTC day since `startIso` (REST v2 `GET /billing/serverless`: one record per
+   * endpoint per bucket, `serverlessId`, `startTime`, `totalAmount`; v1's `/billing/endpoints` is a different product
+   * in v2, Runpod's public endpoints). v2 reports no billed time (v1's `timeBilledMs`): `timeBilledMs` is null. */
+  async billing(env: Env, startIso: string): Promise<{ endpointId: string; time: string; amount: number; timeBilledMs: number | null }[]> {
+    const r = await runpod.rest(env, "GET", `/billing/serverless?bucketSize=day&startTime=${enc(startIso)}`);
+    const recs: any[] = Array.isArray(r?.records) ? r.records : [];
+    return recs.filter((x) => x && x.serverlessId).map((x) => ({ endpointId: String(x.serverlessId), time: String(x.startTime || ""), amount: Number(x.totalAmount || 0), timeBilledMs: null }));
   },
-
-  // ---- REST v2: load-balancer endpoints, the GPU catalog
-  createLb: (env: SlsEnv, payload: unknown) => ok(env, `${slsBases(env).rest2}/serverless`, { method: "POST", body: json(payload), timeoutMs: 60000 }),
+  /** The GPU catalog: every type's serverless pool (`GET /catalog/gpus`; null when the type is in no pool). */
   async gpuCatalog(env: SlsEnv): Promise<{ id: string; pool: string | null }[]> {
-    const j = await ok(env, `${slsBases(env).rest2}/catalog/gpus`, { timeoutMs: 20000 });
+    const j = await ok(env, `${slsBases(env).rest}/catalog/gpus`, { timeoutMs: 20000 });
     return Array.isArray(j?.gpus) ? j.gpus.map((g: any) => ({ id: String(g.id), pool: g.pool ?? null })) : [];
   },
 

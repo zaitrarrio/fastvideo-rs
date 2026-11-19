@@ -187,7 +187,7 @@ impl StartOptions {
     }
 }
 
-/// The pod's start command (`dockerStartCmd: ["/bin/bash", "-c", <this>]`).
+/// The pod's start command (`cmd: ["/bin/bash", "-c", <this>]`, v1's `dockerStartCmd`).
 pub fn start_command(o: &StartOptions) -> Result<String, PodError> {
     o.check()?;
     let mut s = START_TEMPLATE.trim_end_matches('\n').to_owned();
@@ -396,7 +396,7 @@ pub fn launch(tier: &Tier, sha7: &str, start: &StartOptions) -> Result<Launch, P
             count: tier.gpu_count,
             allowed_cuda: Vec::new(),
             min_cuda: None,
-            // The tier's host-RAM floor (`minRAMPerGPU`), when it sets one.
+            // The tier's host-RAM floor (`gpu.minRamPerGpu`), when it sets one.
             min_ram_gb: tier.min_ram_gb,
         },
         placement: Placement {
@@ -548,7 +548,7 @@ pub struct PodRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<f64>,
     pub cap_s: u64,
-    /// The tier's host-RAM floor asked for (GB per GPU, `minRAMPerGPU`).
+    /// The tier's host-RAM floor asked for (GB per GPU, `gpu.minRamPerGpu`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_ram_gb: Option<u32>,
     /// What the host gave the pod (the create answer's `memoryInGb`,
@@ -1414,7 +1414,7 @@ cells = ["c"]
         assert_eq!(l.gpu.min_ram_gb, None, "no floor unless the tier sets one");
     }
 
-    /// A tier's `min_ram_gb` is the pod body's `minRAMPerGPU`, and nothing
+    /// A tier's `min_ram_gb` is the pod body's `gpu.minRamPerGpu`, and nothing
     /// else of the body changes; without it the body has no such field.
     #[test]
     fn a_tiers_host_ram_floor_is_the_pods_min_ram_per_gpu() {
@@ -1422,7 +1422,7 @@ cells = ["c"]
         let t = tier();
         let o = StartOptions::for_tier(&t, "abcdef1-10241200");
         let plain = pod_create_body(&launch(&t, "abcdef1", &o).unwrap());
-        assert!(plain.get("minRAMPerGPU").is_none());
+        assert!(plain["gpu"].get("minRamPerGpu").is_none());
         let t = Tiers::parse(
             &TIERS.replace(
                 "container_disk_gb = 120",
@@ -1437,8 +1437,10 @@ cells = ["c"]
         let l = launch(&t, "abcdef1", &o).unwrap();
         assert_eq!(guard::check_min_ram(&l), Ok(()));
         let mut body = pod_create_body(&l);
-        assert_eq!(body["minRAMPerGPU"], serde_json::json!(192));
-        body.as_object_mut().map(|m| m.remove("minRAMPerGPU"));
+        assert_eq!(body["gpu"]["minRamPerGpu"], serde_json::json!(192));
+        body["gpu"]
+            .as_object_mut()
+            .map(|m| m.remove("minRamPerGpu"));
         assert_eq!(body, plain);
     }
 

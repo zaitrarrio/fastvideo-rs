@@ -66,8 +66,9 @@ source "$HERE/../gpu/volumes.sh"
 # shellcheck source-path=SCRIPTDIR source=../gpu/runpod-cuda.sh
 source "$HERE/../gpu/runpod-cuda.sh"
 
-REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
-REST2="${RUNPOD_API2_BASE:-https://api.runpod.io/v2}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+REST="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
+REST2="${RUNPOD_API2_BASE:-$REST}"
 QUEUE="${RUNPOD_QUEUE_API:-https://api.runpod.ai/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CONFIG="${FV_SERVE_CONFIG:-$FV_IMAGE_CONFIG}"
@@ -89,10 +90,11 @@ EXEC_MS="${FV_EXECUTION_TIMEOUT_MS:-1800000}"
 MODEL="${FV_SMOKE_MODEL:-fake-wan}"
 PREFIX="${FV_ENDPOINT_PREFIX:-fv-serve}"
 IDLE_S="${FV_IDLE_TIMEOUT_S:-5}"
+# v2's FlashBoot enum (v1's queue endpoints took a boolean).
 case "${FV_FLASHBOOT:-0}" in
-  0 | off | false) FLASHBOOT_Q=false; FLASHBOOT_LB=OFF ;;
-  1 | on | true) FLASHBOOT_Q=true; FLASHBOOT_LB=FLASHBOOT ;;
-  priority) FLASHBOOT_Q=true; FLASHBOOT_LB=PRIORITY_FLASHBOOT ;;
+  0 | off | false) FLASHBOOT=OFF ;;
+  1 | on | true) FLASHBOOT=FLASHBOOT ;;
+  priority) FLASHBOOT=PRIORITY_FLASHBOOT ;;
   *) die "FV_FLASHBOOT must be 0, 1 or priority" ;;
 esac
 LEDGER="${FV_SERVE_LEDGER:-$FV_ROOT/artifacts/runpod/serve/ledger.tsv}"
@@ -149,12 +151,28 @@ resolve_digest() {
 
 volume_dc() {
   if [[ -n "${RUNPOD_VOLUME_DC:-}" ]]; then echo "$RUNPOD_VOLUME_DC"; return; fi
-  rest GET "/networkvolumes/$VOLUME" | jq -r '.dataCenterId'
+  rest GET "/network-volumes/$VOLUME" | jq -r '.dataCenter'
 }
 
 gpu_json() { jq -cn --arg g "$GPUS" '$g | split(",") | map(gsub("^ +| +$"; ""))'; }
 
-# Serverless template (REST v1). The volume's HF-cache trees link
+# The v2 GPU selection for the configured types: a serverless endpoint takes
+# pool ids (`GET /v2/catalog/gpus` .pool), not GPU type ids, so the pools the
+# types belong to are selected and every other type in those pools is
+# excluded (`excludedTypes`), which pins the workers to exactly the configured
+# cards as v1's gpuTypeIds did. Without the catalog (no key, a plan): ADA_24.
+gpu_pools_json() {
+  local sel
+  sel="$(curl -sS -H "Authorization: Bearer ${RUNPOD_API_KEY:-}" "$REST2/catalog/gpus" 2>/dev/null \
+    | jq -c --argjson want "$(gpu_json)" '
+      ([.gpus[] | select(.id as $i | $want | index($i)) | .pool | select(. != null)] | unique) as $pools
+      | ([.gpus[] | select((.pool as $p | $pools | index($p)) and (.id as $i | $want | index($i) | not)) | .id] | unique) as $ex
+      | {pools: $pools} + (if $ex == [] then {} else {excludedTypes: $ex} end)' 2>/dev/null || true)"
+  [[ -n "$sel" && "$(jq -r '.pools | length' <<<"$sel" 2>/dev/null)" != 0 ]] || sel='{"pools":["ADA_24"]}'
+  echo "$sel"
+}
+
+# Serverless template (REST v2 POST /templates). The volume's HF-cache trees link
 # absolutely into /workspace/weights (where pods mount it); a serverless
 # worker mounts it at /runpod-volume, and fv-boot (the image's entrypoint)
 # links /workspace/weights there before it starts fv-serve with the config
@@ -163,8 +181,8 @@ template_payload() {
   local image="$1" name="$2"
   jq -n --arg name "$name" --arg image "$image" --argjson cfg "$CONFIG_ENV_JSON" --argjson secrets "$SECRET_ENV_JSON" \
     --argjson extra "${FV_EXTRA_ENV_JSON:-{\}}" --argjson ident "$(fv_image_env_json "$image")" '{
-    name: $name, imageName: $image, isServerless: true, containerDiskInGb: 20, volumeInGb: 0,
-    dockerEntrypoint: ["/opt/fastvideo-rs/bin/fv-boot"],
+    name: $name, image: $image, serverless: true, disk: 20,
+    entrypoint: ["/opt/fastvideo-rs/bin/fv-boot"],
     env: ($secrets + $ident + $cfg + {
       FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_STATE_DIR: "/fvstate",
       FV_WEIGHTS: "/runpod-volume/weights", FV_CACHE_DIR: "/fvstate/cache", RUST_LOG: "info"
@@ -172,16 +190,19 @@ template_payload() {
   }'
 }
 
-# Queue endpoint (REST v1).
+# Queue endpoint (REST v2 POST /serverless). An exact CUDA set
+# (allowedCudaVersions) and a floor (minCudaVersion) are mutually exclusive in
+# v2, so the floor goes only without a set (the default: fv_runpod_cuda is
+# empty).
 endpoint_payload() {
   local tpl="$1" name="$2" dc="$3"
-  jq -n --arg name "$name" --arg tpl "$tpl" --argjson gpus "$(gpu_json)" --arg vol "$VOLUME" --arg dc "$dc" \
-    --arg cuda "$CUDA" --arg min "$FV_MIN_CUDA" --arg exec "$EXEC_MS" --argjson idle "$IDLE_S" --argjson fb "$FLASHBOOT_Q" '{
-    name: $name, templateId: $tpl, computeType: "GPU", gpuTypeIds: $gpus, gpuCount: 1,
-    networkVolumeId: $vol, dataCenterIds: [$dc], workersMin: 0, workersMax: 1, idleTimeout: $idle,
-    flashboot: $fb, executionTimeoutMs: ($exec|tonumber), scalerType: "QUEUE_DELAY", scalerValue: 1,
-    minCudaVersion: $min
-  } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)'
+  jq -n --arg name "$name" --arg tpl "$tpl" --argjson pools "$(gpu_pools_json)" --arg vol "$VOLUME" --arg dc "$dc" \
+    --arg cuda "$CUDA" --arg min "$FV_MIN_CUDA" --arg exec "$EXEC_MS" --argjson idle "$IDLE_S" --arg fb "$FLASHBOOT" '{
+    name: $name, templateId: $tpl, type: "QUEUE",
+    gpu: ($pools + {count: 1} + (if $cuda == "" then {minCudaVersion: $min} else {allowedCudaVersions: ($cuda | split(" "))} end)),
+    networkVolumes: [$vol], dataCenterIds: [$dc], workers: {min: 0, max: 1, idleTimeout: $idle},
+    flashboot: $fb, timeout: ($exec|tonumber), scaling: {type: "QUEUE_DELAY", queueDelay: 1}
+  }'
 }
 
 # Load-balancer endpoint (REST v2: the only API with `type`). GPU pools come
@@ -191,12 +212,9 @@ endpoint_payload() {
 LB_WORKERS_MAX="${FV_LB_WORKERS_MAX:-1}"
 [[ "$LB_WORKERS_MAX" =~ ^[1-9][0-9]*$ ]] || die "FV_LB_WORKERS_MAX must be a positive integer"
 lb_payload() {
-  local image="$1" name="$2" dc="$3" pools
-  pools="$(curl -sS -H "Authorization: Bearer $RUNPOD_API_KEY" "$REST2/catalog/gpus" 2>/dev/null \
-    | jq -c --argjson want "$(gpu_json)" '[.gpus[] | select(.id as $i | $want | index($i)) | .pool | select(. != null)] | unique' 2>/dev/null || echo '[]')"
-  [[ "$pools" != "[]" && -n "$pools" ]] || pools='["ADA_24"]'
-  jq -n --arg name "$name" --arg image "$image" --argjson cfg "$CONFIG_ENV_JSON" --argjson pools "$pools" --arg vol "$VOLUME" \
-    --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" --argjson max "$LB_WORKERS_MAX" --argjson idle "$IDLE_S" --arg fb "$FLASHBOOT_LB" \
+  local image="$1" name="$2" dc="$3"
+  jq -n --arg name "$name" --arg image "$image" --argjson cfg "$CONFIG_ENV_JSON" --argjson pools "$(gpu_pools_json)" --arg vol "$VOLUME" \
+    --arg dc "$dc" --arg cuda "$CUDA" --argjson secrets "$SECRET_ENV_JSON" --argjson max "$LB_WORKERS_MAX" --argjson idle "$IDLE_S" --arg fb "$FLASHBOOT" \
     --argjson ident "$(fv_image_env_json "$image")" '{
     name: $name, type: "LOAD_BALANCER", image: $image,
     ports: ["8000/http"], disk: 20,
@@ -205,7 +223,7 @@ lb_payload() {
       FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/runpod-volume/weights", RUST_LOG: "info",
       FV_WORKERS_MAX: ($max | tostring)
     }),
-    gpu: ({pools: $pools, count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
+    gpu: ($pools + {count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
     workers: {min: 0, max: $max, idleTimeout: $idle},
     scaling: {type: "REQUEST_COUNT", requestCount: 1},
     networkVolumes: [$vol], dataCenterIds: [$dc], flashboot: $fb, timeout: 330000
@@ -217,10 +235,10 @@ TPL=""
 down() {
   local ep="$1" tpl="${2:-}"
   if [[ -n "$ep" ]]; then
-    rest PATCH "/endpoints/$ep" '{"workersMin":0,"workersMax":0}' >/dev/null 2>&1 || true
+    rest PATCH "/serverless/$ep" '{"workers":{"min":0,"max":0}}' >/dev/null 2>&1 || true
     local i
     for i in 1 2 3 4 5 6; do
-      if rest DELETE "/endpoints/$ep" >/dev/null 2>&1; then ledger "endpoint-deleted $ep"; fv_deploy_deleted endpoint "$ep"; break; fi
+      if rest DELETE "/serverless/$ep" >/dev/null 2>&1; then ledger "endpoint-deleted $ep"; fv_deploy_deleted endpoint "$ep"; break; fi
       [[ $i == 6 ]] && log "WARNING: could not delete endpoint $ep (backstop retries at the cap)"
       sleep $((i * 5))
     done
@@ -244,9 +262,9 @@ backstop() {
   nohup env EP_ID="$1" TPL_ID="${2:--}" CAP="$CAP_S" API="$REST" bash -c '
     sleep "$CAP"
     h=(-H "Authorization: Bearer $RUNPOD_API_KEY" -H "content-type: application/json")
-    curl -sS -X PATCH "${h[@]}" -d "{\"workersMin\":0,\"workersMax\":0}" "$API/endpoints/$EP_ID" >/dev/null
+    curl -sS -X PATCH "${h[@]}" -d "{\"workers\":{\"min\":0,\"max\":0}}" "$API/serverless/$EP_ID" >/dev/null
     sleep 20
-    curl -sS -X DELETE "${h[@]}" "$API/endpoints/$EP_ID" >/dev/null
+    curl -sS -X DELETE "${h[@]}" "$API/serverless/$EP_ID" >/dev/null
     [ "$TPL_ID" = - ] || curl -sS -X DELETE "${h[@]}" "$API/templates/$TPL_ID" >/dev/null' >/dev/null 2>&1 &
 }
 
@@ -261,10 +279,10 @@ up_queue() {
   [[ -n "$TPL" ]] || die "template create returned no id"
   ledger "template-created $TPL $name $image"
   tpl_use="$TPL"
-  resp="$(rest POST /endpoints "$(endpoint_payload "$tpl_use" "$name" "$dc")")" || die "endpoint create failed: $(head -c 300 <<<"$resp")"
+  resp="$(rest POST /serverless "$(endpoint_payload "$tpl_use" "$name" "$dc")")" || die "endpoint create failed: $(head -c 300 <<<"$resp")"
   EP="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$EP" ]] || die "endpoint create returned no id"
-  ledger "endpoint-created $EP $name volume=$VOLUME dc=$dc gpus=$GPUS template=$tpl_use flashboot=$FLASHBOOT_Q"
+  ledger "endpoint-created $EP $name volume=$VOLUME dc=$dc gpus=$GPUS template=$tpl_use flashboot=$FLASHBOOT"
   fv_deploy_created endpoint "$EP" name="$name" image="$image" variant="$FV_CUDA_IMAGE" pool="${FV_DEPLOY_POOL:-}" dc="$dc" gpu="$GPUS" \
     meta="$(jq -nc --arg t "$tpl_use" --arg v "$VOLUME" --arg c "$CONFIG" '{type: "queue", template: $t, shared_template: false, volume: $v, config: $c}')"
   backstop "$EP" "$TPL"
@@ -382,8 +400,8 @@ case "${1:-}" in
   plan)
     shift
     img="$(pick_image "${1:-}")"
-    echo "# template (REST v1 POST /templates)"; template_payload "$img" fv-serve-plan
-    echo "# queue endpoint (REST v1 POST /endpoints)"; endpoint_payload "<template id>" fv-serve-plan "${RUNPOD_VOLUME_DC:-<volume dc>}"
+    echo "# template (REST v2 POST /templates)"; template_payload "$img" fv-serve-plan
+    echo "# queue endpoint (REST v2 POST /serverless)"; endpoint_payload "<template id>" fv-serve-plan "${RUNPOD_VOLUME_DC:-<volume dc>}"
     echo "# load balancer (REST v2 POST /serverless)"
     RUNPOD_API_KEY="${RUNPOD_API_KEY:-}" lb_payload "$img" fv-serve-plan "${RUNPOD_VOLUME_DC:-<volume dc>}" ;;
   *) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;

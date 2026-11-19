@@ -24,10 +24,10 @@ pub const LAUNCH_SCHEMA: u32 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
-    /// A Runpod GPU pod (REST v1 `POST /pods`).
+    /// A Runpod GPU pod (REST v2 `POST /pods`).
     RunpodPod,
-    /// A Runpod serverless queue endpoint (REST v1 `POST /templates` +
-    /// `POST /endpoints`).
+    /// A Runpod serverless queue endpoint (REST v2 `POST /templates` +
+    /// `POST /serverless`).
     RunpodServerless,
     /// A Vast instance (REST `POST /bundles/` offer search, `PUT
     /// /asks/<offer>/` create; `scripts/serve/vast.sh`).
@@ -147,7 +147,7 @@ pub struct GpuSpec {
     /// pod; a serverless endpoint gets the whole list).
     pub types: Vec<String>,
     pub count: u32,
-    /// Runpod `allowedCudaVersions` (exact labels); empty = no filter (the
+    /// Runpod `gpu.allowedCudaVersions` (exact labels); empty = no filter (the
     /// default: REST cannot name the 13.1 / 13.2 hosts,
     /// `scripts/gpu/runpod-cuda.sh`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -155,8 +155,8 @@ pub struct GpuSpec {
     /// Runpod serverless `minCudaVersion`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_cuda: Option<String>,
-    /// A Runpod pod's host-RAM floor (`PodCreateInput.minRAMPerGPU`): whole
-    /// GB per GPU, at least 1. `None` sends nothing: Runpod's default floor
+    /// A Runpod pod's host-RAM floor (v2 `gpu.minRamPerGpu`, v1's
+    /// `minRAMPerGPU`): whole GB per GPU, at least 1. `None` sends nothing: Runpod's default floor
     /// (8 GB per GPU), above which the host's share decides. On any other
     /// launch kind (no create body carries it) `guard::check_min_ram`
     /// refuses it before anything is created (docs/adr/0019-fv-lab.md §16.10).
@@ -418,7 +418,7 @@ pub struct Launch {
     /// image's own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entrypoint: Vec<String>,
-    /// Its arguments (Runpod `dockerStartCmd`).
+    /// Its arguments (Runpod `cmd`, v1's `dockerStartCmd`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
     /// The container environment: plain values and provider secret

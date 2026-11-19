@@ -40,10 +40,10 @@ fv_config_env_json() {
 
 fv_template_name() { echo "fv-serve-$1-$2"; }
 
-# fv_template_get <name> -> the template JSON (REST v1), or nothing
+# fv_template_get <name> -> the template JSON (REST v2 GET /templates), or nothing
 fv_template_get() {
-  curl -sS --fail-with-body -H "Authorization: Bearer $RUNPOD_API_KEY" "${RUNPOD_API_BASE:-https://rest.runpod.io/v1}/templates" \
-    | jq -c --arg n "$1" '[.[]? | select(.name == $n)][0] // empty'
+  curl -sS --fail-with-body -H "Authorization: Bearer $RUNPOD_API_KEY" "${RUNPOD_API_BASE:-https://api.runpod.io/v2}/templates" \
+    | jq -c --arg n "$1" '[.templates[]? | select(.name == $n)][0] // empty'
 }
 
 # fv_image_ref <image> <flavour> -> the image the image's Runpod template boots (what CI or a release registered),
@@ -52,7 +52,7 @@ fv_image_ref() {
   local t img=""
   if [[ -n "${RUNPOD_API_KEY:-}" ]]; then
     t="$(fv_template_get "$(fv_template_name "$1" "$2")" 2>/dev/null || true)"
-    img="$(jq -r '.imageName // empty' <<<"${t:-{\}}" 2>/dev/null || true)"
+    img="$(jq -r '.image // empty' <<<"${t:-{\}}" 2>/dev/null || true)"
   fi
   echo "${img:-$FV_SERVE_REPO:$1}"
 }

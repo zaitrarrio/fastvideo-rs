@@ -1,33 +1,34 @@
-//! Runpod (docs/adr/0018-fv-deploy.md §4): [`Pod`] (REST v1 `POST /pods`) and
-//! [`Serverless`] (REST v1 `POST /templates` + `POST /endpoints`), on the
-//! shared [`RunpodApi`] client: REST v1, GraphQL (balance, price quotes), the
+//! Runpod (docs/adr/0018-fv-deploy.md §4, §11): [`Pod`] (REST v2 `POST /pods`)
+//! and [`Serverless`] (REST v2 `POST /templates` + `POST /serverless`), on
+//! the shared [`RunpodApi`] client: REST v2 (`https://api.runpod.io/v2`; v1
+//! at `rest.runpod.io` is retired), GraphQL (balance, price quotes), the
 //! console's log endpoint (`hapi`, as fv-control's `runpod.ts` reads it), the
 //! serverless queue API and the pods' HTTPS proxy.
 //!
-//! The payloads are byte-for-byte what `scripts/serve/runpod-pod.sh` and
-//! `scripts/serve/runpod-endpoint.sh` send for the same inputs
-//! (`fixtures/deploy/*.json`, regenerated from the scripts by
-//! `scripts/serve/tests/fv-deploy-goldens.sh`; `tests/payload_goldens.rs`).
+//! The payloads are the REST v2 form of what `scripts/serve/runpod-pod.sh`
+//! and `scripts/serve/runpod-endpoint.sh` send for the same inputs (the
+//! scripts still speak v1; `fixtures/deploy/*.json` hold the v2 bodies,
+//! `tests/payload_goldens.rs`; the field map is ADR-0018 §11).
 //!
 //! The API key is only ever an `Authorization` header; error bodies are
 //! scrubbed of it and `Debug` never prints it.
 //!
 //! **Shared with the autoscaler** (docs/adr/0018-fv-deploy.md §9): the
 //! requests ([`Requests`]: URL, method, headers, body, timeout), the answer
-//! mapping ([`decode`], [`delete_answer`], [`graphql_data`]: no capacity, 4xx,
-//! 5xx, the key scrubbed), the balance ([`account_of`]), the billed price
-//! ([`crate::provider::parse_usd`]) and the pod-from-template body
-//! ([`template_pod_body`]) are written once, sans I/O: fv-deploy sends them
-//! on the blocking `Http` seam, `fastvideo-autoscale` on its async reqwest
-//! client.
+//! mapping ([`decode`], [`delete_answer`], [`graphql_data`], [`list_items`]:
+//! no capacity, 4xx, 5xx, the key scrubbed), the balance ([`account_of`]),
+//! the billed price ([`crate::provider::parse_usd`]) and the pod-from-template
+//! body ([`template_pod_body`]) are written once, sans I/O: fv-deploy sends
+//! them on the blocking `Http` seam, `fastvideo-autoscale` on its async
+//! reqwest client.
 
 mod pod;
 mod serverless;
 mod template;
 
-pub use pod::{create_body as pod_create_body, Pod, PodListing, PodReach};
+pub use pod::{create_body as pod_create_body, pod_state, Pod, PodListing, PodReach};
 pub use serverless::{
-    endpoint_body, template_body, QueueReach, Serverless, SERVERLESS_DELETE_ATTEMPTS,
+    endpoint_body, template_body, EndpointGpu, QueueReach, Serverless, SERVERLESS_DELETE_ATTEMPTS,
 };
 pub use template::{
     serve_template_body, serve_template_launch, serve_template_name, template_env_of,
@@ -42,8 +43,8 @@ use super::{scrub, Account, CloudType, Offer, ProviderError, ProviderKind};
 use crate::boot::env::BootEnv;
 use crate::boot::sys::{Clock, Http, Method, Request};
 
-/// REST v1.
-pub const REST: &str = "https://rest.runpod.io/v1";
+/// REST v2 (v1 at `rest.runpod.io` is retired: its host has no DNS record).
+pub const REST: &str = "https://api.runpod.io/v2";
 /// The serverless queue API.
 pub const QUEUE: &str = "https://api.runpod.ai/v2";
 pub const GRAPHQL: &str = "https://api.runpod.io/graphql";
@@ -131,7 +132,7 @@ impl std::fmt::Debug for Requests<'_> {
     }
 }
 
-/// A REST v1 call's timeout.
+/// A REST call's timeout.
 pub const REST_TIMEOUT: Duration = Duration::from_secs(60);
 /// A GraphQL query's timeout.
 pub const GRAPHQL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -157,7 +158,7 @@ impl<'a> Requests<'a> {
         Self { urls, key }
     }
 
-    /// A REST v1 call (`path` from `/`).
+    /// A REST v2 call (`path` from `/`).
     pub fn rest(&self, method: Method, path: &str, body: Option<&Value>) -> Request {
         request(
             method,
@@ -189,9 +190,23 @@ impl<'a> Requests<'a> {
         self.rest(Method::Delete, &format!("/pods/{id}"), None)
     }
 
-    /// `GET /pods`.
+    /// `GET /pods` (the first page: `{"pods": [...], "pagination": {...}}`,
+    /// [`list_items`]; [`Self::list_page`] for the next ones).
     pub fn pods(&self) -> Request {
         self.rest(Method::Get, "/pods", None)
+    }
+
+    /// One page of a v2 listing: `GET {path}` with `?cursor=` when continuing
+    /// (`pagination.nextCursor` of the page before).
+    pub fn list_page(&self, path: &str, cursor: Option<&str>) -> Request {
+        match cursor {
+            Some(c) => self.rest(
+                Method::Get,
+                &format!("{path}?cursor={}", url_encode(c)),
+                None,
+            ),
+            None => self.rest(Method::Get, path, None),
+        }
     }
 
     /// `GET /templates/{id}`.
@@ -199,14 +214,31 @@ impl<'a> Requests<'a> {
         self.rest(Method::Get, &format!("/templates/{id}"), None)
     }
 
-    /// `GET /endpoints/{id}`.
+    /// `GET /serverless/{id}` (v1's `/endpoints/{id}`).
     pub fn endpoint(&self, id: &str) -> Request {
-        self.rest(Method::Get, &format!("/endpoints/{id}"), None)
+        self.rest(Method::Get, &format!("/serverless/{id}"), None)
     }
 
-    /// `PATCH /endpoints/{id}`.
+    /// `PATCH /serverless/{id}` (v1's `/endpoints/{id}`; the body's shape is
+    /// v2's: `workers: {min, max, idleTimeout}`, `scaling: {type, …}`).
     pub fn patch_endpoint(&self, id: &str, body: &Value) -> Request {
-        self.rest(Method::Patch, &format!("/endpoints/{id}"), Some(body))
+        self.rest(Method::Patch, &format!("/serverless/{id}"), Some(body))
+    }
+
+    /// `POST /pods/{id}/action` with `{"action": …}` (`start`, `stop`,
+    /// `restart`, `terminate`; v1's `POST /pods/{id}/stop` and kin).
+    pub fn pod_action(&self, id: &str, action: &str) -> Request {
+        self.rest(
+            Method::Post,
+            &format!("/pods/{id}/action"),
+            Some(&json!({ "action": action })),
+        )
+    }
+
+    /// `GET /catalog/gpus`: every GPU type with its serverless `pool`
+    /// ([`EndpointGpu::resolve`]).
+    pub fn catalog_gpus(&self) -> Request {
+        self.rest(Method::Get, "/catalog/gpus", None)
     }
 
     /// The queue API's `GET /{id}/health`.
@@ -257,6 +289,40 @@ pub fn delete_answer(what: &str, status: u16, body: &[u8], key: &str) -> Result<
         return Ok(());
     }
     decode(what, status, body, key).map(|_| ())
+}
+
+/// The items of a v2 listing: `{"<key>": [...], "pagination": {...}}`
+/// (`pods`, `endpoints`, `templates`, `networkVolumes`, `gpus`). Anything
+/// else (v1's bare array, an error object, a string) is not a listing:
+/// `None`.
+pub fn list_items(v: &Value, key: &str) -> Option<Vec<Value>> {
+    v.as_object()?.get(key)?.as_array().cloned()
+}
+
+/// The cursor of the next page of a v2 listing, when there is one.
+pub fn next_cursor(v: &Value) -> Option<String> {
+    let p = v.get("pagination")?;
+    if p.get("hasNextPage").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    p.get("nextCursor")
+        .and_then(Value::as_str)
+        .filter(|c| !c.is_empty())
+        .map(str::to_owned)
+}
+
+/// Percent-encodes a query value (a cursor is opaque text).
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// A GraphQL answer's `data`; `errors` are an error.
@@ -401,7 +467,7 @@ impl<'a> RunpodApi<'a> {
         self.send(&request(method, url, body, timeout, &self.key), what)
     }
 
-    /// A REST v1 call whose non-2xx answer is an error ([`decode`]).
+    /// A REST v2 call whose non-2xx answer is an error ([`decode`]).
     pub(crate) fn rest(
         &self,
         method: Method,
@@ -415,6 +481,35 @@ impl<'a> RunpodApi<'a> {
 
     pub(crate) fn json_or_error(&self, r: Raw, what: &str) -> Result<Value, ProviderError> {
         decode(what, r.status, &r.body, &self.key)
+    }
+
+    /// Every item of a v2 listing (`GET {path}`, the items under `key`:
+    /// [`list_items`]), following `pagination.nextCursor` to the last page.
+    /// An answer that is not a listing is an error, never "nothing".
+    pub(crate) fn list(
+        &self,
+        path: &str,
+        key: &str,
+        what: &str,
+    ) -> Result<Vec<Value>, ProviderError> {
+        let mut items = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let r = self.send(&self.requests().list_page(path, cursor.as_deref()), what)?;
+            let v = self.json_or_error(r, what)?;
+            let page = list_items(&v, key).ok_or_else(|| ProviderError::Decode {
+                what: what.to_owned(),
+                why: format!(
+                    "the answer is not a list of `{key}`: {}",
+                    scrub(&v.to_string(), &self.key, 120)
+                ),
+            })?;
+            items.extend(page);
+            match next_cursor(&v) {
+                Some(c) if Some(&c) != cursor.as_ref() => cursor = Some(c),
+                _ => return Ok(items),
+            }
+        }
     }
 
     /// A DELETE's answer ([`delete_answer`]: gone is done).
@@ -533,7 +628,7 @@ mod shared_tests {
         let c = r.create_pod(&json!({"name": "x"}));
         assert_eq!(
             (c.method, c.url.as_str()),
-            (Method::Post, "https://rest.runpod.io/v1/pods")
+            (Method::Post, "https://api.runpod.io/v2/pods")
         );
         assert!(c
             .headers
@@ -542,14 +637,35 @@ mod shared_tests {
         let d = r.delete_pod("p1");
         assert_eq!(
             (d.method, d.url.as_str()),
-            (Method::Delete, "https://rest.runpod.io/v1/pods/p1")
+            (Method::Delete, "https://api.runpod.io/v2/pods/p1")
         );
         assert!(d.body.is_none());
         assert_eq!(r.health("e1").url, "https://api.runpod.ai/v2/e1/health");
-        let p = r.patch_endpoint("e1", &json!({"workersMin": 0}));
+        let p = r.patch_endpoint("e1", &json!({"workers": {"min": 0}}));
         assert_eq!(
             (p.method, p.url.as_str()),
-            (Method::Patch, "https://rest.runpod.io/v1/endpoints/e1")
+            (Method::Patch, "https://api.runpod.io/v2/serverless/e1")
+        );
+        assert_eq!(
+            r.endpoint("e1").url,
+            "https://api.runpod.io/v2/serverless/e1"
+        );
+        let a = r.pod_action("p1", "stop");
+        assert_eq!(
+            (a.method, a.url.as_str()),
+            (Method::Post, "https://api.runpod.io/v2/pods/p1/action")
+        );
+        assert_eq!(
+            String::from_utf8_lossy(a.body.as_deref().unwrap_or_default()),
+            r#"{"action":"stop"}"#
+        );
+        assert_eq!(
+            r.list_page("/templates", Some("c u/r=1")).url,
+            "https://api.runpod.io/v2/templates?cursor=c%20u%2Fr%3D1"
+        );
+        assert_eq!(
+            r.catalog_gpus().url,
+            "https://api.runpod.io/v2/catalog/gpus"
         );
         let b = r.balance();
         assert_eq!(b.url, GRAPHQL);
@@ -598,5 +714,21 @@ mod shared_tests {
         );
         assert!(graphql_data("q", 200, br#"{"errors":[{"message":"nope"}]}"#, KEY).is_err());
         assert!(account_of(ProviderKind::RunpodPod, &json!({})).is_err());
+    }
+
+    #[test]
+    fn listings_are_read_under_their_key_and_paged_by_cursor() {
+        let page =
+            json!({"pods": [{"id": "a"}], "pagination": {"nextCursor": "c2", "hasNextPage": true}});
+        assert_eq!(list_items(&page, "pods"), Some(vec![json!({"id": "a"})]));
+        assert_eq!(next_cursor(&page).as_deref(), Some("c2"));
+        let last = json!({"pods": [], "pagination": {"nextCursor": null, "hasNextPage": false}});
+        assert_eq!(list_items(&last, "pods"), Some(vec![]));
+        assert_eq!(next_cursor(&last), None);
+        // v1's bare array and an error object are not listings.
+        assert_eq!(list_items(&json!([{"id": "x"}]), "pods"), None);
+        assert_eq!(list_items(&json!({"error": "rate limited"}), "pods"), None);
+        assert_eq!(list_items(&json!({"endpoints": []}), "pods"), None);
+        assert_eq!(list_items(&json!("x"), "pods"), None);
     }
 }

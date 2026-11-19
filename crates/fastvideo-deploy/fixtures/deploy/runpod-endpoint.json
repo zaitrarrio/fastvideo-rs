@@ -1,21 +1,29 @@
 {
-  "computeType": "GPU",
   "dataCenterIds": [
     "EU-RO-1"
   ],
-  "executionTimeoutMs": 1800000,
-  "flashboot": false,
-  "gpuCount": 1,
-  "gpuTypeIds": [
-    "NVIDIA RTX PRO 6000 Blackwell Server Edition"
-  ],
-  "idleTimeout": 5,
-  "minCudaVersion": "13.0",
+  "flashboot": "OFF",
+  "gpu": {
+    "count": 1,
+    "minCudaVersion": "13.0",
+    "pools": [
+      "ADA_24"
+    ]
+  },
   "name": "fv-serve-plan",
-  "networkVolumeId": "bz0ofkfx45",
-  "scalerType": "QUEUE_DELAY",
-  "scalerValue": 1,
+  "networkVolumes": [
+    "bz0ofkfx45"
+  ],
+  "scaling": {
+    "queueDelay": 1,
+    "type": "QUEUE_DELAY"
+  },
   "templateId": "<template id>",
-  "workersMax": 1,
-  "workersMin": 0
+  "timeout": 1800000,
+  "type": "QUEUE",
+  "workers": {
+    "idleTimeout": 5,
+    "max": 1,
+    "min": 0
+  }
 }

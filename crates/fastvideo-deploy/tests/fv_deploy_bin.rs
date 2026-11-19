@@ -21,7 +21,7 @@ const KEY: &str = "rpa_SENTINEL_KEY_42";
 /// `"<METHOD> <path> <authorization>"` per request.
 type Seen = Arc<Mutex<Vec<String>>>;
 
-/// A fake Runpod: GraphQL answers the balance `balance`, `GET /v1/pods/<id>`
+/// A fake Runpod: GraphQL answers the balance `balance`, `GET /v2/pods/<id>`
 /// says RUNNING, `DELETE` succeeds; every request is recorded.
 fn fake_runpod(balance: f64) -> (String, Seen) {
     let l = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("bind: {e}"));
@@ -67,8 +67,8 @@ fn fake_runpod(balance: f64) -> (String, Seen) {
             }
             let reply = if p.starts_with("/graphql") {
                 format!("{{\"data\":{{\"myself\":{{\"clientBalance\":{balance},\"currentSpendPerHr\":0}}}}}}")
-            } else if m == "GET" && p.starts_with("/v1/pods/") {
-                format!("{{\"id\":\"{}\",\"desiredStatus\":\"RUNNING\"}}", &p[9..])
+            } else if m == "GET" && p.starts_with("/v2/pods/") {
+                format!("{{\"id\":\"{}\",\"status\":\"RUNNING\"}}", &p[9..])
             } else {
                 "{}".to_owned()
             };
@@ -101,7 +101,7 @@ fn fake_env(c: &mut Command, base: &str) {
     c.env("NO_PROXY", "127.0.0.1")
         .env("no_proxy", "127.0.0.1")
         .env("RUNPOD_API_KEY", KEY)
-        .env("RUNPOD_API_BASE", format!("{base}/v1"))
+        .env("RUNPOD_API_BASE", format!("{base}/v2"))
         .env("RUNPOD_GRAPHQL", format!("{base}/graphql"));
 }
 
@@ -124,7 +124,7 @@ fn backstop_with_fake_env(base: &str, tag: &str) -> DetachedBackstop {
         ("NO_PROXY".into(), "127.0.0.1".into()),
         ("no_proxy".into(), "127.0.0.1".into()),
         ("RUNPOD_API_KEY".into(), KEY.into()),
-        ("RUNPOD_API_BASE".into(), format!("{base}/v1")),
+        ("RUNPOD_API_BASE".into(), format!("{base}/v2")),
         ("RUNPOD_GRAPHQL".into(), format!("{base}/graphql")),
     ];
     b
@@ -165,7 +165,7 @@ fn detached_backstop_deletes_the_pod_on_its_own() {
             .lock()
             .map(|g| {
                 g.iter()
-                    .find(|l| l.starts_with("DELETE /v1/pods/podbs1"))
+                    .find(|l| l.starts_with("DELETE /v2/pods/podbs1"))
                     .cloned()
             })
             .unwrap_or(None);
@@ -207,7 +207,7 @@ fn up_refuses_below_the_balance_floor_before_any_create() {
     assert!(!err.contains(KEY));
     let reqs = seen.lock().map(|g| g.clone()).unwrap_or_default();
     assert!(
-        reqs.iter().all(|r| !r.starts_with("POST /v1/pods")),
+        reqs.iter().all(|r| !r.starts_with("POST /v2/pods")),
         "{reqs:?}"
     );
     assert!(
@@ -238,9 +238,9 @@ fn plan_and_dry_up_make_no_request_and_hide_the_key() {
         let v: serde_json::Value =
             serde_json::from_str(&so).unwrap_or_else(|e| panic!("{e}: {so}"));
         let body = &v["requests"][0]["body"];
-        assert_eq!(body["networkVolumeId"], "bz0ofkfx45");
+        assert_eq!(body["mounts"]["network"][0]["volumeId"], "bz0ofkfx45");
         assert_eq!(body["dataCenterIds"][0], "EU-RO-1");
-        assert_eq!(body["dockerEntrypoint"][0], "/opt/fastvideo-rs/bin/fv-boot");
+        assert_eq!(body["entrypoint"][0], "/opt/fastvideo-rs/bin/fv-boot");
         assert_eq!(body["env"]["FV_API_KEYS"], "<sha256 of the run key>");
         assert_eq!(v["launch"]["guards"]["ready_timeout_s"], 600);
     }
@@ -297,12 +297,12 @@ fn down_needs_a_kind_for_a_bare_id_and_infers_serverless_from_a_slash() {
     let reqs = seen.lock().map(|g| g.clone()).unwrap_or_default();
     assert!(
         reqs.iter()
-            .any(|r| r.starts_with("DELETE /v1/endpoints/ep9 ")),
+            .any(|r| r.starts_with("DELETE /v2/serverless/ep9 ")),
         "{reqs:?}"
     );
     assert!(
         reqs.iter()
-            .any(|r| r.starts_with("DELETE /v1/templates/tpl9 ")),
+            .any(|r| r.starts_with("DELETE /v2/templates/tpl9 ")),
         "{reqs:?}"
     );
     assert!(!reqs.iter().any(|r| r.contains("/pods/")), "{reqs:?}");
@@ -548,7 +548,7 @@ fn templates_plan_and_release_refusals_make_no_request() {
             .env_remove("GH_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .env_remove("GITHUB_ACTIONS")
-            .env("RUNPOD_API_BASE", format!("{base}/v1"))
+            .env("RUNPOD_API_BASE", format!("{base}/v2"))
             .env("FV_REGISTRY_API", &base)
             .env("FV_GITHUB_API", &base)
             .env("FV_D1_API_BASE", format!("{base}/client/v4"));

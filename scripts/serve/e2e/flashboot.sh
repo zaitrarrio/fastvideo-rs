@@ -35,7 +35,8 @@ OFF_CYCLES="${FV_FB_OFF_CYCLES:-2}"
 IDLE_WAIT="${FV_FB_IDLE_WAIT_S:-30}"
 MIN_START="${FV_FB_MIN_BALANCE:-14}"
 QUEUE="${RUNPOD_QUEUE_API:-https://api.runpod.ai/v2}"
-REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+REST="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 OUT="$FV_ROOT/artifacts/serve/e2e/flashboot"
 NAME="${FV_FB_NAME:-wan-turbo-us-$(date -u +%m%d%H%M)}"
@@ -54,7 +55,7 @@ guard() {
 health() { curl -sS --max-time 30 -H "Authorization: Bearer $RUNPOD_API_KEY" "$QUEUE/$EP/health" || echo '{}'; }
 # Sum of uptimeSeconds over the endpoint's workers (v2 list); frozen = down.
 uptime_sum() {
-  curl -sS --max-time 30 -H "Authorization: Bearer $RUNPOD_API_KEY" "https://api.runpod.io/v2/serverless/$EP/workers" \
+  curl -sS --max-time 30 -H "Authorization: Bearer $RUNPOD_API_KEY" "$REST/serverless/$EP/workers" \
     | jq -r '[.workers[]? | .uptimeSeconds // 0] | add // 0' 2>/dev/null || echo "?"
 }
 
@@ -114,7 +115,7 @@ n=$((FIRST - 1))
 for _ in $(seq "$FIRST" "$ON_CYCLES"); do n=$((n + 1)); cycle "$n" on; done
 if (( OFF_CYCLES > 0 )); then
   curl -sS --fail-with-body -X PATCH -H "Authorization: Bearer $RUNPOD_API_KEY" -H 'content-type: application/json' \
-    -d '{"flashboot":false}' "$REST/endpoints/$EP" | jq -c '{id, flashboot}'
+    -d '{"flashboot":"OFF"}' "$REST/serverless/$EP" | jq -c '{id, flashboot}'
   for _ in $(seq 1 "$OFF_CYCLES"); do n=$((n + 1)); cycle "$n" off; done
 fi
 log "wrote $JSONL"

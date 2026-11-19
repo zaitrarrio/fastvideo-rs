@@ -23,7 +23,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../../gpu/runpod-price.sh
 source "$ROOT/scripts/gpu/runpod-price.sh"
-API="https://rest.runpod.io/v1"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="https://api.runpod.io/v2"
 GQL="https://api.runpod.io/graphql"
 STATE="${FV_E2E_STATE:-$ROOT/target/e2e-ltx.state}"
 GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
@@ -64,7 +65,7 @@ payload() { # $1 image $2 gpu $3 name $4 keyhash $5 recipe
   local plan
   plan="$(RUNPOD_VOLUME_ID="$VOL" RUNPOD_GPU_TYPES="$2" FV_SERVE_CONFIG=/tmp/fv-ltx.toml bash "$ROOT/scripts/serve/runpod-pod.sh" plan "$1")"
   jq --arg name "$3" --arg keys "$4" --arg cmd "$(entry_cmd)" --arg r "$5" '
-    .name = $name | .dockerEntrypoint = ["bash", "-c", $cmd] | .dockerStartCmd = []
+    .name = $name | .entrypoint = ["bash", "-c", $cmd] | .cmd = []
     | .env.FV_API_KEYS = $keys | .env.FV_LTX_RECIPE = $r' <<<"$plan"
 }
 
@@ -86,7 +87,7 @@ cmd_up() {
       log "no pod on $gpu: $(head -c 200 <<<"$resp")"; continue
     fi
     pod="$(jq -r '.id // empty' <<<"$resp")"; [[ -n "$pod" ]] || continue
-    dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
+    dph="$(jq -r '.cost // 0' <<<"$resp")"
     ledger "pod-created $pod $name gpu=$gpu image=$image dph=$dph"
     if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then
       rest DELETE "/pods/$pod" >/dev/null || true; ledger "pod-deleted $pod over-cap"; log "$gpu \$$dph/hr over cap"; continue
@@ -107,7 +108,7 @@ cmd_switch() {
   IFS=$'\t' read -r pod key gpu _ <"$STATE"
   # The create env again (secret references, never values) with the new recipe.
   env="$(payload ghcr.io/x@sha256:0 "$gpu" x "$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)" "$recipe" | jq -c .env)"
-  rest PATCH "/pods/$pod" "$(jq -nc --argjson e "$env" '{env: $e}')" | jq -c '{id, desiredStatus}'
+  rest PATCH "/pods/$pod" "$(jq -nc --argjson e "$env" '{env: $e}')" | jq -c '{id, status}'
   ledger "pod-switch $pod recipe=$recipe"
 }
 
@@ -126,7 +127,7 @@ cmd_down() {
   local pod
   IFS=$'\t' read -r pod _ <"$STATE"
   rest DELETE "/pods/$pod" >/dev/null || true
-  if curl -sS -H "Authorization: Bearer $RUNPOD_API_KEY" "$API/pods" | jq -e --arg p "$pod" 'any(.[]; .id == $p)' >/dev/null; then
+  if curl -sS -H "Authorization: Bearer $RUNPOD_API_KEY" "$API/pods" | jq -e --arg p "$pod" 'any(.pods[]; .id == $p)' >/dev/null; then
     die "pod $pod still listed"
   fi
   ledger "pod-deleted $pod"; rm -f "$STATE"; log "deleted $pod (verified)"

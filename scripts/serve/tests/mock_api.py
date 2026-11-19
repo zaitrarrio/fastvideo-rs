@@ -3,7 +3,12 @@
 (scripts/serve/tests/release.test.sh):
 
 - Cloudflare D1: /client/v4/accounts, …/d1/database?name=, …/query (SQLite)
-- Runpod REST v1 (/v1/pods, /v1/endpoints, /v1/templates) and GraphQL (/graphql)
+- Runpod REST v2 (/v2/pods, /v2/serverless, /v2/templates, /v2/network-volumes:
+  the scripts' API, list replies wrapped as {"pods": [...]} etc., pods with
+  `status` / `cost`, POST /v2/pods/<id>/action) and the retired v1 (/v1/pods,
+  /v1/endpoints, /v1/templates, flat lists, `desiredStatus` / `costPerHr`),
+  which crates/fastvideo-deploy's release goldens still drive, and GraphQL
+  (/graphql)
 - a GHCR-like registry: /token, /v2/<repo>/manifests/<ref>, /v2/<repo>/blobs/<digest>
 - GitHub workflow_dispatch: /repos/<o>/<r>/actions/workflows/<f>/dispatches
 - fv-serve pods: /pod/<id>/health, /pod/<id>/fv/v1/internal/{drain,status}
@@ -54,7 +59,7 @@ STATE = {
     "requests": 0,
     # GPU type -> quoted secure $/hr (GraphQL gpuTypes); others 0.5.
     "gpu_prices": {"NVIDIA H100 80GB HBM3": 2.99},
-    # Every POST /v1/pods body's GPU types, in order.
+    # Every POST /v1/pods or /v2/pods body's GPU types, in order.
     "pod_creates": [],
 }
 # Every request but the test hooks, in order: {m, p, body} (body: the JSON
@@ -213,22 +218,37 @@ class H(BaseHTTPRequestHandler):
                     gt["lowestPrice"] = {"uninterruptablePrice": price}
                 return self.reply(200, {"data": {"gpuTypes": [gt]}})
             return self.reply(200, {"data": {"myself": {"clientBalance": 100.0, "currentSpendPerHr": 1.0}}})
-        if p.startswith("/v1/"):
+        v2 = {"pods": "pods", "serverless": "endpoints", "templates": "templates", "network-volumes": "networkVolumes"}
+        v1 = {"pods": "pods", "endpoints": "endpoints", "templates": "templates"}
+        parts = p.split("/")[2:]
+        is_v2 = p.startswith("/v2/") and parts[0] in v2
+        if p.startswith("/v1/") or is_v2:
             if self.bearer() != RUNPOD_KEY:
                 return self.reply(401, {"error": "bad key"})
-            parts = p.split("/")[2:]
-            coll = {"pods": "pods", "endpoints": "endpoints", "templates": "templates"}.get(parts[0])
+            coll = (v2 if is_v2 else v1).get(parts[0])
             if not coll:
                 return self.reply(404, {"error": "no route"})
-            items = STATE[coll]
+            items = STATE.setdefault(coll, {})
             if len(parts) == 1:
                 if m == "GET":
+                    if is_v2:
+                        return self.reply(200, {coll: list(items.values()),
+                                                "pagination": {"nextCursor": None, "hasNextPage": False}})
                     return self.reply(200, list(items.values()))
                 if m == "POST":
                     b = self.body()
                     if coll == "pods":
-                        STATE["pod_creates"].append(b.get("gpuTypeIds") or [])
+                        if is_v2:
+                            STATE["pod_creates"].append([b["gpu"]["id"]] if b.get("gpu") else [])
+                        else:
+                            STATE["pod_creates"].append(b.get("gpuTypeIds") or [])
                     i = uuid.uuid4().hex[:14]
+                    if is_v2:
+                        b.update({"id": i, "createdAt": now_str()})
+                        if coll == "pods":
+                            b.update({"status": "RUNNING", "cost": 0.5, "dataCenterId": "EU-RO-1"})
+                        items[i] = b
+                        return self.reply(201, b)
                     b.update({"id": i, "createdAt": now_str(), "desiredStatus": "RUNNING", "costPerHr": 0.5})
                     items[i] = b
                     return self.reply(200, b)
@@ -236,11 +256,21 @@ class H(BaseHTTPRequestHandler):
                 i = parts[1]
                 if i not in items:
                     return self.reply(404, {"error": "not found"})
+                if is_v2 and len(parts) == 3 and parts[2] == "action" and m == "POST":
+                    action = self.body().get("action")
+                    if action not in ("start", "stop", "restart", "terminate"):
+                        return self.reply(400, {"error": "bad action"})
+                    STATE["patches"].append({"coll": coll, "id": i, "action": action})
+                    if action == "terminate":
+                        del items[i]
+                        return self.reply(204)
+                    items[i]["status"] = "RUNNING" if action in ("start", "restart") else "EXITED"
+                    return self.reply(200, items[i])
                 if m == "GET":
                     return self.reply(200, items[i])
                 if m == "DELETE":
                     del items[i]
-                    return self.reply(200, {})
+                    return self.reply(204 if is_v2 else 200, None if is_v2 else {})
                 if m == "PATCH":
                     b = self.body()
                     STATE["patches"].append({"coll": coll, "id": i, "keys": sorted(b.keys())})

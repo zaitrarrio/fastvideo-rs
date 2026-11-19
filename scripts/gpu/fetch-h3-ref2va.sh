@@ -17,7 +17,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=volumes.sh
 source "$HERE/volumes.sh"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 VOL_ID="${1:?volume id}"
 fv_check_volume "$VOL_ID"
 CAP_S="${FV_POD_CAP_S:-5400}"
@@ -31,25 +32,32 @@ rest() {
     -H 'content-type: application/json' ${body:+-d "$body"} "$API$path"
 }
 
-dc="$(rest GET "/networkvolumes/$VOL_ID" | jq -r '.dataCenterId // empty')"
+dc="$(rest GET "/network-volumes/$VOL_ID" | jq -r '.dataCenter // empty')"
 [[ -n "$dc" ]] || { echo "no volume $VOL_ID" >&2; exit 1; }
 script_b64="$(base64 -w0 "$HERE/fetch-h3-ref2va.py")"
 start='mkdir -p /srv && cd /srv && (python -m http.server 8000 --directory /srv >/dev/null 2>&1 &) && echo "$FETCH_PY" | base64 -d > /srv/fetch.py && pip install -q --no-cache-dir "huggingface_hub>=0.34" >>/srv/log.txt 2>&1 && python /srv/fetch.py; sleep infinity'
 payload="$(jq -n --arg name "fv-ref-fetch-$(date -u +%m%d%H%M)" --arg vol "$VOL_ID" --arg dc "$dc" \
   --arg start "$start" --arg py "$script_b64" --arg hf "${HF_TOKEN:-}" '{
-    name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
-    cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: 8,
-    containerDiskInGb: 20, networkVolumeId: $vol, volumeMountPath: "/workspace",
+    name: $name, image: "python:3.12-slim", cloud: "SECURE",
+    cpu: {id: "cpu3c", vcpuCount: 8},
+    disk: 20, mounts: {network: [{volumeId: $vol, path: "/workspace"}]},
     dataCenterIds: [$dc], ports: ["8000/http"],
-    dockerStartCmd: ["/bin/bash","-lc",$start],
+    cmd: ["/bin/bash","-lc",$start],
     env: ({FETCH_PY: $py, HF_HUB_ENABLE_HF_TRANSFER: "0", HF_HUB_DISABLE_PROGRESS_BARS: "1"}
           + (if $hf != "" then {HF_TOKEN: $hf} else {} end))
   }')"
-resp="$(rest POST /pods "$payload")"
+# v2 takes one CPU flavor per create (v1 listed several with cpuFlavorPriority
+# "availability"): the flavors of FV_CPU_FLAVORS are tried in order.
+resp=""
+for flavor in ${FV_CPU_FLAVORS:-cpu3c cpu5c cpu3g}; do
+  if resp="$(rest POST /pods "$(jq -c --arg f "$flavor" '.cpu.id = $f' <<<"$payload")" 2>&1)"; then break; fi
+  log "no $flavor pod in $dc: $(head -c 200 <<<"$resp")"; resp=""
+done
+[[ -n "$resp" ]] || { echo "pod create failed (every flavor)" >&2; exit 1; }
 id="$(jq -r '.id // empty' <<<"$resp")"
 [[ -n "$id" ]] || { echo "pod create failed: $resp" >&2; exit 1; }
 mkdir -p "$OUT"; echo "$id" >"$OUT/pod-id"
-log "pod $id \$$(jq -r '.costPerHr' <<<"$resp")/hr dc=$dc vol=$VOL_ID"
+log "pod $id \$$(jq -r '.cost' <<<"$resp")/hr dc=$dc vol=$VOL_ID"
 # Detached backstop: deletes the pod after CAP_S even if this shell dies.
 nohup setsid bash -c "sleep $CAP_S; curl -sS -X DELETE -H 'Authorization: Bearer $RUNPOD_API_KEY' '$API/pods/$id' >/dev/null 2>&1" \
   >/dev/null 2>&1 &

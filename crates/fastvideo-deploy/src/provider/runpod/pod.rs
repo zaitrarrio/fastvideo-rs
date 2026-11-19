@@ -1,5 +1,6 @@
-//! A Runpod GPU pod: REST v1 `POST /pods` with the body `runpod-pod.sh`'s
-//! `payload()` builds, reached through `https://<id>-8000.proxy.runpod.net`.
+//! A Runpod GPU pod: REST v2 `POST /pods` with the v2 form of the body
+//! `runpod-pod.sh`'s `payload()` builds (ADR-0018 §11), reached through
+//! `https://<id>-8000.proxy.runpod.net`.
 
 use std::time::Duration;
 
@@ -7,51 +8,76 @@ use serde_json::{json, Map, Value};
 
 use super::RunpodApi;
 use crate::boot::sys::{Method, Request};
+use crate::launch::POD_VOLUME_MOUNT;
 use crate::provider::{
     body_json, parse_usd, scrub, Account, ApiCall, Cursor, Instance, InstanceId, InstanceState,
     Launch, LogPage, Offer, OfferQuery, Probe, Provider, ProviderError, ProviderKind, Reach,
     ReachOptions,
 };
 
-/// The `PodCreateInput` of a launch: `runpod-pod.sh payload()` field for
-/// field (`fixtures/deploy/runpod-pod.json`), fv-control's
-/// `workerCreatePayload` for the placement fields.
+/// The `CreatePodRequest` of a launch: `runpod-pod.sh payload()` field for
+/// field in REST v2's shape (`fixtures/deploy/runpod-pod.json`), fv-control's
+/// `workerCreatePayload` for the placement fields. v1 → v2: `imageName` →
+/// `image`, `cloudType` → `cloud`, `computeType` gone (a `gpu` object is a
+/// GPU pod), `gpuTypeIds` + `gpuCount` + `allowedCudaVersions` +
+/// `minRAMPerGPU` → `gpu: {id, count, allowedCudaVersions, minRamPerGpu}`,
+/// `containerDiskInGb` → `disk`, `dockerEntrypoint` / `dockerStartCmd` →
+/// `entrypoint` / `cmd`, `networkVolumeId` + `volumeMountPath` →
+/// `mounts.network[{volumeId, path}]`, `volumeInGb` → `mounts.persistent
+/// {size, path}` (only when not 0: v2 has no "no disk" value, and a
+/// persistent disk cannot sit beside a network volume).
 pub fn create_body(l: &Launch) -> Value {
     let mut m = Map::new();
     m.insert("name".into(), json!(l.name));
-    m.insert("imageName".into(), json!(l.image));
-    m.insert("cloudType".into(), json!(l.placement.cloud.as_str()));
-    m.insert("computeType".into(), json!("GPU"));
-    m.insert("gpuTypeIds".into(), json!(l.gpu.types));
-    m.insert("gpuCount".into(), json!(l.gpu.count));
-    m.insert("containerDiskInGb".into(), json!(l.disk.container_gb));
-    m.insert("volumeInGb".into(), json!(l.disk.volume_gb));
+    m.insert("image".into(), json!(l.image));
+    m.insert("cloud".into(), json!(l.placement.cloud.as_str()));
+    // v2 takes one GPU type per pod where v1 took a list: the lifecycle
+    // tries the types one launch at a time (`Launch::for_gpu`), so the first
+    // is the one; a launch with none sends no `gpu` (refused, as v1's empty
+    // list was).
+    if let Some(gpu) = l.gpu.types.first() {
+        let mut g = Map::new();
+        g.insert("id".into(), json!(gpu));
+        g.insert("count".into(), json!(l.gpu.count));
+        if !l.gpu.allowed_cuda.is_empty() {
+            g.insert("allowedCudaVersions".into(), json!(l.gpu.allowed_cuda));
+        }
+        // Only when set: without it the body is the script's
+        // (`runpod-http.sh` sends it only with FV_MIN_RAM_GB).
+        if let Some(gb) = l.gpu.min_ram_gb {
+            g.insert("minRamPerGpu".into(), json!(gb));
+        }
+        m.insert("gpu".into(), Value::Object(g));
+    }
+    m.insert("disk".into(), json!(l.disk.container_gb));
     if !l.ports.is_empty() {
         m.insert("ports".into(), json!(l.ports));
     }
     if !l.entrypoint.is_empty() {
-        m.insert("dockerEntrypoint".into(), json!(l.entrypoint));
+        m.insert("entrypoint".into(), json!(l.entrypoint));
     }
     if !l.args.is_empty() {
-        m.insert("dockerStartCmd".into(), json!(l.args));
+        m.insert("cmd".into(), json!(l.args));
     }
     m.insert("env".into(), json!(l.env));
-    if let Some(v) = &l.placement.volume {
-        m.insert("networkVolumeId".into(), json!(v.id));
-        m.insert("volumeMountPath".into(), json!(v.mount_path));
+    if let Some(mounts) = mounts_of(l) {
+        m.insert("mounts".into(), mounts);
     }
     if !l.placement.data_centers.is_empty() {
         m.insert("dataCenterIds".into(), json!(l.placement.data_centers));
     }
-    if !l.gpu.allowed_cuda.is_empty() {
-        m.insert("allowedCudaVersions".into(), json!(l.gpu.allowed_cuda));
-    }
-    // Only when set: without it the body is the script's
-    // (`runpod-http.sh` sends it only with FV_MIN_RAM_GB).
-    if let Some(gb) = l.gpu.min_ram_gb {
-        m.insert("minRAMPerGPU".into(), json!(gb));
-    }
     Value::Object(m)
+}
+
+/// A launch's `mounts`: the network volume at its mount path, else the pod's
+/// own disk (`volume_gb`, at `/workspace`) when it has one; `None` for
+/// neither (v1 sent `volumeInGb: 0`).
+pub fn mounts_of(l: &Launch) -> Option<Value> {
+    if let Some(v) = &l.placement.volume {
+        return Some(json!({"network": [{"volumeId": v.id, "path": v.mount_path}]}));
+    }
+    (l.disk.volume_gb > 0)
+        .then(|| json!({"persistent": {"size": l.disk.volume_gb, "path": POD_VOLUME_MOUNT}}))
 }
 
 /// Runpod pods.
@@ -78,15 +104,12 @@ pub struct PodListing {
 }
 
 impl Pod<'_> {
-    /// Every pod of the account (`GET /pods`), for a caller that selects by
-    /// name prefix and age (fv-lab `pod reap`, docs/adr/0019-fv-lab.md §6);
-    /// entries without an id are left out.
+    /// Every pod of the account (`GET /pods`, every page), for a caller that
+    /// selects by name prefix and age (fv-lab `pod reap`,
+    /// docs/adr/0019-fv-lab.md §6); entries without an id are left out.
     pub fn list(&self) -> Result<Vec<PodListing>, ProviderError> {
-        let v = self.api.rest(Method::Get, "/pods", None, "GET pods")?;
-        Ok(v.as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-            .iter()
+        let v = self.api.list("/pods", "pods", "GET pods")?;
+        Ok(v.iter()
             .filter_map(|p| {
                 Some(PodListing {
                     id: InstanceId::new(p.get("id")?.as_str()?),
@@ -95,25 +118,28 @@ impl Pod<'_> {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_owned(),
-                    state: pod_state(p.get("desiredStatus").and_then(Value::as_str).unwrap_or("")),
+                    state: pod_state(p.get("status").and_then(Value::as_str).unwrap_or("")),
                     created_at: p
                         .get("createdAt")
                         .and_then(Value::as_str)
                         .and_then(super::parse_runpod_time),
-                    usd_per_hr: parse_usd(p.get("costPerHr")),
+                    usd_per_hr: parse_usd(p.get("cost")),
                 })
             })
             .collect())
     }
 }
 
-/// `desiredStatus` → [`InstanceState`].
-pub fn pod_state(desired: &str) -> InstanceState {
-    match desired {
+/// A v2 pod's `status` (v1's `desiredStatus`) → [`InstanceState`]:
+/// `PROVISIONING` / `STARTING` pending, `RUNNING`, `EXITED` (stopped),
+/// `TERMINATED`; `ERROR` (a pod that failed, no v1 counterpart) and anything
+/// else is unknown (the backstop does not stand down on it).
+pub fn pod_state(status: &str) -> InstanceState {
+    match status {
         "RUNNING" => InstanceState::Running,
-        "CREATED" | "PENDING" | "STARTING" => InstanceState::Pending,
-        "EXITED" | "STOPPED" => InstanceState::Exited,
-        "TERMINATED" | "TERMINATING" => InstanceState::Terminated,
+        "PROVISIONING" | "STARTING" => InstanceState::Pending,
+        "EXITED" => InstanceState::Exited,
+        "TERMINATED" => InstanceState::Terminated,
         _ => InstanceState::Unknown,
     }
 }
@@ -173,9 +199,10 @@ impl Provider for Pod<'_> {
                 what: "POST pods".into(),
                 why: format!("no id in {}", scrub(&v.to_string(), "", 300)),
             })?;
+        // v2's `dataCenterId` (v1's `machine.dataCenterId`); v1's
+        // `machineId` has no v2 counterpart and was not read.
         let dc = v
-            .pointer("/machine/dataCenterId")
-            .or_else(|| v.get("dataCenterId"))
+            .get("dataCenterId")
             .and_then(Value::as_str)
             .map(str::to_owned)
             .or_else(|| launch.placement.data_centers.first().cloned());
@@ -187,14 +214,16 @@ impl Provider for Pod<'_> {
             url: Some(self.api.urls.pod_url(id)),
             gpu: launch.gpu.types.first().cloned(),
             data_center: dc,
-            // A number or a numeric string; missing or unparseable is `None`
-            // and fails the billed-price check.
-            usd_per_hr: parse_usd(v.get("costPerHr")),
+            // v2's `cost` (v1's `costPerHr`): a number or a numeric string;
+            // missing or unparseable is `None` and fails the billed-price
+            // check.
+            usd_per_hr: parse_usd(v.get("cost")),
             created_at: Some(self.api.clock().now()),
-            // What the host gave the pod (`runpod-http.sh` logs the same):
-            // the RAM floor's evidence; absent or 0 is unknown.
-            memory_gb: parse_usd(v.get("memoryInGb")).filter(|x| *x > 0.0),
-            vcpus: parse_usd(v.get("vcpuCount")).filter(|x| *x > 0.0),
+            // What the host gave the pod (`runpod-http.sh` logs the same),
+            // v2's `gpu.memory` / `gpu.vcpuCount` (v1's `memoryInGb` /
+            // `vcpuCount`): the RAM floor's evidence; absent or 0 is unknown.
+            memory_gb: parse_usd(v.pointer("/gpu/memory")).filter(|x| *x > 0.0),
+            vcpus: parse_usd(v.pointer("/gpu/vcpuCount")).filter(|x| *x > 0.0),
         })
     }
 
@@ -216,7 +245,7 @@ impl Provider for Pod<'_> {
             return Ok(InstanceState::Unknown);
         }
         Ok(pod_state(
-            v.get("desiredStatus").and_then(Value::as_str).unwrap_or(""),
+            v.get("status").and_then(Value::as_str).unwrap_or(""),
         ))
     }
 
@@ -265,15 +294,15 @@ impl Provider for Pod<'_> {
         name: &str,
         keep: Option<&InstanceId>,
     ) -> Result<Vec<InstanceId>, ProviderError> {
-        let v = self.api.rest(Method::Get, "/pods", None, "GET pods")?;
+        let v = self.api.list("/pods", "pods", "GET pods")?;
         let mut gone = Vec::new();
         let mut last = None;
-        for p in v.as_array().map(Vec::as_slice).unwrap_or_default() {
+        for p in &v {
             let Some(id) = p.get("id").and_then(Value::as_str) else {
                 continue;
             };
             let named = p.get("name").and_then(Value::as_str) == Some(name);
-            let dead = p.get("desiredStatus").and_then(Value::as_str) == Some("TERMINATED");
+            let dead = p.get("status").and_then(Value::as_str) == Some("TERMINATED");
             if !named || dead || keep.is_some_and(|k| k.as_str() == id) {
                 continue;
             }
@@ -373,7 +402,7 @@ mod tests {
         fn send(&self, req: &Request) -> Result<Response, SysError> {
             assert_eq!(
                 (req.method, req.url.as_str()),
-                (Method::Get, "https://rest.test/v1/pods")
+                (Method::Get, "https://rest.test/v2/pods")
             );
             Ok(Response {
                 status: 200,
@@ -399,12 +428,13 @@ mod tests {
     #[test]
     fn list_reads_names_states_ages_and_prices() {
         let http = OneAnswer(
-            r#"[{"id":"a","name":"fv-lab-rtx6000-x","desiredStatus":"RUNNING","createdAt":"2026-10-24 10:00:00.000 +0000 UTC","costPerHr":"2.49"},
+            r#"{"pods":[{"id":"a","name":"fv-lab-rtx6000-x","status":"RUNNING","createdAt":"2026-10-24 10:00:00.000 +0000 UTC","cost":"2.49"},
                 {"name":"no-id"},
-                {"id":"b","desiredStatus":"TERMINATED"}]"#,
+                {"id":"b","status":"TERMINATED"}],
+                "pagination":{"nextCursor":null,"hasNextPage":false}}"#,
         );
         let urls = RunpodUrls {
-            rest: "https://rest.test/v1".into(),
+            rest: "https://rest.test/v2".into(),
             ..RunpodUrls::default()
         };
         let pod = Pod::new(RunpodApi::new(&http, &Zero, "k", urls));
@@ -421,5 +451,16 @@ mod tests {
             (l[1].name.as_str(), l[1].state),
             ("", InstanceState::Terminated)
         );
+    }
+
+    #[test]
+    fn v2_statuses_map_and_error_is_unknown() {
+        assert_eq!(pod_state("PROVISIONING"), InstanceState::Pending);
+        assert_eq!(pod_state("STARTING"), InstanceState::Pending);
+        assert_eq!(pod_state("RUNNING"), InstanceState::Running);
+        assert_eq!(pod_state("EXITED"), InstanceState::Exited);
+        assert_eq!(pod_state("TERMINATED"), InstanceState::Terminated);
+        assert_eq!(pod_state("ERROR"), InstanceState::Unknown);
+        assert_eq!(pod_state(""), InstanceState::Unknown);
     }
 }

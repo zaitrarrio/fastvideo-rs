@@ -168,6 +168,8 @@ serverlessRoutes.post("/tick", async (c) => c.json(await serverlessTick(c.env, {
 serverlessRoutes.get("/:id", async (c) => {
   const row = await getRow(c.env, c.req.param("id"));
   const live = row.endpoint_id && !row.deleted_at ? await sls.getEndpoint(c.env, row.endpoint_id).catch((e) => ({ error: scrub(c.env, (e as Error).message) })) : null;
+  // The workers' $/hr: GraphQL's (REST v2's worker list carries none).
+  const workerCosts = live && !(live as any).error && Array.isArray((live as any).workerList) && (live as any).workerList.length ? await sls.live(c.env).then((l) => new Map(l.endpoints.flatMap((e) => e.pods.map((p) => [String(p.id), Number(p.costPerHr ?? 0)] as [string, number])))).catch(() => undefined) : undefined;
   const health = row.endpoint_id && !row.deleted_at ? await sls.health(c.env, row.endpoint_id).catch((e) => ({ error: scrub(c.env, (e as Error).message) })) : null;
   const jobs = await recentJobs(c.env, row.id, 20);
   const costs = row.endpoint_id ? await c.env.DB.prepare("SELECT day, usd, minutes FROM cost_daily WHERE pod_id = ? ORDER BY day DESC LIMIT 30").bind(`sls:${row.endpoint_id}`).all<any>() : { results: [] };
@@ -176,7 +178,7 @@ serverlessRoutes.get("/:id", async (c) => {
   return c.json({
     endpoint: rowView(row),
     serving: servingView(specOf(row)),
-    runpod: live && !(live as any).error ? endpointView(live) : live,
+    runpod: live && !(live as any).error ? endpointView(live, { templateId: row.template_id, costs: workerCosts }) : live,
     health,
     jobs,
     stats: jobStats(jobs),
@@ -263,7 +265,7 @@ serverlessRoutes.get("/:id/logs", async (c) => {
   const row = await getRow(c.env, c.req.param("id"));
   if (!row.endpoint_id || row.deleted_at) throw new HttpError(409, `endpoint is ${row.status}`);
   const live = await sls.getEndpoint(c.env, row.endpoint_id);
-  const workers: string[] = Array.isArray(live?.workers) ? live.workers.map((w: any) => String(w.id)) : [];
+  const workers: string[] = Array.isArray(live?.workerList) ? live.workerList.map((w: any) => String(w.id)) : [];
   const worker = c.req.query("worker") || workers[0];
   if (!worker) return c.json({ workers, worker: null, container: [], system: [], note: "no worker is up: logs exist only while a worker runs (stored ones: /api/v1/logs?pod=<worker>)" });
   if (!workers.includes(worker)) {

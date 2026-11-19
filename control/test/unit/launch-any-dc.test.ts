@@ -34,7 +34,7 @@ describe("the request shape: r2 in any data centre, the volume in EU, the fallba
     expect(pl).toEqual([{ dc: "US-TX-3", gpu: H100 }]);
     const body = workerCreatePayload("n", "img", pool, pl[0]!, { FV_WEIGHTS_SOURCE: "r2" });
     expect(body.dataCenterIds).toEqual(["US-TX-3"]);
-    expect(body).not.toHaveProperty("networkVolumeId");
+    expect(body).not.toHaveProperty("mounts");
   });
   it("US-CA-2 (the deleted us volume's data centre) is any other data centre with r2", () => {
     expect(placements({ preset: "wan", weights_source: "r2", gpu_types: [H100], dc: "US-CA-2" })).toEqual([{ dc: "US-CA-2", gpu: H100 }]);
@@ -46,7 +46,7 @@ describe("the request shape: r2 in any data centre, the volume in EU, the fallba
     const pl = workerPlacements(spec, pool);
     expect(pl).toEqual([{ region: "eu", dc: "EU-RO-1", gpu: H100 }]);
     const body = workerCreatePayload("n", "img", pool, pl[0]!, {});
-    expect([body.dataCenterIds, (body as any).networkVolumeId]).toEqual([["EU-RO-1"], "bz0ofkfx45"]);
+    expect([body.dataCenterIds, (body as any).mounts]).toEqual([["EU-RO-1"], { network: [{ volumeId: "bz0ofkfx45", path: "/workspace" }] }]);
   });
   it("fallbacks: gpu_types in the picked order, each data centre in order with every type; a last any = no dataCenterIds", () => {
     const { spec } = launch({ preset: "wan", weights_source: "r2", gpu_types: [H200, H100], data_centers: ["US-CA-2", "US-TX-3", "any"] });
@@ -64,8 +64,8 @@ describe("the request shape: r2 in any data centre, the volume in EU, the fallba
     const any = workerCreatePayload("n", "img", pool, pl[4]!, { FV_WEIGHTS_SOURCE: "r2" });
     expect(any).not.toHaveProperty("dataCenterIds");
     // No exact CUDA list: REST cannot name the 13.1 / 13.2 hosts; the boot's driver check keeps the CUDA 13 minimum.
-    expect(any).not.toHaveProperty("allowedCudaVersions");
-    expect(workerCreatePayload("n", "img", { ...pool, allowed_cuda: ["13.0"] }, pl[4]!, { FV_WEIGHTS_SOURCE: "r2" }).allowedCudaVersions).toEqual(["13.0"]);
+    expect((any as any).gpu).not.toHaveProperty("allowedCudaVersions");
+    expect((workerCreatePayload("n", "img", { ...pool, allowed_cuda: ["13.0"] }, pl[4]!, { FV_WEIGHTS_SOURCE: "r2" }) as any).gpu.allowedCudaVersions).toEqual(["13.0"]);
   });
   it("none (fake engine) and a CPU pod without the volume: any data centre too", () => {
     const g = launch({ variant: "wan", config: "/etc/fv/runpod-fake.toml", fake_models: ["fake-wan"], weights_source: "none", gpu_types: [H100], data_centers: ["US-TX-3"] }).spec.pools[0]!;

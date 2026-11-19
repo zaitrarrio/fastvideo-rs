@@ -1,9 +1,10 @@
-//! The payload goldens (docs/adr/0018-fv-deploy.md §4): the Runpod provider
-//! code builds exactly what `scripts/serve/runpod-pod.sh` and
-//! `scripts/serve/runpod-endpoint.sh` send for the same inputs
-//! (`fixtures/deploy/*.json`, written by those scripts' own `plan` through
-//! `scripts/serve/tests/fv-deploy-goldens.sh`), and a preset launch differs
-//! from the script pod only where ADR-0018 says it does.
+//! The payload goldens (docs/adr/0018-fv-deploy.md §4, §11): the Runpod
+//! provider code builds the REST v2 form of what `scripts/serve/runpod-pod.sh`
+//! and `scripts/serve/runpod-endpoint.sh` send for the same inputs
+//! (`fixtures/deploy/*.json`: the scripts' v1 `plan` bodies, written through
+//! `scripts/serve/tests/fv-deploy-goldens.sh`, carried to v2 field for field
+//! by ADR-0018 §11's map), and a preset launch differs from the script pod
+//! only where ADR-0018 says it does.
 
 use std::path::{Path, PathBuf};
 
@@ -15,7 +16,9 @@ use fastvideo_deploy::launch::{
     self, from_preset, pin_image, script_endpoint, script_pod, PresetRequest, Repo, ScriptEndpoint,
     ScriptPod, KEY_HASH_PLACEHOLDER,
 };
-use fastvideo_deploy::provider::runpod::{endpoint_body, pod_create_body, template_body};
+use fastvideo_deploy::provider::runpod::{
+    endpoint_body, pod_create_body, template_body, EndpointGpu,
+};
 use fastvideo_deploy::provider::ProviderKind;
 
 // The inputs of fv-deploy-goldens.sh.
@@ -81,8 +84,10 @@ fn template_and_endpoint_equal_runpod_endpoint_sh() {
         guards: guard::default_guards(),
     });
     assert_eq!(template_body(&l), fixture("runpod-template.json"));
+    // The plan's body: the GPU type's pool is read from the catalog at
+    // create (`EndpointGpu::resolve`), a placeholder here.
     assert_eq!(
-        endpoint_body(&l, "<template id>"),
+        endpoint_body(&l, "<template id>", &EndpointGpu::unresolved(&l.gpu.types)),
         fixture("runpod-endpoint.json")
     );
     assert_eq!(guard::check_region(&l), Ok(()));
@@ -126,7 +131,7 @@ fn preset_pod_is_the_script_pod_plus_fv_boot() {
     let got = pod_create_body(&l);
     let mut want = fixture("runpod-pod.json");
     want["name"] = json!("fv-deploy-h3-turbo-1024120000");
-    want["containerDiskInGb"] = json!(40);
+    want["disk"] = json!(40);
     want["env"]["FV_WEIGHTS_SOURCE"] = json!("volume");
     want["env"]["FV_RELEASE_CHANNEL"] = json!("stable");
     assert_eq!(got, want);
@@ -156,7 +161,10 @@ fn preset_endpoint_is_the_script_endpoint_plus_fv_boot() {
     assert_eq!(template_body(&l), want_t);
     let mut want_e = fixture("runpod-endpoint.json");
     want_e["name"] = json!("fv-deploy-h3-turbo-1024120000");
-    assert_eq!(endpoint_body(&l, "<template id>"), want_e);
+    assert_eq!(
+        endpoint_body(&l, "<template id>", &EndpointGpu::unresolved(&l.gpu.types)),
+        want_e
+    );
 }
 
 /// Every preset either builds (its trees are on the EU volume; its config

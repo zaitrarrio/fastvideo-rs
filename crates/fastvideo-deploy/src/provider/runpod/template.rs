@@ -1,4 +1,4 @@
-//! A Runpod pod created from a template (REST v1 `POST /pods` with a
+//! A Runpod pod created from a template (REST v2 `POST /pods` with a
 //! `templateId`): the autoscaler's pod pools (`fastvideo-autoscale`
 //! `RunpodPods`, docs/adr/0018-fv-deploy.md §9). Written here, beside
 //! fv-deploy's own pod body ([`super::pod_create_body`]), so there is one
@@ -30,19 +30,17 @@ pub struct TemplatePod<'a> {
     pub env: Option<&'a Map<String, Value>>,
 }
 
-/// The `POST /pods` body: one GPU, the network volume at `/workspace` in its
-/// data centre, no `allowedCudaVersions` (REST cannot name the 13.1 / 13.2
-/// hosts, `scripts/gpu/runpod-cuda.sh`).
+/// The `POST /pods` body (v2: `cloud`, `gpu: {id, count}`,
+/// `mounts.network[{volumeId, path}]`): one GPU, the network volume at
+/// `/workspace` in its data centre, no `gpu.allowedCudaVersions` (REST
+/// cannot name the 13.1 / 13.2 hosts, `scripts/gpu/runpod-cuda.sh`).
 pub fn template_pod_body(p: &TemplatePod<'_>) -> Value {
     let mut body = json!({
         "name": p.name,
         "templateId": p.template_id,
-        "computeType": "GPU",
-        "cloudType": p.cloud_type,
-        "gpuTypeIds": [p.gpu],
-        "gpuCount": 1,
-        "networkVolumeId": p.volume_id,
-        "volumeMountPath": "/workspace",
+        "cloud": p.cloud_type,
+        "gpu": {"id": p.gpu, "count": 1},
+        "mounts": {"network": [{"volumeId": p.volume_id, "path": POD_VOLUME_MOUNT}]},
         "dataCenterIds": [p.data_center],
     });
     if let Some(env) = p.env {
@@ -51,8 +49,8 @@ pub fn template_pod_body(p: &TemplatePod<'_>) -> Value {
     body
 }
 
-/// The `env` of a REST v1 template object, as strings (a non-string value
-/// is skipped; an absent `env` is empty).
+/// The `env` of a REST template object, as strings (a non-string value is
+/// skipped; an absent `env` is empty).
 pub fn template_env_of(v: &Value) -> Map<String, Value> {
     v.get("env")
         .and_then(Value::as_object)
@@ -67,10 +65,10 @@ pub fn template_env_of(v: &Value) -> Map<String, Value> {
 
 /// The pod env that sends a worker config (ADR-0011: the image bakes none):
 /// the template's own env (the secret references, the image identity) with
-/// `FV_WORKER_TOML_B64` on top. REST v1 `POST /pods` documents no rule for a
-/// body `env` next to a `templateId` (the v2 create documents a per-key
-/// merge, body values winning), so the body carries the template's env too:
-/// the same pod whichever rule v1 applies.
+/// `FV_WORKER_TOML_B64` on top. REST v2 `POST /pods` merges a body `env`
+/// into the template's per key, body values winning; the body carries the
+/// template's env too (as it did under v1, which documented no rule), so
+/// the pod's env is the same whichever rule applies.
 pub fn with_worker_config(template_env: &Map<String, Value>, b64: &str) -> Map<String, Value> {
     let mut env = template_env.clone();
     env.insert("FV_WORKER_TOML_B64".into(), Value::String(b64.to_owned()));
@@ -220,14 +218,22 @@ pub fn serve_template_launch(
     }
 }
 
-/// The REST v1 body of a serve template (`runpod-templates.sh payload`): the
+/// The REST v2 body of a serve template (`runpod-templates.sh payload`): the
 /// serverless template body of its launch ([`template_body`]) with the
-/// template's own fields: the readme, a pod's volume mount and ports, the
-/// registry auth when set; `create` adds what the update API does not take
-/// (`isServerless`, `category`).
+/// template's own fields: a pod's ports, the registry auth (`registry`,
+/// v1's `containerRegistryAuthId`) when set; `create` adds `serverless`
+/// (v1's `isServerless`) and `category`, kept off an update as before.
+/// Gone with v2: the readme (`GET /templates/{id}/readme` only, nothing
+/// writes one) and the pod flavour's `volumeMountPath` (v2 names a mount
+/// path only with a persistent disk, and the serve templates have none:
+/// the pod created from the template names its network mount,
+/// [`template_pod_body`]). Not sent, as the script: `startJupyter` /
+/// `startSsh`, which v2's create defaults to `true` (a `JUPYTER_PASSWORD`
+/// env in every container; `PUBLIC_KEY` only with registered SSH keys);
+/// fv-boot reads neither.
 pub fn serve_template_body(
     l: &Launch,
-    image_id: &str,
+    _image_id: &str,
     f: Flavour,
     cpu: bool,
     registry_auth: Option<&str>,
@@ -235,23 +241,15 @@ pub fn serve_template_body(
 ) -> Value {
     let mut b = template_body(l);
     if let Value::Object(m) = &mut b {
-        m.remove("isServerless");
-        m.insert(
-            "readme".into(),
-            json!(format!(
-                "fv-serve {image_id} ({}), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-                f.as_str()
-            )),
-        );
+        m.remove("serverless");
         if f == Flavour::Pod {
-            m.insert("volumeMountPath".into(), json!(POD_VOLUME_MOUNT));
             m.insert("ports".into(), json!(l.ports));
         }
         if let Some(a) = registry_auth.filter(|a| !a.is_empty()) {
-            m.insert("containerRegistryAuthId".into(), json!(a));
+            m.insert("registry".into(), json!(a));
         }
         if create {
-            m.insert("isServerless".into(), json!(f == Flavour::Sls));
+            m.insert("serverless".into(), json!(f == Flavour::Sls));
             m.insert("category".into(), json!(if cpu { "CPU" } else { "NVIDIA" }));
         }
     }
@@ -285,8 +283,14 @@ mod tests {
             "{{ RUNPOD_SECRET_fv_cf_account_id }}"
         );
         assert!(b["env"].get("N").is_none());
-        assert_eq!(b["gpuTypeIds"], json!(["NVIDIA H200"]));
-        assert!(b.get("allowedCudaVersions").is_none());
+        assert_eq!(b["gpu"], json!({"id": "NVIDIA H200", "count": 1}));
+        assert_eq!(
+            b["mounts"],
+            json!({"network": [{"volumeId": "bz0ofkfx45", "path": "/workspace"}]})
+        );
+        assert!(b["gpu"].get("allowedCudaVersions").is_none());
+        assert!(b.get("computeType").is_none() && b.get("cloudType").is_none());
+        assert_eq!(b["cloud"], "SECURE");
         let bare = template_pod_body(&TemplatePod {
             name: "n",
             template_id: "t",

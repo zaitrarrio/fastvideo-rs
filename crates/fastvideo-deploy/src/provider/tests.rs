@@ -1,5 +1,5 @@
 //! fv-deploy's Runpod providers against a fake Runpod ([`FakeRunpod`]: REST
-//! v1, GraphQL, the log endpoint, the queue API and the pods' proxy with a
+//! v2, GraphQL, the log endpoint, the queue API and the pods' proxy with a
 //! fake fv-serve behind it), and the whole `up` lifecycle on [`Pod`] and
 //! [`Serverless`] over it.
 
@@ -26,7 +26,7 @@ pub(crate) const KEY: &str = "rpa_TESTKEY0123456789";
 
 pub(crate) fn urls() -> RunpodUrls {
     RunpodUrls {
-        rest: "https://rest.test/v1".into(),
+        rest: "https://rest.test/v2".into(),
         queue: "https://queue.test/v2".into(),
         graphql: "https://gql.test/graphql".into(),
         hapi: "https://hapi.test/v1".into(),
@@ -90,9 +90,10 @@ pub(crate) struct FakeRunpod {
     pub prices: RefCell<BTreeMap<String, f64>>,
     /// GPU types with no stock.
     pub no_stock: RefCell<Vec<String>>,
-    /// The `costPerHr` the create answers (default: the quote as a number).
+    /// The `cost` the create answers (default: the quote as a number).
     pub billed: RefCell<Option<Value>>,
-    /// More fields of the create's answer (`memoryInGb`, `vcpuCount`).
+    /// More fields of the create's answer (a `gpu` object with `memory`,
+    /// `vcpuCount`).
     pub answer_extra: RefCell<Option<Value>>,
     /// `currentSpendPerHr` of the account.
     pub spend: Cell<f64>,
@@ -237,12 +238,37 @@ impl FakeRunpod {
         Self::ok(json!({"errors": [{"message": "unknown query"}]}))
     }
 
+    /// A v2 listing: the items under `key`, one page.
+    fn page(key: &str, items: Vec<Value>) -> Response {
+        Self::ok(json!({key: items, "pagination": {"nextCursor": null, "hasNextPage": false}}))
+    }
+
+    /// `GET /catalog/gpus`: every priced or out-of-stock GPU type in a pool
+    /// of its own (`POOL_<n>`), `NVIDIA A2` in none.
+    fn catalog(&self) -> Response {
+        let mut gpus: Vec<Value> = self
+            .prices
+            .borrow()
+            .keys()
+            .chain(self.no_stock.borrow().iter())
+            .enumerate()
+            .map(|(i, g)| json!({"id": g, "pool": format!("POOL_{i}")}))
+            .collect();
+        gpus.push(json!({"id": "NVIDIA A2", "pool": null}));
+        Self::page("gpus", gpus)
+    }
+
     fn rest(&self, req: &Request, path: &str) -> Response {
         let m = req.method.as_str();
         let body = Self::body(req);
         match (m, path) {
+            ("GET", "/catalog/gpus") => self.catalog(),
             ("POST", "/pods") => {
-                let gpu = body["gpuTypeIds"][0].as_str().unwrap_or("").to_owned();
+                assert!(
+                    body.get("gpuTypeIds").is_none() && body.get("imageName").is_none(),
+                    "a v1 body: {body}"
+                );
+                let gpu = body["gpu"]["id"].as_str().unwrap_or("").to_owned();
                 if self.no_stock.borrow().contains(&gpu) {
                     return Self::status(
                         500,
@@ -265,8 +291,8 @@ impl FakeRunpod {
                         pinged: 0,
                     },
                 );
-                let mut answer =
-                    json!({"id": id, "costPerHr": price, "machine": {"dataCenterId": "EU-RO-1"}});
+                let mut answer = json!({"id": id, "status": "PROVISIONING", "cost": price,
+                    "dataCenterId": "EU-RO-1", "gpu": {"id": gpu, "count": 1}});
                 if let (Some(Value::Object(extra)), Some(a)) =
                     (self.answer_extra.borrow().clone(), answer.as_object_mut())
                 {
@@ -274,32 +300,36 @@ impl FakeRunpod {
                 }
                 Self::ok(answer)
             }
-            ("GET", "/pods") => Self::ok(Value::Array(
+            ("GET", "/pods") => Self::page(
+                "pods",
                 self.pods
                     .borrow()
                     .iter()
-                    .map(|(id, p)| json!({"id": id, "name": p.name, "desiredStatus": p.desired}))
+                    .map(|(id, p)| json!({"id": id, "name": p.name, "status": p.desired}))
                     .collect(),
-            )),
-            ("GET", "/endpoints") => Self::ok(Value::Array(
+            ),
+            // A v2 endpoint carries its container config, not its template.
+            ("GET", "/serverless") => Self::page(
+                "endpoints",
                 self.endpoints
                     .borrow()
                     .iter()
-                    .map(|(id, (t, n))| json!({"id": id, "name": n, "templateId": t}))
+                    .map(|(id, (_, n))| json!({"id": id, "name": n, "image": IMAGE}))
                     .collect(),
-            )),
-            ("GET", "/templates") => Self::ok(Value::Array(
+            ),
+            ("GET", "/templates") => Self::page(
+                "templates",
                 self.templates
                     .borrow()
                     .iter()
                     .map(|(id, n)| json!({"id": id, "name": n}))
                     .collect(),
-            )),
+            ),
             ("DELETE", p) if p.starts_with("/pods/") && self.delete_fails.get() => {
                 Self::status(500, json!({"error": "internal"}))
             }
             ("GET", p) if p.starts_with("/pods/") => match self.pods.borrow().get(&p[6..]) {
-                Some(pod) => Self::ok(json!({"id": &p[6..], "desiredStatus": pod.desired})),
+                Some(pod) => Self::ok(json!({"id": &p[6..], "status": pod.desired})),
                 None => Self::status(404, json!({"error": "pod not found"})),
             },
             ("DELETE", p) if p.starts_with("/pods/") => {
@@ -309,6 +339,10 @@ impl FakeRunpod {
                 }
             }
             ("POST", "/templates") => {
+                assert!(
+                    body.get("imageName").is_none() && body.get("isServerless").is_none(),
+                    "a v1 body: {body}"
+                );
                 let id = self.next("tpl");
                 self.templates
                     .borrow_mut()
@@ -326,7 +360,15 @@ impl FakeRunpod {
                     Self::status(404, json!({"error": "no template"}))
                 }
             }
-            ("POST", "/endpoints") => {
+            ("POST", "/serverless") => {
+                assert_eq!(body["type"], "QUEUE", "{body}");
+                assert!(
+                    body["gpu"]["pools"]
+                        .as_array()
+                        .is_some_and(|p| !p.is_empty()),
+                    "{body}"
+                );
+                assert!(body.get("gpuTypeIds").is_none(), "a v1 body: {body}");
                 let id = self.next("ep");
                 self.endpoints.borrow_mut().insert(
                     id.clone(),
@@ -335,17 +377,20 @@ impl FakeRunpod {
                         body["name"].as_str().unwrap_or("").to_owned(),
                     ),
                 );
-                Self::ok(json!({"id": id, "templateId": body["templateId"]}))
+                Self::ok(json!({"id": id, "name": body["name"], "image": IMAGE}))
             }
-            ("PATCH", p) if p.starts_with("/endpoints/") => Self::ok(json!({"id": &p[11..]})),
-            ("GET", p) if p.starts_with("/endpoints/") => {
-                match self.endpoints.borrow().get(&p[11..]) {
-                    Some((t, _)) => Self::ok(json!({"id": &p[11..], "templateId": t})),
+            ("PATCH", p) if p.starts_with("/serverless/") => {
+                assert!(body.get("workersMin").is_none(), "a v1 body: {body}");
+                Self::ok(json!({"id": &p[12..]}))
+            }
+            ("GET", p) if p.starts_with("/serverless/") => {
+                match self.endpoints.borrow().get(&p[12..]) {
+                    Some((_, n)) => Self::ok(json!({"id": &p[12..], "name": n, "image": IMAGE})),
                     None => Self::status(404, json!({"error": "no endpoint"})),
                 }
             }
-            ("DELETE", p) if p.starts_with("/endpoints/") => {
-                match self.endpoints.borrow_mut().remove(&p[11..]) {
+            ("DELETE", p) if p.starts_with("/serverless/") => {
+                match self.endpoints.borrow_mut().remove(&p[12..]) {
                     Some(_) => Self::ok(Value::Null),
                     None => Self::status(404, json!({"error": "no endpoint"})),
                 }
@@ -418,12 +463,12 @@ impl Http for FakeRunpod {
             .headers
             .iter()
             .any(|(k, v)| k == "authorization" && v == &format!("Bearer {KEY}"));
-        if let Some(p) = u.strip_prefix("https://rest.test/v1") {
+        if let Some(p) = u.strip_prefix("https://rest.test/v2") {
             assert!(authed, "REST call without the key: {u}");
             let r = self.rest(req, p);
             if self.lose_create_answer.get()
                 && req.method == Method::Post
-                && (p == "/pods" || p == "/endpoints")
+                && (p == "/pods" || p == "/serverless")
             {
                 return Err(SysError::Http {
                     url: u.clone(),
@@ -606,19 +651,24 @@ fn pod_create_status_logs_destroy() {
     assert_eq!(sent, runpod::pod_create_body(&eu_pod_launch()));
 }
 
-/// `GpuSpec::min_ram_gb` is the body's `minRAMPerGPU` (whole GB per GPU)
-/// and nothing else changes; unset, the body has no such field (the
-/// payload goldens hold it to the scripts' byte for byte).
+/// `GpuSpec::min_ram_gb` is the body's `gpu.minRamPerGpu` (whole GB per
+/// GPU; v1's `minRAMPerGPU`) and nothing else changes; unset, the body has
+/// no such field (the payload goldens hold it to the scripts' bodies).
 #[test]
 fn a_host_ram_floor_is_min_ram_per_gpu_and_only_when_set() {
     let plain = runpod::pod_create_body(&eu_pod_launch());
-    assert!(plain.get("minRAMPerGPU").is_none(), "{plain}");
+    assert!(plain["gpu"].get("minRamPerGpu").is_none(), "{plain}");
     let mut l = eu_pod_launch();
     l.gpu.min_ram_gb = Some(192);
     let mut floor = runpod::pod_create_body(&l);
-    assert_eq!(floor["minRAMPerGPU"], json!(192));
-    assert!(floor["minRAMPerGPU"].is_u64(), "an integer, not 192.0");
-    floor.as_object_mut().map(|m| m.remove("minRAMPerGPU"));
+    assert_eq!(floor["gpu"]["minRamPerGpu"], json!(192));
+    assert!(
+        floor["gpu"]["minRamPerGpu"].is_u64(),
+        "an integer, not 192.0"
+    );
+    floor["gpu"]
+        .as_object_mut()
+        .map(|m| m.remove("minRamPerGpu"));
     assert_eq!(floor, plain);
     // The launch's JSON leaves the unset field out (launch.v1.json).
     let j = serde_json::to_value(eu_pod_launch()).unwrap_or_default();
@@ -653,7 +703,7 @@ fn a_host_ram_floor_of_zero_or_off_a_runpod_pod_is_refused() {
     assert_eq!(guard::check_min_ram(&sls), Ok(()));
     sls.gpu.min_ram_gb = Some(192);
     let e = guard::check_min_ram(&sls).map_err(|e| e.to_string());
-    assert!(matches!(&e, Err(m) if m.contains("minRAMPerGPU")), "{e:?}");
+    assert!(matches!(&e, Err(m) if m.contains("minRamPerGpu")), "{e:?}");
     // `up` refuses it before any request that creates.
     let rp = FakeRunpod::new();
     let clock = FakeClock::at(0.0);
@@ -677,10 +727,10 @@ fn the_pods_ram_and_vcpus_are_read_from_the_create_answer_and_logged() {
     let pod = Pod::new(api(&rp, &clock));
     let inst = pod.create(&eu_pod_launch()).expect("create");
     assert_eq!((inst.memory_gb, inst.vcpus), (None, None));
-    *rp.answer_extra.borrow_mut() = Some(json!({"memoryInGb": 0, "vcpuCount": "x"}));
+    *rp.answer_extra.borrow_mut() = Some(json!({"gpu": {"memory": 0, "vcpuCount": "x"}}));
     let inst = pod.create(&eu_pod_launch()).expect("create");
     assert_eq!((inst.memory_gb, inst.vcpus), (None, None));
-    *rp.answer_extra.borrow_mut() = Some(json!({"memoryInGb": 188, "vcpuCount": "24"}));
+    *rp.answer_extra.borrow_mut() = Some(json!({"gpu": {"memory": 188, "vcpuCount": "24"}}));
     let inst = pod.create(&eu_pod_launch()).expect("create");
     assert_eq!((inst.memory_gb, inst.vcpus), (Some(188.0), Some(24.0)));
     let j = serde_json::to_value(&inst).unwrap_or_default();
@@ -705,7 +755,7 @@ fn the_pods_ram_and_vcpus_are_read_from_the_create_answer_and_logged() {
     let sent: Value =
         serde_json::from_slice(posts[posts.len() - 1].body.as_deref().unwrap_or_default())
             .unwrap_or_default();
-    assert_eq!(sent["minRAMPerGPU"], json!(192));
+    assert_eq!(sent["gpu"]["minRamPerGpu"], json!(192));
 }
 
 #[test]
@@ -739,7 +789,7 @@ fn serverless_create_and_destroy_like_the_script() {
     assert_eq!(inst.id.as_str(), "ep2/tpl1");
     assert_eq!((rp.live_endpoints(), rp.live_templates()), (1, 1));
     let ep: Value = serde_json::from_slice(
-        rp.calls(Method::Post, "/endpoints")[0]
+        rp.calls(Method::Post, "/serverless")[0]
             .body
             .as_deref()
             .unwrap_or_default(),
@@ -763,7 +813,7 @@ fn serverless_create_and_destroy_like_the_script() {
         .log
         .borrow()
         .iter()
-        .filter(|r| r.url.contains("/endpoints/") || r.url.contains("/templates/"))
+        .filter(|r| r.url.contains("/serverless/") || r.url.contains("/templates/"))
         .map(|r| {
             format!(
                 "{} {}",
@@ -775,9 +825,9 @@ fn serverless_create_and_destroy_like_the_script() {
     assert_eq!(
         order,
         [
-            "GET endpoints",
-            "PATCH endpoints",
-            "DELETE endpoints",
+            "GET serverless",
+            "PATCH serverless",
+            "DELETE serverless",
             "DELETE templates"
         ]
     );

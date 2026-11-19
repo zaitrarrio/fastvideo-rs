@@ -105,11 +105,14 @@ describe("payloads", () => {
     expect(workerPlacements(old, old.pools[0]!).every((p) => p.region === "eu" && p.dc === "EU-RO-1")).toBe(true);
     expect(workerPlacements({ ...spec, regions: ["us"] }, spec.pools[0]!)).toEqual([]);
     const w = workerCreatePayload("n", "img", spec.pools[0]!, pl[0]!, {});
-    expect(w).toMatchObject({ computeType: "GPU", cloudType: "SECURE", gpuCount: 1, networkVolumeId: "bz0ofkfx45", volumeMountPath: "/workspace", ports: ["8000/http", "70000/tcp"] });
+    // REST v2: a `gpu` block (no computeType), `cloud`, the network volume as a mount.
+    expect(w).toMatchObject({ cloud: "SECURE", gpu: { id: "NVIDIA RTX PRO 6000 Blackwell Server Edition", count: 1 }, mounts: { network: [{ volumeId: "bz0ofkfx45", path: "/workspace" }] }, ports: ["8000/http", "70000/tcp"] });
+    expect(w).not.toHaveProperty("cpu");
     const tiny = defaultSpec("t", "tiny-cpu");
     const cp = workerCreatePayload("n", "img", tiny.pools[0]!, workerPlacements(tiny, tiny.pools[0]!)[0]!, {});
-    expect(cp).toMatchObject({ computeType: "CPU", cpuFlavorIds: ["cpu3c"], ports: ["8000/http"] });
-    expect((cp as any).networkVolumeId).toBeUndefined();
+    expect(cp).toMatchObject({ cpu: { id: "cpu3c" }, ports: ["8000/http"] });
+    expect(cp).not.toHaveProperty("gpu");
+    expect((cp as any).mounts).toBeUndefined();
   });
 });
 

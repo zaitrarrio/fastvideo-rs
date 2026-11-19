@@ -7,7 +7,8 @@
 //! - **Runpod** (an edge front or a standalone pod: `FV_CLUSTER_DEADLINE`,
 //!   `FV_BACKSTOP_API_KEY`, `RUNPOD_POD_ID`): at the deadline, or when the
 //!   account balance (checked every 60 s) is below `FV_MIN_BALANCE`, the pod
-//!   deletes itself through the Runpod REST API. The key is fv-control's
+//!   deletes itself through the Runpod REST API (v2, `DELETE /pods/{id}`;
+//!   v1 at `rest.runpod.io` is retired). The key is fv-control's
 //!   account key (`envCtx` `runpodApiKey` = its `RUNPOD_API_KEY`, the key it
 //!   creates and deletes pods with over REST), not the pod-scoped
 //!   `RUNPOD_API_KEY` Runpod injects (which REST refuses with a 403,
@@ -27,7 +28,9 @@ use super::env::{BootEnv, Kind, Provider};
 use super::sys::{kill_cmd, Method, Request, Response};
 use super::Ctx;
 
-pub const RUNPOD_REST: &str = "https://rest.runpod.io/v1";
+/// REST v2 (`crate::provider::runpod::REST`; the boot half has no provider
+/// dependency, so the text is repeated here).
+pub const RUNPOD_REST: &str = "https://api.runpod.io/v2";
 pub const RUNPOD_GRAPHQL: &str = "https://api.runpod.io/graphql";
 
 /// Secrets only the watchdog needs: unset for fv-serve and the boot's other

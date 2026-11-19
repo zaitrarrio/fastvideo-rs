@@ -177,7 +177,7 @@ export const EndpointSpecZ = z
     workers_max: z.number().int().min(0).max(8).meta({ "x-unit": "workers" }).describe("Most workers at once."),
     idle_timeout_s: z.number().int().min(5).max(3600).meta({ "x-unit": "s" }).describe("A worker without a job this long is stopped (Runpod: 5-3600 s)."),
     flashboot: z.boolean().describe("Runpod FlashBoot (faster warm starts; docs/serve/images.md §FlashBoot)."),
-    execution_timeout_s: z.number().int().min(10).max(86400).meta({ "x-unit": "s" }).describe("A job running longer fails (executionTimeoutMs)."),
+    execution_timeout_s: z.number().int().min(10).max(86400).meta({ "x-unit": "s" }).describe("A job running longer fails (the endpoint's `timeout`, ms)."),
     scaler_type: z.enum(["QUEUE_DELAY", "REQUEST_COUNT"], { error: (i) => enumMessage("a Runpod scaler type", i.input, ["QUEUE_DELAY", "REQUEST_COUNT"]) }).describe("QUEUE_DELAY: add a worker when a job waited scaler_value seconds; REQUEST_COUNT: one worker per scaler_value queued jobs."),
     scaler_value: z.number().int().min(1).max(500).describe("The scaler's value: seconds of queue delay (QUEUE_DELAY) or jobs per worker (REQUEST_COUNT); Runpod takes an integer 1-500."),
     allowed_cuda: uniq(z.enum(CUDA_VERSIONS, { error: (i) => enumMessage("a CUDA version Runpod knows", i.input, CUDA_VERSIONS) })).optional().describe(`GPU workers: an exact list of CUDA versions a host may offer (allowedCudaVersions). Default: none, as [] (every endpoint gets minCudaVersion ${MIN_CUDA}, and the boot refuses a driver older than CUDA 13). Runpod's REST enum stops at 13.0 while hosts report 13.1 / 13.2, so a list leaves those hosts out (all Secure RTX PRO 6000s, 2026-10-14).`),
@@ -368,7 +368,7 @@ export function normalizeEndpointSpec(inputIn: any): EndpointSpec {
 export function specDiff(a: EndpointSpec, b: EndpointSpec): { template: boolean; endpoint: boolean; recreate: string[]; scaleUp: boolean } {
   const j = (x: unknown) => JSON.stringify(x ?? null);
   const recreate: string[] = (["name", "mode", "compute", "network_volume"] as const).filter((k) => j(a[k]) !== j(b[k]));
-  // A CPU endpoint's flavors and vCPUs are fixed at create (REST v2 fields).
+  // A CPU endpoint's flavors and vCPUs are fixed at create (fv-control never PATCHes the `cpu` list).
   if (b.compute === "CPU") recreate.push(...(["cpu_flavors", "vcpu"] as const).filter((k) => j(a[k]) !== j(b[k])));
   const template = (["image", "config", "config_toml", "env", "container_disk_gb", "weights_source", "upsampler_local"] as const).some((k) => j(a[k]) !== j(b[k]));
   const endpoint = (

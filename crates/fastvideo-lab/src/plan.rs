@@ -179,7 +179,7 @@ pub struct Tier {
     /// Per-arm cap (s), `timeout --kill-after=15` around each command; 0 = none.
     pub cell_timeout_s: u64,
     pub container_disk_gb: u32,
-    /// The pod's host-RAM floor, whole GB per GPU (Runpod `minRAMPerGPU`,
+    /// The pod's host-RAM floor, whole GB per GPU (Runpod `gpu.minRamPerGpu`,
     /// ADR-0019 §16.10): a positive integer. Absent: none is asked for, and
     /// Runpod's default floor (8 GB per GPU) leaves the host's share to decide.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -295,7 +295,7 @@ impl Tiers {
                 return Err(field(
                     file,
                     at("min_ram_gb"),
-                    "a positive whole number of GB per GPU (Runpod minRAMPerGPU), or leave it out",
+                    "a positive whole number of GB per GPU (Runpod gpu.minRamPerGpu), or leave it out",
                 ));
             }
             if let Some(p) = t.preflight.iter().find(|p| !is_token(p)) {

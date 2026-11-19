@@ -180,7 +180,7 @@ impl OracleOps for LiveOps<'_> {
             l.image,
             l.gpu
                 .min_ram_gb
-                .map(|g| format!(", host RAM floor {g} GB per GPU (minRAMPerGPU)"))
+                .map(|g| format!(", host RAM floor {g} GB per GPU (gpu.minRamPerGpu)"))
                 .unwrap_or_default()
         ));
         let ledger = self.ledger();

@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { podAllowedCuda, workerCreatePayload } from "../../src/cluster/payloads";
 import { CUDA_VERSIONS, cudaAtLeast, DEFAULT_ALLOWED_CUDA, IMAGE_CUDA, MIN_CUDA } from "../../src/enums";
-import { endpointCreatePayload, endpointUpdatePayload, v2CreatePayload } from "../../src/serverless/payloads";
+import { endpointCreatePayload, endpointUpdatePayload } from "../../src/serverless/payloads";
 import { normalizeEndpointSpec } from "../../src/serverless/spec";
 
 const SH = new URL("../../../scripts/gpu/runpod-cuda.sh", import.meta.url);
@@ -40,19 +40,20 @@ describe("placements: at least CUDA 13.0", () => {
   it("pods: no exact list by default in any data centre; a pool's own list is kept as is", () => {
     expect(podAllowedCuda(pool)).toEqual([]);
     for (const dc of ["EU-RO-1", "US-TX-3", undefined]) {
-      expect(workerCreatePayload("n", "img", pool, { dc, gpu: pool.gpu_types[0] } as any, { FV_WEIGHTS_SOURCE: "r2" })).not.toHaveProperty("allowedCudaVersions");
+      expect((workerCreatePayload("n", "img", pool, { dc, gpu: pool.gpu_types[0] } as any, { FV_WEIGHTS_SOURCE: "r2" }) as any).gpu).not.toHaveProperty("allowedCudaVersions");
     }
     expect(podAllowedCuda({ ...pool, allowed_cuda: ["13.0", "12.8"] })).toEqual(["13.0", "12.8"]);
   });
-  it("serverless GPU endpoints: minCudaVersion 13.0 on create and update; CPU endpoints none; v2 gets it from the follow-up PATCH", () => {
+  it("serverless GPU endpoints: gpu.minCudaVersion 13.0 on create and update, queue and load balancer alike; CPU endpoints have no gpu block", () => {
     for (const ws of ["volume", "r2"] as const) {
       const s = normalizeEndpointSpec({ name: `c-${ws}`, preset: "wan", weights_source: ws } as any);
-      expect(endpointCreatePayload(s, "t")).toMatchObject({ minCudaVersion: MIN_CUDA });
-      expect(endpointCreatePayload(s, "t")).not.toHaveProperty("allowedCudaVersions");
-      expect(endpointUpdatePayload(s)).toMatchObject({ minCudaVersion: MIN_CUDA });
-      expect((v2CreatePayload({ ...s, mode: "lb" } as any, "img") as any).gpu).not.toHaveProperty("allowedCudaVersions");
+      expect(endpointCreatePayload(s, "t")).toMatchObject({ gpu: { minCudaVersion: MIN_CUDA } });
+      expect((endpointCreatePayload(s, "t") as any).gpu).not.toHaveProperty("allowedCudaVersions");
+      expect(endpointUpdatePayload(s)).toMatchObject({ gpu: { minCudaVersion: MIN_CUDA } });
+      expect((endpointCreatePayload({ ...s, mode: "lb" } as any, "t", { pools: ["BLACKWELL_96"] }) as any).gpu).toMatchObject({ pools: ["BLACKWELL_96"], minCudaVersion: MIN_CUDA });
+      expect((endpointCreatePayload({ ...s, mode: "lb" } as any, "t", { pools: ["BLACKWELL_96"] }) as any).gpu).not.toHaveProperty("allowedCudaVersions");
     }
     const cpu = normalizeEndpointSpec({ name: "cpu", variant: "cpu" } as any);
-    expect(endpointCreatePayload(cpu, "t")).not.toHaveProperty("minCudaVersion");
+    expect(endpointCreatePayload(cpu, "t")).not.toHaveProperty("gpu");
   });
 });

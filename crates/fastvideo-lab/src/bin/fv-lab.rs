@@ -1110,7 +1110,7 @@ fn cmd_up(u: &UpArgs) -> Result<bool, String> {
         t.gpu,
         l.image,
         t.min_ram_gb
-            .map(|g| format!(", host RAM floor {g} GB per GPU (minRAMPerGPU)"))
+            .map(|g| format!(", host RAM floor {g} GB per GPU (gpu.minRamPerGpu)"))
             .unwrap_or_default()
     ));
     let api_key = env.get(API_KEY_VAR).unwrap_or("").to_owned();

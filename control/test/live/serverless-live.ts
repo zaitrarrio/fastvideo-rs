@@ -29,12 +29,13 @@ const step = (name: string, x: unknown) => {
 };
 
 function backstop(ep: string, tpl: string | null) {
-  const api = "https://rest.runpod.io/v1";
+  // REST v2 (v1's rest.runpod.io is retired): scale to 0, delete the endpoint, then its template.
+  const api = "https://api.runpod.io/v2";
   const script = `sleep ${CAP_S}
 h=(-H "Authorization: Bearer $RUNPOD_API_KEY" -H "content-type: application/json")
-curl -sS -X PATCH "\${h[@]}" -d '{"workersMin":0,"workersMax":0}' "${api}/endpoints/${ep}" >/dev/null
+curl -sS -X PATCH "\${h[@]}" -d '{"workers":{"min":0,"max":0}}' "${api}/serverless/${ep}" >/dev/null
 sleep 20
-curl -sS -X DELETE "\${h[@]}" "${api}/endpoints/${ep}" >/dev/null
+curl -sS -X DELETE "\${h[@]}" "${api}/serverless/${ep}" >/dev/null
 ${tpl ? `sleep 5; curl -sS -X DELETE "\${h[@]}" "${api}/templates/${tpl}" >/dev/null` : ""}`;
   const p = spawn("bash", ["-c", script], { detached: true, stdio: "ignore", env: process.env });
   p.unref();
@@ -116,8 +117,7 @@ async function main() {
       r = await getRow(env, row.id);
     }
     const gone = (await sls.getEndpoint(env, row.endpoint_id!)) === null;
-    const tpls = (await runpod.rest(env, "GET", "/templates")) as any[];
-    const tplGone = !tpls.some((t) => t.id === row.template_id);
+    const tplGone = !row.template_id || (await sls.getTemplate(env, row.template_id)) === null;
     step("delete", { ms: Date.now() - td, status: r.status, endpoint_absent: gone, template_absent: tplGone });
     log("deleted", r.status, "endpoint absent", gone, "template absent", tplGone);
     const audits = await env.DB.prepare("SELECT action, actor, ok FROM audit ORDER BY id").all();

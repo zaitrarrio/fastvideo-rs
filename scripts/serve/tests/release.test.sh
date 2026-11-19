@@ -23,7 +23,7 @@ M="http://127.0.0.1:$(cat "$T/port")"
 unset CLOUDFLARE_API_KEY CLOUDFLARE_API_TOKEN FV_CF_ACCOUNT_ID FV_D1_DATABASE_ID GITHUB_TOKEN GITHUB_ACTIONS CLAUDECODE FV_RELEASE_CHANNEL
 export FV_ENV_FILE=/dev/null
 export FV_D1_API_BASE="$M/client/v4" FV_CF_API_TOKEN=test-cf-token
-export RUNPOD_API_BASE="$M/v1" RUNPOD_GRAPHQL="$M/graphql" RUNPOD_API_KEY=test-runpod-key
+export RUNPOD_API_BASE="$M/v2" RUNPOD_GRAPHQL="$M/graphql" RUNPOD_API_KEY=test-runpod-key
 export FV_REGISTRY_API="$M" FV_GITHUB_API="$M" GH_TOKEN=test-gh-token
 export FV_POD_URL_TEMPLATE="$M/pod/{pod}" FV_SERVE_LEDGER="$T/ledger.tsv"
 # FV_POD_CAP_S: runpod-pod.sh's detached backstop deletes the pod that long
@@ -66,7 +66,7 @@ for v in $KEYS; do
   [[ "$v" == debug ]] && continue
   for f in sls pod; do
     [[ "$v" == cpu && "$f" == sls ]] && continue
-    tpls="$(jq -c --arg id "tpl-$v-$f" --arg n "fv-serve-$v-$f" '. + {($id): {id: $id, name: $n, imageName: "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld", env: {}}}' <<<"$tpls")"
+    tpls="$(jq -c --arg id "tpl-$v-$f" --arg n "fv-serve-$v-$f" '. + {($id): {id: $id, name: $n, image: "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld", env: {}}}' <<<"$tpls")"
   done
 done
 curl -sS -X POST -d "{\"templates\": $tpls}" "$M/__seed" >/dev/null
@@ -97,7 +97,7 @@ check "promote: :stable and :<image>-stable point at the build" \
 check "promote: stable does not move the plain :<image> tags" test -z "$(tag cuda)"
 check "promote: every template boots the build, with its identity env" \
   test "$(state | jq -r --arg d "$(jq -r .cuda <<<"$DA")" '[.templates[] | select(.name | startswith("fv-serve-cuda-"))
-    | (.imageName | endswith($d)) and .env.FV_IMAGE_DIGEST == $d and .env.FV_RELEASE_CHANNEL == "stable"] | all')" = true
+    | (.image | endswith($d)) and .env.FV_IMAGE_DIGEST == $d and .env.FV_RELEASE_CHANNEL == "stable"] | all')" = true
 check "promote: the D1 row" \
   test "$(sql "SELECT channel, git_sha, action, notes, templates_updated, promoted_by FROM releases WHERE id = 1" | jq -c '.[0]')" \
   = "{\"channel\":\"stable\",\"git_sha\":\"$A\",\"action\":\"promote\",\"notes\":\"first stable\",\"templates_updated\":1,\"promoted_by\":\"test\"}"
@@ -131,7 +131,7 @@ check "rollback --dry-run: plans the previous release" bash -c 'grep -q "retag  
 out="$(rel rollback stable --local)"
 check "rollback: release 4 re-promotes release 1" bash -c 'grep -q "release 4: stable = aaaaaaa (rollback)" <<<"$0"' "$out"
 check "rollback: the tags and templates are back on A" \
-  test "$(tag stable) $(state | jq -r '.templates["tpl-cuda-pod"].imageName')" = "$(jq -r .debug <<<"$DA") $REPO@$(jq -r .cuda <<<"$DA")"
+  test "$(tag stable) $(state | jq -r '.templates["tpl-cuda-pod"].image')" = "$(jq -r .debug <<<"$DA") $REPO@$(jq -r .cuda <<<"$DA")"
 check "rollback: the row names its source and B is marked rolled back" \
   test "$(sql "SELECT (SELECT source_release FROM releases WHERE id = 4) AS s, (SELECT rolled_back_at IS NOT NULL FROM releases WHERE id = 2) AS r" | jq -c '.[0]')" = '{"s":1,"r":1}'
 out="$(bash "$SERVE/release.sh" rollback stable --local 2>&1)"
@@ -174,7 +174,7 @@ check "runpod-pod.sh up: a deployments row with the build's sha and image" \
 check "runpod-pod.sh up: the pod env names its image" \
   test "$(state | jq -r --arg p "$POD" '.pods[$p].env.FV_IMAGE_DIGEST')" = "$(jq -r .cuda <<<"$DA")"
 check "runpod-pod.sh up: the config rides inline (the image bakes none), fv-boot starts it" \
-  test "$(state | jq -r --arg p "$POD" '.pods[$p] | [(.env.FV_WORKER_TOML_B64 | @base64d | startswith("# fv-serve on Runpod")), .dockerEntrypoint[0], (.dockerStartCmd // [] | length)] | @tsv')" = "$(printf 'true\t/opt/fastvideo-rs/bin/fv-boot\t0')"
+  test "$(state | jq -r --arg p "$POD" '.pods[$p] | [(.env.FV_WORKER_TOML_B64 | @base64d | startswith("# fv-serve on Runpod")), .entrypoint[0], (.cmd // [] | length)] | @tsv')" = "$(printf 'true\t/opt/fastvideo-rs/bin/fv-boot\t0')"
 bash "$SERVE/runpod-pod.sh" down "$POD" >/dev/null 2>>"$T/stderr.log"
 check "runpod-pod.sh down: the row is deleted" \
   test "$(sql "SELECT status, deleted_at IS NOT NULL AS d FROM deployments WHERE runpod_id = '$POD'" | jq -c '.[0]')" = '{"status":"deleted","d":1}'
@@ -199,9 +199,9 @@ check "price cap: the over-cap type is skipped and the next one created, once" \
 
 # --- deployed / reconcile --------------------------------------------------------
 # A stray fv pod nobody recorded, and a row for a pod that is gone.
-curl -sS -X POST "$M/__seed" -d "{\"pods\": {\"stray1\": {\"id\": \"stray1\", \"name\": \"fv-serve-smoke-x\", \"imageName\": \"$REPO@$(jq -r .cuda <<<"$DB")\",
-  \"desiredStatus\": \"RUNNING\", \"createdAt\": \"2026-09-29 01:22:30.836 +0000 UTC\", \"env\": {\"FV_ADMIN_TOKEN\": \"never-print-me\"}},
-  \"other1\": {\"id\": \"other1\", \"name\": \"someone-else\", \"imageName\": \"daydreamlive/scope\", \"desiredStatus\": \"RUNNING\"}}}" >/dev/null
+curl -sS -X POST "$M/__seed" -d "{\"pods\": {\"stray1\": {\"id\": \"stray1\", \"name\": \"fv-serve-smoke-x\", \"image\": \"$REPO@$(jq -r .cuda <<<"$DB")\",
+  \"status\": \"RUNNING\", \"createdAt\": \"2026-09-29 01:22:30.836 +0000 UTC\", \"env\": {\"FV_ADMIN_TOKEN\": \"never-print-me\"}},
+  \"other1\": {\"id\": \"other1\", \"name\": \"someone-else\", \"image\": \"daydreamlive/scope\", \"status\": \"RUNNING\"}}}" >/dev/null
 sql "INSERT INTO deployments (id, kind, runpod_id, created_at, updated_at, created_by, status) VALUES ('pod:ghost', 'pod', 'ghost', 1, 1, 'test', 'ready')" >/dev/null
 out="$(rel deployed --json)"
 got="$(jq -c '[.[] | select(.id == "stray1") | {key, sha: .sha[0:7], channels, follows, drift, known}]' <<<"$out")"
@@ -219,7 +219,7 @@ check "reconcile: gone rows marked, unknown pods adopted" \
   test "$(sql "SELECT (SELECT status FROM deployments WHERE id = 'pod:ghost') AS g, (SELECT created_by FROM deployments WHERE id = 'pod:stray1') AS a" | jq -c '.[0]')" \
   = '{"g":"gone","a":"reconcile/release.sh"}'
 check "reconcile: the templates follow stable (B)" bash -c '! grep -q "^template" <<<"$0"' "$out"
-curl -sS -X POST "$M/__seed" -d '{"pods": {"stray1": {"id": "stray1", "name": "fv-serve-smoke-x", "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ther", "desiredStatus": "RUNNING"}}}' >/dev/null
+curl -sS -X POST "$M/__seed" -d '{"pods": {"stray1": {"id": "stray1", "name": "fv-serve-smoke-x", "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ther", "status": "RUNNING"}}}' >/dev/null
 out="$(rel reconcile --fix)"
 check "reconcile: a changed image is flagged and --fix records it" \
   bash -c 'grep -q "^drifted   pod stray1" <<<"$0" && [[ "$1" == "sha256:0ther" ]]' "$out" "$(sql "SELECT digest FROM deployments WHERE id = 'pod:stray1'" | jq -r '.[0].digest')"

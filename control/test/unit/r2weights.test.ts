@@ -186,11 +186,11 @@ describe("weights_source r2: the default, the checks, the env", () => {
     expect(planned).toEqual([...trees, "h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8"]);
     expect(gb).toBe(Math.min(500, r2DiskGb(all, planned)));
     const p = workerCreatePayload("fv-ctl-x", "img", pool, { region: "eu", dc: "EU-RO-1", gpu: "g" }, e) as any;
-    expect(p.networkVolumeId).toBeUndefined();
-    // No pod volume: Runpod's default one at /workspace would take the fetch into /workspace/weights (EDQUOT)
-    expect([p.volumeInGb, p.volumeMountPath, p.containerDiskInGb]).toEqual([0, undefined, gb]);
+    // No network volume, and no pod volume (REST v2: no `mounts` at all): Runpod's default one at /workspace would
+    // take the fetch into /workspace/weights (EDQUOT)
+    expect([p.mounts, p.disk]).toEqual([undefined, gb]);
     // No exact CUDA list (REST cannot name the 13.1 / 13.2 hosts); the boot's driver check refuses a pre-13 host
-    expect(p.allowedCudaVersions).toBeUndefined();
+    expect(p.gpu.allowedCudaVersions).toBeUndefined();
     // r2 anywhere else (docs/ops/r2-bench-2026-10-12.md findings 2 and 5): the data centres given, no exact CUDA list either
     const us = { ...pool, data_centers: ["US-TX-3", "US-KS-2"] };
     expect(validate("pool", us).ok).toBe(true);
@@ -199,16 +199,16 @@ describe("weights_source r2: the default, the checks, the env", () => {
     expect(pls.map((x) => x.dc)).toEqual(["US-TX-3", "US-KS-2"]);
     expect(pls.every((x) => x.region === undefined)).toBe(true);
     const pu = workerCreatePayload("fv-ctl-x", "img", us, pls[0]!, e) as any;
-    expect([pu.dataCenterIds, pu.allowedCudaVersions, pu.networkVolumeId]).toEqual([["US-TX-3"], undefined, undefined]);
-    expect((workerCreatePayload("fv-ctl-x", "img", { ...us, allowed_cuda: [] }, pls[0]!, e) as any).allowedCudaVersions, "allowed_cuda [] sends no filter").toBeUndefined();
-    expect((workerCreatePayload("fv-ctl-x", "img", { ...us, allowed_cuda: ["13.0"] }, pls[0]!, e) as any).allowedCudaVersions, "a pool's own list is kept").toEqual(["13.0"]);
-    expect(p.containerDiskInGb).toBe(gb);
-    expect(p.dockerStartCmd[0]).toContain('export FV_POD_ID="${FV_POD_ID:-${RUNPOD_POD_ID:-}}"');
-    expect(p.dockerStartCmd[0].indexOf("r2-fetch.py")).toBeLessThan(p.dockerStartCmd[0].indexOf("exec /opt/fastvideo-rs/bin/fv-serve"));
+    expect([pu.dataCenterIds, pu.gpu.allowedCudaVersions, pu.mounts]).toEqual([["US-TX-3"], undefined, undefined]);
+    expect((workerCreatePayload("fv-ctl-x", "img", { ...us, allowed_cuda: [] }, pls[0]!, e) as any).gpu.allowedCudaVersions, "allowed_cuda [] sends no filter").toBeUndefined();
+    expect((workerCreatePayload("fv-ctl-x", "img", { ...us, allowed_cuda: ["13.0"] }, pls[0]!, e) as any).gpu.allowedCudaVersions, "a pool's own list is kept").toEqual(["13.0"]);
+    expect(p.disk).toBe(gb);
+    expect(p.cmd[0]).toContain('export FV_POD_ID="${FV_POD_ID:-${RUNPOD_POD_ID:-}}"');
+    expect(p.cmd[0].indexOf("r2-fetch.py")).toBeLessThan(p.cmd[0].indexOf("exec /opt/fastvideo-rs/bin/fv-serve"));
     // The volume path is unchanged without r2.
     const v = workerSystemEnv({ ...ctx, env: all } as any, { ...h3 } as any, "img");
     expect(v.FV_WEIGHTS_SOURCE).toBeUndefined();
-    expect((workerCreatePayload("fv-ctl-x", "img", { ...h3 } as any, { region: "eu", dc: "EU-RO-1", gpu: "g" }, v) as any).networkVolumeId).toBeTruthy();
+    expect((workerCreatePayload("fv-ctl-x", "img", { ...h3 } as any, { region: "eu", dc: "EU-RO-1", gpu: "g" }, v) as any).mounts.network[0].volumeId).toBeTruthy();
     expect(bootFor(v)).not.toContain("r2-fetch.py");
     // A Runpod pool whose trees are not on the EU volume (H3 + LTX only since 2026-10-13) defaults to r2: the
     // fetch boot, no volume, the region's data centre; an explicit volume stays the volume.
@@ -218,7 +218,7 @@ describe("weights_source r2: the default, the checks, the env", () => {
     const we = workerSystemEnv(ctx, wan, "img");
     expect(we.FV_WEIGHTS_SOURCE).toBe("r2");
     const wp = workerCreatePayload("fv-ctl-x", "img", wan, workerPlacements({ regions: ["eu"] } as any, wan)[0]!, we) as any;
-    expect([wp.networkVolumeId, wp.dataCenterIds]).toEqual([undefined, ["EU-RO-1"]]);
+    expect([wp.mounts, wp.dataCenterIds]).toEqual([undefined, ["EU-RO-1"]]);
     expect(providerIssues(all, { pools: [wan] })).toEqual([]);
     expect(weightsSource({ ...wan, weights_source: "volume" }, all)).toBe("volume");
     expect(weightsSource({ ...presetPool("ltx")! }, all)).toBe("volume");

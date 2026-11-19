@@ -1,13 +1,18 @@
-// Runpod API: REST v1 (pods), GraphQL (balance, runtime metrics, prices) and
-// the console's log endpoint (hapi.runpod.net/v1/pod/<id>/logs: not in the
-// public docs, but it answers with the API key; docs/control/README.md
-// "Logs"). The API key only ever goes in an Authorization header. Nothing
-// here returns a pod's env: Runpod's GET /pods/<id> includes it in clear,
-// so only named fields are picked.
+// Runpod API: REST v2 (api.runpod.io/v2: pods, templates, serverless, billing,
+// the catalog), GraphQL (balance, runtime metrics, prices) and the console's
+// log endpoint (hapi.runpod.net/v1/pod/<id>/logs: not in the public docs, but
+// it answers with the API key; docs/control/README.md "Logs"). REST v1
+// (rest.runpod.io/v1) is retired: its host no longer resolves and Runpod's API
+// overview says it is "deprecated and no longer available". The API key only
+// ever goes in an Authorization header. Nothing here returns a pod's env:
+// Runpod's GET /pods/<id> includes it in clear, so only named fields are
+// picked.
 import { runpodErrorText } from "./runpoderr";
 import { defaults, type Env } from "./env";
 import { fetchWithTimeout, HttpError, scrub } from "./util";
 
+/** A pod as GraphQL `myself { pods }` reports it (the per-minute collector; REST v2 names these `status`, `cost`,
+ * `image`: `runpod.pod`). */
 export interface RunpodPod {
   id: string;
   name: string;
@@ -25,6 +30,20 @@ export interface RunpodPod {
     container?: { cpuPercent?: number; memoryPercent?: number };
   } | null;
 }
+
+/** A pod as REST v2 `GET /pods/<id>` (and the create answer) reports it: the named fields fv-control reads. */
+export interface RestPod {
+  id: string;
+  name: string;
+  /** PROVISIONING | STARTING | RUNNING | EXITED | ERROR | TERMINATED */
+  status: string;
+  /** $/hr of the pod's compute (reported in every status: a stopped pod is not billed for it). */
+  cost: number;
+  image?: string;
+  dataCenterId?: string | null;
+}
+/** The named fields of a REST v2 pod body (never its env). */
+export const restPod = (p: any): RestPod => ({ id: String(p.id), name: String(p.name ?? ""), status: String(p.status ?? ""), cost: Number(p.cost ?? 0), image: typeof p.image === "string" ? p.image : undefined, dataCenterId: p.dataCenterId ?? null });
 
 async function call(env: Env, url: string, init: RequestInit & { timeoutMs?: number }): Promise<any> {
   const r = await fetchWithTimeout(url, {
@@ -46,6 +65,7 @@ async function call(env: Env, url: string, init: RequestInit & { timeoutMs?: num
 }
 
 export const runpod = {
+  /** One REST v2 call: `path` under `defaults.runpodRest` (`/pods`, `/templates`, `/serverless`, `/billing/…`, `/catalog/…`). */
   rest(env: Env, method: string, path: string, body?: unknown) {
     return call(env, `${defaults.runpodRest(env)}${path}`, { method, body: body === undefined ? undefined : JSON.stringify(body), timeoutMs: 60000 });
   },
@@ -68,12 +88,12 @@ export const runpod = {
     );
     return { balance: Number(d.myself.clientBalance), spendPerHr: Number(d.myself.currentSpendPerHr), pods: d.myself.pods || [] };
   },
-  /** A pod's public fields (never its env). null when it is gone. */
-  async pod(env: Env, id: string): Promise<{ id: string; name: string; desiredStatus: string; costPerHr: number; imageName?: string } | null> {
+  /** A pod's public fields (REST v2 `GET /pods/<id>`; never its env). null when it is gone. */
+  async pod(env: Env, id: string): Promise<RestPod | null> {
     try {
       const p = await runpod.rest(env, "GET", `/pods/${encodeURIComponent(id)}`);
       if (!p || !p.id) return null;
-      return { id: p.id, name: p.name, desiredStatus: p.desiredStatus, costPerHr: Number(p.costPerHr ?? 0), imageName: p.imageName };
+      return restPod(p);
     } catch (e) {
       if (e instanceof HttpError && (e.status === 404 || e.status === 400)) return null;
       throw e;
@@ -86,9 +106,12 @@ export const runpod = {
     if (!p?.id) return null;
     return { desiredStatus: String(p.desiredStatus || ""), uptimeS: typeof p.runtime?.uptimeInSeconds === "number" ? p.runtime.uptimeInSeconds : null };
   },
+  /** `POST /pods` (a CreatePodRequest: src/launch.ts runpodPodBody, cluster/payloads.ts, buildpods.ts). Answers the Pod
+   * (201), or a QueuedPod (202) when the request queued for capacity, which fv-control never asks for. */
   create(env: Env, payload: unknown) {
     return runpod.rest(env, "POST", "/pods", payload);
   },
+  /** `PATCH /pods/<id>` (an UpdatePodRequest: `env`, `image`, …). */
   patch(env: Env, id: string, body: unknown) {
     return runpod.rest(env, "PATCH", `/pods/${encodeURIComponent(id)}`, body);
   },
@@ -101,11 +124,15 @@ export const runpod = {
       throw e;
     }
   },
+  /** A pod state transition: REST v2 `POST /pods/<id>/action {action}` (v1's `/stop` and `/start` routes). */
+  action(env: Env, id: string, action: "start" | "stop" | "restart" | "terminate") {
+    return runpod.rest(env, "POST", `/pods/${encodeURIComponent(id)}/action`, { action });
+  },
   stop(env: Env, id: string) {
-    return runpod.rest(env, "POST", `/pods/${encodeURIComponent(id)}/stop`);
+    return runpod.action(env, id, "stop");
   },
   start(env: Env, id: string) {
-    return runpod.rest(env, "POST", `/pods/${encodeURIComponent(id)}/start`);
+    return runpod.action(env, id, "start");
   },
   /** The container and system log tail Runpod keeps for a pod. */
   async logs(env: Env, id: string): Promise<{ container: string[]; system: string[] }> {
@@ -120,6 +147,6 @@ export const runpod = {
   },
 };
 
-/** CPU pod $/hr per vCPU (estimates; the create answer's costPerHr is checked against the cap). */
+/** CPU pod $/hr per vCPU (estimates; the create answer's `cost` is checked against the cap). */
 export const CPU_DPH_PER_VCPU: Record<string, number> = { cpu3c: 0.03, cpu3g: 0.04, cpu3m: 0.05, cpu5c: 0.035, cpu5g: 0.045, cpu5m: 0.06 };
 export const cpuPrice = (flavor: string, vcpu: number) => (CPU_DPH_PER_VCPU[flavor] ?? 0.06) * vcpu;

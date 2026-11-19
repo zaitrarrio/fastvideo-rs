@@ -223,7 +223,7 @@ fn call(base: &str, method: Method, path: &str, body: Option<Value>) -> Value {
     if let Some(b) = body {
         req = req.json(b.to_string());
     }
-    if path.starts_with("/v1/") {
+    if path.starts_with("/v2/") {
         req = req.bearer("test-runpod-key");
     }
     let r = PlainHttp.send(&req).unwrap_or_else(|e| panic!("{e}"));
@@ -290,7 +290,7 @@ fn effects(
     let p = |r: &Value| r["p"].as_str().unwrap_or("").to_owned();
     let runpod: Vec<Value> = reqs
         .iter()
-        .filter(|r| p(r).starts_with("/v1/") && r["m"] != "GET")
+        .filter(|r| p(r).starts_with("/v2/") && r["m"] != "GET")
         .map(|r| json!([r["m"], p(r), r["body"]]))
         .collect();
     let d1: Vec<Value> = reqs
@@ -316,7 +316,7 @@ fn effects(
             let m = r["m"].as_str().unwrap_or("");
             if m == "RETAG" {
                 Some(format!("retag {}", r["body"]["tag"].as_str().unwrap_or("")))
-            } else if path.starts_with("/v1/") && m != "GET" {
+            } else if path.starts_with("/v2/") && m != "GET" {
                 Some(format!("{m} {path}"))
             } else if path.ends_with("/query") {
                 let sql = collapse(r["body"]["sql"].as_str().unwrap_or(""));
@@ -359,7 +359,7 @@ fn base_env(base: &str) -> Vec<(String, String)> {
     [
         ("FV_D1_API_BASE", format!("{base}/client/v4")),
         ("FV_CF_API_TOKEN", "test-cf-token".into()),
-        ("RUNPOD_API_BASE", format!("{base}/v1")),
+        ("RUNPOD_API_BASE", format!("{base}/v2")),
         ("RUNPOD_GRAPHQL", format!("{base}/graphql")),
         ("RUNPOD_API_KEY", "test-runpod-key".into()),
         ("FV_REGISTRY_API", base.to_owned()),
@@ -419,7 +419,7 @@ fn release_templates_and_reconcile_send_what_the_scripts_send() {
     for t in ["cuda-sls", "cuda-pod", "cpu-pod"] {
         tpls.insert(
             format!("tpl-{t}"),
-            json!({"id": format!("tpl-{t}"), "name": format!("fv-serve-{t}"), "imageName": format!("{REPO}@sha256:0ld"), "env": {}}),
+            json!({"id": format!("tpl-{t}"), "name": format!("fv-serve-{t}"), "image": format!("{REPO}@sha256:0ld"), "env": {}}),
         );
     }
     call(
@@ -607,7 +607,7 @@ fn release_templates_and_reconcile_send_what_the_scripts_send() {
     sc!("templates-same", &[], |c| sync(
         c, "cuda", &b_cuda, "stable"
     ));
-    call(&base, Method::Delete, "/v1/templates/tpl-cpu-pod", None);
+    call(&base, Method::Delete, "/v2/templates/tpl-cpu-pod", None);
     let b_cpu = reff(&db, "cpu");
     sc!("templates-create", &[], |c| sync(
         c, "cpu", &b_cpu, "stable"
@@ -629,13 +629,18 @@ fn release_templates_and_reconcile_send_what_the_scripts_send() {
         Method::Post,
         "/__seed",
         Some(json!({
+        // v2 objects (fv-deploy-release-goldens.sh's seed): a pod's `status`,
+        // `cost`, `gpu.id`, `dataCenterId`; an endpoint on the serve image
+        // (v2 inlines the template's image into the endpoint and keeps no
+        // template id).
         "pods": {
-            "stray1": {"id": "stray1", "name": "fv-serve-smoke-x", "imageName": reff(&db, "cuda"),
-                "desiredStatus": "RUNNING", "createdAt": "2026-09-29 01:22:30.836 +0000 UTC", "costPerHr": 0.5,
-                "machine": {"gpuDisplayName": "RTX PRO 6000", "dataCenterId": "EU-RO-1"}, "env": {"FV_ADMIN_TOKEN": "never-print-me"}},
-            "other1": {"id": "other1", "name": "someone-else", "imageName": "daydreamlive/scope", "desiredStatus": "RUNNING"}},
-        "endpoints": {"ep1": {"id": "ep1", "name": "fv-serve-ep-x", "templateId": "tpl-cuda-sls",
-            "createdAt": "2026-09-30 10:00:00.000 +0000 UTC", "gpuTypeIds": [GPU], "dataCenterIds": ["EU-RO-1"]}}})),
+            "stray1": {"id": "stray1", "name": "fv-serve-smoke-x", "image": reff(&db, "cuda"),
+                "status": "RUNNING", "createdAt": "2026-09-29 01:22:30.836 +0000 UTC", "cost": 0.5,
+                "gpu": {"id": GPU, "count": 1}, "dataCenterId": "EU-RO-1", "env": {"FV_ADMIN_TOKEN": "never-print-me"}},
+            "other1": {"id": "other1", "name": "someone-else", "image": "daydreamlive/scope", "status": "RUNNING"}},
+        "endpoints": {"ep1": {"id": "ep1", "name": "fv-serve-ep-x", "image": reff(&db, "cuda"), "type": "QUEUE",
+            "createdAt": "2026-09-30 10:00:00.000 +0000 UTC", "gpu": {"pools": ["ADA_24"], "count": 1}, "dataCenterIds": ["EU-RO-1"],
+            "env": {"FV_RELEASE_CHANNEL": "stable"}}}})),
     );
     call(
         &base,
@@ -667,7 +672,7 @@ fn release_templates_and_reconcile_send_what_the_scripts_send() {
         Method::Post,
         "/__seed",
         Some(
-            json!({"pods": {"stray1": {"id": "stray1", "name": "fv-serve-smoke-x", "imageName": reff(&da, "cuda"), "desiredStatus": "RUNNING"}}}),
+            json!({"pods": {"stray1": {"id": "stray1", "name": "fv-serve-smoke-x", "image": reff(&da, "cuda"), "status": "RUNNING"}}}),
         ),
     );
     sc!("reconcile-drift", &[], |c| reconcile::reconcile(
@@ -721,7 +726,7 @@ fn release_templates_and_reconcile_send_what_the_scripts_send() {
         &base,
         Method::Post,
         "/__fail",
-        Some(json!({"m": "PATCH", "p": "/v1/templates/", "status": 500, "times": 1})),
+        Some(json!({"m": "PATCH", "p": "/v2/templates/", "status": 500, "times": 1})),
     );
     sc!("promote-template-fails", &[], |c| promote::promote(
         c, "aaaaaaa", "stable", &local

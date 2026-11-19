@@ -191,8 +191,8 @@ export async function createWorker(env: Env, c: Cluster, poolId: string, image: 
       log(`${poolId}: create returned no id`);
       continue;
     }
-    const dph = Number(r.costPerHr ?? 0);
-    const rec: PodRec = { pod: r.id, pool: poolId, gpu: pl.gpu, cpu: pl.cpu, dc: pl.dc || r.machine?.dataCenterId, dph, created: Math.floor(now() / 1000), image, url: defaults.podUrl(env, r.id) };
+    const dph = Number(r.cost ?? 0);
+    const rec: PodRec = { pod: r.id, pool: poolId, gpu: pl.gpu, cpu: pl.cpu, dc: pl.dc || r.dataCenterId || undefined, dph, created: Math.floor(now() / 1000), image, url: defaults.podUrl(env, r.id) };
     const cap = pool.compute === "CPU" ? 1.0 : c.spec.max_gpu_dph;
     if (dph > cap) {
       log(`${poolId}: ${r.id} costs $${dph}/hr > $${cap}: deleting`);
@@ -322,7 +322,7 @@ export async function patchWorker(env: Env, c: Cluster, rec: PodRec, log: Logf, 
   if (isOtherPod(rec.pod)) throw new HttpError(409, `${rec.pod}: a GMI / Brev pod's env cannot be changed in place (GMI wipes the container on update; Brev runs a startup script once): roll or stop and start it`);
   const ctx = await envCtx(env, c);
   const { full, hash } = await desiredEnv(env, c, ctx, "worker", { pod: rec.pod, pool: rec.pool, image: image || rec.image });
-  await runpod.patch(env, rec.pod, { env: full, ...(image ? { imageName: image } : {}) });
+  await runpod.patch(env, rec.pod, { env: full, ...(image ? { image } : {}) });
   if (image) rec.image = image;
   await saveState(env, c);
   await podUpdate(env, rec.pod, { env_hash: hash, image });

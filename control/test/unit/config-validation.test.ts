@@ -367,6 +367,10 @@ describe("Runpod errors made readable", () => {
     expect(readableProblem("At /endpoints/properties/scalerType/enum: value must be one of 'QUEUE_DELAY', 'REQUEST_COUNT'", { scalerType: "QUEUE" })).toMatch(/scalerType: Runpod refused "QUEUE" \(did you mean "QUEUE_DELAY"/);
     expect(readableProblem("something else")).toBe("something else");
     expect(runpodErrorText({ error: "plain" })).toBe("plain");
+    // REST v2's ErrorResponse: the validation failures first, then `detail`; `title` only when nothing else says more.
+    expect(runpodErrorText({ title: "Bad Request", status: 400, detail: "request validation failed", errors: ["$: additional properties 'computeType' not allowed"] })).toBe("$: additional properties 'computeType' not allowed (request validation failed)");
+    expect(runpodErrorText({ title: "Not Found", status: 404, detail: "pod not found" })).toBe("pod not found");
+    expect(runpodErrorText({ title: "Too Many Requests", status: 429 })).toBe("Too Many Requests");
     // Our own schema refuses the same values first, with the same hint.
     for (const [spec, re] of [
       [{ name: "a", variant: "h3-turbo", data_centers: ["EU-IS-1"] }, /data_centers\.0: "EU-IS-1" is not a Runpod data centre/],

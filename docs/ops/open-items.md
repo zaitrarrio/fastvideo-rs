@@ -22,7 +22,7 @@ new work in the same area. Newest decisions first.
   auxiliary/tae and lpips: 462.45 GB), filled from R2 with
   `scripts/gpu/r2-fill-volume.sh`; everything else from R2.
   **Blocked (2026-10-13):** Runpod no longer creates network volumes in
-  EUR-IS-1 (`POST /networkvolumes`: "Data center EUR-IS-1 not found or does
+  EUR-IS-1 (v1's `POST /networkvolumes`, now `POST /v2/network-volumes`: "Data center EUR-IS-1 not found or does
   not support network volumes"; GraphQL `storageSupport: false`). The only EU
   DC with volumes and RTX PRO 6000 Server stock is EU-RO-1 (stock "Low"),
   which would move the EU GPU region.

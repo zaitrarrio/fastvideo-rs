@@ -56,7 +56,8 @@ source "$HERE/lib/ghcr.sh"
 source "$HERE/lib/registry.sh"
 export FV_DEPLOY_SCRIPT=release.sh
 
-REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+REST="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GH_API="${FV_GITHUB_API:-https://api.github.com}"
 GH_REPO="${FV_GITHUB_REPO:-zaitrarrio/fastvideo-rs}"
 TEMPLATE_CHANNEL="${FV_TEMPLATE_CHANNEL:-stable}"
@@ -149,7 +150,7 @@ resolve() {
 
 missing_keys() { local k; for k in $FV_RELEASE_KEYS; do jq -e --arg k "$k" 'has($k)' >/dev/null <<<"$1" || echo "$k"; done; }
 
-template_image() { [[ -n "${RUNPOD_API_KEY:-}" ]] && fv_template_get "$(fv_template_name "$1" "$2")" 2>/dev/null | jq -r '.imageName // empty' || true; }
+template_image() { [[ -n "${RUNPOD_API_KEY:-}" ]] && fv_template_get "$(fv_template_name "$1" "$2")" 2>/dev/null | jq -r '.image // empty' || true; }
 
 # ---- promote / rollback -----------------------------------------------------
 
@@ -327,34 +328,35 @@ cmd_history() {
       done
 }
 
-# fetch_runpod: PODS, EPS, TPLS (raw REST v1 lists; only named fields of
-# them are ever shown).
+# fetch_runpod: PODS, EPS, TPLS (the item arrays of the REST v2 lists; only
+# named fields of them are ever shown).
 fetch_runpod() {
   [[ -n "${RUNPOD_API_KEY:-}" ]] || die "RUNPOD_API_KEY missing"
-  PODS="$(rp GET /pods)" || die "Runpod: pods"
-  EPS="$(rp GET /endpoints)" || die "Runpod: endpoints"
-  TPLS="$(rp GET /templates)" || die "Runpod: templates"
+  PODS="$(rp GET /pods | jq -c '.pods // []')" || die "Runpod: pods"
+  EPS="$(rp GET /serverless | jq -c '.endpoints // []')" || die "Runpod: endpoints"
+  TPLS="$(rp GET /templates | jq -c '.templates // []')" || die "Runpod: templates"
 }
 
 # Live fv-serve resources (after fetch_runpod): [{kind, id, name, image,
 # created (unix s), status, variant_hint, channel_hint, gpu, dc, dph}]. A
 # pod counts when it runs an image of $FV_SERVE_REPO or is named fv-serve-*,
-# fv-cluster-* or fv-gw-*; an endpoint when its template's image does or it
-# is named fv-*.
+# fv-cluster-* or fv-gw-*; an endpoint when its image does or it is named
+# fv-*. (REST v2 inlines an endpoint's container settings and keeps no
+# template id, so the template an endpoint was created from is not known
+# here: `template` and `template_name` are null, and the hints come from the
+# env the template gave it.)
 live_resources() {
-  jq -nc --arg repo "$FV_SERVE_REPO" --argjson pods "$PODS" --argjson eps "$EPS" --argjson tpls "$TPLS" '
+  jq -nc --arg repo "$FV_SERVE_REPO" --argjson pods "$PODS" --argjson eps "$EPS" '
     def ts: if . == null then null else (sub("\\.[0-9]+"; "") | sub(" \\+0000 UTC$"; "Z") | sub(" "; "T") | sub("Z?$"; "Z") | fromdateiso8601? // null) end;
-    ($tpls | map({key: .id, value: {name, imageName}}) | from_entries) as $t
-    | [ ($pods[] | select((.imageName // "" | startswith($repo)) or (.name // "" | test("^fv-(serve|cluster|gw)-")))
-         | {kind: (if (.name // "" | test("-gw-|gateway")) then "gateway" else "pod" end), id, name, image: .imageName,
-            created: (.createdAt | ts), status: .desiredStatus, variant_hint: (.env.FV_VARIANT // null),
-            channel_hint: (.env.FV_RELEASE_CHANNEL // null), gpu: (.machine.gpuDisplayName // .gpu.displayName // null),
-            dc: (.machine.dataCenterId // .dataCenterId // null), dph: .costPerHr}),
-        ($eps[] | ($t[.templateId] // {}) as $tp
-         | select(($tp.imageName // "" | startswith($repo)) or (.name // "" | test("^fv-")))
-         | {kind: "endpoint", id, name, image: $tp.imageName, template: .templateId, template_name: $tp.name,
-            created: (.createdAt | ts), status: "ENDPOINT", variant_hint: ($tp.name // "" | capture("^fv-serve-(?<v>.+)-(sls|pod)$").v // null),
-            channel_hint: null, gpu: ((.gpuTypeIds // []) | join(",")), dc: ((.dataCenterIds // []) | join(",")), dph: null}) ]'
+    [ ($pods[] | select((.image // "" | startswith($repo)) or (.name // "" | test("^fv-(serve|cluster|gw)-")))
+         | {kind: (if (.name // "" | test("-gw-|gateway")) then "gateway" else "pod" end), id, name, image: .image,
+            created: (.createdAt | ts), status: .status, variant_hint: (.env.FV_VARIANT // null),
+            channel_hint: (.env.FV_RELEASE_CHANNEL // null), gpu: (.gpu.id // null),
+            dc: (.dataCenterId // null), dph: .cost}),
+        ($eps[] | select((.image // "" | startswith($repo)) or (.name // "" | test("^fv-")))
+         | {kind: "endpoint", id, name, image: .image, template: null, template_name: null,
+            created: (.createdAt | ts), status: "ENDPOINT", variant_hint: (.env.FV_VARIANT // null),
+            channel_hint: (.env.FV_RELEASE_CHANNEL // null), gpu: ((.gpu.pools // []) | join(",")), dc: ((.dataCenterIds // []) | join(",")), dph: null}) ]'
 }
 
 # pod_url <pod id> -> its HTTP base (FV_POD_URL_TEMPLATE, `{pod}` replaced).
@@ -457,7 +459,7 @@ cmd_reconcile() {
   want="$(jq -c --arg c "$TEMPLATE_CHANNEL" '[.[] | select(.channel == $c)][0].digests // "{}" | fromjson' <<<"$heads")"
   for v in $FV_IMAGES; do
     for f in $(fv_image_flavours "$v"); do
-      cur="$(jq -r --arg n "$(fv_template_name "$v" "$f")" '[.[] | select(.name == $n)][0].imageName // empty' <<<"$TPLS")"
+      cur="$(jq -r --arg n "$(fv_template_name "$v" "$f")" '[.[] | select(.name == $n)][0].image // empty' <<<"$TPLS")"
       [[ -n "$cur" ]] || { echo "template  $(fv_template_name "$v" "$f") missing"; continue; }
       if [[ "$want" != '{}' && "$(jq -r --arg v "$v" '.[$v] // ""' <<<"$want")" != "$cur" ]]; then
         n_drift=$((n_drift + 1))

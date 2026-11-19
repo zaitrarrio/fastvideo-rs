@@ -3,6 +3,9 @@
 // builders before fv-control built its launches as fv-deploy `Launch` values. The comparison is independent of the
 // Launch code: the snapshot came from the old hand-written builders.
 //
+// The snapshot was regenerated on 2026-11-19 for REST v2 (rest.runpod.io/v1 is retired): every body changed shape by
+// the v1 → v2 mapping src/launch.ts documents, so this corpus now pins the v2 bodies.
+//
 // `cases`: every case's canonical body (sorted keys) as the first 16 hex digits of its SHA-256; `shown`: one case of
 // each kind in full, long strings by length and hash, for review. A builder that throws is a case too.
 //
