@@ -60,13 +60,13 @@ describe("placement: inheritance, order, any", () => {
     expect(workerPlacements(s, wan)).toEqual([{ dc: "US-TX-3", gpu: RTX }, { gpu: RTX }]);
     const body = workerCreatePayload("n", "img", wan, workerPlacements(s, wan)[1]!, { FV_WEIGHTS_SOURCE: "r2" });
     expect(body).not.toHaveProperty("dataCenterIds");
-    expect(body).not.toHaveProperty("networkVolumeId");
+    expect(body).not.toHaveProperty("mounts");
     for (const id of ["h3-turbo", "h3-max", "ltx"]) {
       const p = pool(s, id);
       expect(poolWithoutVolume(p)).toBe(false);
       const pl = workerPlacements(s, p);
       expect(pl).toEqual([{ region: "eu", dc: "EU-RO-1", gpu: RTX }]);
-      expect((workerCreatePayload("n", "img", p, pl[0]!, {}) as any).networkVolumeId).toBe("bz0ofkfx45");
+      expect((workerCreatePayload("n", "img", p, pl[0]!, {}) as any).mounts.network).toEqual([{ volumeId: "bz0ofkfx45", path: "/workspace" }]);
     }
   });
   it("order: each data centre in order with every GPU type in order; the pool's own data centres win", () => {

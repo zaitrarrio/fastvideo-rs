@@ -125,7 +125,7 @@ pub struct Stack {
     /// The backstop's deadline and the pod's own cap (s), at most 4 h.
     pub wall_cap_s: u64,
     pub container_disk_gb: u32,
-    /// The pod's host-RAM floor, whole GB per GPU (Runpod `minRAMPerGPU`).
+    /// The pod's host-RAM floor, whole GB per GPU (Runpod `gpu.minRamPerGpu`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub min_ram_gb: Option<u32>,
@@ -293,7 +293,7 @@ impl Stacks {
                 return Err(sfield(
                     file,
                     at("min_ram_gb"),
-                    "a positive whole number of GB per GPU (Runpod minRAMPerGPU), or leave it out",
+                    "a positive whole number of GB per GPU (Runpod gpu.minRamPerGpu), or leave it out",
                 ));
             }
             if s.cell_timeout_s == 0 {
@@ -566,7 +566,7 @@ impl UpstreamStart {
     }
 }
 
-/// The upstream pod's start command (`dockerStartCmd: ["/bin/bash", "-c", <this>]`).
+/// The upstream pod's start command (`cmd: ["/bin/bash", "-c", <this>]`, v1's `dockerStartCmd`).
 pub fn upstream_start_command(o: &UpstreamStart) -> Result<String, String> {
     o.check()?;
     let mut s = UPSTREAM_START_TEMPLATE.trim_end_matches('\n').to_owned();

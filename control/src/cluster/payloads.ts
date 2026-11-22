@@ -49,14 +49,15 @@ exec /opt/fastvideo-rs/bin/fv-serve --config /fv-worker.toml`;
 // FV_BACKSTOP_API_KEY is fv-control's own account key (envCtx runpodApiKey =
 // RUNPOD_API_KEY, the key it creates and deletes pods with over REST), not
 // the pod-scoped RUNPOD_API_KEY Runpod injects, which REST refuses with a 403
-// (docs/adr/0023-lab-report-and-ci-bridge.md §4). Only a 2xx or a 404 (the pod
-// is already gone) ends the attempts; any other answer is retried.
+// (docs/adr/0023-lab-report-and-ci-bridge.md §4). The delete is REST v2's
+// DELETE /pods/<id> (v1's host is retired). Only a 2xx or a 404 (the
+// pod is already gone) ends the attempts; any other answer is retried.
 const WATCHDOG = `(
   command -v curl >/dev/null 2>&1 || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl; } >/fvstate/watchdog-apt.log 2>&1
   bye() {
     echo "[watchdog] $1: deleting \${RUNPOD_POD_ID}" >&2
     for i in 1 2 3; do
-      c=$(curl -sS --max-time 30 -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: Bearer $FV_BACKSTOP_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID")
+      c=$(curl -sS --max-time 30 -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: Bearer $FV_BACKSTOP_API_KEY" "https://api.runpod.io/v2/pods/$RUNPOD_POD_ID")
       case "$c" in 2??|404) break ;; esac
       echo "[watchdog] delete: HTTP \${c:-none}" >&2
       [ "$i" = 3 ] || sleep 5
@@ -374,7 +375,7 @@ const DEFAULT_CLUSTER_GUARDS: Guards = { max_usd_per_hr: 3.6, min_balance_usd: 8
 /** A Runpod GPU worker as fv-deploy's Launch (plan C3c, docs/adr/0018-fv-deploy.md §7): the image, the shell boot
  * (bootFor: an image with fv-boot runs fv-boot first thing) as `bash -c <boot>`, the env, the GPU type of this
  * placement attempt, the region's network volume at /workspace unless the pool mounts none (weights_source r2 / hub,
- * or volume off: then no volume, and volumeInGb 0 so Runpod adds no default pod volume), the data centre, the
+ * or volume off: then no volume, and volume_gb 0 so the pod gets no persistent disk), the data centre, the
  * container disk (the pool's, else sized for r2 / hub trees, else 40 GB), the CUDA filter and the ports. Checked
  * against the schema. CPU pools are not Launches (the schema has no CPU compute: workerCreatePayload). */
 export function workerLaunch(name: string, image: string, pool: PoolSpec, pl: Placement, env: Record<string, string>, guards: Guards = DEFAULT_CLUSTER_GUARDS): Launch {
@@ -399,23 +400,21 @@ export function workerLaunch(name: string, image: string, pool: PoolSpec, pl: Pl
   });
 }
 
-/** REST v1 POST /pods of one worker: a GPU pod from its Launch (src/launch.ts runpodPodBody, the Rust provider's
- * rules), a CPU pod from the pool (outside the Launch schema: CPU flavor, vCPUs, no GPU fields). */
+/** REST v2 POST /pods of one worker: a GPU pod from its Launch (src/launch.ts runpodPodBody, the Rust provider's
+ * rules), a CPU pod from the pool (outside the Launch schema: a `cpu` block of flavor and vCPUs, no `gpu`). */
 export function workerCreatePayload(name: string, image: string, pool: PoolSpec, pl: Placement, env: Record<string, string>, guards?: Guards) {
   if (pool.compute === "CPU") {
     return {
       name,
-      imageName: image,
-      dockerEntrypoint: ["bash", "-c"],
-      dockerStartCmd: [bootFor(env)],
+      image,
+      entrypoint: ["bash", "-c"],
+      cmd: [bootFor(env)],
       env,
-      computeType: "CPU",
-      cpuFlavorIds: [pl.cpu!],
-      vcpuCount: pool.vcpu ?? 2,
-      containerDiskInGb: pool.container_disk_gb ?? 10,
+      cpu: { id: pl.cpu!, vcpuCount: pool.vcpu ?? 2 },
+      disk: pool.container_disk_gb ?? 10,
       ports: ["8000/http"],
       ...(pl.dc ? { dataCenterIds: [pl.dc] } : {}),
-      ...(pool.volume && pl.region ? { networkVolumeId: REGIONS[pl.region]!.volume, volumeMountPath: "/workspace" } : {}),
+      ...(pool.volume && pl.region ? { mounts: { network: [{ volumeId: REGIONS[pl.region]!.volume, path: POD_VOLUME_MOUNT }] } } : {}),
     };
   }
   return runpodPodBody(workerLaunch(name, image, pool, pl, env, guards));

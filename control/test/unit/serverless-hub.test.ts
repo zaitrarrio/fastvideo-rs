@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Env } from "../../src/env";
 import { HUB_FETCH_TREE_SH } from "../../src/providers";
-import { endpointCreatePayload, SLS_HUB_BOOT, templateCreatePayload, templateUpdatePayload, v2CreatePayload, v2TemplateBoot } from "../../src/serverless/payloads";
+import { endpointCreatePayload, SLS_HUB_BOOT, templateCreatePayload, templateUpdatePayload } from "../../src/serverless/payloads";
 import { defaultEndpointSpec, normalizeEndpointSpec, placementIssues, withWeightsSource } from "../../src/serverless/spec";
 import { applyReport, HUB_DOWNLOAD_GBPS, SLS_HUB_SH, slsHubDiskGb, slsHubEnv, slsHubPlan, slsOutlook, slsWeightsIssues, type BootRow } from "../../src/serverless/weights";
 import { HUB_SHA256, HUB_TREES } from "../../src/weights-sources";
@@ -102,18 +102,17 @@ describe("the template and the endpoint", () => {
   });
   it("the payloads: the bash Hub boot before fv-serve, the disk, FlashBoot, no volume and no data centre", () => {
     const t = templateCreatePayload(spec, "img", "fvc-hw-x", env);
-    expect(t.dockerEntrypoint).toEqual(["bash", "-c", SLS_HUB_BOOT]);
-    expect(t.containerDiskInGb).toBe(spec.container_disk_gb);
+    expect(t.entrypoint).toEqual(["bash", "-c", SLS_HUB_BOOT]);
+    expect(t.disk).toBe(spec.container_disk_gb);
     expect(t.env.FV_WEIGHTS_SOURCE).toBe("hub");
     expect(t.env.FV_WEIGHTS_TOKEN).toBe("fvw_" + "a".repeat(64));
     expect(SLS_HUB_BOOT.indexOf("fetch-hub-tree.py")).toBeLessThan(SLS_HUB_BOOT.indexOf("exec /opt/fastvideo-rs/bin/fv-serve"));
     expect(SLS_HUB_BOOT).not.toContain("r2-fetch.py");
     execFileSync("bash", ["-n", "-c", SLS_HUB_BOOT]);
-    expect(templateUpdatePayload(spec, "img", env).dockerEntrypoint).toEqual(["bash", "-c", SLS_HUB_BOOT]);
-    expect(v2TemplateBoot(spec)?.dockerEntrypoint).toEqual(["bash", "-c", SLS_HUB_BOOT]);
-    const e = endpointCreatePayload(spec, "tpl");
-    expect([e.flashboot, (e as any).networkVolumeId, (e as any).dataCenterIds, e.allowedCudaVersions, e.minCudaVersion]).toEqual([true, undefined, undefined, undefined, "13.0"]);
-    expect(v2CreatePayload(hub({ mode: "lb", scaler_type: "REQUEST_COUNT", scaler_value: 1 }), "img", [], env).flashboot).toBe("FLASHBOOT");
+    expect(templateUpdatePayload(spec, "img", env).entrypoint).toEqual(["bash", "-c", SLS_HUB_BOOT]);
+    const e = endpointCreatePayload(spec, "tpl") as any;
+    expect([e.flashboot, e.networkVolumes, e.dataCenterIds, e.gpu.allowedCudaVersions, e.gpu.minCudaVersion]).toEqual(["FLASHBOOT", undefined, undefined, undefined, "13.0"]);
+    expect(endpointCreatePayload(hub({ mode: "lb", scaler_type: "REQUEST_COUNT", scaler_value: 1 }), "tpl", { pools: ["BLACKWELL_96"] })).toMatchObject({ type: "LOAD_BALANCER", flashboot: "FLASHBOOT" });
   });
 });
 

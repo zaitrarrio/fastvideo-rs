@@ -172,15 +172,13 @@ impl<'a> Ctx<'a> {
     }
 }
 
-/// A Runpod REST v1 listing (`GET /pods`, `/endpoints`, `/templates`): an
-/// array of objects, each with a string `id`. Anything else (an error object,
-/// `null`, an entry without an id) is an error, never an empty list: a
-/// reconcile would mark every live row gone, a template sync would create
-/// duplicates.
-pub fn listing(v: serde_json::Value, what: &str) -> Result<Vec<serde_json::Value>, ReleaseError> {
-    let serde_json::Value::Array(items) = v else {
-        return Err(refused(format!("{what}: the answer is not a list")));
-    };
+/// A Runpod REST listing's items (`GET /pods`, `/serverless`, `/templates`:
+/// `RunpodApi::list` reads the pages): every entry must be an object with a
+/// string id; anything else is an error, never "nothing".
+pub fn listing(
+    items: Vec<serde_json::Value>,
+    what: &str,
+) -> Result<Vec<serde_json::Value>, ReleaseError> {
     if let Some(bad) = items
         .iter()
         .find(|x| x.get("id").and_then(serde_json::Value::as_str).is_none())
@@ -266,20 +264,24 @@ mod tests {
     fn a_listing_that_is_not_one_is_an_error() {
         use serde_json::json;
         assert_eq!(
-            listing(json!([{"id": "a"}, {"id": "b", "name": "x"}]), "GET pods")
-                .map(|v| v.len())
-                .ok(),
+            listing(
+                vec![json!({"id": "a"}), json!({"id": "b", "name": "x"})],
+                "GET pods"
+            )
+            .map(|v| v.len())
+            .ok(),
             Some(2)
         );
-        assert!(listing(json!([]), "GET pods").is_ok_and(|v| v.is_empty()));
-        for bad in [
-            json!({"error": "rate limited"}),
-            json!(null),
-            json!("x"),
-            json!([{"name": "no id"}]),
-            json!([{"id": 3}]),
-        ] {
-            assert!(listing(bad.clone(), "GET pods").is_err(), "{bad}");
+        assert!(listing(vec![], "GET pods").is_ok_and(|v| v.is_empty()));
+        for bad in [json!({"name": "no id"}), json!({"id": 3}), json!(null)] {
+            assert!(listing(vec![bad.clone()], "GET pods").is_err(), "{bad}");
+        }
+        // The page itself: v2's wrapper, or nothing (`RunpodApi::list`).
+        for bad in [json!({"error": "rate limited"}), json!(null), json!("x")] {
+            assert!(
+                crate::provider::runpod::list_items(&bad, "pods").is_none(),
+                "{bad}"
+            );
         }
     }
 

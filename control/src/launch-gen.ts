@@ -39,15 +39,15 @@ export const DiskZ: z.ZodType<Disk> = z.strictObject({
 
 /** The GPU request. */
 export interface GpuSpec {
-  /** Runpod `allowedCudaVersions` (exact labels); empty = no filter (the
+  /** Runpod `gpu.allowedCudaVersions` (exact labels); empty = no filter (the
    * default: REST cannot name the 13.1 / 13.2 hosts,
    * `scripts/gpu/runpod-cuda.sh`). */
   allowed_cuda?: string[];
   count: number;
   /** Runpod serverless `minCudaVersion`. */
   min_cuda?: string | null;
-  /** A Runpod pod's host-RAM floor (`PodCreateInput.minRAMPerGPU`): whole
-   * GB per GPU, at least 1. `None` sends nothing: Runpod's default floor
+  /** A Runpod pod's host-RAM floor (v2 `gpu.minRamPerGpu`, v1's
+   * `minRAMPerGPU`): whole GB per GPU, at least 1. `None` sends nothing: Runpod's default floor
    * (8 GB per GPU), above which the host's share decides. On any other
    * launch kind (no create body carries it) `guard::check_min_ram`
    * refuses it before anything is created (docs/adr/0019-fv-lab.md §16.10). */
@@ -230,7 +230,7 @@ export const WeightsSourceZ: z.ZodType<WeightsSource> = z.enum(["volume", "r2", 
  * preset plus a provider section (`crate::launch`), turned into the
  * provider's exact payload by [`crate::provider::Provider::payload`]. */
 export interface Launch {
-  /** Its arguments (Runpod `dockerStartCmd`). */
+  /** Its arguments (Runpod `cmd`, v1's `dockerStartCmd`). */
   args?: string[];
   disk: Disk;
   /** The container entrypoint (`/opt/fastvideo-rs/bin/fv-boot`); empty: the

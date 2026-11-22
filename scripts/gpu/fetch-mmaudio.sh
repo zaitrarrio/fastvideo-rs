@@ -18,7 +18,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=volumes.sh
 source "$HERE/volumes.sh"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 VOL_NAME="${RUNPOD_VOLUME_NAME:-$FV_EU_VOLUME_NAME}"
 fv_check_volume "$VOL_NAME"
 CAP_S="${FV_POD_CAP_S:-3600}"
@@ -32,24 +33,31 @@ rest() {
     -H 'content-type: application/json' ${body:+-d "$body"} "$API$path"
 }
 
-vol="$(rest GET /networkvolumes | jq -r --arg n "$VOL_NAME" '.[] | select(.name==$n) | "\(.id) \(.dataCenterId)"' | head -1)"
+vol="$(rest GET /network-volumes | jq -r --arg n "$VOL_NAME" '.networkVolumes[] | select(.name==$n) | "\(.id) \(.dataCenter)"' | head -1)"
 [[ -n "$vol" ]] || { echo "no volume named $VOL_NAME" >&2; exit 1; }
 vol_id="${vol% *}"; dc="${vol#* }"
 script_b64="$(base64 -w0 "$HERE/fetch-mmaudio.py")"
 start='mkdir -p /srv && cd /srv && (python -m http.server 8000 --directory /srv >/dev/null 2>&1 &) && echo "$FETCH_PY" | base64 -d > /srv/fetch.py && pip install -q --no-cache-dir huggingface_hub safetensors numpy >>/srv/log.txt 2>&1 && pip install -q --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu >>/srv/log.txt 2>&1 && python /srv/fetch.py; sleep infinity'
 payload="$(jq -n --arg name "fv-fetch-mmaudio-$(date -u +%m%d%H%M)" --arg vol "$vol_id" --arg dc "$dc" \
   --arg start "$start" --arg py "$script_b64" --arg hf "${HF_TOKEN:-}" --arg addonly "${FETCH_ADD_ONLY:-1}" '{
-    name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
-    cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: 8,
-    containerDiskInGb: 30, networkVolumeId: $vol, volumeMountPath: "/workspace",
+    name: $name, image: "python:3.12-slim", cloud: "SECURE",
+    cpu: {id: "cpu3c", vcpuCount: 8},
+    disk: 30, mounts: {network: [{volumeId: $vol, path: "/workspace"}]},
     dataCenterIds: [$dc], ports: ["8000/http"],
-    dockerStartCmd: ["/bin/bash","-lc",$start],
+    cmd: ["/bin/bash","-lc",$start],
     env: ({FETCH_PY: $py, HF_HUB_ENABLE_HF_TRANSFER: "0", FETCH_ADD_ONLY: $addonly} + (if $hf != "" then {HF_TOKEN: $hf} else {} end))
   }')"
-resp="$(rest POST /pods "$payload")"
+# v2 takes one CPU flavor per create (v1 listed several with cpuFlavorPriority
+# "availability"): the flavors of FV_CPU_FLAVORS are tried in order.
+resp=""
+for flavor in ${FV_CPU_FLAVORS:-cpu3c cpu5c cpu3g}; do
+  if resp="$(rest POST /pods "$(jq -c --arg f "$flavor" '.cpu.id = $f' <<<"$payload")" 2>&1)"; then break; fi
+  log "no $flavor pod in $dc: $(head -c 200 <<<"$resp")"; resp=""
+done
+[[ -n "$resp" ]] || { echo "pod create failed (every flavor)" >&2; exit 1; }
 id="$(jq -r '.id // empty' <<<"$resp")"
 [[ -n "$id" ]] || { echo "pod create failed: $resp" >&2; exit 1; }
-log "pod $id \$$(jq -r '.costPerHr' <<<"$resp")/hr dc=$dc vol=$vol_id"
+log "pod $id \$$(jq -r '.cost' <<<"$resp")/hr dc=$dc vol=$vol_id"
 mkdir -p "$OUT"; echo "$id" >"$OUT/pod-id"
 # Backstop: delete the pod after CAP_S whatever happens to this shell.
 ( sleep "$CAP_S"; rest DELETE "/pods/$id" >/dev/null 2>&1 || true ) &

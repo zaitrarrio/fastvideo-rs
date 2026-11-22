@@ -371,20 +371,19 @@ export function buildPodPayload(p: PayloadIn): Record<string, unknown> {
     env.FV_BUILD_R2_ACCESS_KEY_ID = p.r2.key_id;
     env.FV_BUILD_R2_SECRET_ACCESS_KEY = p.r2.secret;
   }
+  // REST v2 CreatePodRequest: a `cpu` block is a CPU pod (v1's computeType CPU + cpuFlavorIds + vcpuCount); no pod
+  // volume (v1's volumeInGb 0: no `mounts.persistent`), the network volume as a `mounts.network` entry. v1's
+  // `cpuFlavorPriority: "custom"` has no v2 field (one flavor is asked for, so nothing to prioritise).
   return {
     name: p.name,
-    imageName: p.image,
-    computeType: "CPU",
-    cloudType: "SECURE",
-    cpuFlavorIds: [p.flavor],
-    cpuFlavorPriority: "custom",
-    vcpuCount: p.vcpu,
-    containerDiskInGb: p.disk_gb,
-    volumeInGb: 0,
-    ...(p.volume_id ? { networkVolumeId: p.volume_id, volumeMountPath: "/workspace" } : {}),
+    image: p.image,
+    cloud: "SECURE",
+    cpu: { id: p.flavor, vcpuCount: p.vcpu },
+    disk: p.disk_gb,
+    ...(p.volume_id ? { mounts: { network: [{ volumeId: p.volume_id, path: "/workspace" }] } } : {}),
     dataCenterIds: [p.dc],
     ports: ["8000/http"],
-    dockerStartCmd: ["/bin/bash", "-c", BUILD_POD_START_CMD],
+    cmd: ["/bin/bash", "-c", BUILD_POD_START_CMD],
     env,
   };
 }
@@ -421,7 +420,7 @@ async function refresh(env: Env, rows: BuildPodRow[]): Promise<BuildPodRow[]> {
       continue;
     }
     const p = await runpod.pod(env, r.pod_id);
-    const state = !p ? "deleted" : p.desiredStatus === "RUNNING" ? "running" : p.desiredStatus === "EXITED" || p.desiredStatus === "TERMINATED" ? "stopped" : r.state;
+    const state = !p ? "deleted" : p.status === "RUNNING" ? "running" : p.status === "EXITED" || p.status === "TERMINATED" ? "stopped" : r.state;
     if (state !== r.state) {
       const f: Record<string, unknown> = { state };
       if (state === "deleted") f.deleted_at = now();
@@ -537,7 +536,7 @@ export async function createBuildPod(
         const res = await runpod.create(env, payload);
         const podId = String(res?.id || "");
         if (!podId) throw new HttpError(502, "runpod: create answered without an id");
-        const dph = Number(res.costPerHr ?? c.price ?? 0);
+        const dph = Number(res.cost ?? c.price ?? 0);
         if (dph > pol.max_dph_per_pod) {
           await runpod.remove(env, podId).catch(() => {});
           errors.push(`${c.flavor}-${c.vcpu} in ${c.dc}: $${dph}/hr over the cap (deleted)`);

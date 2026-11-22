@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The in-pod self-delete (docs/adr/0023-lab-report-and-ci-bridge.md §4): inside a
-# Runpod pod, the pod-scoped RUNPOD_API_KEY may not DELETE /v1/pods/$RUNPOD_POD_ID
-# through REST (HTTP 403); GraphQL podTerminate with the same key works. Every
+# Runpod pod, the pod-scoped RUNPOD_API_KEY may not DELETE /v2/pods/$RUNPOD_POD_ID
+# through REST (HTTP 403 on v1, whose host is gone; v2 is not assumed to differ);
+# GraphQL podTerminate with the same key works. Every
 # in-pod self-delete calls fv_self_delete, defined once in
 # scripts/gpu/lib/self-delete.sh. This check fails when:
 #
@@ -172,8 +173,8 @@ for x in "${LOCAL[@]}"; do [[ -f "$x" ]] || bad "LOCAL names $x, which does not 
 # 1. No REST self-delete; the rule's own cases first.
 mkdir -p "$TMP/cases"
 printf '%s\n' 'curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" \' \
-  '  "https://rest.runpod.io/v1/pods/$FV_POD_ID"' >"$TMP/cases/alias.sh"
-printf '%s\n' 'import requests' 'requests.delete(' '    f"https://rest.runpod.io/v1/pods/{pod}",' \
+  '  "https://api.runpod.io/v2/pods/$FV_POD_ID"' >"$TMP/cases/alias.sh"
+printf '%s\n' 'import requests' 'requests.delete(' '    f"https://api.runpod.io/v2/pods/{pod}",' \
   '    headers={"Authorization": f"Bearer {key}"},' ')' >"$TMP/cases/multi.py"
 printf '%s\n' 'curl -sS -X DELETE -H "Authorization: Bearer $K" "$API/pods/$ME_ID"' >"$TMP/cases/onpod.sh"
 printf '%s\n' 'curl -sS -X DELETE -H "Authorization: Bearer $K" "$API/pods/$POD_ID"' >"$TMP/cases/local.sh"

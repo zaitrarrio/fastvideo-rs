@@ -11,7 +11,8 @@
 #   fv-deploy-goldens.sh --check   fail when a script's payload differs from the fixture
 #
 # No network: a fake curl on PATH answers the one lookup the pod plan makes
-# (GET /networkvolumes/<id> -> its data centre) and refuses anything else;
+# (GET /network-volumes/<id> -> its data centre) and refuses anything else
+# (the endpoint plan's GPU catalog lookup included: its pools fall back);
 # the GCP functions run in vm.sh's dry-run mode with a fixed project. In the
 # GCP instance, the metadata items that carry a repository file
 # (startup-script, fv-config, the verify scripts and tables) are written as
@@ -61,7 +62,7 @@ mkdir -p "$TMP/bin"
 cat >"$TMP/bin/curl" <<EOF
 #!/usr/bin/env bash
 for a in "\$@"; do
-  case "\$a" in */networkvolumes/$VOLUME) echo '{"id":"$VOLUME","dataCenterId":"$DC"}'; exit 0 ;; esac
+  case "\$a" in */network-volumes/$VOLUME) echo '{"id":"$VOLUME","dataCenter":"$DC"}'; exit 0 ;; esac
 done
 echo "fake curl: no network in the goldens (\$*)" >&2
 exit 7

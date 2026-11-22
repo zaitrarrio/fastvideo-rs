@@ -51,7 +51,8 @@ source "$HERE/../gpu/volumes.sh"
 source "$HERE/../gpu/runpod-cuda.sh"
 fv_check_volume "${RUNPOD_VOLUME_ID:-}" # the deleted US volume: refuse (EU only since 2026-10)
 
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CONFIG="${FV_SERVE_CONFIG:-$FV_IMAGE_CONFIG}"
 CONFIG_ENV_JSON="$(fv_config_env_json "$CONFIG")" || die "FV_SERVE_CONFIG=$CONFIG: no such worker config"
@@ -120,25 +121,26 @@ resolve_digest() {
   echo "ghcr.io/$repo@$digest"
 }
 
-# $1 image, $2 gpu type, $3 name, $4 api-key hash -> PodCreateInput JSON
+# $1 image, $2 gpu type, $3 name, $4 api-key hash -> the REST v2 CreatePodRequest JSON
 payload() {
   local image="$1" gpu="$2" name="$3" keyhash="$4" vol_json='{}'
   if [[ -n "${RUNPOD_VOLUME_ID:-}" ]]; then
     local dc
-    dc="$(rest GET "/networkvolumes/$RUNPOD_VOLUME_ID" | jq -r '.dataCenterId')"
-    vol_json="$(jq -n --arg v "$RUNPOD_VOLUME_ID" --arg dc "$dc" '{networkVolumeId: $v, volumeMountPath: "/workspace", dataCenterIds: [$dc]}')"
+    dc="$(rest GET "/network-volumes/$RUNPOD_VOLUME_ID" | jq -r '.dataCenter')"
+    vol_json="$(jq -n --arg v "$RUNPOD_VOLUME_ID" --arg dc "$dc" '{mounts: {network: [{volumeId: $v, path: "/workspace"}]}, dataCenterIds: [$dc]}')"
   fi
   jq -n --arg name "$name" --arg image "$image" --arg gpu "$gpu" --argjson cfg "$CONFIG_ENV_JSON" --arg cuda "$CUDA" \
     --arg keys "$keyhash" --argjson secrets "$SECRET_ENV_JSON" --argjson vol "$vol_json" --argjson ident "$(fv_image_env_json "$image")" '{
-      name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
-      gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 30, volumeInGb: 0,
+      name: $name, image: $image, cloud: "SECURE",
+      gpu: ({id: $gpu, count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
+      disk: 30,
       ports: ["8000/http", "70000/tcp"],
-      dockerEntrypoint: ["/opt/fastvideo-rs/bin/fv-boot"],
+      entrypoint: ["/opt/fastvideo-rs/bin/fv-boot"],
       env: ($secrets + $ident + $cfg + {
         FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
         FV_API_KEYS: $keys, FV_SERVE_FORWARD: "1", RUST_LOG: "info"
       })
-    } + $vol + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)'
+    } + $vol'
 }
 
 POD=""
@@ -169,7 +171,7 @@ create() {
     POD="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$POD" ]] || { log "create returned no id: $(head -c 300 <<<"$resp")"; continue; }
     ledger "pod-created $POD $name gpu=$gpu image=$image"
-    dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
+    dph="$(jq -r '.cost // 0' <<<"$resp")"
     if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then
       # Only when the billed price differs from the quote checked above.
       log "pod $POD on $gpu costs \$$dph/hr > cap \$$MAX_DPH (quoted \$$FV_QUOTED_DPH): deleting"
@@ -185,7 +187,7 @@ create() {
       >/dev/null 2>&1 &
     log "pod $POD: $gpu at \$$dph/hr (wall-clock cap ${CAP_S}s)"
     fv_deploy_created pod "$POD" name="$name" image="$image" gpu="$gpu" cost_per_hr="$dph" variant="$FV_CUDA_IMAGE" \
-      dc="$(jq -r '.machine.dataCenterId // .dataCenterId // empty' <<<"$resp")" meta="$(jq -nc --arg c "$CONFIG" '{config: $c}')"
+      dc="$(jq -r '.dataCenterId // empty' <<<"$resp")" meta="$(jq -nc --arg c "$CONFIG" '{config: $c}')"
     CREATED_GPU="$gpu"; CREATED_DPH="$dph"
     return 0
   done

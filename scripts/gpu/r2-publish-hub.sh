@@ -19,7 +19,8 @@
 # FV_PUB_VCPU (default 16); FV_PUB_DC; FV_PUB_FILES / FV_PUB_WINDOW (r2-weights.py --files / --window).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CFG="${FV_CONFIG_DIR:-/root/.config/fv}"
 CAP_S="${FV_POD_CAP_S:-5400}"
@@ -95,19 +96,26 @@ tarfile.open(fileobj=io.BytesIO(b)).extractall(\"/opt/fv\")
     payload="$(jq -n --arg name "fv-r2pub-$(date -u +%m%d%H%M)" --arg dc "${FV_PUB_DC:-}" --arg start "$start" \
       --arg vcpu "${FV_PUB_VCPU:-16}" --arg sha "$sha" --arg ep "https://$ACCT.r2.cloudflarestorage.com" --arg dests "$*" \
       --arg files "${FV_PUB_FILES:-4}" --arg window "${FV_PUB_WINDOW:-4}" '{
-        name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
-        cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: ($vcpu|tonumber),
-        containerDiskInGb: 20, ports: ["8000/http"], dockerStartCmd: ["/bin/bash","-lc",$start],
+        name: $name, image: "python:3.12-slim", cloud: "SECURE",
+        cpu: {id: "cpu3c", vcpuCount: ($vcpu|tonumber)},
+        disk: 20, ports: ["8000/http"], cmd: ["/bin/bash","-lc",$start],
         env: {FV_BUNDLE_URL: env.FVX_URL, FV_BUNDLE_SHA256: $sha, FV_WEIGHTS_R2_ENDPOINT: $ep, FV_WEIGHTS_R2_BUCKET: "fv-weights",
               FV_WEIGHTS_R2_ACCESS_KEY_ID: env.FVX_RWID, FV_WEIGHTS_R2_SECRET_ACCESS_KEY: env.FVX_RWSEC, HF_TOKEN: env.FVX_HF,
               FV_PUB_DESTS: $dests, FV_PUB_FILES: $files, FV_PUB_WINDOW: $window}
       } + (if $dc == "" then {} else {dataCenterIds: [$dc]} end)')"
     unset FVX_URL FVX_RWID FVX_RWSEC FVX_HF
-    resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(jq -r '.error // .' <<<"$resp" | head -c 300)"; exit 1; }
+    # v2 takes one CPU flavor per create (v1 listed several with cpuFlavorPriority
+    # "availability"): the flavors are tried in order.
+    resp=""
+    for flavor in ${FV_CPU_FLAVORS:-cpu3c cpu5c cpu3g}; do
+      if resp="$(rest POST /pods <<<"$(jq -c --arg f "$flavor" '.cpu.id = $f' <<<"$payload")" 2>&1)"; then break; fi
+      log "no $flavor pod: $(head -c 200 <<<"$resp")"; resp=""
+    done
+    [[ -n "$resp" ]] || { log "pod create failed (every flavor)"; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$id" ]] || { log "pod create failed: $(head -c 300 <<<"$resp")"; exit 1; }
     setsid nohup bash -c "sleep $CAP_S; curl -sS -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' \"\$RUNPOD_API_KEY\") '$API/pods/$id' >/dev/null 2>&1" >/dev/null 2>&1 </dev/null &
-    log "pod $id \$$(jq -r '.costPerHr' <<<"$resp")/hr, backstop pid $! deletes it after ${CAP_S}s; logs https://$id-8000.proxy.runpod.net/"
+    log "pod $id \$$(jq -r '.cost' <<<"$resp")/hr, backstop pid $! deletes it after ${CAP_S}s; logs https://$id-8000.proxy.runpod.net/"
     echo "$id"
     ;;
   status)

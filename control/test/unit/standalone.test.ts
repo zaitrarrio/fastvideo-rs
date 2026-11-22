@@ -262,8 +262,8 @@ describe("standalone pods: the spec", () => {
     expect(e.FV_DISPATCH_FRONT).toBeUndefined();
     const pl = workerPlacements(spec, spec.pools[0]!)[0]!;
     const payload = workerCreatePayload("fv-pod-h3-solo-1006", "img", spec.pools[0]!, pl, e);
-    expect(payload.dockerStartCmd).toEqual([WATCHDOG_WORKER_BOOT]);
-    expect(payload).toMatchObject({ networkVolumeId: "bz0ofkfx45", dataCenterIds: ["EU-RO-1"], gpuTypeIds: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"] });
+    expect(payload.cmd).toEqual([WATCHDOG_WORKER_BOOT]);
+    expect(payload).toMatchObject({ mounts: { network: [{ volumeId: "bz0ofkfx45", path: "/workspace" }] }, dataCenterIds: ["EU-RO-1"], gpu: { id: "NVIDIA RTX PRO 6000 Blackwell Server Edition", count: 1 } });
     const plain = workerSystemEnv(base, spec.pools[0]!, "img");
     expect(plain.FV_CLUSTER_DEADLINE).toBeUndefined();
     expect(bootFor(plain)).toBe(WORKER_BOOT);

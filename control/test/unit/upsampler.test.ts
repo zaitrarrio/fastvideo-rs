@@ -79,7 +79,7 @@ describe("the pods: env and boot", () => {
     expect(b.indexOf(UPSAMPLER_START_SH)).toBeGreaterThan(b.indexOf("mkdir -p /fvstate"));
     expect(b.indexOf(UPSAMPLER_WAIT_SH)).toBeLessThan(b.indexOf("exec /opt/fastvideo-rs/bin/fv-serve"));
     // the volume is still mounted (the GGUF goes to the container disk, never the volume)
-    expect((workerCreatePayload("n", "img", { ...h3, upsampler_local: true } as any, { region: "eu", dc: "EU-RO-1", gpu: "g" }, e) as any).networkVolumeId).toBeTruthy();
+    expect((workerCreatePayload("n", "img", { ...h3, upsampler_local: true } as any, { region: "eu", dc: "EU-RO-1", gpu: "g" }, e) as any).mounts.network[0].volumeId).toBeTruthy();
     // off: no env, the boot unchanged
     const off = workerSystemEnv(ctxOf(env), h3 as any, "img");
     expect(Object.keys(off).filter((k) => k.startsWith("FV_UPSAMPLER"))).toEqual([]);

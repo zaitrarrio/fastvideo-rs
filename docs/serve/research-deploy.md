@@ -236,7 +236,7 @@ Field notes:
 ## 2. Runpod pods
 
 How we create pods today: `scripts/gpu/runpod-http.sh` `create_pod()`.
-- REST v1 call: `POST https://rest.runpod.io/v1/pods` with `imageName`, `cloudType: SECURE`, `gpuTypeIds`, `containerDiskInGb`, `networkVolumeId`, `volumeMountPath: /workspace`, `dataCenterIds`, `ports: ["8000/http"]`, `dockerStartCmd`.
+- REST v2 call (since 2026-11-19; v1 at rest.runpod.io is retired and its name no longer resolves): `POST https://api.runpod.io/v2/pods` with `image`, `cloud: SECURE`, `gpu: {id, count: 1, allowedCudaVersions?, minRamPerGpu?}`, `disk`, `mounts: {network: [{volumeId, path: /workspace}]}`, `dataCenterIds`, `ports: ["8000/http"]`, `cmd`. The answer's hourly rate is `cost`, its state `status`; `GET /pods` wraps the list as `{"pods": [...]}`.
 - It picks a stocked data center through GraphQL `dataCenters{gpuAvailability}`.
 - Results come back over `https://<pod>-8000.proxy.runpod.net`.
 - A price cap and a wall-clock cap guard spending, and the pod is deleted at the end.
@@ -355,7 +355,7 @@ Base: CI publishes `ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-<7>` (and `build
 
 | Concern | Runpod pod | Runpod Serverless (queue) | Runpod Serverless (LB) | Vast instance / serverless |
 |---|---|---|---|---|
-| Start | `dockerStartCmd` / REST `args` → server binary | ENTRYPOINT = server in `runpod-queue` mode (Rust job-take loop, §1.1) | ENTRYPOINT = server listening on `$PORT` | `--entrypoint`/`--args` (args runtype = image as is), or onstart in ssh mode. Serverless: template onstart → `start_server.sh` + our `worker.py`, server started by onstart |
+| Start | `cmd` (v1 `dockerStartCmd`) / REST `args` → server binary | ENTRYPOINT = server in `runpod-queue` mode (Rust job-take loop, §1.1) | ENTRYPOINT = server listening on `$PORT` | `--entrypoint`/`--args` (args runtype = image as is), or onstart in ssh mode. Serverless: template onstart → `start_server.sh` + our `worker.py`, server started by onstart |
 | Health | Our `/healthz` via proxy; the driver polls like `wait_up` in runpod-http.sh | Heartbeat to `RUNPOD_WEBHOOK_PING`; fail fast and exit non-zero on CUDA init failure (the SDK uses `os._exit(1)`, `_health/fitness.py`) | `GET /ping`: 204 while weights load, 200 when ready (§1.3) | `/healthz`. Serverless: `on_load` log line + benchmark (§3.4) |
 | Weights | Network volume at `/workspace` (current practice: `RUNPOD_VOLUME_NAME` volumes, read-only use; runpod-http.sh notes silently dropped writes) | Network volume at `/runpod-volume` (pins the DC; attach one per DC) or a global volume; baking 10s of GB into the image slows cold pulls (INFERRED) | Same as queue | Download at boot with `hf-fm` to the container disk, or a local volume; bake small models |
 | Warm start | Keep the pod running | `workers.min ≥1` removes cold starts (billed); FlashBoot; keep weights resident across jobs in one process | Same; `strict-resume` affinity | Vast serverless `cold_mult`/`min_cold_load` keep stopped instances with a warm disk (INFERRED from parameter names; https://docs.vast.ai/guides/serverless/serverless-parameters) |
@@ -412,7 +412,7 @@ strobe is our near-real-time WebRTC video generation server. Its source was read
   - It returns `{"id","state","stats"}`, or `{"error", "stats"}` on failure.
   - It sends no progress updates. Viewers find the stream at the SFU, not via `/status`.
 - Endpoint type: "Use a QUEUE-based endpoint, not load-balancing: streams are long jobs". "Set executionTimeout >= your max stream length (default is 600s)".
-- Settings actually used. They go through REST **v1** `https://rest.runpod.io/v1` (`POST /templates`, then `POST /endpoints`), not the v2 API in §1.5:
+- Settings actually used. They went through REST **v1** `https://rest.runpod.io/v1` (`POST /templates`, then `POST /endpoints`), not the v2 API in §1.5 (v1 is retired since 2026-11: the same settings are v2's `serverless: true` template and `POST /serverless` with `type: QUEUE`, `gpu: {pools}`, `workers: {min, max, idleTimeout}`, `scaling: {type: QUEUE_DELAY, queueDelay}`, `timeout` ms, `flashboot: FLASHBOOT`, `networkVolumes`):
   - Template: `isServerless: true`, `imageName: ghcr.io/<owner>/strobe:gpu` (or `@sha256:` digest pin), `containerDiskInGb` 50, `volumeInGb` 0, `dockerStartCmd: ["python3.12","-m","strobe.runpod_handler"]`, `env` = `STROBE_*` + HF/Torch caches on the volume.
   - Endpoint: `computeType GPU`, `gpuTypeIds` (default `NVIDIA H100 80GB HBM3, NVIDIA A100-SXM4-80GB, NVIDIA GeForce RTX 4090`), `workersMin` 1 in the script (0 in the UI), `workersMax` 3, `idleTimeout` 300, `scalerType QUEUE_DELAY`/`scalerValue 4`, `executionTimeoutMs = STROBE_MAX_STREAM_SECONDS×1000` (default 600 s), `flashboot: true`, and optional `networkVolumeId`.
   - Production guidance in `CLAUDE.md`: "`gpuTypeIds` = SXM/NVL only, `executionTimeoutMs=1800000` (cold start ~7 min), and `workersMin≥1`".
@@ -422,7 +422,7 @@ strobe is our near-real-time WebRTC video generation server. Its source was read
   - `TORCHINDUCTOR_CACHE_DIR`/`TRITON_CACHE_DIR` under `<volume>/torch-compile`, "so only the first cold worker pays the compile";
   - TensorRT VAE plans at `/runpod-volume/trt-vae` (`scripts/deploy/runpod-configure-optimal.sh`).
   - Weights are uploaded through Runpod's S3-compatible API at `https://s3api-<dc>.runpod.io` with separate S3 keys, no pod needed (`runpod-common.sh` `runpod_s3_endpoint`).
-- Image pull: the GHCR package is public, so no registry credential is needed. If private, the code recreates `containerregistryauth` on every deploy because "RunPod stores registry credentials immutably (there is no update endpoint)" and a rotated token fails silently.
+- Image pull: the GHCR package is public, so no registry credential is needed. If private, the code recreates `containerregistryauth` (v2: `POST /registries`, which does have `PATCH /registries/{id}`) on every deploy because "RunPod stores registry credentials immutably (there is no update endpoint)" and a rotated token fails silently.
   - Templates pin the image **digest** so FlashBoot or scale-up relaunches pull the exact tested image (`deploy/runpod/README.md`).
 - The Runpod pod variant uses the same image with the default CMD (`strobe.server`), `ports: ["8080/http"]`, and health at `https://<pod>-8080.proxy.runpod.net/healthz` (`runpod.ts` `provisionPod`/`getPodStatus`).
 

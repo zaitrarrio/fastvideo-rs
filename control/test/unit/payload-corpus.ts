@@ -1,15 +1,17 @@
 // The payload corpus (plan C3c, docs/adr/0018-fv-deploy.md §7.2): every Runpod request body fv-control builds, over a
 // representative set of inputs, through the public payload builders only (workerSystemEnv / workerPlacements /
-// workerCreatePayload, templateCreatePayload / templateUpdatePayload / endpointCreatePayload / endpointUpdatePayload /
-// v2CreatePayload, migrateSpec / specOf for stored specs), so the same file runs against any revision that has them.
+// workerCreatePayload, templateCreatePayload / templateUpdatePayload / endpointCreatePayload / endpointUpdatePayload,
+// migrateSpec / specOf for stored specs), so the same file runs against any revision that has them.
 // fixtures/payload-corpus.json is the snapshot; payload-corpus.test.ts compares. The snapshot was first written from
-// main at 2258aec2 (the builders before C3c); see the test for the regenerate command.
+// main at 2258aec2 (the builders before C3c) and rewritten for REST v2 on 2026-11-19 (v1 is retired: every body
+// changed shape; the `v2` cases are now the endpoint create with the catalog's pools); see the test for the regenerate
+// command.
 import { createHash } from "node:crypto";
 import type { Env } from "../../src/env";
 import { workerCreatePayload, workerPlacements, workerSystemEnv, type EnvCtx } from "../../src/cluster/payloads";
 import { defaultSpec, migrateSpec, normalizeSpec, POOL_PRESETS, presetPool, TEMPLATES, type ClusterSpec } from "../../src/cluster/spec";
 import { standaloneSpec } from "../../src/standalone";
-import { endpointCreatePayload, endpointUpdatePayload, templateCreatePayload, templateUpdatePayload, v2CreatePayload } from "../../src/serverless/payloads";
+import { endpointCreatePayload, endpointUpdatePayload, templateCreatePayload, templateUpdatePayload } from "../../src/serverless/payloads";
 import { normalizeEndpointSpec, type EndpointSpec } from "../../src/serverless/spec";
 import { SLS_PRESETS } from "../../src/serverless/presets";
 import { specOf, type SlsRow } from "../../src/serverless/ops";
@@ -179,7 +181,8 @@ export function corpus(): Record<string, unknown> {
     put(`sls/${name}/template-update`, () => templateUpdatePayload(s, IMAGE, w));
     put(`sls/${name}/endpoint`, () => endpointCreatePayload(s, "tpl1"));
     put(`sls/${name}/endpoint-update`, () => endpointUpdatePayload(s, { ...s, allowed_cuda: ["13.0"] }));
-    put(`sls/${name}/v2`, () => v2CreatePayload(s, IMAGE, ["BLACKWELL_96"], w));
+    // The create with the catalog's pools (what ops.ts createEndpoint sends; the `endpoint` case above has none).
+    put(`sls/${name}/v2`, () => endpointCreatePayload(s, "tpl1", { pools: ["BLACKWELL_96"] }));
   }
   return out;
 }

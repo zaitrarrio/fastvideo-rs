@@ -196,9 +196,7 @@ fn wall_cap_can_only_be_lowered() {
     let plan = stdout(fv_lab().args(up).args(["--wall-cap-s", "1800"]));
     let v: serde_json::Value = serde_json::from_str(&plan).expect("json plan");
     assert_eq!(v["launch"]["guards"]["cap_s"], 1800, "{plan}");
-    let cmd = v["requests"][0]["body"]["dockerStartCmd"][2]
-        .as_str()
-        .unwrap_or("");
+    let cmd = v["requests"][0]["body"]["cmd"][2].as_str().unwrap_or("");
     assert!(cmd.contains("sleep 1800\n"), "{cmd}");
     assert!(!cmd.contains("sleep 14400"), "{cmd}");
     let default = stdout(fv_lab().args(up));
@@ -299,9 +297,7 @@ fn a_baseline_tier_needs_the_baseline_commit() {
     assert!(!fv_lab().args(up).output().unwrap().status.success());
     let plan = stdout(fv_lab().args(up).args(["--baseline-sha", "7654321"]));
     let v: serde_json::Value = serde_json::from_str(&plan).expect("json plan");
-    let cmd = v["requests"][0]["body"]["dockerStartCmd"][2]
-        .as_str()
-        .unwrap_or("");
+    let cmd = v["requests"][0]["body"]["cmd"][2].as_str().unwrap_or("");
     assert!(
         cmd.contains("env FV_BASELINE_SHA=7654321 FV_WORK=/workspace"),
         "{cmd}"
@@ -396,7 +392,10 @@ fn pod_up_without_yes_is_the_plan_and_needs_no_key() {
     assert_eq!(v["launch"]["guards"]["cap_s"], 14400);
     assert_eq!(v["launch"]["guards"]["ready_timeout_s"], 600);
     assert_eq!(v["requests"][0]["method"], "POST");
-    assert_eq!(v["requests"][0]["body"]["networkVolumeId"], "bz0ofkfx45");
+    assert_eq!(
+        v["requests"][0]["body"]["mounts"]["network"][0]["volumeId"],
+        "bz0ofkfx45"
+    );
     let bad = fv_lab()
         .args(["pod", "up", "--sha", "nothex", "--family", "rtx6000"])
         .output()
@@ -474,7 +473,7 @@ fn pod_up_cells_must_be_arms_of_the_tier() {
     for want in [
         "\"FV_WEIGHTS_R2_ACCESS_KEY_ID\": \"{{ RUNPOD_SECRET_fv_r2_access_key_id }}\"",
         "\"FV_WEIGHTS_R2_SECRET_ACCESS_KEY\": \"{{ RUNPOD_SECRET_fv_r2_secret_access_key }}\"",
-        "\"containerDiskInGb\": 300",
+        "\"disk\": 300",
     ] {
         assert!(plan.contains(want), "{want}\n{plan}");
     }
@@ -1033,9 +1032,7 @@ fn the_oracle_pod_needs_its_references_and_the_d1d_knobs_are_refused() {
     }
     let plan = stdout(fv_lab().args(up).args(cells).args(url));
     let v: serde_json::Value = serde_json::from_str(&plan).expect("json plan");
-    let cmd = v["requests"][0]["body"]["dockerStartCmd"][2]
-        .as_str()
-        .unwrap_or("");
+    let cmd = v["requests"][0]["body"]["cmd"][2].as_str().unwrap_or("");
     assert!(cmd.contains("env FV_ORACLE_URL=https://abc-8000.proxy.runpod.net/upstream/1234567-10260100 FV_WORK=/workspace"), "{cmd}");
     assert!(cmd.contains("FV_GEN_TIMEOUT_S=5400"), "{cmd}");
     let (code, _, err) = out_err(
@@ -1091,9 +1088,7 @@ fn a_wan_pod_needs_references_only_for_the_oracle_arms_it_selects() {
     // The S6 arms (no --yes: the plan, no request): past the check.
     let plan = stdout(fv_lab().args(up).args(["--cells", s6]));
     let v: serde_json::Value = serde_json::from_str(&plan).expect("json plan");
-    let cmd = v["requests"][0]["body"]["dockerStartCmd"][2]
-        .as_str()
-        .unwrap_or("");
+    let cmd = v["requests"][0]["body"]["cmd"][2].as_str().unwrap_or("");
     assert!(
         cmd.contains("FV_CELLS=\"wan13-dmd wan13-dmd-dense kernels-wan cli-fw22 engine-fw22\""),
         "{cmd}"
@@ -1180,11 +1175,11 @@ fn oracle_without_yes_is_the_plan_and_needs_no_key() {
         "ghcr.io/zaitrarrio/fastvideo-rs-upstream-fastvideo:latest"
     );
     let body = &up[0]["requests"][0]["body"];
-    assert_eq!(body["minRAMPerGPU"], 192);
-    assert_eq!(body["networkVolumeId"], "bz0ofkfx45");
+    assert_eq!(body["gpu"]["minRamPerGpu"], 192);
+    assert_eq!(body["mounts"]["network"][0]["volumeId"], "bz0ofkfx45");
     assert_eq!(body["dataCenterIds"], serde_json::json!(["EU-RO-1"]));
     assert_eq!(up[0]["launch"]["guards"]["ready_timeout_s"], 600);
-    let cmd = body["dockerStartCmd"][2].as_str().unwrap();
+    let cmd = body["cmd"][2].as_str().unwrap();
     assert!(cmd.contains("UP_STEPS=\"info:box weights:h3-diffusers oracle:fasth3-4step-vsa\""));
     assert!(cmd.contains(&format!("origin {UP} ")));
     let rt = &v["runtime"];

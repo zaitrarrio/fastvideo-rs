@@ -33,7 +33,7 @@ tower = { workspace = true, features = ["util"] }
 
 [features]
 default = []
-# Runpod REST v1 / GraphQL / queue-health clients over reqwest, the
+# Runpod REST v2 / GraphQL / queue-health clients over reqwest, the
 # gateway pools poller, and the standalone `fv-autoscale` binary.
 runpod = ["dep:reqwest", "dep:tracing-subscriber", "tokio/net", "tokio/rt-multi-thread", "tokio/signal"]
 # The D1 lease over HTTPS (the D1 client's reqwest transport).

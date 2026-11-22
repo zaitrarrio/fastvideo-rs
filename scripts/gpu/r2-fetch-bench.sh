@@ -17,7 +17,8 @@
 # FV_BENCH_RAW_S, FV_BENCH_FETCH (see r2-fetch-bench.py).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 CFG="${FV_CONFIG_DIR:-/root/.config/fv}"
 CAP_S="${FV_BENCH_CAP_S:-2700}"
@@ -53,10 +54,10 @@ tarfile.open(fileobj=io.BytesIO(b)).extractall(\"/opt/fv\")
     --arg ep "https://$ACCT.r2.cloudflarestorage.com" --arg trees "$trees" --argjson dcs "$(printf '%s\n' "${dcs[@]}" | jq -R . | jq -s 'map(select(length > 0))')" \
     --arg raw "${FV_BENCH_RAW-32:64 64:64 128:64 64:256 128:256 64:64:h}" --arg raws "${FV_BENCH_RAW_S:-20}" \
     --arg fetch "${FV_BENCH_FETCH:-32:1 32:1:--no-full-hash 64:1:--no-full-hash 64:4:--no-full-hash 128:4:--no-full-hash 128:2:--no-full-hash 64:4}" '{
-      name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
-      cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: ($vcpu|tonumber),
-      containerDiskInGb: 80, dataCenterIds: $dcs, dataCenterPriority: "availability", ports: ["8000/http"],
-      dockerStartCmd: ["/bin/bash","-lc",$start],
+      name: $name, image: "python:3.12-slim", cloud: "SECURE",
+      cpu: {id: "cpu3c", vcpuCount: ($vcpu|tonumber)},
+      disk: 80, dataCenterIds: $dcs, ports: ["8000/http"],
+      cmd: ["/bin/bash","-lc",$start],
       env: {FV_BENCH_B64: env.FVX_B64, FV_BENCH_SHA256: $sha, FV_WEIGHTS_R2_ENDPOINT: $ep, FV_WEIGHTS_R2_BUCKET: "fv-weights",
             FV_R2_RO_ID: env.FVX_ROID, FV_R2_RO_SECRET: env.FVX_ROSEC, FV_BENCH_TREES: $trees, FV_BENCH_RAW: $raw, FV_BENCH_RAW_S: $raws, FV_BENCH_FETCH: $fetch}
     }')"
@@ -71,17 +72,26 @@ case "${1:-}" in
     bal="$(balance)"
     awk -v b="$bal" -v m="$MIN_BALANCE" 'BEGIN{exit !(b+0 >= m+2)}' || { log "balance \$$bal too close to \$$MIN_BALANCE"; exit 1; }
     mkpayload
-    resp="$(rest POST /pods <<<"$payload")" || { log "pod create failed: $(jq -r '.error // .' <<<"$resp" 2>/dev/null | head -c 300)"; exit 1; }
+    # (v1's dataCenterPriority "availability" has no v2 field: dataCenterIds is
+    # already a preference list the scheduler picks from.)
+    # v2 takes one CPU flavor per create (v1 listed several with cpuFlavorPriority
+    # "availability"): the flavors are tried in order.
+    resp=""
+    for flavor in ${FV_CPU_FLAVORS:-cpu3c cpu5c cpu3g}; do
+      if resp="$(rest POST /pods <<<"$(jq -c --arg f "$flavor" '.cpu.id = $f' <<<"$payload")" 2>&1)"; then break; fi
+      log "no $flavor pod: $(head -c 200 <<<"$resp")"; resp=""
+    done
+    [[ -n "$resp" ]] || { log "pod create failed (every flavor)"; exit 1; }
     id="$(jq -r '.id // empty' <<<"$resp")"
     [[ -n "$id" ]] || { log "pod create failed: $(head -c 300 <<<"$resp")"; exit 1; }
     setsid nohup bash -c "sleep $CAP_S; curl -sS -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' \"\$RUNPOD_API_KEY\") '$API/pods/$id' >/dev/null 2>&1" >/dev/null 2>&1 </dev/null &
-    log "pod $id \$$(jq -r '.costPerHr' <<<"$resp")/hr in $(jq -r '.machine.dataCenterId // .dataCenterId // "?"' <<<"$resp"), balance \$$bal; backstop pid $! deletes it after ${CAP_S}s; https://$id-8000.proxy.runpod.net/"
+    log "pod $id \$$(jq -r '.cost' <<<"$resp")/hr in $(jq -r '.dataCenterId // "?"' <<<"$resp"), balance \$$bal; backstop pid $! deletes it after ${CAP_S}s; https://$id-8000.proxy.runpod.net/"
     echo "$id"
     ;;
   rerun)
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
     id="${2:?pod id}"; dcs=(); mkpayload
-    rest PATCH "/pods/$id" <<<"$(jq -c '{env, dockerStartCmd}' <<<"$payload")" >/dev/null || { log "update of $id failed"; exit 1; }
+    rest PATCH "/pods/$id" <<<"$(jq -c '{env, cmd}' <<<"$payload")" >/dev/null || { log "update of $id failed"; exit 1; }
     log "pod $id updated: the bench runs again with the current scripts"
     ;;
   status)

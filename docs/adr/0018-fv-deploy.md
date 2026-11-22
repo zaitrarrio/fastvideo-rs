@@ -712,6 +712,34 @@ pods and endpoints live in its own tables, so `reconcile` reports fv-control's s
 - fv-control names `cap_s` as unchecked without a deadline (`SLS_GUARDS_NOT_CHECKED_WITHOUT_DEADLINE`); §7.2 / §7.3's
   "fail-closed 0" text is marked superseded by §10.4.
 
+### 11. Runpod REST v2 (2026-11-19)
+
+Runpod retired REST v1 (`https://rest.runpod.io/v1`: the host no longer resolves; "REST API v1 is deprecated and no
+longer available"). `crates/fastvideo-deploy`'s Runpod code (`provider::runpod`, `release::{templates, reconcile}`,
+the in-pod watchdog) now speaks REST v2 at `https://api.runpod.io/v2` (`runpod::REST`, `watchdog::RUNPOD_REST`;
+`RUNPOD_API_BASE` still overrides). GraphQL (balance, price quotes), the queue API, `hapi` and the pods' proxy are
+unchanged. The scripts were ported in the same change set, so §4's rule holds: the fixtures under
+`fixtures/deploy/` and `crates/fastvideo-lab/fixtures/runpod-http-*.json` are the scripts' v2 `plan` bodies, and
+the Rust bodies equal them. The field map (`crates/fastvideo-deploy/src/provider/runpod/*.rs` doc comments):
+
+| v1 | v2 | Notes |
+|---|---|---|
+| `POST /pods` body: `imageName`, `cloudType`, `computeType: GPU`, `gpuTypeIds: [t]` + `gpuCount` + `allowedCudaVersions` + `minRAMPerGPU`, `containerDiskInGb`, `dockerEntrypoint` / `dockerStartCmd`, `networkVolumeId` + `volumeMountPath`, `volumeInGb` | `image`, `cloud`, (none: a `gpu` object is a GPU pod), `gpu: {id, count, allowedCudaVersions, minRamPerGpu}`, `disk`, `entrypoint` / `cmd`, `mounts.network: [{volumeId, path}]`, `mounts.persistent: {size, path}` | v2 takes one GPU type per pod; the lifecycle already tried the types one launch at a time (`Launch::for_gpu`). `volumeInGb: 0` has no v2 form (a persistent disk is ≥ 10 GB and cannot sit beside a network volume): a launch without a pod disk sends no `persistent`. |
+| pod answers: `desiredStatus` (`CREATED`, `PENDING`, `STARTING`, `RUNNING`, `EXITED`, `STOPPED`, `TERMINATED`, `TERMINATING`), `costPerHr`, `machine.dataCenterId`, `machine.gpuDisplayName`, `memoryInGb`, `vcpuCount`, `machineId`; `GET /pods` a bare array | `status` (`PROVISIONING`, `STARTING`, `RUNNING`, `EXITED`, `ERROR`, `TERMINATED`), `cost`, `dataCenterId`, `gpu.id`, `gpu.memory`, `gpu.vcpuCount`; `{"pods": [...], "pagination": {nextCursor, hasNextPage}}` | `ERROR` maps to `Unknown` (the backstop does not stand down on it). `machineId` has no v2 field (GraphQL still reports it; nothing in the crate read it). `RunpodApi::list` follows `nextCursor`; a page without the wrapper key is an error, never "nothing". |
+| `POST /pods/{id}/stop` and kin | `POST /pods/{id}/action` `{"action": start \| stop \| restart \| terminate}` | `Requests::pod_action`; nothing in the crate stops a pod. |
+| templates: `imageName`, `isServerless`, `containerDiskInGb`, `dockerEntrypoint` / `dockerStartCmd`, `volumeInGb` + `volumeMountPath`, `containerRegistryAuthId`, `readme`; `GET /templates` a bare array | `image`, `serverless`, `disk`, `entrypoint` / `cmd`, `mounts.persistent {size, path}` (only with a disk), `registry`, no readme; `{"templates": [...]}` | The serve templates have no persistent disk, so the pod flavour's `volumeMountPath` is gone with it (the pod created from the template names its network mount, `template_pod_body`). v2 writes no readme (`GET /templates/{id}/readme` only). `serverless` and `category` stay create-only as `isServerless` / `category` were. **Not sent** (as the script): `startJupyter` / `startSsh`, which v2's create defaults to `true` (a `JUPYTER_PASSWORD` env in every container; `PUBLIC_KEY` only with registered SSH keys); fv-boot reads neither. |
+| endpoints: `POST /endpoints`, `GET /endpoints[/{id}]`, `PATCH /endpoints/{id}`, `DELETE /endpoints/{id}`; body `computeType`, `gpuTypeIds` + `gpuCount` + `minCudaVersion` + `allowedCudaVersions`, `networkVolumeId`, `workersMin` / `workersMax` / `idleTimeout`, `scalerType` + `scalerValue`, `flashboot: bool`, `executionTimeoutMs`; answers `templateId`, `gpuTypeIds`; `GET /endpoints` a bare array | `/serverless` (same verbs), `type: "QUEUE"` (required), `gpu: {pools, excludedTypes, count, minCudaVersion \| allowedCudaVersions}`, `networkVolumes: [id]`, `workers: {min, max, idleTimeout}`, `scaling: {type, queueDelay \| requestCount}`, `flashboot: "OFF" \| "FLASHBOOT"`, `timeout`; answers carry the container config (`image`, `env`) and `gpu.pools`, no template id; `{"endpoints": [...]}` | v1 named GPU **types**; v2 names serverless **pools** (`GET /catalog/gpus` `pool`) narrowed by `excludedTypes`, with no inclusive allowlist. `Serverless::create` reads the catalog once and resolves each launch type to its pool with the pool's other types excluded (`EndpointGpu::resolve`: a name that is itself a pool is the whole pool; an unknown type or one outside every pool refuses the launch before anything is created). `fv-deploy plan` sends nothing and shows the script's fallback pool, `ADA_24` (`EndpointGpu::unresolved`). An exact CUDA set and a floor are mutually exclusive in v2: the floor goes only without a set. `idleTimeout` goes only with `QUEUE_DELAY` (v2 refuses it with `REQUEST_COUNT`). A v2 endpoint does not name its template: `sweep` finds fv-deploy's template by the endpoint's name (its second pass, as before), and `reconcile` reads the endpoint's own `image`. `destroy`'s workers-to-zero is `{"workers": {"min": 0, "max": 0}}`. |
+| `GET /networkvolumes[/{id}]`, `dataCenterId` | `GET /network-volumes[/{id}]`, `dataCenter` | Read by the scripts only; the crate names no volume endpoint. |
+| `includeWorkers`, `includeTemplate` query parameters | none (`GET /serverless/{id}/workers`) | The crate used neither. |
+
+`tests/release_goldens.rs` runs on the mock's `/v2/` routes (`scripts/serve/tests/mock_api.py` serves both
+versions; `fv-deploy-release-goldens.sh` drives v2 too). `fastvideo-autoscale` sends fv-deploy's `Requests`
+(§9) and reads v2 on its side too: `endpoint_settings` reads `workers.{min,max,idleTimeout}` and
+`scaling.{type,queueDelay|requestCount}` (`queueDelay` as whole seconds), `endpoint_patch` sends the changed
+fields in that shape (`scaling` whole when its type or value differs, `idleTimeout` only with `QUEUE_DELAY`), the
+pod pool reads `status` / `cost` / `gpu.id` from the paged `{"pods": [...]}` listing (`RunpodApi::pods` follows
+`nextCursor`; a non-listing answer is an error, never "no pods").
+
 ## Consequences
 
 - One Rust path for a Runpod launch, with the guards in one place and testable without a network; the scripts stay

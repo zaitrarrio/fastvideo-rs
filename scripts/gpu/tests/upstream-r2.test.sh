@@ -242,7 +242,7 @@ check_plan "with the Hub token" "{\"HF_TOKEN\":\"{{ RUNPOD_SECRET_fv_hf_token }}
 cmd() { # <K=V …>: the body's start command
   env -i PATH="$PATH" HOME="$TMP" LC_ALL=C RUNPOD_API_KEY=test FV_PLAN_VOLUME="vol0 EU-RO-1" \
     UP_SHA=1234567890abcdef1234567890abcdef12345678 "$@" \
-    bash "$ROOT/scripts/gpu/runpod-http.sh" plan-upstream 1234567 1234567-10261200 | jq -r '.dockerStartCmd[2]'
+    bash "$ROOT/scripts/gpu/runpod-http.sh" plan-upstream 1234567 1234567-10261200 | jq -r '.cmd[2]'
 }
 CAPTURE='_fvr2_id="${FV_WEIGHTS_R2_ACCESS_KEY_ID:-}" _fvr2_secret="${FV_WEIGHTS_R2_SECRET_ACCESS_KEY:-}"; unset FV_WEIGHTS_R2_ACCESS_KEY_ID FV_WEIGHTS_R2_SECRET_ACCESS_KEY'
 HANDOFF='FV_WEIGHTS_R2_ACCESS_KEY_ID="$_fvr2_id" FV_WEIGHTS_R2_SECRET_ACCESS_KEY="$_fvr2_secret" env '

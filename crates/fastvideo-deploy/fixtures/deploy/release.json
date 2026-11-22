@@ -104,9 +104,9 @@
         "retag cpu-stable",
         "retag cuda-stable",
         "retag stable",
-        "PATCH /v1/templates/tpl-cuda-sls",
-        "PATCH /v1/templates/tpl-cuda-pod",
-        "PATCH /v1/templates/tpl-cpu-pod",
+        "PATCH /v2/templates/tpl-cuda-sls",
+        "PATCH /v2/templates/tpl-cuda-pod",
+        "PATCH /v2/templates/tpl-cpu-pod",
         "d1 INSERT releases"
       ],
       "prog": "release",
@@ -127,9 +127,9 @@
       "runpod": [
         [
           "PATCH",
-          "/v1/templates/tpl-cuda-sls",
+          "/v2/templates/tpl-cuda-sls",
           {
-            "containerDiskInGb": 20,
+            "disk": 20,
             "env": {
               "FV_AUTH_MODE": "trust-gateway",
               "FV_CACHE_DIR": "/fvstate/cache",
@@ -149,17 +149,15 @@
               "FV_WEIGHTS": "/runpod-volume/weights",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
-            "name": "fv-serve-cuda-sls",
-            "readme": "fv-serve cuda (sls), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "name": "fv-serve-cuda-sls"
           }
         ],
         [
           "PATCH",
-          "/v1/templates/tpl-cuda-pod",
+          "/v2/templates/tpl-cuda-pod",
           {
-            "containerDiskInGb": 30,
+            "disk": 30,
             "env": {
               "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
               "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -178,22 +176,19 @@
               "FV_WEIGHTS": "/workspace/weights",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
             "name": "fv-serve-cuda-pod",
             "ports": [
               "8000/http",
               "70000/tcp"
-            ],
-            "readme": "fv-serve cuda (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0,
-            "volumeMountPath": "/workspace"
+            ]
           }
         ],
         [
           "PATCH",
-          "/v1/templates/tpl-cpu-pod",
+          "/v2/templates/tpl-cpu-pod",
           {
-            "containerDiskInGb": 30,
+            "disk": 30,
             "env": {
               "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
               "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -210,14 +205,11 @@
               "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
             "name": "fv-serve-cpu-pod",
             "ports": [
               "8000/http"
-            ],
-            "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0,
-            "volumeMountPath": "/workspace"
+            ]
           }
         ]
       ],
@@ -530,9 +522,9 @@
         "retag cpu-stable",
         "retag cuda-stable",
         "retag stable",
-        "PATCH /v1/templates/tpl-cuda-sls",
-        "PATCH /v1/templates/tpl-cuda-pod",
-        "PATCH /v1/templates/tpl-cpu-pod",
+        "PATCH /v2/templates/tpl-cuda-sls",
+        "PATCH /v2/templates/tpl-cuda-pod",
+        "PATCH /v2/templates/tpl-cpu-pod",
         "d1 UPDATE releases",
         "d1 INSERT releases"
       ],
@@ -554,9 +546,9 @@
       "runpod": [
         [
           "PATCH",
-          "/v1/templates/tpl-cuda-sls",
+          "/v2/templates/tpl-cuda-sls",
           {
-            "containerDiskInGb": 20,
+            "disk": 20,
             "env": {
               "FV_AUTH_MODE": "trust-gateway",
               "FV_CACHE_DIR": "/fvstate/cache",
@@ -576,17 +568,15 @@
               "FV_WEIGHTS": "/runpod-volume/weights",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
-            "name": "fv-serve-cuda-sls",
-            "readme": "fv-serve cuda (sls), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+            "name": "fv-serve-cuda-sls"
           }
         ],
         [
           "PATCH",
-          "/v1/templates/tpl-cuda-pod",
+          "/v2/templates/tpl-cuda-pod",
           {
-            "containerDiskInGb": 30,
+            "disk": 30,
             "env": {
               "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
               "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -605,22 +595,19 @@
               "FV_WEIGHTS": "/workspace/weights",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
             "name": "fv-serve-cuda-pod",
             "ports": [
               "8000/http",
               "70000/tcp"
-            ],
-            "readme": "fv-serve cuda (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0,
-            "volumeMountPath": "/workspace"
+            ]
           }
         ],
         [
           "PATCH",
-          "/v1/templates/tpl-cpu-pod",
+          "/v2/templates/tpl-cpu-pod",
           {
-            "containerDiskInGb": 30,
+            "disk": 30,
             "env": {
               "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
               "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -637,14 +624,11 @@
               "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
             "name": "fv-serve-cpu-pod",
             "ports": [
               "8000/http"
-            ],
-            "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0,
-            "volumeMountPath": "/workspace"
+            ]
           }
         ]
       ],
@@ -750,7 +734,7 @@
         "retag cpu-stable",
         "retag stable",
         "retag h3-turbo-stable",
-        "PATCH /v1/templates/tpl-cpu-pod",
+        "PATCH /v2/templates/tpl-cpu-pod",
         "d1 UPDATE releases",
         "d1 INSERT releases"
       ],
@@ -772,9 +756,9 @@
       "runpod": [
         [
           "PATCH",
-          "/v1/templates/tpl-cpu-pod",
+          "/v2/templates/tpl-cpu-pod",
           {
-            "containerDiskInGb": 30,
+            "disk": 30,
             "env": {
               "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
               "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -791,14 +775,11 @@
               "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
             "name": "fv-serve-cpu-pod",
             "ports": [
               "8000/http"
-            ],
-            "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0,
-            "volumeMountPath": "/workspace"
+            ]
           }
         ]
       ],
@@ -848,7 +829,7 @@
         "retag cpu-stable",
         "retag cuda-stable",
         "retag stable",
-        "PATCH /v1/templates/tpl-cpu-pod",
+        "PATCH /v2/templates/tpl-cpu-pod",
         "d1 UPDATE releases",
         "d1 INSERT releases"
       ],
@@ -870,9 +851,9 @@
       "runpod": [
         [
           "PATCH",
-          "/v1/templates/tpl-cpu-pod",
+          "/v2/templates/tpl-cpu-pod",
           {
-            "containerDiskInGb": 30,
+            "disk": 30,
             "env": {
               "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
               "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -889,14 +870,11 @@
               "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
             "name": "fv-serve-cpu-pod",
             "ports": [
               "8000/http"
-            ],
-            "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0,
-            "volumeMountPath": "/workspace"
+            ]
           }
         ]
       ],
@@ -937,17 +915,17 @@
       "name": "templates-create",
       "ok": true,
       "order": [
-        "POST /v1/templates"
+        "POST /v2/templates"
       ],
       "prog": "templates",
       "retags": [],
       "runpod": [
         [
           "POST",
-          "/v1/templates",
+          "/v2/templates",
           {
             "category": "CPU",
-            "containerDiskInGb": 30,
+            "disk": 30,
             "env": {
               "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
               "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -964,15 +942,12 @@
               "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
-            "isServerless": false,
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>",
             "name": "fv-serve-cpu-pod",
             "ports": [
               "8000/http"
             ],
-            "readme": "fv-serve cpu (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0,
-            "volumeMountPath": "/workspace"
+            "serverless": false
           }
         ]
       ],
@@ -993,18 +968,17 @@
       "name": "templates-update",
       "ok": true,
       "order": [
-        "PATCH /v1/templates/tpl-cuda-sls",
-        "PATCH /v1/templates/tpl-cuda-pod"
+        "PATCH /v2/templates/tpl-cuda-sls",
+        "PATCH /v2/templates/tpl-cuda-pod"
       ],
       "prog": "templates",
       "retags": [],
       "runpod": [
         [
           "PATCH",
-          "/v1/templates/tpl-cuda-sls",
+          "/v2/templates/tpl-cuda-sls",
           {
-            "containerDiskInGb": 20,
-            "containerRegistryAuthId": "auth-golden",
+            "disk": 20,
             "env": {
               "FV_AUTH_MODE": "trust-gateway",
               "FV_CACHE_DIR": "/fvstate/cache",
@@ -1024,18 +998,16 @@
               "FV_WEIGHTS": "/runpod-volume/weights",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
             "name": "fv-serve-cuda-sls",
-            "readme": "fv-serve cuda (sls), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0
+            "registry": "auth-golden"
           }
         ],
         [
           "PATCH",
-          "/v1/templates/tpl-cuda-pod",
+          "/v2/templates/tpl-cuda-pod",
           {
-            "containerDiskInGb": 30,
-            "containerRegistryAuthId": "auth-golden",
+            "disk": 30,
             "env": {
               "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
               "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -1054,15 +1026,13 @@
               "FV_WEIGHTS": "/workspace/weights",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
             "name": "fv-serve-cuda-pod",
             "ports": [
               "8000/http",
               "70000/tcp"
             ],
-            "readme": "fv-serve cuda (pod), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0,
-            "volumeMountPath": "/workspace"
+            "registry": "auth-golden"
           }
         ]
       ],
@@ -1119,7 +1089,7 @@
       "stdout": [
         "gone      pod ghost   (created by test)",
         "unknown   pod stray1 fv-serve-smoke-x ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
-        "unknown   endpoint ep1 fv-serve-ep-x ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "unknown   endpoint ep1 fv-serve-ep-x ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
         "template  fv-serve-cuda-sls <A.cuda:12> != stable <B.cuda:12>",
         "template  fv-serve-cuda-pod <A.cuda:12> != stable <B.cuda:12>",
         "reconcile: 1 gone (not marked: dry run), 2 unknown, 2 drifted"
@@ -1155,14 +1125,14 @@
             "latest",
             "fv-serve-smoke-x",
             "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
-            "RTX PRO 6000",
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition",
             "EU-RO-1",
             "{\"adopted\":true}",
             "<B.cuda>"
           ]
         ],
         [
-          "INSERT INTO deployments (id, kind, runpod_id, created_at, updated_at, created_by, status, git_sha, variant, name, image, gpu, dc, meta, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at, status = excluded.status, git_sha = excluded.git_sha, variant = excluded.variant, name = excluded.name, image = excluded.image, gpu = excluded.gpu, dc = excluded.dc, meta = excluded.meta, digest = excluded.digest",
+          "INSERT INTO deployments (id, kind, runpod_id, created_at, updated_at, created_by, status, git_sha, variant, channel, name, image, gpu, dc, meta, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at, status = excluded.status, git_sha = excluded.git_sha, variant = excluded.variant, channel = excluded.channel, name = excluded.name, image = excluded.image, gpu = excluded.gpu, dc = excluded.dc, meta = excluded.meta, digest = excluded.digest",
           [
             "endpoint:ep1",
             "endpoint",
@@ -1171,14 +1141,15 @@
             "<now>",
             "reconcile/release.sh",
             "ready",
-            "0000000aaaa",
-            "h3-turbo",
+            "bbbbbbb222222222222222222222222222222222",
+            "cuda",
+            "latest",
             "fv-serve-ep-x",
-            "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
-            "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
+            "ADA_24",
             "EU-RO-1",
-            "{\"adopted\":true,\"template\":\"tpl-cuda-sls\"}",
-            "<A.cuda>"
+            "{\"adopted\":true}",
+            "<B.cuda>"
           ]
         ]
       ],
@@ -1197,7 +1168,7 @@
       "stdout": [
         "gone      pod ghost   (created by test)",
         "unknown   pod stray1 fv-serve-smoke-x ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
-        "unknown   endpoint ep1 fv-serve-ep-x ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "unknown   endpoint ep1 fv-serve-ep-x ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
         "template  fv-serve-cuda-sls <A.cuda:12> != stable <B.cuda:12>",
         "template  fv-serve-cuda-pod <A.cuda:12> != stable <B.cuda:12>",
         "reconcile: 1 gone, 2 unknown (adopted), 2 drifted"
@@ -1407,7 +1378,7 @@
         "retag cpu-stable",
         "retag cuda-stable",
         "retag stable",
-        "PATCH /v1/templates/tpl-cuda-sls"
+        "PATCH /v2/templates/tpl-cuda-sls"
       ],
       "prog": "release",
       "retags": [
@@ -1427,9 +1398,9 @@
       "runpod": [
         [
           "PATCH",
-          "/v1/templates/tpl-cuda-sls",
+          "/v2/templates/tpl-cuda-sls",
           {
-            "containerDiskInGb": 20,
+            "disk": 20,
             "env": {
               "FV_AUTH_MODE": "trust-gateway",
               "FV_CACHE_DIR": "/fvstate/cache",
@@ -1449,10 +1420,8 @@
               "FV_WEIGHTS": "/runpod-volume/weights",
               "RUST_LOG": "info"
             },
-            "imageName": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
-            "name": "fv-serve-cuda-sls",
-            "readme": "fv-serve cuda (sls), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md",
-            "volumeInGb": 0
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+            "name": "fv-serve-cuda-sls"
           }
         ]
       ],

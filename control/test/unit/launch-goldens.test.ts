@@ -3,7 +3,9 @@
 //      regenerated fails `gen-configs.mjs --check`;
 //   2. src/launch.ts builds, from a Launch, exactly the Runpod bodies the Rust provider builds: the C3a payload goldens
 //      (crates/fastvideo-deploy/fixtures/deploy/*.json, what runpod-pod.sh / runpod-endpoint.sh send) from the same
-//      launches crates/fastvideo-deploy/tests/payload_goldens.rs builds them from;
+//      launches crates/fastvideo-deploy/tests/payload_goldens.rs builds them from. Both are REST v2 bodies since
+//      2026-11-19 (v1, rest.runpod.io, is retired): the endpoint's GPU block takes the golden's own plan-time pools
+//      (POOLS: what payload_goldens.rs sends without the catalog), the create resolving them from the catalog;
 //   3. for the presets fv-deploy launches, fv-control's pod, template and endpoint equal fv-deploy's field by field,
 //      but for the differences listed here (each explained in ADR-0018 §7.4); a new difference, or a listed one that no
 //      longer occurs, fails;
@@ -15,7 +17,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEPLOY_SCHEMAS, launchGenTs, OUTPUTS } from "../../gen-configs.mjs";
 import { LaunchZ } from "../../src/launch-gen";
-import { checkLaunch, DEFAULT_SERVERLESS, FV_DEPLOY_DEFAULT_GUARDS, LAUNCH_SCHEMA, LaunchSchemaError, runpodEndpointBody, runpodPodBody, runpodTemplateBody, type Launch } from "../../src/launch";
+import { checkLaunch, DEFAULT_SERVERLESS, FV_DEPLOY_DEFAULT_GUARDS, type GpuPools, LAUNCH_SCHEMA, LaunchSchemaError, runpodEndpointBody, runpodPodBody, runpodTemplateBody, type Launch } from "../../src/launch";
 import { clusterGuards, EDGE_WORKER_BOOT, MAX_REPLACE, PULL_DEADLINE_S, WATCHDOG_WORKER_BOOT, WORKER_BOOT, workerCreatePayload, workerLaunch, workerPlacements, workerSystemEnv, type EnvCtx } from "../../src/cluster/payloads";
 import { defaultSpec, migrateSpec, normalizeSpec, POOL_PRESETS, presetPool, TEMPLATES, type ClusterSpec } from "../../src/cluster/spec";
 import { standaloneSpec } from "../../src/standalone";
@@ -31,9 +33,14 @@ const fixture = (name: string) => JSON.parse(readFileSync(join(repo, "crates/fas
 /** A body as it goes over the wire (undefined fields dropped). */
 const wire = (x: unknown) => JSON.parse(JSON.stringify(x));
 
+
 // The inputs of scripts/serve/tests/fv-deploy-goldens.sh and payload_goldens.rs.
 const IMAGE = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const GPU = "NVIDIA RTX PRO 6000 Blackwell Server Edition";
+/** The goldens' GPU block without the catalog (`fv-deploy plan` makes no request: serverless.rs
+ * `EndpointGpu::unresolved`, runpod-endpoint.sh's fallback pool): the golden's own `gpu.pools`, nothing excluded. A
+ * create resolves GPU's pool from `GET /catalog/gpus` instead (ops.ts endpointGpuPools). */
+const POOLS: GpuPools = { pools: [...fixture("runpod-endpoint.json").gpu.pools] };
 const KEY_HASH_PLACEHOLDER = "<sha256 of the run key>";
 const SECRET_REFS = Object.fromEntries(
   ["cf_account_id", "cf_api_token", "d1_database_id", "r2_bucket", "r2_endpoint", "r2_access_key_id", "r2_secret_access_key", "webhook_ed25519_key"].map((s) => [`FV_${s.toUpperCase()}`, `{{ RUNPOD_SECRET_fv_${s} }}`]),
@@ -181,31 +188,48 @@ describe("fv-deploy's types in TypeScript (src/launch-gen.ts, gen-configs.mjs)",
 describe("a Launch's Runpod bodies are the Rust provider's (the C3a payload goldens)", () => {
   it("pod: runpod-pod.json", () => {
     expect(wire(runpodPodBody(checkLaunch(scriptPod())))).toStrictEqual(fixture("runpod-pod.json"));
+    // v2's names, no v1 name left.
+    const b = wire(runpodPodBody(checkLaunch(scriptPod())));
+    expect(b).toMatchObject({ image: IMAGE, cloud: "SECURE", gpu: { id: GPU, count: 1 }, disk: 30, entrypoint: ["/opt/fastvideo-rs/bin/fv-boot"], mounts: { network: [{ volumeId: "bz0ofkfx45", path: "/workspace" }] } });
+    for (const k of ["imageName", "cloudType", "computeType", "gpuTypeIds", "gpuCount", "containerDiskInGb", "volumeInGb", "volumeMountPath", "networkVolumeId", "dockerEntrypoint", "dockerStartCmd"]) expect(b).not.toHaveProperty(k);
   });
   it("serverless: runpod-template.json and runpod-endpoint.json", () => {
     const l = checkLaunch(scriptEndpoint());
     expect(wire(runpodTemplateBody(l))).toStrictEqual(fixture("runpod-template.json"));
-    expect(wire(runpodEndpointBody(l, "<template id>"))).toStrictEqual(fixture("runpod-endpoint.json"));
+    expect(wire(runpodEndpointBody(l, "<template id>", POOLS))).toStrictEqual(fixture("runpod-endpoint.json"));
     // No serverless section: runpod-endpoint.sh's scaling (launch.rs default_serverless).
-    expect(wire(runpodEndpointBody({ ...l, serverless: null }, "<template id>"))).toStrictEqual(fixture("runpod-endpoint.json"));
+    expect(wire(runpodEndpointBody({ ...l, serverless: null }, "<template id>", POOLS))).toStrictEqual(fixture("runpod-endpoint.json"));
+    const e = wire(runpodEndpointBody(l, "<template id>", POOLS));
+    expect(e).toMatchObject({ type: "QUEUE", gpu: { pools: POOLS.pools, count: 1, minCudaVersion: "13.0" }, networkVolumes: ["bz0ofkfx45"], workers: { min: 0, max: 1, idleTimeout: 5 }, scaling: { type: "QUEUE_DELAY", queueDelay: 1 }, flashboot: "OFF", timeout: 1_800_000 });
+    for (const k of ["computeType", "gpuTypeIds", "gpuCount", "networkVolumeId", "workersMin", "workersMax", "idleTimeout", "executionTimeoutMs", "scalerType", "scalerValue"]) expect(e).not.toHaveProperty(k);
   });
   it("optional fields as the Rust builders: empty lists and absent options are left out, a filter and a start command are sent", () => {
     const l: Launch = { ...scriptPod(), ports: [], entrypoint: [], args: ["--config", "/etc/fv/x.toml"], placement: { cloud: "COMMUNITY" }, gpu: { types: [GPU], count: 2, allowed_cuda: ["13.0"] } };
     const b = wire(runpodPodBody(l));
     expect(b).not.toHaveProperty("ports");
-    expect(b).not.toHaveProperty("dockerEntrypoint");
-    expect(b).not.toHaveProperty("networkVolumeId");
+    expect(b).not.toHaveProperty("entrypoint");
+    expect(b).not.toHaveProperty("mounts");
     expect(b).not.toHaveProperty("dataCenterIds");
-    expect(b).toMatchObject({ dockerStartCmd: ["--config", "/etc/fv/x.toml"], cloudType: "COMMUNITY", gpuCount: 2, allowedCudaVersions: ["13.0"] });
-    expect(b).not.toHaveProperty("minRAMPerGPU");
-    // A host-RAM floor (fv-lab's tier min_ram_gb) is minRAMPerGPU, as pod.rs create_body sends it.
+    expect(b).toMatchObject({ cmd: ["--config", "/etc/fv/x.toml"], cloud: "COMMUNITY", gpu: { count: 2, allowedCudaVersions: ["13.0"] } });
+    expect(b.gpu).not.toHaveProperty("minRamPerGpu");
+    // A host-RAM floor (fv-lab's tier min_ram_gb) is gpu.minRamPerGpu (v1's minRAMPerGPU, as pod.rs create_body sends it).
     const floor = wire(runpodPodBody(checkLaunch({ ...scriptPod(), gpu: { ...scriptPod().gpu, min_ram_gb: 192 } })));
-    expect(floor).toStrictEqual({ ...fixture("runpod-pod.json"), minRAMPerGPU: 192 });
+    const golden = fixture("runpod-pod.json");
+    expect(floor).toStrictEqual({ ...golden, gpu: { ...golden.gpu, minRamPerGpu: 192 } });
     // At least 1 GB (launch.v1.json minimum 1, as guard::check_min_ram).
     expect(() => checkLaunch({ ...scriptPod(), gpu: { ...scriptPod().gpu, min_ram_gb: 0 } })).toThrow(LaunchSchemaError);
-    const e = wire(runpodEndpointBody({ ...scriptEndpoint(), gpu: { types: [GPU], count: 1 }, placement: {} }, "t"));
-    expect(e).not.toHaveProperty("minCudaVersion");
-    expect(e).not.toHaveProperty("networkVolumeId");
+    // A pod volume (volume_gb > 0) without a network volume is a persistent mount at /workspace (pod.rs mounts_of);
+    // with one, the network mount alone (v2 refuses both).
+    expect(wire(runpodPodBody({ ...scriptPod(), placement: { cloud: "SECURE" }, disk: { container_gb: 30, volume_gb: 50 } })).mounts).toEqual({ persistent: { size: 50, path: "/workspace" } });
+    expect(wire(runpodPodBody({ ...scriptPod(), disk: { container_gb: 30, volume_gb: 50 } })).mounts).toEqual(golden.mounts);
+    // v2 takes one GPU type per pod (gpu.id): the first, as pod.rs create_body (every fv-control launch names one).
+    expect(wire(runpodPodBody({ ...scriptPod(), gpu: { types: [GPU, "NVIDIA H100 80GB HBM3"], count: 1 } })).gpu).toEqual({ id: GPU, count: 1 });
+    const e = wire(runpodEndpointBody({ ...scriptEndpoint(), gpu: { types: [GPU], count: 1 }, placement: {} }, "t", POOLS));
+    expect(e.gpu).not.toHaveProperty("minCudaVersion");
+    expect(e).not.toHaveProperty("networkVolumes");
+    expect(e).not.toHaveProperty("dataCenterIds");
+    // A CUDA list and the CUDA floor are mutually exclusive in v2: the list wins (serverless.rs endpoint_body).
+    expect(wire(runpodEndpointBody({ ...scriptEndpoint(), gpu: { types: [GPU], count: 1, min_cuda: "13.0", allowed_cuda: ["13.2"] } }, "t", POOLS)).gpu).toEqual({ pools: POOLS.pools, count: 1, allowedCudaVersions: ["13.2"] });
     expect(() => runpodPodBody(scriptEndpoint())).toThrow(/no pod body/);
     expect(() => runpodTemplateBody(scriptPod())).toThrow(/no serverless template/);
   });
@@ -222,7 +246,7 @@ const PRESETS: Record<string, string> = { "h3-turbo": "runpod.toml", "h3-max": "
 function fvDeployPod(preset: string) {
   const want = fixture("runpod-pod.json");
   want.name = `fv-deploy-${preset}-1024120000`;
-  want.containerDiskInGb = 40;
+  want.disk = 40;
   Object.assign(want.env, { FV_WEIGHTS_SOURCE: "volume", FV_RELEASE_CHANNEL: "stable", FV_WORKER_TOML_B64: b64utf8(WORKER_CONFIGS[PRESETS[preset]!]!) });
   return want;
 }
@@ -269,7 +293,7 @@ function podDifferences(ctx: PodContext, preset: string, spec: ClusterSpec): { s
   };
   const boot = { standalone: WATCHDOG_WORKER_BOOT, direct: WORKER_BOOT, edge: EDGE_WORKER_BOOT }[ctx];
   return {
-    set: { name: "fvc-x", dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [boot] },
+    set: { name: "fvc-x", entrypoint: ["bash", "-c"], cmd: [boot] },
     env: { ...cluster, ...(ctx === "edge" ? { ...edge, ...backstop } : ctx === "standalone" ? { ...direct, ...backstop } : direct) },
     drop: ["FV_API_KEYS", "FV_SERVE_FORWARD", "FV_WEIGHTS_SOURCE"],
   };
@@ -331,17 +355,18 @@ describe("for a preset fv-deploy launches, fv-control's payloads are fv-deploy's
       const { t, e } = fvDeployServerless(preset);
       const spec = normalizeEndpointSpec({ name: "ep", preset });
       expect(endpointLaunch(spec, IMAGE)).toMatchObject({ provider: "runpod-serverless", weights: "volume", gpu: { min_cuda: "13.0" }, placement: { volume: { id: "bz0ofkfx45", mount_path: "/runpod-volume" } } });
+      // (v1's `readme`, once a listed difference, has no REST v2 field.)
       const td = {
-        set: { name: "fvc-ep-261025120000", dockerEntrypoint: ["/bin/sh", "-c", SLS_BOOT], dockerStartCmd: [], category: "NVIDIA", readme: "fv-control serverless endpoint ep (cuda); docs/control/serverless.md" },
+        set: { name: "fvc-ep-261025120000", entrypoint: ["/bin/sh", "-c", SLS_BOOT], cmd: [], category: "NVIDIA" },
         env: { FV_CONTROL_ENDPOINT: "ep" },
         drop: ["FV_WEIGHTS_SOURCE"],
       };
       const tw = applyDifferences(t, td);
       expect(wire(templateCreatePayload(spec, IMAGE, "fvc-ep-261025120000")), `${preset} template`).toStrictEqual(tw.want);
-      const ed = { set: { name: "fvc-ep", scalerValue: 4, executionTimeoutMs: TIMEOUT_MS[preset] }, env: {}, drop: [] };
+      const ed = { set: { name: "fvc-ep", scaling: { type: "QUEUE_DELAY", queueDelay: 4 }, timeout: TIMEOUT_MS[preset] }, env: {}, drop: [] };
       const ew = applyDifferences({ ...e, env: {} }, ed);
       delete ew.want.env;
-      expect(wire(endpointCreatePayload(spec, "<template id>")), `${preset} endpoint`).toStrictEqual(ew.want);
+      expect(wire(endpointCreatePayload(spec, "<template id>", POOLS)), `${preset} endpoint`).toStrictEqual(ew.want);
       [...tw.real.map((r) => `template.${r}`), ...ew.real.map((r) => `endpoint.${r}`)].forEach((r) => seen.add(r));
       listed = [
         ...Object.keys(td.set).map((k) => `template.${k}`),
@@ -375,7 +400,7 @@ describe("every fv-control Runpod GPU launch is a schema-valid Launch that says 
         for (const pl of workerPlacements(spec, pool)) {
           if (pool.compute === "CPU") {
             expect(() => workerLaunch("fvc-x", IMAGE, pool, pl, env)).toThrow(/CPU pod is not a Launch/);
-            expect(workerCreatePayload("fvc-x", IMAGE, pool, pl, env)).toMatchObject({ computeType: "CPU", cpuFlavorIds: [pl.cpu] });
+            expect(workerCreatePayload("fvc-x", IMAGE, pool, pl, env)).toMatchObject({ cpu: { id: pl.cpu } });
             continue;
           }
           const l = workerLaunch("fvc-x", IMAGE, pool, pl, env, clusterGuards(spec));
@@ -458,22 +483,23 @@ describe("every fv-control Runpod GPU launch is a schema-valid Launch that says 
     expect(LaunchZ.safeParse(wire(launch)).success).toBe(true);
     expect(launch.guards).toMatchObject({ cap_s: 3600, max_usd_per_hr: 3.6 });
     expect(body.env.FV_WORKER_TOML_B64).toBe(b64utf8(WORKER_CONFIGS["runpod.toml"]!));
-    expect(body).toMatchObject({ networkVolumeId: "bz0ofkfx45", dataCenterIds: ["EU-RO-1"], dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [WORKER_BOOT] });
+    expect(body).toMatchObject({ mounts: { network: [{ volumeId: "bz0ofkfx45", path: "/workspace" }] }, dataCenterIds: ["EU-RO-1"], entrypoint: ["bash", "-c"], cmd: [WORKER_BOOT] });
     // An endpoint row stored before the one image (serverless_endpoints.spec): a variant and no config.
     const row = { spec: JSON.stringify({ ...normalizeEndpointSpec({ name: "old", compute: "GPU", config: "runpod-ltx.toml" }), config: undefined, compute: undefined, variant: "ltx" }) } as unknown as SlsRow;
     const s = specOf(row);
     expect([s.compute, s.config]).toEqual(["GPU", "runpod-ltx.toml"]);
     expect(LaunchZ.safeParse(wire(endpointLaunch(s, IMAGE))).success).toBe(true);
     expect(wire(templateCreatePayload(s, IMAGE, "t")).env.FV_WORKER_TOML_B64).toBe(b64utf8(WORKER_CONFIGS["runpod-ltx.toml"]!));
-    const want = { name: "fvc-old", templateId: "tpl", computeType: "GPU", gpuTypeIds: s.gpu_types, gpuCount: 1, networkVolumeId: "bz0ofkfx45", dataCenterIds: ["EU-RO-1"], workersMin: 0, workersMax: 1, idleTimeout: 5, flashboot: false, executionTimeoutMs: 1_800_000, scalerType: "QUEUE_DELAY", scalerValue: 4, minCudaVersion: "13.0" };
-    expect(wire(endpointCreatePayload(s, "tpl"))).toStrictEqual(want);
+    expect(s.gpu_types).toEqual([GPU]);
+    const want = { name: "fvc-old", templateId: "tpl", type: "QUEUE", gpu: { pools: POOLS.pools, count: 1, minCudaVersion: "13.0" }, networkVolumes: ["bz0ofkfx45"], dataCenterIds: ["EU-RO-1"], workers: { min: 0, max: 1, idleTimeout: 5 }, scaling: { type: "QUEUE_DELAY", queueDelay: 4 }, flashboot: "OFF", timeout: 1_800_000 };
+    expect(wire(endpointCreatePayload(s, "tpl", POOLS))).toStrictEqual(want);
     // A spec without `compute` reads as GPU, as before C3c: the GPU Launch, template category and endpoint fields.
     const { compute: _c, ...bare } = s;
     const nb = bare as EndpointSpec;
     expect(wire(templateCreatePayload(nb, IMAGE, "t")).category).toBe("NVIDIA");
-    expect(wire(endpointCreatePayload(nb, "tpl"))).toStrictEqual(want);
-    const { name: _n, templateId: _t, networkVolumeId: _v, computeType: _ct, ...fields } = want;
-    expect(wire(endpointUpdatePayload(nb))).toStrictEqual(fields);
+    expect(wire(endpointCreatePayload(nb, "tpl", POOLS))).toStrictEqual(want);
+    const { name: _n, templateId: _t, networkVolumes: _v, type: _ty, ...fields } = want;
+    expect(wire(endpointUpdatePayload(nb, undefined, POOLS))).toStrictEqual(fields);
   });
 });
 

@@ -4,8 +4,8 @@
 //! [`SimWorld`] advances in 1 s steps: arrivals join a FIFO queue, workers
 //! boot (worker start + weight load, sometimes an uncached image pull),
 //! take one job (or one stream) each, and finish. A serverless pool also
-//! emulates Runpod's own scaler (`workersMin` always kept, `QUEUE_DELAY` /
-//! `REQUEST_COUNT` scale-up to `workersMax`, idle reaping after the idle
+//! emulates Runpod's own scaler (`workers.min` always kept, `QUEUE_DELAY` /
+//! `REQUEST_COUNT` scale-up to `workers.max`, idle reaping after the idle
 //! timeout; busy workers are never reaped). [`SimProvider`] and
 //! [`SimSignals`] put the controller in front of it.
 

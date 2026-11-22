@@ -102,15 +102,16 @@ class StopperTest(unittest.TestCase):
         seen = []
 
         def call(method, url, body):
-            seen.append((method, url, body and body["query"].split("(")[0]))
+            seen.append((method, url, body and (body["query"].split("(")[0] if "query" in body else body)))
             if len(seen) < 3:
                 raise RuntimeError("HTTP 403 Forbidden: error code: 1010")
             return {"data": {}}
 
         s = bps.Stopper(call=call, pod="pod1")
         self.assertTrue(s.attempt("idle 20 min", 100.0))
+        # REST v2: a stop is POST /pods/<id>/action {"action": "stop"}.
         self.assertEqual(seen, [
-            ("POST", bps.RUNPOD_REST + "/pods/pod1/stop", None),
+            ("POST", bps.RUNPOD_REST + "/pods/pod1/action", {"action": "stop"}),
             ("DELETE", bps.RUNPOD_REST + "/pods/pod1", None),
             ("POST", bps.RUNPOD_GRAPHQL, "mutation { podStop"),
         ])
@@ -149,7 +150,7 @@ class StopperTest(unittest.TestCase):
         try:
             with _FakeRunpod({}, status=403, body=b"error code: 1010") as srv:
                 with self.assertRaisesRegex(RuntimeError, "HTTP 403.*error code: 1010"):
-                    bps.runpod_call("POST", srv.url + "/pods/x/stop")
+                    bps.runpod_call("POST", srv.url + "/pods/x/action", {"action": "stop"})
                 self.assertTrue(srv.seen[-1]["ua"].startswith("fv-build-pod/"))
                 self.assertNotIn("Python-urllib", srv.seen[-1]["ua"])
                 self.assertEqual(srv.seen[-1]["auth"], "Bearer k")

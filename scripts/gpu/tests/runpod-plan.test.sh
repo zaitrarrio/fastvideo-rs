@@ -64,7 +64,7 @@ drive() {
     rp_load_key() { echo "rp_load_key" >>"$D/local.log"; }
     rp_volume_dc() { echo EU-RO-1; }
     rp_volume_ready_file() { echo "$D/state/ready.json"; }
-    rp_rest() { echo "[]"; }
+    rp_rest() { echo "{\"pods\":[]}"; }
     rp_gpu_offer() { echo "1 2.49"; }
     rp_ensure_registry_auth() { echo auth1; }
     rp_create_gpu_pod() { echo "create $1" >>"$D/pods.log"; echo "pod-$1"; }

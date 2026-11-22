@@ -34,7 +34,8 @@ source "$ROOT/scripts/gpu/runpod-price.sh"
 source "$ROOT/scripts/gpu/runpod-cuda.sh"
 # shellcheck source-path=SCRIPTDIR source=../../gpu/volumes.sh
 source "$ROOT/scripts/gpu/volumes.sh"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GQL="https://api.runpod.io/graphql"
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 : "${RUNPOD_IMAGE:?RUNPOD_IMAGE (the fv-serve image with cuda,http-client) missing}"
@@ -346,19 +347,20 @@ create() {
   fi
   if [[ -n "$VOLUME" ]]; then
     local dc
-    dc="$(rest GET "/networkvolumes/$VOLUME" | jq -r '.dataCenterId')"
-    vol="$(jq -n --arg v "$VOLUME" --arg dc "$dc" '{networkVolumeId: $v, volumeMountPath: "/workspace", dataCenterIds: [$dc]}')"
+    dc="$(rest GET "/network-volumes/$VOLUME" | jq -r '.dataCenter')"
+    vol="$(jq -n --arg v "$VOLUME" --arg dc "$dc" '{mounts: {network: [{volumeId: $v, path: "/workspace"}]}, dataCenterIds: [$dc]}')"
   fi
   payload="$(jq -n --arg name "fv-segments-$TAG" --arg image "$RUNPOD_IMAGE" --arg gpu "$gpu" --argjson vol "$vol" --argjson r2env "$r2env" --argjson disk "$DISK_GB" \
     --arg cmd "$(pod_cmd "$enc")" --arg py "$(client_py | base64 -w0)" \
     --arg tae "$(base64 -w0 <"$ROOT/scripts/gpu/fetch_taehv.sh")" \
     --arg cfgb "$([[ -n "$SEG_CONFIG" ]] && base64 -w0 <"$SEG_CONFIG")" --arg prepb "$([[ -n "$SEG_PREP" ]] && base64 -w0 <"$SEG_PREP")" \
     --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" '{
-      name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
-      gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: $disk, volumeInGb: 0,
+      name: $name, image: $image, cloud: "SECURE",
+      gpu: ({id: $gpu, count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
+      disk: $disk,
       env: ({NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video", FV_SEG_PY_B64: $py, FV_TAE_B64: $tae, FV_SEG_CONFIG_B64: $cfgb, FV_SEG_PREP_B64: $prepb} + $r2env),
-      ports: ["8000/http"], dockerEntrypoint: ["/bin/bash", "-c"], dockerStartCmd: [$cmd]
-    } + $vol + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)')"
+      ports: ["8000/http"], entrypoint: ["/bin/bash", "-c"], cmd: [$cmd]
+    } + $vol')"
   rest POST /pods "$payload"
 }
 
@@ -374,7 +376,7 @@ for g in "${gpu_list[@]}"; do
   log "create pod on $g (segments encoder $enc)"
   if resp="$(create "$g" "$enc" 2>&1)"; then
     id="$(jq -r '.id // empty' <<<"$resp")"
-    dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
+    dph="$(jq -r '.cost // 0' <<<"$resp")"
     [[ -n "$id" ]] && break
   fi
   log "no pod on $g: ${resp:0:200}"

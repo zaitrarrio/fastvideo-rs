@@ -8,7 +8,8 @@ import type { ClusterSpec } from "../cluster/spec";
 import type { Env } from "../env";
 import { resolveClusterImages } from "../ghcr";
 import { audit, getSetting, HttpError, newId, now, parseJson, putSetting, scrub, utcDay } from "../util";
-import { endpointCreatePayload, endpointName, endpointUpdatePayload, invokeBody, lbPools, SLS_PREFIX, templateCreatePayload, templateName, templateUpdatePayload, v2CreatePayload, v2TemplateBoot } from "./payloads";
+import { endpointCreatePayload, endpointName, endpointUpdatePayload, invokeBody, SLS_PREFIX, templateCreatePayload, templateName, templateUpdatePayload } from "./payloads";
+import { gpuPools, type GpuPools } from "../launch";
 import { balanceFloor, sls, type LiveEndpoint, type SlsEnv } from "./runpod-sls";
 import { normalizeEndpointSpec, specDiff, type EndpointSpec } from "./spec";
 import { newWeightsToken, slsHubEnv, slsWeightsEnv } from "./weights";
@@ -153,6 +154,23 @@ async function weightsFor(env: Env, spec: EndpointSpec): Promise<{ weights: Reco
   return { weights: { ...own, ...(ups ? upsamplerPodEnv(env) : {}) }, hash: t.hash };
 }
 
+/** The REST v2 GPU block's pools of a GPU endpoint's types (launch.ts gpuPools over `GET /catalog/gpus`; v1 took the
+ * type ids). A type the catalog does not list, or puts in no serverless pool, cannot be asked for: refused (409)
+ * before anything is created. `{pools: []}` for a CPU endpoint. */
+export async function endpointGpuPools(env: SlsEnv, spec: EndpointSpec): Promise<GpuPools> {
+  if (spec.compute !== "GPU") return { pools: [] };
+  const types = spec.gpu_types || [];
+  const catalog = await sls.gpuCatalog(env);
+  let g: GpuPools;
+  try {
+    g = gpuPools(types, catalog);
+  } catch (e) {
+    throw new HttpError(409, `gpu_types: ${(e as Error).message}`);
+  }
+  if (!g.pools.length) throw new HttpError(409, "gpu_types: no GPU type named");
+  return g;
+}
+
 // ---------------------------------------------------------------- create
 export async function createEndpoint(env: SlsEnv, who: Actor, input: unknown, o: { image?: string } = {}): Promise<SlsRow> {
   const spec = normalizeEndpointSpec(input);
@@ -171,30 +189,19 @@ export async function createEndpoint(env: SlsEnv, who: Actor, input: unknown, o:
   let tpl: string | null = null;
   let ep: string | null = null;
   try {
-    if (spec.mode === "queue" && spec.compute === "GPU") {
-      // GPU queue: a template, then the endpoint on it (REST v1; runpod-endpoint.sh's proven path).
-      const tr = await sls.createTemplate(env, templateCreatePayload(spec, image, templateName(spec, t), w.weights));
-      tpl = String(tr?.id || "");
-      if (!tpl) throw new HttpError(502, "runpod: template create returned no id");
-      await patchRow(env, id, { template_id: tpl, own_template: 1 });
-      const er = await sls.createEndpoint(env, endpointCreatePayload(spec, tpl));
-      ep = String(er?.id || "");
-      if (!ep) throw new HttpError(502, "runpod: endpoint create returned no id");
-    } else {
-      // Load balancer, or CPU queue (REST v1 ignores computeType CPU): REST v2, which makes the template.
-      const pools = spec.compute === "GPU" ? lbPools(spec.gpu_types || [], await sls.gpuCatalog(env).catch(() => [])) : [];
-      const er = await sls.createLb(env, v2CreatePayload(spec, image, pools, w.weights));
-      ep = String(er?.id || "");
-      if (!ep) throw new HttpError(502, "runpod: v2 endpoint create returned no id");
-      const got = await sls.getEndpoint(env, ep);
-      tpl = got?.templateId ?? er?.templateId ?? null;
-      await patchRow(env, id, { template_id: tpl, own_template: tpl ? 1 : 0 });
-      // Its config's boot (every endpoint sends one: the images bake none).
-      if (!tpl) throw new HttpError(502, "runpod: the v2 endpoint has no template to give the config");
-      await sls.updateTemplate(env, tpl, v2TemplateBoot(spec));
-    }
-    // Runpod's create drops some fields (REST v1: flashboot false, workersMax 0; live 2026-10-06): set them again.
-    await sls.patchEndpoint(env, ep, endpointUpdatePayload(spec));
+    // REST v2, every mode and compute alike: a template, then the endpoint on it (runpod-endpoint.sh's proven path;
+    // v2's create resolves the template into the endpoint's container settings and keeps no link to it).
+    const gpu = await endpointGpuPools(env, spec);
+    const tr = await sls.createTemplate(env, templateCreatePayload(spec, image, templateName(spec, t), w.weights));
+    tpl = String(tr?.id || "");
+    if (!tpl) throw new HttpError(502, "runpod: template create returned no id");
+    await patchRow(env, id, { template_id: tpl, own_template: 1 });
+    const er = await sls.createEndpoint(env, endpointCreatePayload(spec, tpl, gpu));
+    ep = String(er?.id || "");
+    if (!ep) throw new HttpError(502, "runpod: endpoint create returned no id");
+    // REST v1's create dropped some fields (flashboot false, workersMax 0; live 2026-10-06): the spec's scaling is set
+    // again after every create until a v2 run shows the reconcile is not needed (one PATCH; harmless when it is not).
+    await sls.patchEndpoint(env, ep, endpointUpdatePayload(spec, undefined, gpu));
     await patchRow(env, id, { endpoint_id: ep, status: "active" });
     await audit(env, { actor: who.actor, ip: who.ip, action: "serverless.create", target: spec.name, after: { endpoint: ep, template: tpl, image, spec } });
     return await reload(env, id);
@@ -248,9 +255,20 @@ async function applyUpdate(env: SlsEnv, who: Actor, row: SlsRow, prev: EndpointS
     tokens = w.hash ? { weights_token_hash: w.hash, weights_token_prev_hash: row.weights_token_hash ?? null, weights_token_rotated_at: now() } : { weights_token_hash: null, weights_token_prev_hash: null, weights_token_rotated_at: null };
     applied.push("template");
   }
-  if (d.endpoint) {
-    await sls.patchEndpoint(env, row.endpoint_id!, endpointUpdatePayload(next, prev));
-    applied.push("endpoint");
+  if (d.endpoint || d.template) {
+    // v2 keeps no link from the endpoint to its template: a template change is re-applied with `templateId` (image,
+    // args, disk, ports, env, registry: one-time, the endpoint's workers roll). The GPU pools go with every endpoint
+    // change when the catalog answers; without it, only when the types changed (else the pools stay as they are).
+    let gpu: GpuPools = { pools: [] };
+    if (d.endpoint && next.compute === "GPU") {
+      const typesChanged = JSON.stringify(prev.gpu_types ?? null) !== JSON.stringify(next.gpu_types ?? null);
+      gpu = await endpointGpuPools(env, next).catch((e) => {
+        if (typesChanged) throw e;
+        return { pools: [] };
+      });
+    }
+    await sls.patchEndpoint(env, row.endpoint_id!, { ...(d.template ? { templateId: row.template_id } : {}), ...(d.endpoint ? endpointUpdatePayload(next, prev, gpu) : {}) });
+    if (d.endpoint) applied.push("endpoint");
   }
   const deadline = prev.deadline_min !== next.deadline_min ? deadlineFor(next) : row.deadline;
   const status = next.workers_max > 0 ? "active" : "scaled-down";
@@ -303,7 +321,7 @@ export async function finishDelete(env: Env, row: SlsRow, actor: string): Promis
       const live = await sls.getEndpoint(env, row.endpoint_id);
       if (live) {
         assertOurs(row, live);
-        await sls.patchEndpoint(env, row.endpoint_id, { workersMin: 0, workersMax: 0 }).catch(() => {});
+        await sls.patchEndpoint(env, row.endpoint_id, { workers: { min: 0, max: 0 } }).catch(() => {});
         await sls.deleteEndpoint(env, row.endpoint_id);
       }
     }
@@ -523,7 +541,7 @@ export async function serverlessTick(env: SlsEnv, o: { force_billing?: boolean }
           await deleteEndpoint(env, who, r, "deadline backstop");
           actions.push(`${r.name}: deleted (deadline)`);
         } else if (r.status === "active") {
-          await sls.patchEndpoint(env, r.endpoint_id, { workersMin: 0, workersMax: 0 });
+          await sls.patchEndpoint(env, r.endpoint_id, { workers: { min: 0, max: 0 } });
           const sp = { ...specOf(r), workers_min: 0, workers_max: 0 };
           await patchRow(env, r.id, { status: "scaled-down", spec: JSON.stringify(sp), deadline: null });
           await audit(env, { actor: who.actor, action: "serverless.scale", target: r.name, after: { workers_min: 0, workers_max: 0 }, detail: "deadline backstop" });
@@ -533,7 +551,7 @@ export async function serverlessTick(env: SlsEnv, o: { force_billing?: boolean }
         continue;
       }
       if (view && view.balance < floor && stopOnFloor && r.status === "active") {
-        await sls.patchEndpoint(env, r.endpoint_id, { workersMin: 0, workersMax: 0 });
+        await sls.patchEndpoint(env, r.endpoint_id, { workers: { min: 0, max: 0 } });
         const sp = { ...specOf(r), workers_min: 0, workers_max: 0 };
         await patchRow(env, r.id, { status: "scaled-down", spec: JSON.stringify(sp) });
         await audit(env, { actor: "policy:balance_floor", action: "serverless.scale", target: r.name, after: { workers_min: 0, workers_max: 0 }, detail: `balance $${view.balance.toFixed(2)} below the floor $${floor}` });
@@ -564,7 +582,9 @@ export async function serverlessTick(env: SlsEnv, o: { force_billing?: boolean }
   return { endpoints: live.length, actions, ...(billed !== undefined ? { billed } : {}) };
 }
 
-/** Writes Runpod's billed spend of fv-control's endpoints into cost_daily (pod_id sls:<endpoint>, owner serverless:<name>). */
+/** Writes Runpod's billed spend of fv-control's endpoints into cost_daily (pod_id sls:<endpoint>, owner serverless:<name>).
+ * REST v2's billing reports no billed time (v1's `timeBilledMs`): `minutes` is 0 and a row's `billed_ms` keeps what
+ * the ledger already holds. */
 export async function recordBilling(env: Env, rows: SlsRow[], t = now()): Promise<number> {
   const ours = new Map(rows.filter((r) => r.endpoint_id).map((r) => [r.endpoint_id!, r]));
   if (!ours.size) return 0;
@@ -582,13 +602,13 @@ export async function recordBilling(env: Env, rows: SlsRow[], t = now()): Promis
       env.DB.prepare(
         `INSERT INTO cost_daily (day, pod_id, cluster_id, owner, usd, minutes, idle_minutes) VALUES (?, ?, NULL, ?, ?, ?, 0)
          ON CONFLICT (day, pod_id) DO UPDATE SET usd = excluded.usd, minutes = excluded.minutes, owner = excluded.owner`,
-      ).bind(day, `sls:${b.endpointId}`, `serverless:${r.name}`, b.amount, Math.round(b.timeBilledMs / 60000)),
+      ).bind(day, `sls:${b.endpointId}`, `serverless:${r.name}`, b.amount, Math.round((b.timeBilledMs ?? 0) / 60000)),
     );
   }
   for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
   for (const r of ours.values()) {
     const s = await env.DB.prepare("SELECT COALESCE(SUM(usd), 0) AS usd, COALESCE(SUM(minutes), 0) AS minutes FROM cost_daily WHERE pod_id = ?").bind(`sls:${r.endpoint_id}`).first<{ usd: number; minutes: number }>();
-    const billedMs = recs.filter((b) => b.endpointId === r.endpoint_id).reduce((a, b) => a + b.timeBilledMs, 0);
+    const billedMs = recs.filter((b) => b.endpointId === r.endpoint_id).reduce((a, b) => a + (b.timeBilledMs ?? 0), 0);
     await patchRow(env, r.id, { cost_usd: s?.usd ?? 0, billed_ms: Math.max(billedMs, (s?.minutes ?? 0) * 60000), billed_at: t });
   }
   return n;

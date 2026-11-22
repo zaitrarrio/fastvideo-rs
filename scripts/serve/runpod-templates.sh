@@ -29,8 +29,8 @@
 #
 # Templates carry no secret values: the D1/R2/webhook values are Runpod secret
 # references ({{ RUNPOD_SECRET_fv_* }}), resolved by Runpod at boot. A private
-# registry needs RUNPOD_REGISTRY_AUTH_ID (a Runpod container registry auth id,
-# `POST /containerregistryauth`); the GHCR package is public, so none is set.
+# registry needs RUNPOD_REGISTRY_AUTH_ID (a Runpod container registry credential
+# id, `POST /registries`); the GHCR package is public, so none is set.
 #
 # Env: RUNPOD_API_KEY; RUNPOD_REGISTRY_AUTH_ID (optional); FV_RELEASE_CHANNEL
 # (optional: the channel being synced).
@@ -41,7 +41,8 @@ source "$HERE/../gpu/lib.sh"
 # shellcheck source-path=SCRIPTDIR source=variants.sh
 source "$HERE/variants.sh"
 
-REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+REST="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 SECRET_ENV_JSON='{
   "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
   "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -58,9 +59,10 @@ rest() {
     -H 'content-type: application/json' ${3:+-d "$3"} "$REST$2"
 }
 
-# payload <id> <sls|pod> <image> [create] -> template JSON. The image's
+# payload <id> <sls|pod> <image> [create] -> template JSON (REST v2). The image's
 # entrypoint (fv-boot) starts fv-serve with the config the launch adds to the env; no start command.
-# `create` adds the fields the update API does not take (isServerless, category).
+# `create` adds the fields an update leaves alone (serverless, category). (v2 templates
+# carry no readme, and no mount without a persistent disk.)
 payload() {
   local v="$1" flavour="$2" image="$3" mode="${4:-}"
   jq -n --arg name "$(fv_template_name "$v" "$flavour")" --arg image "$image" --arg flavour "$flavour" \
@@ -68,20 +70,19 @@ payload() {
     --arg ch "${FV_RELEASE_CHANNEL:-}" '
     ({FV_IMAGE_REF: $image} + (if ($image | contains("@sha256:")) then {FV_IMAGE_DIGEST: ($image | split("@")[1])} else {} end)
      + (if $ch == "" then {} else {FV_RELEASE_CHANNEL: $ch} end)) as $ident
-    | {name: $name, imageName: $image, volumeInGb: 0,
-     readme: ("fv-serve " + $v + " (" + $flavour + "), published by CI; no worker config: a launch sends one (FV_WORKER_TOML_B64); docs/serve/images.md")}
+    | {name: $name, image: $image}
     + (if $flavour == "sls" then {
-         containerDiskInGb: 20,
+         disk: 20,
          env: ($secrets + $ident + {FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_STATE_DIR: "/fvstate",
                            FV_WEIGHTS: "/runpod-volume/weights", FV_CACHE_DIR: "/fvstate/cache", RUST_LOG: "info"})}
        else {
-         containerDiskInGb: 30, volumeMountPath: "/workspace",
+         disk: 30,
          ports: (if $v == "cpu" then ["8000/http"] else ["8000/http", "70000/tcp"] end),
          env: ($secrets + $ident + {FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", RUST_LOG: "info"}
                + (if $v == "cpu" then {} else {FV_WEIGHTS: "/workspace/weights", FV_SERVE_FORWARD: "1"} end))}
        end)
-    + (if $auth == "" then {} else {containerRegistryAuthId: $auth} end)
-    + (if $mode == "create" then {isServerless: ($flavour == "sls"), category: (if $v == "cpu" then "CPU" else "NVIDIA" end)} else {} end)'
+    + (if $auth == "" then {} else {registry: $auth} end)
+    + (if $mode == "create" then {serverless: ($flavour == "sls"), category: (if $v == "cpu" then "CPU" else "NVIDIA" end)} else {} end)'
 }
 
 sync_one() {
@@ -93,7 +94,7 @@ sync_one() {
     cur="$(fv_template_get "$name")"
     if [[ -n "$cur" ]]; then
       id="$(jq -r .id <<<"$cur")"
-      if [[ "$(jq -r .imageName <<<"$cur")" == "$image" && "$(jq -r '.env.FV_RELEASE_CHANNEL // ""' <<<"$cur")" == "${FV_RELEASE_CHANNEL:-$(jq -r '.env.FV_RELEASE_CHANNEL // ""' <<<"$cur")}" \
+      if [[ "$(jq -r .image <<<"$cur")" == "$image" && "$(jq -r '.env.FV_RELEASE_CHANNEL // ""' <<<"$cur")" == "${FV_RELEASE_CHANNEL:-$(jq -r '.env.FV_RELEASE_CHANNEL // ""' <<<"$cur")}" \
         && "$(jq -r '.env.FV_IMAGE_REF // ""' <<<"$cur")" == "$image" ]]; then
         log "$name ($id): already $image"; continue
       fi
@@ -113,7 +114,7 @@ case "${1:-}" in
     while read -r v img _; do [[ -z "$v" || "$v" == \#* ]] || sync_one "$v" "$img"; done <"${1:?file}" ;;
   list)
     : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
-    rest GET /templates | jq -r '.[] | select(.name | startswith("fv-serve-")) | select(.name | test("-(sls|pod)$")) | "\(.id)\t\(.name)\t\(.imageName)"' ;;
+    rest GET /templates | jq -r '.templates[] | select(.name | startswith("fv-serve-")) | select(.name | test("-(sls|pod)$")) | "\(.id)\t\(.name)\t\(.image)"' ;;
   id)
     shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
     fv_template_get "$(fv_template_name "${1:?image id}" "${2:?sls|pod}")" | jq -r '.id // empty' ;;

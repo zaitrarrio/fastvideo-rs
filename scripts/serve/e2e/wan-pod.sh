@@ -27,7 +27,8 @@ source "$ROOT/scripts/gpu/runpod-price.sh"
 source "$ROOT/scripts/gpu/volumes.sh"
 # shellcheck source-path=SCRIPTDIR source=../../gpu/runpod-cuda.sh
 source "$ROOT/scripts/gpu/runpod-cuda.sh"
-API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+API="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 GQL="https://api.runpod.io/graphql"
 STATE="${FV_E2E_STATE:-${TMPDIR:-/tmp}/fv-e2e-wan.state}"
 GPUS="${RUNPOD_GPU_TYPES:-$FV_EU_GPUS|NVIDIA H100 80GB HBM3|NVIDIA H100 NVL|NVIDIA H100 PCIe}"
@@ -70,16 +71,17 @@ payload() { # image gpu name keyhash
   local py run dc
   py="$(tar cz -C "$HERE" whep_viewer.py reactor_causal.py | base64 -w0)"
   run="$(base64 -w0 <"$HERE/wan-pod-run.sh")"
-  dc="$(rest GET "/networkvolumes/$VOLUME" | jq -r '.dataCenterId')"
+  dc="$(rest GET "/network-volumes/$VOLUME" | jq -r '.dataCenter')"
   jq -n --arg name "$3" --arg image "$1" --arg gpu "$2" --arg keys "$4" --arg py "$py" --arg run "$run" \
     --arg vol "$VOLUME" --arg dc "$dc" --arg tag "$(date -u +%m%d%H%M)" \
     --arg cuda "${RUNPOD_ALLOWED_CUDA-$(fv_runpod_cuda)}" --arg skip1 "${FV_E2E_SKIP_PHASE1:-0}" --arg live "${FV_E2E_LIVE_S:-300}" '{
-    name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
-    gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 60, volumeInGb: 0,
-    networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
+    name: $name, image: $image, cloud: "SECURE",
+    gpu: ({id: $gpu, count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
+    disk: 60,
+    mounts: {network: [{volumeId: $vol, path: "/workspace"}]}, dataCenterIds: [$dc],
     ports: ["8000/http", "8001/http", "70000/tcp"],
-    dockerEntrypoint: ["/bin/bash", "-c"],
-    dockerStartCmd: ["echo \"$FV_E2E_RUN_B64\" | base64 -d >/wan-pod-run.sh && exec bash /wan-pod-run.sh"],
+    entrypoint: ["/bin/bash", "-c"],
+    cmd: ["echo \"$FV_E2E_RUN_B64\" | base64 -d >/wan-pod-run.sh && exec bash /wan-pod-run.sh"],
     env: {
       FV_CF_ACCOUNT_ID: "{{ RUNPOD_SECRET_fv_cf_account_id }}",
       FV_CF_API_TOKEN: "{{ RUNPOD_SECRET_fv_cf_api_token }}",
@@ -92,7 +94,7 @@ payload() { # image gpu name keyhash
       FV_API_KEYS: $keys, FV_SERVE_MODE: "http", RUST_LOG: "info",
       FV_E2E_TAG: $tag, FV_E2E_PY_B64: $py, FV_E2E_RUN_B64: $run,
       FV_E2E_SKIP_PHASE1: $skip1, FV_E2E_LIVE_S: $live
-    }} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)'
+    }}'
 }
 
 cmd_up() {
@@ -115,7 +117,7 @@ cmd_up() {
     if ! resp="$(rest POST /pods "$(payload "$image" "$gpu" "$name" "$keyhash")" 2>&1)"; then
       log "no pod on $gpu: $(head -c 200 <<<"$resp")"; continue
     fi
-    pod="$(jq -r '.id // empty' <<<"$resp")"; dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
+    pod="$(jq -r '.id // empty' <<<"$resp")"; dph="$(jq -r '.cost // 0' <<<"$resp")"
     [[ -n "$pod" ]] || { log "no id: $(head -c 200 <<<"$resp")"; continue; }
     ledger "pod-created $pod $name gpu=$gpu image=$image"
     if awk -v p="$dph" -v c="$MAX_DPH" 'BEGIN{exit !(p+0 > c+0)}'; then
@@ -188,7 +190,7 @@ cmd_down() {
   rest DELETE "/pods/$pod" >/dev/null || log "delete call failed"
   sleep 5
   if rest GET "/pods/$pod" >/dev/null 2>&1; then
-    log "WARNING: pod $pod still listed"; rest GET "/pods/$pod" | jq -c '{id, desiredStatus}' >&2 || true; exit 1
+    log "WARNING: pod $pod still listed"; rest GET "/pods/$pod" | jq -c '{id, status}' >&2 || true; exit 1
   fi
   ledger "pod-deleted $pod"
   log "pod $pod deleted ($(( ($(date +%s) - $(st created)) ))s after create, \$$(st dph)/hr)"

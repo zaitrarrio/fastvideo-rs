@@ -10,7 +10,7 @@
 //! trait itself is listed in ADR-0018 §9 "What remains".
 //!
 //! - [`runpod`] (feature `runpod`): a Runpod serverless endpoint steered
-//!   through `workersMin`/`workersMax`/scaler/idle timeout, and Runpod pods
+//!   through `workers.min`/`workers.max`/scaler/idle timeout, and Runpod pods
 //!   created from a template with GPU-type and region fallback.
 //! - [`crate::sim`]: the simulated provider used by tests and the
 //!   simulation harness.

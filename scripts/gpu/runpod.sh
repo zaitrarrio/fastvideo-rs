@@ -33,7 +33,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/volumes.sh"
 # shellcheck source=scripts/gpu/fv-lab-retired.sh
 source "$(dirname "${BASH_SOURCE[0]}")/fv-lab-retired.sh"
 
-RUNPOD_API_BASE="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
+# Runpod REST API v2 (v1 at rest.runpod.io is retired: its name no longer resolves).
+RUNPOD_API_BASE="${RUNPOD_API_BASE:-https://api.runpod.io/v2}"
 RUNPOD_GQL="${RUNPOD_GQL:-https://api.runpod.io/graphql}"
 RP_STATE="$FV_ROOT/artifacts/runpod"
 RP_LIVE="$RP_STATE/live.log"
@@ -121,14 +122,11 @@ rp_rsync() {
 
 rp_pod_ssh_target() {
   local id="$1" raw host port
+  # v2: the published 22/tcp mapping is `ssh.direct` (GET /pods/{id} only),
+  # else the live port list under `runtime.ports`.
   raw="$(rp_rest GET "/pods/${id}" 2>/dev/null || true)"
-  host="$(jq -r '.publicIp // empty' <<<"${raw:-}" 2>/dev/null || true)"
-  port="$(jq -r '
-    (.portMappings["22"] // .portMappings."22" // empty) as $pm
-    | if $pm != "" then $pm
-      else [.runtime.ports[]? | select(.privatePort==22)][0].publicPort // empty
-      end
-  ' <<<"${raw:-}" 2>/dev/null || true)"
+  host="$(jq -r '.ssh.direct.host // ([.runtime.ports[]? | select(.private==22)][0].ip) // empty' <<<"${raw:-}" 2>/dev/null || true)"
+  port="$(jq -r '.ssh.direct.port // ([.runtime.ports[]? | select(.private==22)][0].public) // empty' <<<"${raw:-}" 2>/dev/null || true)"
   if [[ -z "$host" || -z "$port" || "$host" == "null" ]]; then
     raw="$(rp_gql 'query { myself { pods { id runtime { ports { ip isIpPublic privatePort publicPort type } } } } }')"
     host="$(jq -r --arg id "$id" '.data.myself.pods[] | select(.id==$id) | [.runtime.ports[]? | select(.privatePort==22 and .isIpPublic==true)][0].ip // empty' <<<"$raw")"
@@ -142,7 +140,7 @@ rp_wait_ssh() {
   local id="$1" timeout_s="${2:-600}" t0 host port status
   t0=$(date +%s)
   while :; do
-    status="$(rp_rest GET "/pods/${id}" | jq -r '.desiredStatus // .lastStatusChange // "unknown"')"
+    status="$(rp_rest GET "/pods/${id}" | jq -r '.status // "unknown"')"
     if read -r host port < <(rp_pod_ssh_target "$id" 2>/dev/null) && rp_ssh "$host" "$port" true 2>/dev/null; then
       rp_log "ssh ok root@$host:$port (pod $id)"
       printf '%s %s\n' "$host" "$port"
@@ -187,9 +185,9 @@ rp_pick_dc() {
 
 rp_find_or_create_volume() {
   local vols existing id dc
-  vols="$(rp_rest GET /networkvolumes)"
+  vols="$(rp_rest GET /network-volumes)"
   existing="$(jq -r --arg n "$RP_VOL_NAME" --argjson gb "$RP_VOL_GB" \
-    '.[] | select(.name==$n and .size>=$gb) | "\(.id)\t\(.dataCenterId)\t\(.size)"' <<<"$vols" | head -1)"
+    '.networkVolumes[] | select(.name==$n and .size>=$gb) | "\(.id)\t\(.dataCenter)\t\(.size)"' <<<"$vols" | head -1)"
   if [[ -n "$existing" ]]; then
     id="${existing%%$'\t'*}"
     rp_log "reuse volume $existing"
@@ -201,8 +199,8 @@ rp_find_or_create_volume() {
   rp_log "create volume name=$RP_VOL_NAME size=${RP_VOL_GB}GB dc=$dc"
   local payload resp
   payload="$(jq -n --arg name "$RP_VOL_NAME" --argjson size "$RP_VOL_GB" --arg dc "$dc" \
-    '{name:$name, size:$size, dataCenterId:$dc}')"
-  resp="$(rp_rest POST /networkvolumes "$payload")"
+    '{name:$name, size:$size, dataCenter:$dc}')"
+  resp="$(rp_rest POST /network-volumes "$payload")"
   id="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$id" ]] || die "volume create returned no id: $resp"
   if [[ "$id" == "$RP_EUR_VOLUME_KEEP" ]]; then
@@ -226,7 +224,7 @@ rp_probe_gpu_dc() {
 
 rp_volume_dc() {
   local id="$1"
-  rp_rest GET "/networkvolumes/${id}" | jq -r '.dataCenterId'
+  rp_rest GET "/network-volumes/${id}" | jq -r '.dataCenter'
 }
 
 rp_ensure_registry_auth() {
@@ -243,7 +241,7 @@ rp_ensure_registry_auth() {
   user="${GHCR_USERNAME:-zaitrarrio}"
   payload="$(jq -n --arg name "fv-ghcr-$(date +%s)" --arg user "$user" --arg pass "$token" \
     '{name:$name, username:$user, password:$pass}')"
-  resp="$(rp_rest POST /containerregistryauth "$payload" 2>/dev/null || true)"
+  resp="$(rp_rest POST /registries "$payload" 2>/dev/null || true)"
   id="$(jq -r '.id // empty' <<<"$resp")"
   if [[ -n "$id" ]]; then
     rp_log "ghcr registry auth id=$id user=$user"
@@ -300,18 +298,13 @@ rp_create_cpu_pod() {
     --arg auth "$auth" \
     '{
       name: $name,
-      imageName: $image,
-      cloudType: "SECURE",
-      computeType: "CPU",
-      cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"],
-      cpuFlavorPriority: "availability",
-      vcpuCount: 8,
-      containerDiskInGb: 20,
-      volumeInGb: 0,
-      networkVolumeId: $vol,
-      volumeMountPath: "/workspace",
+      image: $image,
+      cloud: "SECURE",
+      cpu: {id: "cpu3c", vcpuCount: 8},
+      disk: 20,
+      mounts: {network: [{volumeId: $vol, path: "/workspace"}]},
       ports: ["22/tcp"],
-      dockerStartCmd: ["/bin/bash","-lc","mkdir -p /root/.ssh /run/sshd; printf \"%s\\n\" \"$PUBLIC_KEY\" >> /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; /usr/sbin/sshd; exec sleep infinity"],
+      cmd: ["/bin/bash","-lc","mkdir -p /root/.ssh /run/sshd; printf \"%s\\n\" \"$PUBLIC_KEY\" >> /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; /usr/sbin/sshd; exec sleep infinity"],
       env: {
         PUBLIC_KEY: $pubkey,
         HF_TOKEN: $hf,
@@ -319,13 +312,21 @@ rp_create_cpu_pod() {
         HF_HOME: "/workspace/hf",
         HF_HUB_ENABLE_HF_TRANSFER: "1"
       }
-    } + (if $auth != "" then {containerRegistryAuthId:$auth} else {} end)')"
+    } + (if $auth != "" then {registry:$auth} else {} end)')"
   rp_log "create CPU fetch pod name=$name image=$RP_FETCH_IMAGE dc=$dc vol=$vol"
-  resp="$(rp_rest POST /pods "$payload")"
+  # v2 takes one CPU flavor per create (v1 listed several with cpuFlavorPriority
+  # "availability"): the flavors of RUNPOD_CPU_FLAVORS are tried in order.
+  local flavor
+  resp=""
+  for flavor in ${RUNPOD_CPU_FLAVORS:-cpu3c cpu5c cpu3g}; do
+    if resp="$(rp_rest POST /pods "$(jq -c --arg f "$flavor" '.cpu.id = $f' <<<"$payload")")"; then break; fi
+    rp_log "no $flavor pod in $dc"; resp=""
+  done
+  [[ -n "$resp" ]] || die "CPU pod create failed (every flavor)"
   id="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$id" ]] || die "CPU pod create failed: $resp"
   local dph
-  dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
+  dph="$(jq -r '.cost // 0' <<<"$resp")"
   rp_log "cpu pod $id  \$${dph}/hr  image=$RP_FETCH_IMAGE  dc=$dc"
   printf '%s\n' "$resp" >"$RP_STATE/fetch-pod.json"
   printf '%s\n' "$id"
@@ -508,8 +509,8 @@ cmd_verify() {
 cmd_status() {
   rp_load_key
   rp_log "status"
-  rp_rest GET /networkvolumes | jq -r '.[] | "  vol \(.id)  \(.name)  \(.size)GB  dc=\(.dataCenterId)"' | tee -a "$RP_LIVE" >&2
-  rp_rest GET /pods | jq -r '.[] | select((.name//"")|startswith("fv-")) | "  pod \(.id)  \(.name)  \(.desiredStatus)  \(.computeType)  $\(.costPerHr)/hr  \(.imageName)"' | tee -a "$RP_LIVE" >&2
+  rp_rest GET /network-volumes | jq -r '.networkVolumes[] | "  vol \(.id)  \(.name)  \(.size)GB  dc=\(.dataCenter)"' | tee -a "$RP_LIVE" >&2
+  rp_rest GET /pods | jq -r '.pods[] | select((.name//"")|startswith("fv-")) | "  pod \(.id)  \(.name)  \(.status)  \(if .gpu then "GPU" else "CPU" end)  $\(.cost)/hr  \(.image)"' | tee -a "$RP_LIVE" >&2
   if [[ -f "$(rp_volume_ready_file)" ]]; then
     rp_log "volume-ready $(cat "$(rp_volume_ready_file)")"
   else
@@ -520,7 +521,7 @@ cmd_status() {
 cmd_reap() {
   rp_load_key
   local ids
-  ids="$(rp_rest GET /pods | jq -r '.[] | select((.name//"")|test("^fv-(fetch|gpu)")) | .id')"
+  ids="$(rp_rest GET /pods | jq -r '.pods[] | select((.name//"")|test("^fv-(fetch|gpu)")) | .id')"
   [[ -n "$ids" ]] || { rp_log "no fv-fetch/fv-gpu pods"; return 0; }
   local id
   for id in $ids; do rp_destroy_pod "$id"; done
@@ -557,20 +558,16 @@ rp_create_gpu_pod() {
     --argjson pin "$pin_dc" \
     '{
       name: $name,
-      imageName: $image,
-      cloudType: "SECURE",
-      computeType: "GPU",
-      gpuTypeIds: [$gpu],
-      gpuCount: 1,
-      containerDiskInGb: 20,
-      volumeInGb: 0,
-      networkVolumeId: $vol,
-      volumeMountPath: "/workspace",
+      image: $image,
+      cloud: "SECURE",
+      gpu: {id: $gpu, count: 1},
+      disk: 20,
+      mounts: {network: [{volumeId: $vol, path: "/workspace"}]},
       ports: ["22/tcp"],
-      dockerStartCmd: ["/bin/bash","-lc","mkdir -p /root/.ssh /run/sshd; printf \"%s\\n\" \"$PUBLIC_KEY\" >> /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; /usr/sbin/sshd; exec sleep infinity"],
+      cmd: ["/bin/bash","-lc","mkdir -p /root/.ssh /run/sshd; printf \"%s\\n\" \"$PUBLIC_KEY\" >> /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; /usr/sbin/sshd; exec sleep infinity"],
       env: { PUBLIC_KEY: $pubkey }
     } + (if $pin == 1 then {dataCenterIds:[$dc]} else {} end)
-      + (if $auth != "" then {containerRegistryAuthId:$auth} else {} end)')"
+      + (if $auth != "" then {registry:$auth} else {} end)')"
   rp_log "create GPU pod name=$name image=$RP_IMAGE dc=$dc pin_dc=$pin_dc vol=$vol type=$gpu"
   if ! resp="$(rp_rest POST /pods "$payload")"; then
     rp_log "GPU create failed for $gpu"
@@ -578,7 +575,7 @@ rp_create_gpu_pod() {
   fi
   id="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$id" ]] || { rp_log "GPU create returned no id for $gpu: $resp"; return 1; }
-  dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
+  dph="$(jq -r '.cost // 0' <<<"$resp")"
   rp_log "gpu pod $id  name=$name  \$${dph}/hr  image=$RP_IMAGE  dc=$dc"
   if awk -v p="$dph" -v cap="$RP_GPU_MAX_DPH" 'BEGIN{exit !(p+0 > cap+0)}'; then
     rp_log "FATAL: pod $id \$${dph}/hr above ceiling \$${RP_GPU_MAX_DPH} — destroying"
@@ -732,12 +729,12 @@ cmd_gpu() {
     rp_log "volume ready  id=$vol  dc=$dc"
   fi
   local live
-  live="$(rp_rest GET /pods | jq -r --arg p "$GPU_NAME_PREFIX" '[.[] | select((.name//"")|startswith($p)) | .id] | length')"
+  live="$(rp_rest GET /pods | jq -r --arg p "$GPU_NAME_PREFIX" '[.pods[] | select((.name//"")|startswith($p)) | .id] | length')"
   if (( live >= RP_MAX_GPU_PODS )); then
     die "already $live GPU pods with prefix $GPU_NAME_PREFIX (cap $RP_MAX_GPU_PODS)"
   fi
   rp_gpu_offer "$dc" >/dev/null || die "no $RP_GPU_TYPE stock in $dc (quota/stock)"
-  auth="$(jq -r '.containerRegistryAuthId // empty' "$RP_STATE/fetch-pod.json" 2>/dev/null || true)"
+  auth="$(jq -r '.registry // empty' "$RP_STATE/fetch-pod.json" 2>/dev/null || true)"
   [[ -n "$auth" ]] || auth="$(rp_ensure_registry_auth)"
   rp_log "▶ gpu: ${#RP_GPU_FAMILIES[@]} PRO 6000 pods (${RP_GPU_FAMILIES[*]}) on vol=$vol dc=$dc image=$RP_IMAGE auth=${auth:-none}"
 

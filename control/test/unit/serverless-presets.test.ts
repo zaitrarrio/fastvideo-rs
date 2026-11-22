@@ -10,7 +10,7 @@ import { POOL_PRESETS } from "../../src/cluster/spec";
 import { LEGACY_VARIANT_CONFIGS, RUNPOD_GPU_TYPES, SLS_PRESET_IDS } from "../../src/enums";
 import { GPU_MEMORY_GB } from "../../src/gpus";
 import { examplesFor, fillExample } from "../../src/serverless/examples";
-import { SLS_BOOT, templateCreatePayload, templateUpdatePayload, v2CreatePayload, v2TemplateBoot, workerEnv } from "../../src/serverless/payloads";
+import { endpointCreatePayload, SLS_BOOT, templateCreatePayload, templateUpdatePayload, workerEnv } from "../../src/serverless/payloads";
 import { inferPreset, mergeSpec, servingIssues, servingView, SLS_PRESETS } from "../../src/serverless/presets";
 import { compareCapabilities, readToml, servesOf, servesOfToml } from "../../src/serverless/serves";
 import { defaultEndpointSpec, normalizeEndpointSpec } from "../../src/serverless/spec";
@@ -46,8 +46,7 @@ describe("presets: one catalog", () => {
     // Owned by name, sent as its text (the one image bakes none).
     expect(max.config).toBe("runpod-h3-max.toml");
     expect(max.config_toml).toBeUndefined();
-    expect(v2TemplateBoot(max).dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
-    expect(templateCreatePayload(max, IMG, "t").dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
+    expect(templateCreatePayload(max, IMG, "t").entrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
     expect(b64(templateCreatePayload(max, IMG, "t").env.FV_WORKER_TOML_B64!)).toBe(WORKER_CONFIGS["runpod-h3-max.toml"]);
     const r = normalizeEndpointSpec({ name: "r", preset: "h3-ref2v" });
     expect(r).toMatchObject({ compute: "GPU", config: "runpod-h3-ref2v.toml", execution_timeout_s: 3600 });
@@ -68,23 +67,26 @@ describe("presets: one catalog", () => {
 });
 
 describe("payloads: the inline config in both modes", () => {
-  it("queue (REST v1 template): FV_WORKER_TOML_B64 is the ref2v config, the boot decodes it", () => {
+  it("queue (the template): FV_WORKER_TOML_B64 is the ref2v config, the boot decodes it", () => {
     const s = normalizeEndpointSpec({ name: "r", preset: "h3-ref2v" });
     const t = templateCreatePayload(s, IMG, "fvc-r-x");
     expect(b64(t.env.FV_WORKER_TOML_B64!)).toBe(REF2V);
     expect(t.env.FV_SERVE_MODE).toBe("runpod-queue");
-    expect(t.dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
-    expect(templateUpdatePayload(s, IMG).dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
+    expect(t.entrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
+    expect(templateUpdatePayload(s, IMG).entrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
   });
-  it("load balancer (REST v2): the env carries it and the template gets the boot after create (no longer refused)", () => {
+  it("load balancer: its template carries the config, the boot and the port; the endpoint is type LOAD_BALANCER on it", () => {
     const s = normalizeEndpointSpec({ name: "r", preset: "h3-ref2v", mode: "lb" });
     expect(s.scaler_type).toBe("REQUEST_COUNT");
-    const p = v2CreatePayload(s, IMG, ["BLACKWELL_96"]) as any;
+    const t = templateCreatePayload(s, IMG, "fvc-r-x") as any;
+    expect(b64(t.env.FV_WORKER_TOML_B64)).toBe(REF2V);
+    expect(t.env.FV_SERVE_MODE).toBe("http");
+    expect(t.entrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
+    expect(t.ports).toEqual(["8000/http"]);
+    const p = endpointCreatePayload(s, "tpl", { pools: ["BLACKWELL_96"] }) as any;
     expect(p.type).toBe("LOAD_BALANCER");
-    expect(b64(p.env.FV_WORKER_TOML_B64)).toBe(REF2V);
-    expect(p.env.FV_SERVE_MODE).toBe("http");
-    expect(p.args).toBeUndefined();
-    expect(v2TemplateBoot(s)!.dockerEntrypoint).toEqual(["/bin/sh", "-c", SLS_BOOT]);
+    expect(p.image).toBeUndefined();
+    expect(p.env).toBeUndefined();
     // A custom inline config on a load balancer validates too.
     const c = normalizeEndpointSpec({ name: "c", variant: "ltx", mode: "lb", config_toml: WORKER_CONFIGS["runpod-ltx-pro.toml"] });
     expect(workerEnv(c, IMG).FV_WORKER_TOML_B64).toBeTruthy();

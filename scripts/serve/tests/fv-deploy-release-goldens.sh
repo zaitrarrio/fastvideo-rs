@@ -38,7 +38,7 @@ unset CLOUDFLARE_API_KEY CLOUDFLARE_API_TOKEN FV_CF_ACCOUNT_ID FV_D1_DATABASE_ID
   FV_RELEASE_REF FV_GITHUB_REPO FV_REGISTRY
 export FV_ENV_FILE=/dev/null
 export FV_D1_API_BASE="$M/client/v4" FV_CF_API_TOKEN=test-cf-token
-export RUNPOD_API_BASE="$M/v1" RUNPOD_GRAPHQL="$M/graphql" RUNPOD_API_KEY=test-runpod-key
+export RUNPOD_API_BASE="$M/v2" RUNPOD_GRAPHQL="$M/graphql" RUNPOD_API_KEY=test-runpod-key
 export FV_REGISTRY_API="$M" FV_GITHUB_API="$M" GH_TOKEN=test-gh-token
 export FV_DEPLOYED_BY=test
 REPO=ghcr.io/zaitrarrio/fastvideo-rs-serve
@@ -67,7 +67,7 @@ DB="$(build "$B" "debug cuda cpu")"
 DC="$(build "$C" "debug cuda")"
 tpls='{}'
 for t in cuda-sls cuda-pod cpu-pod; do
-  tpls="$(jq -c --arg id "tpl-$t" --arg n "fv-serve-$t" '. + {($id): {id: $id, name: $n, imageName: "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld", env: {}}}' <<<"$tpls")"
+  tpls="$(jq -c --arg id "tpl-$t" --arg n "fv-serve-$t" '. + {($id): {id: $id, name: $n, image: "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld", env: {}}}' <<<"$tpls")"
 done
 hook __seed "{\"templates\": $tpls}" >/dev/null
 
@@ -97,14 +97,14 @@ scenario() {
       name: $name, prog: $prog, args: $args, env: $envs, ok: ($rc == 0),
       stdout: ($out | split("\n") | map(select(length > 0))),
       retags: ($docker | split("\n") | map(select(length > 0) | split("\t"))),
-      runpod: [$reqs[] | select((.p | startswith("/v1/")) and .m != "GET") | [.m, .p, .body]],
+      runpod: [$reqs[] | select((.p | test("^/v2/(pods|serverless|templates|network-volumes|registries)(/|$|\\?)")) and .m != "GET") | [.m, .p, .body]],
       d1: [$reqs[] | select(.p | endswith("/query")) | .body
            | {sql: (.sql | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ")), params: (.params // [])}
            | select(.sql | test("^(INSERT|UPDATE) ")) | [.sql, .params]],
       dispatch: [$reqs[] | select(.p | endswith("/dispatches")) | .body],
       order: [$reqs[] | (.p | split("?")[0]) as $path
         | if .m == "RETAG" then "retag " + .body.tag
-          elif ($path | startswith("/v1/")) and .m != "GET" then .m + " " + $path
+          elif ($path | test("^/v2/(pods|serverless|templates|network-volumes|registries)(/|$)")) and .m != "GET" then .m + " " + $path
           elif ($path | endswith("/query")) then (.body.sql | gsub("\\s+"; " ") | ltrimstr(" ") | split(" ")) as $w
             | if $w[0] == "INSERT" then "d1 INSERT " + $w[2] elif $w[0] == "UPDATE" then "d1 UPDATE " + $w[1] else empty end
           elif ($path | endswith("/dispatches")) then "dispatch"
@@ -163,7 +163,7 @@ scenario rollback-back release rollback stable --local --to 3
 # ---- templates ---------------------------------------------------------------------------------------------------
 ENVS=(FV_RELEASE_CHANNEL=stable)
 scenario templates-same templates sync cuda "$(ref "$DB" cuda)"
-curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "$M/v1/templates/tpl-cpu-pod" >/dev/null
+curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "$M/v2/templates/tpl-cpu-pod" >/dev/null
 ENVS=(FV_RELEASE_CHANNEL=stable)
 scenario templates-create templates sync cpu "$(ref "$DB" cpu)"
 ENVS=(FV_RELEASE_CHANNEL=latest RUNPOD_REGISTRY_AUTH_ID=auth-golden)
@@ -172,17 +172,19 @@ scenario templates-unknown templates sync gpu "$(ref "$DA" cuda)"
 scenario templates-tag templates sync cuda "$REPO:cuda-stable"
 
 # ---- reconcile ---------------------------------------------------------------------------------------------------
-# A stray fv pod nobody recorded, someone else's pod, an fv endpoint on a serve template, and a row whose pod is gone.
-hook __seed "{\"pods\": {\"stray1\": {\"id\": \"stray1\", \"name\": \"fv-serve-smoke-x\", \"imageName\": \"$(ref "$DB" cuda)\",
-  \"desiredStatus\": \"RUNNING\", \"createdAt\": \"2026-09-29 01:22:30.836 +0000 UTC\", \"costPerHr\": 0.5,
-  \"machine\": {\"gpuDisplayName\": \"RTX PRO 6000\", \"dataCenterId\": \"EU-RO-1\"}, \"env\": {\"FV_ADMIN_TOKEN\": \"never-print-me\"}},
-  \"other1\": {\"id\": \"other1\", \"name\": \"someone-else\", \"imageName\": \"daydreamlive/scope\", \"desiredStatus\": \"RUNNING\"}},
-  \"endpoints\": {\"ep1\": {\"id\": \"ep1\", \"name\": \"fv-serve-ep-x\", \"templateId\": \"tpl-cuda-sls\",
-  \"createdAt\": \"2026-09-30 10:00:00.000 +0000 UTC\", \"gpuTypeIds\": [\"NVIDIA RTX PRO 6000 Blackwell Server Edition\"], \"dataCenterIds\": [\"EU-RO-1\"]}}}" >/dev/null
+# A stray fv pod nobody recorded, someone else's pod, an fv endpoint on the serve image (REST v2 inlines the
+# template's image into the endpoint and keeps no template id), and a row whose pod is gone.
+hook __seed "{\"pods\": {\"stray1\": {\"id\": \"stray1\", \"name\": \"fv-serve-smoke-x\", \"image\": \"$(ref "$DB" cuda)\",
+  \"status\": \"RUNNING\", \"createdAt\": \"2026-09-29 01:22:30.836 +0000 UTC\", \"cost\": 0.5,
+  \"gpu\": {\"id\": \"NVIDIA RTX PRO 6000 Blackwell Server Edition\", \"count\": 1}, \"dataCenterId\": \"EU-RO-1\", \"env\": {\"FV_ADMIN_TOKEN\": \"never-print-me\"}},
+  \"other1\": {\"id\": \"other1\", \"name\": \"someone-else\", \"image\": \"daydreamlive/scope\", \"status\": \"RUNNING\"}},
+  \"endpoints\": {\"ep1\": {\"id\": \"ep1\", \"name\": \"fv-serve-ep-x\", \"image\": \"$(ref "$DB" cuda)\", \"type\": \"QUEUE\",
+  \"createdAt\": \"2026-09-30 10:00:00.000 +0000 UTC\", \"gpu\": {\"pools\": [\"ADA_24\"], \"count\": 1}, \"dataCenterIds\": [\"EU-RO-1\"],
+  \"env\": {\"FV_RELEASE_CHANNEL\": \"stable\"}}}}" >/dev/null
 hook __sql "{\"sql\": \"INSERT INTO deployments (id, kind, runpod_id, created_at, updated_at, created_by, status) VALUES ('pod:ghost', 'pod', 'ghost', 1, 1, 'test', 'ready')\"}" >/dev/null
 scenario reconcile-dry-run release reconcile --dry-run
 scenario reconcile-adopt release reconcile --adopt
-hook __seed "{\"pods\": {\"stray1\": {\"id\": \"stray1\", \"name\": \"fv-serve-smoke-x\", \"imageName\": \"$(ref "$DA" cuda)\", \"desiredStatus\": \"RUNNING\"}}}" >/dev/null
+hook __seed "{\"pods\": {\"stray1\": {\"id\": \"stray1\", \"name\": \"fv-serve-smoke-x\", \"image\": \"$(ref "$DA" cuda)\", \"status\": \"RUNNING\"}}}" >/dev/null
 scenario reconcile-drift release reconcile
 scenario reconcile-fix release reconcile --fix
 
@@ -193,7 +195,7 @@ scenario registry-endpoint registry endpoint "$(ref "$DB" cuda)"
 
 # ---- partial failures: the order of the effects, and where each stops --------------------------------------------
 # A template PATCH answers 500 after the retags: the sync fails, nothing is recorded in D1.
-hook __fail '{"m": "PATCH", "p": "/v1/templates/", "status": 500, "times": 1}' >/dev/null
+hook __fail '{"m": "PATCH", "p": "/v2/templates/", "status": 500, "times": 1}' >/dev/null
 scenario promote-template-fails release promote aaaaaaa stable --local
 # The release INSERT answers 500 after the retags (a channel the templates do not follow): the images moved, the
 # release is not recorded, and the command fails saying so.

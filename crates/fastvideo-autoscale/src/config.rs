@@ -414,7 +414,7 @@ impl ScheduleRule {
     }
 }
 
-/// Runpod serverless steering (REST v1 `PATCH /endpoints/{id}`).
+/// Runpod serverless steering (REST v2 `PATCH /serverless/{id}`).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerlessConfig {
@@ -425,7 +425,8 @@ pub struct ServerlessConfig {
     /// `REQUEST_COUNT` (jobs per worker).
     pub scaler_type: String,
     pub scaler_value: u32,
-    /// Runpod's own idle timeout (seconds) for workers above `workersMin`.
+    /// Runpod's own idle timeout (seconds) for workers above `workers.min`
+    /// (sent only with `QUEUE_DELAY`: v2 refuses it with `REQUEST_COUNT`).
     pub idle_timeout_s: u32,
 }
 
@@ -441,7 +442,7 @@ impl Default for ServerlessConfig {
     }
 }
 
-/// Runpod pods from a template (REST v1 `POST /pods`): the one CUDA image's
+/// Runpod pods from a template (REST v2 `POST /pods`): the one CUDA image's
 /// pod template (`fv-serve-cuda-pod`), with the pool's worker config in the
 /// pod's env.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -470,7 +471,7 @@ pub struct PodConfig {
     pub url_template: String,
     /// Health path answering 200 when ready (204 while loading).
     pub ready_path: String,
-    /// Refuse a pod whose `costPerHr` exceeds this (0 = the price table × 1.25).
+    /// Refuse a pod whose `cost` (v1's `costPerHr`) exceeds this (0 = the price table × 1.25).
     pub max_usd_per_hr: f64,
 }
 
