@@ -231,7 +231,9 @@ cmd_up() {
   awk -v b="$b" -v m="$MIN_BALANCE" -v d="$MAX_DPH" -v c="$CAP_S" 'BEGIN{exit !(b - d*c/3600 >= m)}' \
     || die "balance \$$b would drop below \$$MIN_BALANCE at the cap (${CAP_S}s at \$$MAX_DPH/h)"
   log "balance \$$b"
-  image="$(resolve_digest "${FV_SERVE_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda}")"
+  # FV_SERVE_LINK=static: the statically linked cuda-static image (docs/serve/images.md; the owner's own runs
+  # only before ADR-0024 D4).
+  image="$(resolve_digest "${FV_SERVE_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-serve:$([[ "${FV_SERVE_LINK:-dynamic}" == static ]] && echo cuda-static || echo cuda)}")"
   key="fvk-$(openssl rand -hex 16)"; keyhash="$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)"
   name="fv-stream-demo-$(date -u +%m%d%H%M)"
   IFS='|' read -r -a types <<<"${GPUS//,/|}"

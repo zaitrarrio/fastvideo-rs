@@ -156,6 +156,7 @@ jobs:
           # ones that embed the oxide cubins.
           - { group: oxide, sets: oxide, oxide: deps-oxide }
           - { group: serve-cuda, sets: serve-cuda, oxide: deps-oxide }
+          - { group: serve-cuda-static, sets: serve-cuda-static, oxide: deps-oxide }
           - { group: serve-cpu, sets: serve-cpu, oxide: deps-oxide }
           - { group: serve-fake, sets: serve-fake, oxide: deps-nooxide }
           - { group: gpucheck, sets: gpucheck, oxide: deps-oxide }

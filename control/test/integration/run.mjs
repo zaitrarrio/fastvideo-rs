@@ -716,7 +716,7 @@ await step("templates and pool presets; a legacy gateway block migrates", async 
   assert.ok(dyn.fal_apps.some((x) => x.id === "fal-ai/ltx-2.3-quality"));
   assert.ok(dyn.model_ids.some((x) => x.id === "ltx25-distill-dense"));
   assert.match(dyn.env_keys.find((k) => k.id === "FASTVIDEO_ATTN_SAGE").detail, /in use: (cluster|pool)/);
-  assert.deepEqual(dyn.images.map((i) => i.id), ["cuda", "cpu"]);
+  assert.deepEqual(dyn.images.map((i) => i.id), ["cuda", "cuda-static", "cpu"]);
   assert.ok(dyn.config_paths.includes("runpod-ltx-pro.toml"));
   // Deleting the definition drops its pool env.
   assert.equal((await call(`/api/v1/clusters/${r.j.cluster.id}`, { method: "DELETE", headers: T() })).status, 200);

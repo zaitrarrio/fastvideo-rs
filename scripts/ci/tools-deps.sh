@@ -8,7 +8,7 @@
 #
 #   tools-deps.sh <group> <recipe.json>
 #
-# Groups: oxide, serve-cuda, serve-cpu, serve-fake, gpucheck, gpucheck-tests,
+# Groups: oxide, serve-cuda, serve-cuda-static, serve-cpu, serve-fake, gpucheck, gpucheck-tests,
 # gpucheck-vast, hf-fm (the release sets), check-lint, check-test (check.sh).
 # Keep in step with release-artifacts-pod.sh and check.sh: a mismatch only
 # costs time (cargo recompiles what differs), never correctness.
@@ -28,6 +28,15 @@ case "$group" in
   oxide) ;;   # its own stage (fv-oxide-aot), cached by its inputs
   # Each serve set also carries fv-boot (release-artifacts-pod.sh build_serve).
   serve-cuda) rel cook --release -p fastvideo-serve --features cuda,http-client
+    rel cook --release -p fastvideo-deploy --features boot ;;
+  # The static link needs the toolkit's *_static.a (libcublas-dev, cuda-cupti-dev, cuda-cudart-dev) and the driver
+  # stub under CUDA_HOME (docker/gpucheck.Dockerfile static-build installs them), and the compiler's libstdc++.a
+  # under a second root (cudarc asks for `static:+whole-archive=stdc++`; release-artifacts-pod.sh static_link_root).
+  serve-cuda-static)
+    mkdir -p /opt/fv-static-link/lib64 && ln -sfn "$(c++ -print-file-name=libstdc++.a)" /opt/fv-static-link/lib64/libstdc++.a
+    printf '!<arch>\n' > /opt/fv-static-link/lib64/libcudnn.a   # the empty cuDNN shim (cuDNN stays shared)
+    rel env CUDA_TOOLKIT_ROOT_DIR=/opt/fv-static-link \
+      cargo chef cook --recipe-path "$recipe" --release -p fastvideo-serve --features cuda-static,http-client
     rel cook --release -p fastvideo-deploy --features boot ;;
   serve-cpu) rel cook --release -p fastvideo-serve --features http-client
     rel cook --release -p fastvideo-deploy --features boot ;;

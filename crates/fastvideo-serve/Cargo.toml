@@ -32,6 +32,8 @@ image.workspace = true
 fastvideo-protocol.workspace = true
 fastvideo-trace.workspace = true
 fastvideo-engine-service.workspace = true
+# Only for the link-mode features (`cuda` / `cuda-static`); the engine service uses it.
+fastvideo-cudarc = { workspace = true, optional = true }
 fastvideo-media.workspace = true
 fastvideo-webrtc.workspace = true
 fastvideo-serve-kit.workspace = true
@@ -121,8 +123,15 @@ default = ["openai-videos", "minimax", "ltxapi", "fal", "reactor"]
 # FakeBackend-only engine for CPU CI (FakeBackend is always compiled; the
 # `[engine] backend` config selects it, and it is the default).
 fake = []
-# CudaBackend over fastvideo-cudarc (the only path to CUDA).
-cuda = ["fastvideo-engine-service/cuda"]
+# CudaBackend over fastvideo-cudarc (the only path to CUDA), the CUDA libraries
+# dlopened at run time (the `cuda` image).
+cuda = ["cuda-engine", "fastvideo-cudarc/link-dynamic"]
+# The same engine with cuBLAS, cuBLASLt, cudart, NVRTC and CUPTI linked statically
+# (cuDNN stays shared; ADR-0024 step 4, the `cuda-static` image). Not with `cuda`.
+cuda-static = ["cuda-engine", "fastvideo-cudarc/link-static"]
+# The CUDA engine without a link mode: what the code gates on (`cuda` and
+# `cuda-static` both enable it); not a feature to build with by itself.
+cuda-engine = ["fastvideo-engine-service/cuda"]
 # str0m peer host for Reactor and the fal director (the director also needs `fal`).
 webrtc = ["fastvideo-webrtc/str0m", "fastvideo-webrtc/opus", "fastvideo-media/opus", "fastvideo-fal?/director"]
 # In-process OpenH264 and Opus encoders.

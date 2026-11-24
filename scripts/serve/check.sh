@@ -175,7 +175,7 @@ fi
 if [[ "${FV_SERVE_CUDA:-0}" == "1" ]]; then
   # Type-checking cudarc needs a target CUDA version; nothing runs on a GPU.
   CUDARC_CUDA_VERSION="${CUDARC_CUDA_VERSION:-13000}" \
-    run cargo check -p fastvideo-engine-service --features cuda
+    run cargo check -p fastvideo-engine-service --features cuda,fastvideo-cudarc/link-dynamic
 fi
 
 # Last, after every compile above: the realtime stage (--realtime), or at

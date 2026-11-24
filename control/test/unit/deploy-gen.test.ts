@@ -24,11 +24,13 @@ const edited = (from: string, to: string) => {
 
 describe("deploy/deploy.toml", () => {
   const dep = loadDeploy(set);
-  it("parses: 2 images (one CUDA image, the cpu image), 24 model presets, 4 family presets, 5 GCP rows, 4 autoscale pools", () => {
-    // One image with boot-time config (owner decision 2026-10-25): no per-variant images, no baked config.
+  it("parses: 3 images (the CUDA image, its static twin, the cpu image), 24 model presets, 4 family presets, 5 GCP rows, 4 autoscale pools", () => {
+    // One image with boot-time config (owner decision 2026-10-25): no per-variant images, no baked config; the
+    // statically linked CUDA image beside it (owner decision 2026-11-24, ADR-0024 step 4).
     expect(dep.images).toEqual([
-      { id: "cuda", carries: ["runpod-fake.toml"], compute: "gpu", note: null },
-      { id: "cpu", carries: ["runpod-fake.toml"], compute: "cpu", note: "CPU only, fake engine; `gateway` until 2026-10-06" },
+      { id: "cuda", carries: ["runpod-fake.toml"], compute: "gpu", link: "dynamic", note: null },
+      { id: "cuda-static", carries: ["runpod-fake.toml"], compute: "gpu", link: "static", note: "static cuBLAS / cuBLASLt / cudart / NVRTC / CUPTI; cuDNN shared (ADR-0024 step 4)" },
+      { id: "cpu", carries: ["runpod-fake.toml"], compute: "cpu", link: "dynamic", note: "CPU only, fake engine; `gateway` until 2026-10-06" },
     ]);
     expect(new Set([...dep.presets, ...dep.family_presets].map((p) => p.image))).toEqual(new Set(["cuda"]));
     expect(dep.presets.length).toBe(24);
@@ -41,8 +43,8 @@ describe("deploy/deploy.toml", () => {
     expect(deployChecks(set)).toEqual([]);
   });
   it("fv-control reads it unchanged: images, enums, presets, configs (every preset's sent inline)", () => {
-    expect(DEPLOY_IMAGES.map((i) => i.id)).toEqual(["cuda", "cpu"]);
-    expect(SERVE_IMAGES).toEqual({ GPU: "cuda", CPU: "cpu" });
+    expect(DEPLOY_IMAGES.map((i) => i.id)).toEqual(["cuda", "cuda-static", "cpu"]);
+    expect(SERVE_IMAGES).toEqual({ GPU: "cuda", GPU_STATIC: "cuda-static", CPU: "cpu" });
     expect([...POOL_PRESET_IDS]).toEqual([...MODEL_PRESETS, ...FAMILY_PRESETS].map((p) => p.id));
     expect(DEPLOY_PRESETS.map((p) => p.id)).toEqual(MODEL_PRESETS.map((p) => p.id));
     expect(DEPLOY_FAMILY_PRESETS.map((p) => p.members)).toEqual(FAMILY_PRESETS.map((p) => p.members));
@@ -77,8 +79,11 @@ describe("deploy/deploy.toml refusals", () => {
     // A served name is not a variant id: the canonical id is required.
     expect(edited('{ variant = "fasth3-trim-8step", recipe = "h3-trim" }', '{ variant = "h3-trim" }')).toThrow(/not a variant id/);
   });
-  it("one CUDA image and at most one CPU image, each carrying the smoke config, none baking one", () => {
+  it("one CUDA image, at most one static CUDA image and one CPU image, each carrying the smoke config, none baking one", () => {
     expect(edited('[[images]]\nid = "cpu"', '[[images]]\nid = "h3-max"\ncarries = ["runpod-fake.toml"]\n\n[[images]]\nid = "cpu"')).toThrow(/2 GPU images/);
+    expect(edited('[[images]]\nid = "cpu"', '[[images]]\nid = "cuda-static-2"\ncarries = ["runpod-fake.toml"]\nlink = "static"\n\n[[images]]\nid = "cpu"')).toThrow(/2 static GPU images/);
+    expect(edited('compute = "cpu"\nnote', 'compute = "cpu"\nlink = "static"\nnote')).toThrow(/a CPU image links no CUDA library/);
+    expect(edited('link = "static"', 'link = "lto"')).toThrow(/link: dynamic \| static/);
     expect(edited('id = "cuda"\ncarries = ["runpod-fake.toml"]', 'id = "cuda"\ncarries = ["runpod.toml"]')).toThrow(/carries runpod-fake.toml/);
     expect(edited('id = "cuda"\ncarries', 'id = "cuda"\nconfig = "runpod.toml"\ncarries')).toThrow(/config: unknown key/);
   });
@@ -116,8 +121,8 @@ describe("the hand-written serve stages are held to the data (gen-configs.mjs on
   const PATHS = ["control/gen-configs.mjs", "control/package.json", "control/src", "families", "deploy", "configs", "docker", "docs/serve/images.md", "scripts/gpu", "scripts/serve/variants.sh", "scripts/gcp", ".github/workflows/serve-image.yml", "crates/fastvideo-serve/console", "crates/fastvideo-deploy/schemas"];
   it("the committed stages: serve-cuda and serve-cpu carry the smoke config, bake no FV_CONFIG, name their image", () => {
     const st = serveStages();
-    expect(Object.keys(st).sort()).toEqual(["cpu", "cuda"]);
-    for (const id of ["cuda", "cpu"]) {
+    expect(Object.keys(st).sort()).toEqual(["cpu", "cuda", "cuda-static"]);
+    for (const id of ["cuda", "cuda-static", "cpu"]) {
       expect(st[id].files, id).toEqual(["runpod-fake.toml"]);
       expect(st[id].env, id).toEqual({ FV_VARIANT: id });
     }

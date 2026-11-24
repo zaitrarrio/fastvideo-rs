@@ -58,7 +58,17 @@ export const DEPLOY_IMAGES: DeployImage[] = [
       "runpod-fake.toml"
     ],
     "compute": "gpu",
+    "link": "dynamic",
     "note": null
+  },
+  {
+    "id": "cuda-static",
+    "carries": [
+      "runpod-fake.toml"
+    ],
+    "compute": "gpu",
+    "link": "static",
+    "note": "static cuBLAS / cuBLASLt / cudart / NVRTC / CUPTI; cuDNN shared (ADR-0024 step 4)"
   },
   {
     "id": "cpu",
@@ -66,6 +76,7 @@ export const DEPLOY_IMAGES: DeployImage[] = [
       "runpod-fake.toml"
     ],
     "compute": "cpu",
+    "link": "dynamic",
     "note": "CPU only, fake engine; `gateway` until 2026-10-06"
   }
 ];

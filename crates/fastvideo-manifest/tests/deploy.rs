@@ -42,11 +42,18 @@ fn committed_deploy_file_validates_against_the_families() {
     let (d, set) = committed();
     assert_eq!(d.presets.len(), 24);
     assert_eq!(d.family_presets.len(), 4);
-    // One CUDA image and the CPU image (owner decision 2026-10-25): every
-    // preset runs on the CUDA image with its config sent at boot.
+    // One CUDA image, its statically linked twin (owner decision 2026-11-24,
+    // ADR-0024 step 4) and the CPU image (owner decision 2026-10-25): every
+    // preset runs on the dynamically linked CUDA image with its config sent
+    // at boot; a launch picks the static one by image tag.
     assert_eq!(
         d.images.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
-        ["cuda", "cpu"]
+        ["cuda", "cuda-static", "cpu"]
+    );
+    assert_eq!(d.gpu_image().map(|i| i.id.as_str()), Some("cuda"));
+    assert_eq!(
+        d.gpu_static_image().map(|i| i.id.as_str()),
+        Some("cuda-static")
     );
     for p in &d.presets {
         assert_eq!(p.image, "cuda", "{}", p.id);

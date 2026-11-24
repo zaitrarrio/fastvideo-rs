@@ -126,7 +126,10 @@ semver = { version = "1", features = ["serde"] }
 schemars = { version = "1", features = ["derive"] }
 proptest = "1"
 
-cudarc = { version = "0.17", default-features = false, features = ["std", "driver", "cublas", "cublaslt", "cudnn", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-loading"] }
+# No link mode here: a leaf binary picks `fastvideo-cudarc/link-dynamic` (dlopen, the
+# `cuda` images) or `fastvideo-cudarc/link-static` (static cuBLAS / NVRTC / cudart /
+# CUPTI, the `cuda-static` image; ADR-0024 step 4). cudarc refuses a build with both or neither.
+cudarc = { version = "0.17", default-features = false, features = ["std", "driver", "cublas", "cublaslt", "cudnn", "nvrtc", "f16", "cuda-version-from-build-system"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

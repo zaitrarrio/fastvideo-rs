@@ -25,6 +25,7 @@
 //! JIT-only binary.
 
 use std::env;
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -225,6 +226,32 @@ fn write_aot(table: &Path, nvcc_entries: &str, oxide: &str, dc_entries: &str) {
     .expect("write aot.rs");
 }
 
+/// `link-static`: cudarc's `static-linking` build asks the linker for
+/// `libcudnn.a` (`static:+whole-archive=cudnn`), which NVIDIA's licence does
+/// not let us ship (ADR-0024), and for `static:+whole-archive=stdc++`. rustc
+/// resolves both when it builds cudarc's rlib, from cudarc's own search
+/// list, so the build (docker/gpucheck.Dockerfile `static-build`,
+/// scripts/dev/release-artifacts-pod.sh) points `CUDA_TOOLKIT_ROOT_DIR` at a
+/// root whose `lib64` holds an empty `libcudnn.a` (the ar magic alone is a
+/// valid archive: GNU ld, lld and mold accept it) and a link to the C++
+/// compiler's `libstdc++.a`. This crate then links the shared cuDNN by its
+/// exact file name (`-l:libcudnn.so.9`; a plain `-lcudnn` would find the
+/// empty shim first), so every cuDNN symbol resolves from the library the
+/// image carries: a `cuda-static` fv-serve links cuBLAS, cuBLASLt, cudart,
+/// NVRTC and CUPTI statically and loads libcudnn.so.9 as before (its own
+/// cuBLASLt / NVRTC needs stay with the shared libraries until ADR-0024
+/// step 3 removes cuDNN). The build host needs libcudnn.so.9 on the linker's
+/// path (the cuDNN runtime package).
+fn cudnn_shared() {
+    println!("cargo:rustc-link-lib=dylib:+verbatim=libcudnn.so.9");
+    match env::var("CUDA_TOOLKIT_ROOT_DIR") {
+        Ok(root) if Path::new(&root).join("lib64/libcudnn.a").is_file() => {}
+        _ => println!(
+            "cargo:warning=fastvideo-cudarc link-static: CUDA_TOOLKIT_ROOT_DIR does not name a root with lib64/libcudnn.a (the empty shim) and lib64/libstdc++.a; cudarc's rlib will not link (docs/serve/images.md, the cuda-static image)"
+        ),
+    }
+}
+
 fn main() {
     for part in KERNEL_PARTS {
         println!("cargo:rerun-if-changed={part}");
@@ -238,6 +265,11 @@ fn main() {
     println!("cargo:rerun-if-env-changed=NVCC");
     println!("cargo:rerun-if-env-changed=FV_CUBIN_SMS");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_CUDA");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_LINK_STATIC");
+    println!("cargo:rerun-if-env-changed=CUDA_TOOLKIT_ROOT_DIR");
+    if env::var_os("CARGO_FEATURE_LINK_STATIC").is_some() {
+        cudnn_shared();
+    }
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_OXIDE");
     println!("cargo:rerun-if-env-changed=FV_OXIDE_CUBIN_DIR");
     println!("cargo:rerun-if-env-changed=FV_REQUIRE_OXIDE");
@@ -402,10 +434,11 @@ fn main() {
         &precise_module_entries(&nvcc, &out, &sms, SRC_VDN, "h3_vdn"),
     );
     write_cubin_table(&fp4_table, "AOT_ATTN_FP4", &fp4_entries(&nvcc, &out, &sms));
-    let moe_nvrtc = nvrtc_version();
+    let nvrtc = Nvrtc::load(&nvcc);
+    let moe_nvrtc = nvrtc_version(&nvrtc);
     write_moe_table(
         &moe_table,
-        &moe_entries(&out, &sms, &moe_cu),
+        &moe_entries(&nvrtc, &out, &sms, &moe_cu),
         Some(&sms),
         &moe_nvrtc,
     );
@@ -487,15 +520,15 @@ fn write_moe_table(table: &Path, entries: &str, sms: Option<&[u32]>, nvrtc: &str
 /// outputs cannot move; fv-gpucheck's `moe_aot` group checks it bit for bit.
 /// (nvcc `--use_fast_math --ftz=true` did not: 4 of 12 checks differed on an
 /// RTX PRO 6000, because cudarc's `use_fast_math` only adds `--fmad=true`.)
-fn moe_entries(out: &Path, sms: &[u32], src: &Path) -> String {
+fn moe_entries(nvrtc: &Nvrtc, out: &Path, sms: &[u32], src: &Path) -> String {
     let text = fs::read_to_string(src).unwrap_or_else(|e| panic!("read {}: {e}", src.display()));
     let mut entries = String::new();
     for sm in sms {
         let cubin = out.join(format!("moe_sm{sm}.cubin"));
         let ptx = out.join(format!("moe_compute{sm}.ptx"));
-        let bytes = nvrtc_compile(&text, &format!("sm_{sm}"), true);
+        let bytes = nvrtc_compile(nvrtc, &text, &format!("sm_{sm}"), true);
         fs::write(&cubin, bytes).unwrap_or_else(|e| panic!("write {}: {e}", cubin.display()));
-        let bytes = nvrtc_compile(&text, &format!("compute_{sm}"), false);
+        let bytes = nvrtc_compile(nvrtc, &text, &format!("compute_{sm}"), false);
         fs::write(&ptx, bytes).unwrap_or_else(|e| panic!("write {}: {e}", ptx.display()));
         entries.push_str(&format!(
             "    ({sm}, include_bytes!({:?}), include_str!({:?})),\n",
@@ -506,68 +539,193 @@ fn moe_entries(out: &Path, sms: &[u32], src: &Path) -> String {
     entries
 }
 
-/// The libnvrtc version the MoE table was compiled with, as `major.minor`.
-fn nvrtc_version() -> String {
-    use cudarc::nvrtc::sys;
-    // SAFETY: two valid out-pointers; the library loads on first use (and
-    // panics inside cudarc when it is missing, hence catch_unwind).
-    let ok = std::panic::catch_unwind(|| {
-        let (mut major, mut minor) = (0i32, 0i32);
-        let r = unsafe { sys::nvrtcVersion(&mut major, &mut minor) };
-        (r, major, minor)
-    });
-    match ok {
-        Ok((r, major, minor)) if r == sys::nvrtcResult::NVRTC_SUCCESS => format!("{major}.{minor}"),
-        Ok((r, _, _)) => panic!("nvrtcVersion: {r:?}"),
-        Err(_) => panic!(
-            "the MoE AOT table needs libnvrtc at build time (nvcc was found, so the \
-             CUDA toolkit is expected): libnvrtc.so did not load"
-        ),
+/// libnvrtc at build time, dlopened (`libloading`) from the toolkit `nvcc`
+/// belongs to (`<nvcc>/../../lib64`, `.../targets/x86_64-linux/lib`), else
+/// `CUDA_HOME` / `CUDA_ROOT` / `CUDA_PATH`, `/usr/local/cuda`, else the
+/// loader's own search path. Only the entry points the MoE table needs.
+struct Nvrtc {
+    _lib: libloading::Library,
+    version: unsafe extern "C" fn(*mut c_int, *mut c_int) -> c_int,
+    create: unsafe extern "C" fn(
+        *mut *mut c_void,
+        *const c_char,
+        *const c_char,
+        c_int,
+        *const *const c_char,
+        *const *const c_char,
+    ) -> c_int,
+    compile: unsafe extern "C" fn(*mut c_void, c_int, *const *const c_char) -> c_int,
+    log_size: unsafe extern "C" fn(*mut c_void, *mut usize) -> c_int,
+    log: unsafe extern "C" fn(*mut c_void, *mut c_char) -> c_int,
+    cubin_size: unsafe extern "C" fn(*mut c_void, *mut usize) -> c_int,
+    cubin: unsafe extern "C" fn(*mut c_void, *mut c_char) -> c_int,
+    ptx_size: unsafe extern "C" fn(*mut c_void, *mut usize) -> c_int,
+    ptx: unsafe extern "C" fn(*mut c_void, *mut c_char) -> c_int,
+    destroy: unsafe extern "C" fn(*mut *mut c_void) -> c_int,
+    error_string: unsafe extern "C" fn(c_int) -> *const c_char,
+}
+
+impl Nvrtc {
+    fn load(nvcc: &Path) -> Self {
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        if let Some(root) = nvcc.parent().and_then(Path::parent) {
+            candidates.push(root.join("lib64/libnvrtc.so"));
+            candidates.push(root.join("targets/x86_64-linux/lib/libnvrtc.so"));
+        }
+        for var in ["CUDA_HOME", "CUDA_ROOT", "CUDA_PATH"] {
+            if let Ok(p) = env::var(var) {
+                candidates.push(Path::new(&p).join("lib64/libnvrtc.so"));
+            }
+        }
+        candidates.push(PathBuf::from("/usr/local/cuda/lib64/libnvrtc.so"));
+        let mut tried = Vec::new();
+        let lib = candidates
+            .iter()
+            .filter(|p| p.is_file())
+            .find_map(|p| {
+                // SAFETY: libnvrtc runs no unsound initialisers.
+                match unsafe { libloading::Library::new(p) } {
+                    Ok(l) => Some(l),
+                    Err(e) => {
+                        tried.push(format!("{}: {e}", p.display()));
+                        None
+                    }
+                }
+            })
+            .or_else(|| unsafe { libloading::Library::new("libnvrtc.so") }.ok())
+            .unwrap_or_else(|| {
+                panic!(
+                    "the MoE AOT table needs libnvrtc at build time (nvcc was found at {}, so the \
+                     CUDA toolkit is expected): libnvrtc.so did not load (tried {:?}, {tried:?})",
+                    nvcc.display(),
+                    candidates
+                )
+            });
+        macro_rules! sym {
+            ($name:literal) => {
+                // SAFETY: the signatures above are libnvrtc's (nvrtc.h).
+                *unsafe { lib.get(concat!($name, "\0").as_bytes()) }
+                    .unwrap_or_else(|e| panic!("libnvrtc: no {}: {e}", $name))
+            };
+        }
+        Self {
+            version: sym!("nvrtcVersion"),
+            create: sym!("nvrtcCreateProgram"),
+            compile: sym!("nvrtcCompileProgram"),
+            log_size: sym!("nvrtcGetProgramLogSize"),
+            log: sym!("nvrtcGetProgramLog"),
+            cubin_size: sym!("nvrtcGetCUBINSize"),
+            cubin: sym!("nvrtcGetCUBIN"),
+            ptx_size: sym!("nvrtcGetPTXSize"),
+            ptx: sym!("nvrtcGetPTX"),
+            destroy: sym!("nvrtcDestroyProgram"),
+            error_string: sym!("nvrtcGetErrorString"),
+            _lib: lib,
+        }
     }
+
+    fn err(&self, r: c_int) -> String {
+        // SAFETY: nvrtcGetErrorString returns a static C string for any code.
+        unsafe { CStr::from_ptr((self.error_string)(r)) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// A `(size getter, bytes getter)` pair as the bytes (the trailing NUL of
+    /// a text result, PTX or the log, dropped).
+    fn bytes(
+        &self,
+        prog: *mut c_void,
+        size: unsafe extern "C" fn(*mut c_void, *mut usize) -> c_int,
+        get: unsafe extern "C" fn(*mut c_void, *mut c_char) -> c_int,
+        what: &str,
+        text: bool,
+    ) -> Vec<u8> {
+        let mut n = 0usize;
+        // SAFETY: `prog` is a live program, `n` a valid out-pointer, and the
+        // buffer is as large as the size getter asked for.
+        unsafe {
+            let r = size(prog, &mut n);
+            assert!(r == 0, "{what} size: {}", self.err(r));
+            let mut buf = vec![0u8; n];
+            if n > 0 {
+                let r = get(prog, buf.as_mut_ptr().cast());
+                assert!(r == 0, "{what}: {}", self.err(r));
+            }
+            if text && buf.last() == Some(&0) {
+                buf.pop();
+            }
+            buf
+        }
+    }
+}
+
+/// The libnvrtc version the MoE table was compiled with, as `major.minor`.
+fn nvrtc_version(nvrtc: &Nvrtc) -> String {
+    let (mut major, mut minor) = (0 as c_int, 0 as c_int);
+    // SAFETY: two valid out-pointers.
+    let r = unsafe { (nvrtc.version)(&mut major, &mut minor) };
+    assert!(r == 0, "nvrtcVersion: {}", nvrtc.err(r));
+    format!("{major}.{minor}")
 }
 
 /// NVRTC `src` for `arch` with the MoE option strings: a cubin for a real
 /// `sm_XY` (`sass`), PTX for a `compute_XY`. Any failure is a build error.
-fn nvrtc_compile(src: &str, arch: &str, sass: bool) -> Vec<u8> {
-    use cudarc::nvrtc::{result, sys};
-    use std::ffi::{CStr, CString};
+fn nvrtc_compile(nvrtc: &Nvrtc, src: &str, arch: &str, sass: bool) -> Vec<u8> {
     let c_src = CString::new(src).expect("moe source has no NUL");
-    let mut options: Vec<String> = moe_nvrtc_opts::MOE_NVRTC_OPTIONS
+    let options: Vec<CString> = moe_nvrtc_opts::MOE_NVRTC_OPTIONS
         .iter()
         .map(|s| s.to_string())
+        .chain(std::iter::once(format!("--gpu-architecture={arch}")))
+        .map(|s| CString::new(s).expect("nvrtc option has no NUL"))
         .collect();
-    options.push(format!("--gpu-architecture={arch}"));
-    let prog = result::create_program(&c_src, None)
-        .unwrap_or_else(|e| panic!("nvrtc create (moe {arch}): {e:?}"));
-    // SAFETY: `prog` comes from `create_program`, `c_src` outlives it, and it
-    // is destroyed exactly once at the end.
+    let opt_ptrs: Vec<*const c_char> = options.iter().map(|o| o.as_ptr()).collect();
+    let mut prog: *mut c_void = std::ptr::null_mut();
+    // SAFETY: `c_src` and `options` outlive the program; `prog` comes from
+    // nvrtcCreateProgram and is destroyed exactly once at the end.
     let out = unsafe {
-        if let Err(e) = result::compile_program(prog, &options) {
-            let log = result::get_program_log(prog)
-                .ok()
-                .map(|l| CStr::from_ptr(l.as_ptr()).to_string_lossy().into_owned())
-                .unwrap_or_default();
-            panic!("nvrtc moe {arch} {options:?}: {e:?}\n{log}");
+        let r = (nvrtc.create)(
+            &mut prog,
+            c_src.as_ptr(),
+            c"moe.cu".as_ptr(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+        assert!(r == 0, "nvrtc create (moe {arch}): {}", nvrtc.err(r));
+        let r = (nvrtc.compile)(prog, opt_ptrs.len() as c_int, opt_ptrs.as_ptr());
+        if r != 0 {
+            let log =
+                String::from_utf8_lossy(&nvrtc.bytes(prog, nvrtc.log_size, nvrtc.log, "log", true))
+                    .into_owned();
+            panic!(
+                "nvrtc moe {arch} {:?}: {}\n{log}",
+                moe_nvrtc_opts::MOE_NVRTC_OPTIONS,
+                nvrtc.err(r)
+            );
         }
-        if sass {
-            let mut size = 0usize;
-            sys::nvrtcGetCUBINSize(prog, &mut size)
-                .result()
-                .unwrap_or_else(|e| panic!("nvrtcGetCUBINSize moe {arch}: {e:?}"));
-            assert!(size > 0, "nvrtc moe {arch}: empty cubin");
-            let mut buf = vec![0u8; size];
-            sys::nvrtcGetCUBIN(prog, buf.as_mut_ptr().cast())
-                .result()
-                .unwrap_or_else(|e| panic!("nvrtcGetCUBIN moe {arch}: {e:?}"));
-            buf
+        let bytes = if sass {
+            let b = nvrtc.bytes(
+                prog,
+                nvrtc.cubin_size,
+                nvrtc.cubin,
+                &format!("nvrtcGetCUBIN moe {arch}"),
+                false,
+            );
+            assert!(!b.is_empty(), "nvrtc moe {arch}: empty cubin");
+            b
         } else {
-            let ptx =
-                result::get_ptx(prog).unwrap_or_else(|e| panic!("nvrtc ptx moe {arch}: {e:?}"));
-            CStr::from_ptr(ptx.as_ptr()).to_bytes().to_vec()
-        }
+            nvrtc.bytes(
+                prog,
+                nvrtc.ptx_size,
+                nvrtc.ptx,
+                &format!("nvrtc ptx moe {arch}"),
+                true,
+            )
+        };
+        let _ = (nvrtc.destroy)(&mut prog);
+        bytes
     };
-    // SAFETY: created above, not destroyed yet.
-    let _ = unsafe { result::destroy_program(prog) };
     out
 }
 

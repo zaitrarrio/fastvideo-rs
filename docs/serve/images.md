@@ -1,11 +1,12 @@
-# fv-serve images: one CUDA image and one CPU image, published to GHCR and Runpod
+# fv-serve images: one CUDA image, its statically linked twin and one CPU image, published to GHCR and Runpod
 
 Date: 2026-09-28; shared layer stack 2026-10-06 ([Lean runtime
 images](#lean-runtime-images-2026-10-06)); one image with boot-time config
 2026-10-25 ([below](#one-image-with-boot-time-config-2026-10-25); before it,
-CI built seven variant images, one per baked config). Build:
+CI built seven variant images, one per baked config); the statically
+linked `cuda-static` image 2026-11-24 ([below](#the-statically-linked-image-cuda-static-2026-11-24)). Build:
 `docker/gpucheck.Dockerfile` (stages `base-os`, `base-cuda` … `serve-cuda`,
-`serve-cpu`, `runtime`, `serve`), CI: `.github/workflows/serve-image.yml` +
+`serve-cuda-static`, `serve-cpu`, `runtime`, `serve`), CI: `.github/workflows/serve-image.yml` +
 `scripts/serve/ci-images.sh` + `scripts/ci/base-images.sh`, Runpod
 publishing: `scripts/serve/runpod-templates.sh`, image table:
 `scripts/serve/variants.sh` (generated from `deploy/deploy.toml` `[[images]]`).
@@ -21,11 +22,12 @@ deploy scripts pull anonymously).
 | image | fv-serve | carries under `/etc/fv` (`FV_WORKER_CONFIG`) | GHCR tags | Runpod templates |
 |---|---|---|---|---|
 | cuda | CUDA (every preset) | `runpod-fake.toml` | `:cuda-sha-<sha>`, `:cuda` / `:cuda-latest`, `:cuda-stable` | `fv-serve-cuda-sls`, `fv-serve-cuda-pod` |
+| cuda-static (static cuBLAS / cuBLASLt / cudart / NVRTC / CUPTI; cuDNN shared (ADR-0024 step 4)) | CUDA, static NVIDIA libraries (cuDNN shared); by image tag | `runpod-fake.toml` | `:cuda-static-sha-<sha>`, `:cuda-static` / `:cuda-static-latest`, `:cuda-static-stable` | `fv-serve-cuda-static-sls`, `fv-serve-cuda-static-pod` |
 | cpu (CPU only, fake engine; `gateway` until 2026-10-06) | CPU only (fake engine) | `runpod-fake.toml` | `:cpu-sha-<sha>`, `:cpu` / `:cpu-latest`, `:cpu-stable` | `fv-serve-cpu-pod` |
 
 <!-- END GENERATED -->
 
-Neither image bakes a worker config: every launch sends one at boot
+No image bakes a worker config: every launch sends one at boot
 (`FV_WORKER_TOML_B64`, the config inline, or `FV_WORKER_CONFIG`, a file in the
 image), and an image started without one refuses to boot. The only config
 each carries is `/etc/fv/runpod-fake.toml` (fake engine), for CI's no-GPU
@@ -59,6 +61,8 @@ base-cuda: cuBLASLt                                  every CUDA image
  ├─ serve-cuda: fv-serve --features cuda,http-client, python3 + curl + scripts/gpu/r2-fetch.py (weights_source r2), runpod-fake.toml, FV_VARIANT=cuda
  │    + llama-server (llama.cpp, CUDA; fastvideo-rs-runtime:llama-server-<hash>, 82 MB) + fv-upsampler: the local
  │      prompt upsampler sidecar, docs/serve/upsampler-local.md
+ ├─ serve-cuda-static: the same, with fv-serve --features cuda-static,http-client (static cuBLAS / cuBLASLt / cudart /
+ │      NVRTC / CUPTI; cuDNN still from base-cuda), FV_VARIANT=cuda-static
  ├─ runtime: sshd/rsync/curl, CUPTI, hf-fm, scripts/gpu, oxide, fv-gpucheck
  │   └─ serve (debug): + configs, deploy/vast/worker.py, fv-serve
 base-os ─ serve-cpu: fv-serve --features http-client (no CUDA library)
@@ -66,7 +70,7 @@ base-os ─ serve-cpu: fv-serve --features http-client (no CUDA library)
 
 One CUDA image serves every preset, so Runpod's host image cache covers
 every family at once (before 2026-10-25 six CUDA variants differed only in
-a last layer of a few KB); `fastvideo-rs-runtime` and the
+a last layer of a few KB); `cuda-static`, `fastvideo-rs-runtime` and the
 debug image add only their thin top layers to the same base. The `cpu` image (fv-control's
 fake-engine workers) shares the OS and ffmpeg layers and has no CUDA
 library at all (the smoke check asserts it).
@@ -119,6 +123,74 @@ from the R2 bucket `fv-weights`; the US volume `s2k01690bi` was deleted
   not cover a family (DiT + text encoder + VAE + upscaler repos). It also
   mounts where the network volume mounts. It is worth revisiting for a
   single-repo family once the trees are published on the Hub.
+
+## The statically linked image: `cuda-static` (2026-11-24)
+
+Owner decision 2026-11-24 (FVID-2026-11-24-ship-static-fv-serve): ship a
+statically linked fv-serve beside the dynamically linked one, as a second
+CUDA image, `cuda-static`. It is [ADR-0024](../adr/0024-driver-only-runtime.md)
+step 4 brought forward as an **additional** build, not a replacement: every
+preset and every fv-control launch still runs `cuda`; a launch picks the
+static image by tag (`:cuda-static`, `:cuda-static-sha-<sha>`;
+`scripts/serve/runpod-pod.sh` and the endpoint script take an image), and
+its Runpod templates are `fv-serve-cuda-static-sls` / `-pod`.
+
+**What is static.** fv-serve's `cuda-static` feature selects
+`fastvideo-cudarc/link-static` (cudarc `static-linking`) instead of
+`cuda`'s `link-dynamic` (cudarc `dynamic-loading`, dlopen at run time); a
+`cuda` build without exactly one of the two fails to compile. The binary
+then carries cuBLAS, cuBLASLt, cudart, NVRTC (with nvptxcompiler and the
+builtins) and CUPTI from the toolkit's `*_static.a`, plus `libculibos` and
+the compiler's `libstdc++.a`, and links `libcuda` from the driver stub (the
+host's driver at run time). **cuDNN stays a shared library**: its licence
+allows redistributing only the runtime `.so` (ADR-0024 §context), so
+`fastvideo-cudarc`'s build.rs satisfies cudarc's `libcudnn.a` directive with
+an empty archive and links `libcudnn.so.9` as before. cuDNN's engines in
+turn load the shared cuBLASLt and NVRTC, so the image stays on `base-cuda`
+(the full CUDA layer) until ADR-0024 step 3 removes cuDNN; the gain today
+is a binary whose own CUDA calls do not depend on the image's library
+versions, and the measurement ADR-0024 step 4 asked for. The `cuda-static`
+smoke check (`ci-images.sh smoke`) asserts the binary needs no shared
+cuBLAS / NVRTC / cudart / CUPTI and does load `libcudnn.so.9`; the `cuda`
+smoke asserts the opposite feature.
+
+**It needs the driver at load.** The static binary names `libcuda.so.1` in
+its `DT_NEEDED` (cudarc's static mode links the driver stub; the dynamic
+binary dlopens the driver), so it cannot start on a host without an NVIDIA
+driver. The image carries the toolkit's driver stub at
+`/opt/fastvideo-rs/lib/driver-stub/libcuda.so.1`, **off the loader's
+path**: only CI's no-GPU smoke check points `LD_LIBRARY_PATH` at it, and the
+smoke asserts no `libcuda.so.1` is on the default path, so on a GPU host the
+real driver is the one loaded.
+
+**Build.** Dockerfile stage `static-build` (on the shared `build` stage:
+the pinned `libcublas-dev`, `cuda-cupti-dev`, `cuda-cudart-dev` and
+`cuda-driver-dev` packages added, `CUDA_TOOLKIT_ROOT_DIR` pointing cudarc at
+a `lib64/libstdc++.a` link; the stage fails if `ldd` still names a shared
+CUDA library), image stage `serve-cuda-static`; tools-release set
+`serve-cuda-static` (`release-artifacts-pod.sh`, `tools-deps.sh`,
+`prebuilt.sh` context `static-build`); CI builds it with the others
+(`serve-image.yml` default `cuda cuda-static cpu`, registry cache
+`buildcache-cuda-static`).
+
+**Not before NVIDIA's confirmation.** ADR-0024 D4 stands: no `cuda-static`
+image serves rented capacity before NVIDIA's written confirmation for the
+GPU-rental product. Until then it is built, smoke-checked and published for
+measurement and the owner's own runs.
+
+**Size (local measurement, 2026-11-24, toolkit 13.4.92 / cuBLAS 13.8.0.4 /
+cuDNN 9.28, release profile).** The dynamically linked fv-serve is 89 MB
+(26 MB gzip); the static one is 910 MB (547 MB gzip): cudarc links every
+archive `+whole-archive`, and libcublasLt_static alone is 852 MB (libnvrtc
+143, libcublas 125, libcupti 58, libnvptxcompiler 58). Because cuDNN still
+needs the shared cuBLASLt and NVRTC, the `cuda-static` image carries the
+1048 MB CUDA layer **and** the 547 MB binary layer: about 520 MB more than
+`cuda` today. The gain comes with ADR-0024 steps 2–3 (cuDNN gone): then the
+CUDA layer goes and the static binary is the whole payload. Measured
+reductions: `nvprune` to one SM takes about 170 MB off cuBLAS + cuBLASLt;
+dropping CUPTI (FASTVIDEO_GPU_TRACE) 58 MB; the NVRTC trio (208 MB) only
+with step 1b. Details in the decision log
+(FVID-2026-11-24-ship-static-fv-serve).
 
 ## One image with boot-time config (2026-10-25)
 

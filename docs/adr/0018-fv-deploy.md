@@ -650,7 +650,7 @@ fields. No body changes: guards are not in any Runpod payload, and the payload c
 #### 10.5 Evidence
 
 `scripts/serve/tests/fv-deploy-goldens.sh` (CI `control.yml`, `--check`) now also writes
-`fixtures/deploy/serve-templates.json` (`runpod-templates.sh plan` of the CUDA and CPU images) and
+`fixtures/deploy/serve-templates.json` (`runpod-templates.sh plan` of the CUDA, static CUDA and CPU images) and
 `fixtures/deploy/release.json`: `fv-deploy-release-goldens.sh` runs 28 scenarios of `release.sh`,
 `runpod-templates.sh sync` and `registry.sh` against `mock_api.py` (D1 on SQLite, Runpod REST, a GHCR-like registry,
 GitHub dispatch) and records per scenario whether it succeeded, its stdout, the retags, the Runpod writes, the D1

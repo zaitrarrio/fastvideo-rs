@@ -2,6 +2,24 @@
 
 Project code: FVID
 
+### FVID · 2026-11-24 · FVID-2026-11-24-ship-static-fv-serve
+- Trigger: the owner asked for the size of the binaries and the roadblocks to static linking (ADR-0024 step 4: cudarc `static-linking`, the cuDNN licence, D4), then: "I'd like us to ship a statically linked version in addition to our dynamically linked version"
+- Options: wait for ADR-0024 steps 2–3 (cuDNN gone) and link statically then, one image; a second CUDA image now with everything but cuDNN static, the dynamic one unchanged; replace the dynamic image outright
+- Decision: **(owner) ship a statically linked fv-serve in addition to the dynamically linked one**: a second CUDA image `cuda-static` (fv-serve `cuda-static` feature → `fastvideo-cudarc/link-static` → cudarc `static-linking`: cuBLAS, cuBLASLt, cudart, NVRTC + nvptxcompiler + builtins, CUPTI, libculibos, libstdc++ in the binary; cuDNN stays `libcudnn.so.9`, satisfied by an empty `libcudnn.a` + `dylib=cudnn`), `deploy/deploy.toml` `[[images]]` gains `link = "dynamic" | "static"` (one dynamic CUDA image, at most one static, one CPU); every preset and fv-control launch keeps `cuda`; `FV_SERVE_LINK=static` / the `:cuda-static` tag pick it; ADR-0024 D5
+- Reason: owner's call; the dynamic image stays the served default, so nothing changes for the pools, and the static binary gives the step-4 measurement on real builds now
+- Reversibility: cheap (drop the `[[images]]` table, the two Dockerfile stages and the `cuda-static` feature; the `link` field defaults to dynamic)
+- Executed by: this PR (branch claude/trusting-hamilton-s480y1); CI builds `cuda cuda-static cpu`
+- ADR: docs/adr/0024-driver-only-runtime.md (step 4, D5; D4 still open: no `cuda-static` image serves rented capacity before NVIDIA's written confirmation)
+- Verification: pending (serve-image CI: the `cuda-static` smoke asserts no shared cuBLAS / NVRTC / cudart / CUPTI and a loaded `libcudnn.so.9`). Local measurement 2026-11-24 (this container, toolkit 13.4.92, cuBLAS 13.8.0.4, cuDNN 9.28.1.4, release profile): see the table below
+- Size table (local measurement 2026-11-24, this container):
+
+  | binary (release profile: fat LTO, 1 codegen unit, opt-level 3; `cuda*,http-client`) | size | gzip -6 | loads at run time |
+  |---|---|---|---|
+  | fv-serve `cuda` (dynamic) | 89 MB | 26 MB | libcuda (dlopen), cuBLAS, cuBLASLt, cudart, NVRTC, cuDNN from the image's CUDA layer (1048 MB compressed) |
+  | fv-serve `cuda-static` | 910 MB (904 MB with debug info stripped) | 547 MB | libcuda.so.1 (`DT_NEEDED`), libcudnn.so.9 and, through cuDNN, the shared cuBLASLt / NVRTC: the image keeps the CUDA layer until ADR-0024 step 3 |
+
+  What the static binary carries (the toolkit's archives, each `+whole-archive` by cudarc): libcublasLt_static 852 MB, libnvrtc_static 143 MB, libcublas_static 125 MB, libcupti_static 58 MB, libnvptxcompiler_static 58 MB, libnvrtc-builtins_static 7 MB, libcudart_static 2 MB. Reductions measured or available: `nvprune -arch sm_120` leaves cuBLASLt at 720 MB and cuBLAS at 84 MB (about 170 MB saved for a one-SM build); dropping CUPTI from static builds (FASTVIDEO_GPU_TRACE only) saves 58 MB; the NVRTC trio (208 MB) can go only with step 1b (`jit` off) and once nothing else in the binary needs it; a cudarc without `+whole-archive` would let the linker drop unreferenced objects (unmeasured). Until cuDNN leaves (steps 2–3) the image is about 520 MB larger than `cuda`'s; after it, the static binary is the whole payload and the CUDA layer goes.
+
 ### FVID · 2026-11-12 · FVID-2026-11-12-defer-wo-1b
 - Trigger: after WO-1a (PR #245) every module of a built SM loads embedded cubins; WO-1b (a `jit` feature gating run-time NVRTC) was next
 - Options: implement WO-1b now; defer it to ADR-0024 step 4

@@ -448,7 +448,7 @@ const CONFIG_RE = /^[A-Za-z0-9._-]+\.toml$/;
 const strs = (x) => Array.isArray(x) && x.every((s) => typeof s === "string" && s.length > 0);
 const KEYS = {
   top: ["schema", "dispatch", "images", "presets", "family_presets", "gcp", "autoscale"],
-  image: ["id", "carries", "compute", "note"],
+  image: ["id", "carries", "compute", "link", "note"],
   preset: ["id", "title", "description", "standard", "image", "config", "prequant", "licence", "container_disk_gb", "models", "max_queued", "job_timeout_s", "stale_after_s"],
   model: ["variant", "id", "recipe"],
   family: ["id", "title", "description", "image", "config", "min_vram_gb", "members", "prequant", "left_out"],
@@ -482,7 +482,8 @@ export function parseDeploy(textIn, set = loadFamilies(), label = "deploy/deploy
   for (const [k, v] of Object.entries(dispatch)) text(v, `${label}: dispatch.${k}`);
   const dispatchFams = new Set(Object.values(dispatch));
 
-  // The serve images: one CUDA image, at most one CPU image (owner decision 2026-10-25); none bakes a config.
+  // The serve images: one CUDA image, at most one statically linked CUDA image (owner decision 2026-11-24, ADR-0024
+  // step 4) and at most one CPU image (owner decision 2026-10-25); none bakes a config.
   const images = (doc.images ?? []).map((im, i) => {
     const at = `${label}: images[${i}]`;
     onlyKeys(im, KEYS.image, at);
@@ -492,17 +493,20 @@ export function parseDeploy(textIn, set = loadFamilies(), label = "deploy/deploy
     if (!carried.includes(SMOKE_CONFIG)) throw new Error(`${at}.carries: every serve image carries ${SMOKE_CONFIG} (CI's no-GPU smoke check)`);
     const compute = im.compute ?? "gpu";
     if (!["gpu", "cpu"].includes(compute)) throw new Error(`${at}.compute: gpu | cpu`);
+    const link = im.link ?? "dynamic";
+    if (!["dynamic", "static"].includes(link)) throw new Error(`${at}.link: dynamic | static`);
+    if (compute === "cpu" && link !== "dynamic") throw new Error(`${at}.link: a CPU image links no CUDA library (no link mode)`);
     if (im.note !== undefined) text(im.note, `${at}.note`);
-    return { id: im.id, carries: [...carried], compute, note: im.note ?? null };
+    return { id: im.id, carries: [...carried], compute, link, note: im.note ?? null };
   });
   const imageById = new Map();
   for (const im of images) {
     if (imageById.has(im.id)) throw new Error(`${label}: image ${im.id} twice`);
     imageById.set(im.id, im);
   }
-  for (const [compute, one] of [["gpu", true], ["cpu", false]]) {
-    const n = images.filter((x) => x.compute === compute).length;
-    if (n > 1 || (one && n === 0)) throw new Error(`${label}: ${n} ${compute.toUpperCase()} images: one CUDA image (and at most one CPU image), configs are sent at boot`);
+  for (const [compute, link, name, one] of [["gpu", "dynamic", "GPU", true], ["gpu", "static", "static GPU", false], ["cpu", "dynamic", "CPU", false]]) {
+    const n = images.filter((x) => x.compute === compute && x.link === link).length;
+    if (n > 1 || (one && n === 0)) throw new Error(`${label}: ${n} ${name} images: one CUDA image (and at most one static CUDA image and one CPU image), configs are sent at boot`);
   }
   const servingImage = (id, at) => {
     const im = imageById.get(id);
@@ -707,8 +711,8 @@ export const ENUMS_PRESETS_REGION = tsRegion("POOL_PRESET_IDS");
 /** src/enums.ts: the SERVE_IMAGES and POOL_PRESET_IDS lines (enums.ts has no imports, so they are written into it). */
 export function enumsTs(dep = loadDeploy()) {
   const list = (xs) => `[${xs.map((x) => JSON.stringify(x)).join(", ")}]`;
-  const of = (c) => dep.images.find((i) => i.compute === c)?.id;
-  const images = `{ GPU: ${JSON.stringify(of("gpu"))}${of("cpu") ? `, CPU: ${JSON.stringify(of("cpu"))}` : ""} }`;
+  const of = (c, l = "dynamic") => dep.images.find((i) => i.compute === c && i.link === l)?.id;
+  const images = `{ GPU: ${JSON.stringify(of("gpu"))}${of("gpu", "static") ? `, GPU_STATIC: ${JSON.stringify(of("gpu", "static"))}` : ""}${of("cpu") ? `, CPU: ${JSON.stringify(of("cpu"))}` : ""} }`;
   let t = readRel("src/enums.ts");
   t = withRegion(t, ...ENUMS_IMAGES_REGION, `export const SERVE_IMAGES = ${images} as const;`, "src/enums.ts");
   t = withRegion(t, ...ENUMS_PRESETS_REGION, `export const POOL_PRESET_IDS = ${list([...dep.presets, ...dep.family_presets].map((p) => p.id))} as const;`, "src/enums.ts");
@@ -724,8 +728,8 @@ export const VARIANTS_SH_END = "# END GENERATED";
 /** scripts/serve/variants.sh: the image table and FV_IMAGES (no per-variant images, no config table: every launch
  * sends its config). */
 export function variantsSh(dep = loadDeploy()) {
-  const rows = [["image", "compute", "carries (FV_WORKER_CONFIG)", "GHCR tag", "Runpod templates", "note"]];
-  for (const i of dep.images) rows.push([i.id, i.compute, i.carries.join(", "), `…:${i.id}[-sha-…]`, i.compute === "cpu" ? `fv-serve-${i.id}-pod` : `fv-serve-${i.id}-sls / -pod`, (i.note ?? "").replace(/`/g, "")]);
+  const rows = [["image", "compute", "link", "carries (FV_WORKER_CONFIG)", "GHCR tag", "Runpod templates", "note"]];
+  for (const i of dep.images) rows.push([i.id, i.compute, i.compute === "cpu" ? "-" : i.link, i.carries.join(", "), `…:${i.id}[-sha-…]`, i.compute === "cpu" ? `fv-serve-${i.id}-pod` : `fv-serve-${i.id}-sls / -pod`, (i.note ?? "").replace(/`/g, "")]);
   const body = [
     "#",
     ...pad(rows).map((l) => `#   ${l}`),
@@ -734,7 +738,8 @@ export function variantsSh(dep = loadDeploy()) {
     "# image carries; fv_config_env_json below), and an image started without one refuses to boot.",
     "",
     `FV_IMAGES="${dep.images.map((i) => i.id).join(" ")}"`,
-    `FV_CUDA_IMAGE="${dep.images.find((i) => i.compute === "gpu").id}"`,
+    `FV_CUDA_IMAGE="${dep.images.find((i) => i.compute === "gpu" && i.link === "dynamic").id}"`,
+    `FV_CUDA_STATIC_IMAGE="${dep.images.find((i) => i.compute === "gpu" && i.link === "static")?.id ?? ""}"`,
   ].join("\n");
   return withRegion(readRel("../scripts/serve/variants.sh"), VARIANTS_SH_BEGIN, VARIANTS_SH_END, body, "scripts/serve/variants.sh");
 }
@@ -768,7 +773,7 @@ export function imagesMd(set = loadFamilies(), dep = loadDeploy(set)) {
   const rows = ["| image | fv-serve | carries under `/etc/fv` (`FV_WORKER_CONFIG`) | GHCR tags | Runpod templates |", "|---|---|---|---|---|"];
   for (const i of dep.images) {
     const name = i.note ? `${i.id} (${i.note})` : i.id;
-    const bin = i.compute === "cpu" ? "CPU only (fake engine)" : "CUDA (every preset)";
+    const bin = i.compute === "cpu" ? "CPU only (fake engine)" : i.link === "static" ? "CUDA, static NVIDIA libraries (cuDNN shared); by image tag" : "CUDA (every preset)";
     const tags = `\`:${i.id}-sha-<sha>\`, \`:${i.id}\` / \`:${i.id}-latest\`, \`:${i.id}-stable\``;
     const tpl = i.compute === "cpu" ? `\`fv-serve-${i.id}-pod\`` : `\`fv-serve-${i.id}-sls\`, \`fv-serve-${i.id}-pod\``;
     rows.push(`| ${name} | ${bin} | ${i.carries.map((c) => `\`${c}\``).join(", ")} | ${tags} | ${tpl} |`);

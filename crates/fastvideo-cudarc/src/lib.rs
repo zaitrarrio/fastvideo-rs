@@ -11,6 +11,16 @@
 // the shape check an out-of-range index gives.
 #![allow(clippy::needless_range_loop)]
 
+// A `cuda` build picks its link mode (Cargo.toml): the leaf binary enables
+// `link-dynamic` (the `cuda` images) or `link-static` (the `cuda-static` image).
+#[cfg(all(
+    feature = "cuda",
+    not(any(feature = "link-dynamic", feature = "link-static"))
+))]
+compile_error!(
+    "fastvideo-cudarc: the `cuda` feature needs a link mode: enable `link-dynamic` (dlopen the CUDA libraries, the cuda images) or `link-static` (static cuBLAS / NVRTC / cudart / CUPTI, the cuda-static image)"
+);
+
 pub mod cosmos;
 pub mod cosmos3;
 pub mod dreamx;
