@@ -265,21 +265,26 @@ fn every_gold_arm_reads_trees_on_the_volume_or_in_r2() {
     }
     assert_eq!(pending.len(), PENDING_R2.len(), "{pending:?}");
     assert_eq!(plan.arms.len(), 35, "every gold variant runs (one of them, history-forcing-1.3b, skipped at its gate until its tree is published)");
-    // The R2-only arms the volume tier skipped now fetch (ADR-0023 §3).
+    // The R2-only arms the volume tier skipped now fetch (ADR-0023 §3). Since
+    // the 2026-11-24 fill (docs/ops/runpod-volumes.md §0b) the H3 arms
+    // (fasth3-8step-dense, vdn-h3, h3-larry-turbo, fasth3-trim-nvfp4) read
+    // the volume; the Wan, LongLive and LongLive-Plug arms still fetch.
     for arm in [
-        "fasth3-8step-dense",
         "fastwan21-1.3b",
         "longlive-1.3b",
         "wan14b-plug-4step",
-        "vdn-h3",
-        "h3-larry-turbo",
-        "fasth3-trim-nvfp4",
         "h3-plug-4step",
         "h3-plug-cfg",
     ] {
         assert!(
             !plan.arm(arm).expect(arm).reads.is_empty(),
             "{arm} reads R2 trees"
+        );
+    }
+    for arm in ["fasth3-8step-dense", "vdn-h3", "h3-larry-turbo", "fasth3-trim-nvfp4"] {
+        assert!(
+            plan.arm(arm).expect(arm).reads.is_empty(),
+            "{arm} reads the volume since 2026-11-24"
         );
     }
 }
@@ -289,11 +294,12 @@ fn the_gold_container_disk_holds_its_largest_arm() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let tier = lab.tier(GOLD_TIER).expect("gold tier");
     let (_, plan) = gold_plan(&lab);
-    // h3-8step (fasth3-8step-dense), 147.86 GB, the largest arm; every
-    // distinct tree fetched once (536.27 GB: 530.74 GB plus the two
-    // LongLive-Plug H3 adapter trees, 2.77 GB each) in the tier's order.
-    assert_eq!(plan.peak_bytes, 147_857_050_891);
-    assert_eq!(plan.fetch_bytes, 536_274_519_897);
+    // wan21-t2v-14b with its LongLive-Plug adapters (wan14b-plug-4step),
+    // 84.09 GB, the largest arm since the 2026-11-24 fill put the H3 trees
+    // on the volume (before: h3-8step, 147.86 GB); every distinct tree
+    // fetched once (213.24 GB; 536.27 GB before) in the tier's order.
+    assert_eq!(plan.peak_bytes, 84_087_639_322);
+    assert_eq!(plan.fetch_bytes, 213_243_575_813);
     let peak_gb = plan.peak_bytes.div_ceil(1_000_000_000);
     assert!(
         u64::from(tier.container_disk_gb) >= peak_gb + DISK_RESERVE_GB,

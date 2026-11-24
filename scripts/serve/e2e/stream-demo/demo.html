@@ -30,7 +30,7 @@
 <body>
 <main>
   <h1>Live stream demo</h1>
-  <p class="sub">fv-serve renders one stream on the GPU (a causal model such as SF-Wan as one continuous rollout; a clip model such as H3, LTX or Wan as a clip queue), publishes it over WHIP to a Cloudflare Stream live input, and this page plays it back over WHEP. Steer the prompt while it runs.</p>
+  <p class="sub">fv-serve renders one stream on the GPU (a causal model such as SF-Wan as one continuous rollout; a clip model such as H3, LTX or Wan as a clip queue), publishes it to a Cloudflare Stream live input (WHIP, or RTMPS where the pod's host has no UDP out), and this page plays it back (WHEP, or HLS). Steer the prompt while it runs.</p>
 
   <video id="video" autoplay playsinline muted controls></video>
   <div id="status">idle</div>
@@ -53,6 +53,14 @@
       <div><label>Model (from the server's capabilities)</label><select id="model"></select></div>
       <div><label id="maxLabel">Max seconds (causal: session length, a reset restarts the clock; clip: optional)</label><input id="max" type="number" value="300"></div>
     </div>
+    <div class="row">
+      <div><label>Output (Cloudflare Stream live input)</label>
+        <select id="output">
+          <option value="cloudflare">WHIP ingest, WHEP playback (needs UDP out of the pod)</option>
+          <option value="cloudflare-rtmps">RTMPS ingest, HLS playback (TCP only; a few seconds of latency)</option>
+        </select></div>
+      <div></div>
+    </div>
     <button id="start">Start stream</button>
     <button id="stop" class="secondary" disabled>Stop</button>
     <label>Or watch a running stream by id</label>
@@ -73,6 +81,7 @@
     <button id="reset" class="secondary" disabled>Reset (scene cut)</button>
   </fieldset>
 </main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js"></script>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -163,10 +172,23 @@
     whep = r.headers.get('location') ? new URL(r.headers.get('location'), url).href : null;
     await pc.setRemoteDescription({ type: 'answer', sdp: await r.text() });
   }
+  let hls = null;
+  async function playHls(url) {
+    await stopPlayer();
+    const v = $('video');
+    if (window.Hls && Hls.isSupported()) {
+      hls = new Hls({ lowLatencyMode: true });
+      hls.loadSource(url); hls.attachMedia(v);
+    } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+      v.src = url;
+    } else throw new Error('no HLS playback in this browser');
+    v.play().catch(() => {});
+  }
   async function stopPlayer() {
     if (whep) { try { await fetch(whep, { method: 'DELETE' }); } catch {} whep = null; }
     if (pc) { pc.close(); pc = null; }
-    $('video').srcObject = null;
+    if (hls) { hls.destroy(); hls = null; }
+    $('video').srcObject = null; $('video').removeAttribute('src');
   }
 
   const enable = (on) => {
@@ -192,11 +214,16 @@
         if (s.mode && s.mode !== mode) showMode(s.mode);
         const st = s.status || {};
         say(`stream ${id} (${s.model || '?'}, ${s.mode || '?'}): ${st.state || '?'} · output ${st.output_state || '?'}${st.output_error ? ' (' + st.output_error + ')' : ''}${sessionLine(s)}`);
-        const whepUrl = s.playback?.whep_url;
-        if (!playing && whepUrl && st.output_state === 'publishing') {
+        const whepUrl = s.playback?.whep_url, hlsUrl = s.playback?.hls_url;
+        if (!playing && st.output_state === 'publishing' && (whepUrl || hlsUrl)) {
           playing = true;
-          say(`playing over WHEP: ${whepUrl}`);
-          try { await playWhep(whepUrl); } catch (e) { playing = false; say(`WHEP: ${e}`); }
+          if (whepUrl && s.playback?.format !== 'hls') {
+            say(`playing over WHEP: ${whepUrl}`);
+            try { await playWhep(whepUrl); } catch (e) { playing = false; say(`WHEP: ${e}`); }
+          } else {
+            say(`playing HLS: ${hlsUrl}`);
+            try { await playHls(hlsUrl); } catch (e) { playing = false; say(`HLS: ${e}`); }
+          }
         }
         if (['closed', 'failed', 'ended'].includes(st.state) || st.output_state === 'failed' || st.output_state === 'ended') {
           clearInterval(poll); enable(false); streamId = null; await stopPlayer();
@@ -212,7 +239,7 @@
     save();
     try {
       say('starting…');
-      const body = { model: $('model').value, prompt: $('prompt').value, output: { kind: 'cloudflare' } };
+      const body = { model: $('model').value, prompt: $('prompt').value, output: { kind: $('output').value } };
       const max = Number($('max').value);
       if (max > 0) body.max_seconds = max;
       const s = await api('POST', '/fv/v1/streams', body);
