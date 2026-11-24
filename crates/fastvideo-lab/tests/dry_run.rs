@@ -1190,7 +1190,7 @@ fn the_mmaudio_tier_is_the_cut_mmaudio_family() {
     assert_eq!(
         r2,
         [
-            "[mmaudio] dry-run weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 3 R2 trees (79.61 GB) fetched before the arms that read them, at most 50.68 GB on the container disk at once",
+            "[mmaudio] dry-run weights /fvscratch/weights: 20 volume trees linked from /workspace/weights; 3 R2 trees (79.61 GB) fetched before the arms that read them, at most 50.68 GB on the container disk at once",
             "[mmaudio] dry-run r2 wan13-audio: fetch fastwan21-1.3b@25e7ed7f41fd8ce2fdd108688c65e8caf0ce3aef (29.21 GB), mmaudio-44k-v2@eu-20261011 (21.46 GB) into /fvscratch/weights",
             "[mmaudio] dry-run r2 sfwan13-audio: drop fastwan21-1.3b (29.21 GB); fetch sfwan21-1.3b@4b44356635ae5e927ca552a220f768022be76004 (28.93 GB) into /fvscratch/weights",
         ],

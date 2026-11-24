@@ -1,5 +1,5 @@
 [sol-bench-b1] matrix start image=unknown
-[sol-bench-b1] dry-run weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 2 R2 trees (42.93 GB) fetched before the arms that read them, at most 28.93 GB on the container disk at once
+[sol-bench-b1] dry-run weights /fvscratch/weights: 20 volume trees linked from /workspace/weights; 2 R2 trees (42.93 GB) fetched before the arms that read them, at most 28.93 GB on the container disk at once
 [sol-bench-b1] dry-run r2 sana-baseline: fetch sana-video-2b-480p@db5f398b13ca086d09a50ce156c20527773841b1 (14.00 GB) into /fvscratch/weights
 [sol-bench-b1] dry-run sana-baseline: /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sana-video gen --weights /fvscratch/weights/sana-video-2b-480p --prompt a\ corgi\ running\ on\ the\ beach --arm baseline --seed 42 --warm --clip /fvscratch/runs/sol-bench-b1/1234567-10241200/sana-baseline/frames 
 [sol-bench-b1] dry-run sana-full: /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast sana-video gen --weights /fvscratch/weights/sana-video-2b-480p --prompt a\ corgi\ running\ on\ the\ beach --arm full --seed 42 --warm --clip /fvscratch/runs/sol-bench-b1/1234567-10241200/sana-full/frames 
