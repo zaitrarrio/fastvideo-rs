@@ -70,6 +70,62 @@ $('toggle-key').onclick = () => {
   f.type = show ? 'text' : 'password'; $('toggle-key').textContent = show ? 'Hide key' : 'Show key';
 };
 
+// A model's gold lab record (`GET /fv/v1/gold/{variant}`, src/gold.rs): the
+// tables of lab/gold/<variant>.toml as key / value rows, the sources and the
+// declared gaps; a model with no record says so.
+const GOLD_SECTIONS = [
+  ['model', 'Model'], ['tier', 'Tier'], ['workload', 'Workload'], ['upstream', 'Upstream'], ['latency', 'Latency'],
+  ['quality', 'Quality'], ['cost', 'Cost'], ['last_validated', 'Last validated'],
+];
+const fmtVal = (v) => (v === null || v === undefined) ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+function goldRows(obj) {
+  return Object.entries(obj || {}).filter(([, v]) => v !== null && v !== undefined && v !== '')
+    .flatMap(([k, v]) => [el('dt', {}, k.replace(/_/g, ' ')), el('dd', { 'data-gold-field': k }, fmtVal(v))]);
+}
+export async function showGold(variant) {
+  const stage = $('gold-stage');
+  stage.hidden = false;
+  $('gold-title').textContent = variant;
+  $('gold-state').textContent = 'loading…'; $('gold-state').className = 'pill warn';
+  setMsg('gold-msg', '');
+  $('gold').replaceChildren();
+  let g;
+  try {
+    g = await request('GET', '/fv/v1/gold/' + encodeURIComponent(variant), { auth: 'bearer' });
+  } catch (e) {
+    $('gold-state').textContent = e.status === 404 ? 'no record' : 'error'; $('gold-state').className = 'pill ' + (e.status === 404 ? '' : 'bad');
+    setMsg('gold-msg', e.status === 404 ? 'No gold lab record for ' + variant + ' (lab/gold/' + variant + '.toml).' : e.message, e.status === 404 ? '' : 'bad');
+    stage.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    return;
+  }
+  const lv = g.last_validated || {};
+  $('gold-state').textContent = lv.commit ? 'validated ' + (lv.date || '') + ' @ ' + lv.commit : 'not yet validated';
+  $('gold-state').className = 'pill ' + (lv.commit ? 'ok' : 'warn');
+  const parts = [];
+  for (const [key, title] of GOLD_SECTIONS) {
+    const sec = g[key];
+    if (!sec || typeof sec !== 'object' || !Object.keys(sec).length) continue;
+    const { env, ...rest } = sec;
+    const rows = goldRows(rest);
+    if (env && Object.keys(env).length) rows.push(el('dt', {}, 'env'), el('dd', {}, Object.entries(env).map(([k, v]) => k + '=' + v).join(' ')));
+    parts.push(el('h3', {}, title), el('dl', { class: 'gold-section', 'data-gold-section': key }, ...rows));
+  }
+  const sources = Array.isArray(g.source) ? g.source : [];
+  if (sources.length) {
+    parts.push(el('h3', {}, 'Sources (' + sources.length + ')'), el('ul', { class: 'gold-sources' }, ...sources.map((src) => el('li', {},
+      el('span', { class: 'mono' }, src.path + (src.heading ? ' § ' + src.heading : '')), src.date ? ' (' + src.date + ')' : '',
+      src.fields && src.fields.length ? el('div', { class: 'hint' }, 'fields: ' + src.fields.join(', ')) : '',
+      src.note ? el('div', { class: 'hint' }, src.note) : ''))));
+  }
+  const gaps = Array.isArray(g.gap) ? g.gap : [];
+  if (gaps.length) {
+    parts.push(el('h3', {}, 'Gaps (' + gaps.length + ')'), el('ul', { class: 'gold-gaps' }, ...gaps.map((x) => el('li', {}, el('span', { class: 'mono' }, x.field), ': ' + x.why))));
+  }
+  parts.push(el('p', { class: 'hint' }, el('span', { class: 'mono' }, g.path)));
+  $('gold').replaceChildren(...parts);
+  stage.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
 // The served models (`/fv/v1/capabilities`): id, tier, the recipe it runs
 // (attention, VAE, steps, profile), tasks, and the live pages for stream
 // models (causal: Live stream, with its session-length rule; clip: Live
@@ -95,7 +151,8 @@ async function renderServed(caps) {
       : kind === 'clip' ? el('span', {}, streamLink('clip stream'), el('small', { class: 'hint' }, ' clip queue')) : '–';
     const lic = licences[c.id] || (c.served_names || []).map((n) => licences[n]).find(Boolean) || m.licence;
     return el('tr', { 'data-model': c.id },
-      el('td', { class: 'mono' }, c.id, aliasesOf(c.id).length ? el('div', { class: 'hint' }, 'aka ' + aliasesOf(c.id).join(', ')) : ''),
+      el('td', { class: 'mono' }, el('a', { href: '#gold-stage', 'data-gold': c.id, title: 'The gold lab record of ' + c.id }, c.id),
+        aliasesOf(c.id).length ? el('div', { class: 'hint' }, 'aka ' + aliasesOf(c.id).join(', ')) : ''),
       el('td', {}, c.tier || '–', lic ? el('div', {}, el('span', { class: 'pill warn', title: lic, 'data-licence': 'non-commercial' }, /non-commercial/i.test(lic) ? 'non-commercial' : 'licence')) : ''),
       el('td', { 'data-recipe': '' }, el('div', { class: 'mono' }, c.recipe || ''), el('div', { class: 'hint' }, recipeText(m.recipe))),
       el('td', {}, (c.tasks || []).join(', ')),
@@ -103,12 +160,15 @@ async function renderServed(caps) {
       el('td', {}, el('a', { href: page('/console/native?model=' + encodeURIComponent(c.id)) }, 'Native API')));
   });
   box.replaceChildren(...rows);
+  for (const a of box.querySelectorAll('a[data-gold]')) a.onclick = (e) => { e.preventDefault(); showGold(a.dataset.gold); };
   $('served-table').hidden = !rows.length;
   const tiers = (caps && Array.isArray(caps.tiers)) ? caps.tiers : [];
   $('served-tiers').textContent = tiers.length
     ? 'Tier bindings: ' + tiers.map((t) => (t.alias || t.name || [t.family, t.tier].filter(Boolean).join('/')) + ' → ' + (t.model || t.id || '?')).join(', ') + '.'
     : '';
   setMsg('served-msg', rows.length ? '' : 'Connect with a key to list the served models (GET /fv/v1/capabilities).');
+  const want = new URLSearchParams(location.search).get('gold');
+  if (want && rows.length && !$('gold-title').textContent) showGold(want);
 }
 
 async function renderModels() {

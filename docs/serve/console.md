@@ -10,7 +10,7 @@ with `curl`.
 
 | Page | What it does |
 |---|---|
-| `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, the mounted APIs (its `protocols`), the **served models** with tier, recipe (attention, VAE, steps, profile), tasks and their live page (causal: Live stream, with the session-length rule; duplex: Live input), the tier bindings, and the mounted fal apps and endpoints (an app whose model is not served lists none). With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
+| `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, the mounted APIs (its `protocols`), the **served models** with tier, recipe (attention, VAE, steps, profile), tasks and their live page (causal: Live stream, with the session-length rule; clip: Live stream as a clip queue; duplex: Live input), the tier bindings, and the mounted fal apps and endpoints (an app whose model is not served lists none). **A model's name opens its gold lab record** (§2b; `?gold=<variant>` opens one on load). With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
 | `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys; **Experimental features** (§7) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page, clip or causal (§4) |
@@ -134,6 +134,28 @@ curl -s -X DELETE "$BASE/fv/v1/admin/keys/key_…" -H "Authorization: Bearer $AD
 
 Names are 1-64 characters without control characters. Without a valid admin
 token every call answers `401 {"error":{"kind":"unauthorized",…}}`.
+
+## 2b. Gold lab records
+
+Clicking a served model's name on `/console` (or the "gold lab record" link
+in the Live stream page's model facts) opens the variant's gold standard
+(`lab/gold/<variant>.toml`, ADR-0009; filled by `fv-lab run gold`, ADR-0023)
+in a panel under the served models: the pill says when it was last
+validated (`last_validated.commit`, date) or "not yet validated"; then the
+Model, Tier (GPU, SM, VRAM, the offer), Workload (canvas, frames, fps,
+prompt set, seeds, steps, env), Upstream, Latency (what is measured, p50 /
+min / max, denoise, decode, load, peak memory), Quality (the gate verdict,
+the cell, PSNR / LPIPS / sharpness / jitter), Cost (per hour, per clip) and
+Last validated tables as key / value rows, the sources every number is
+copied from (path, heading, date, the fields they cover) and the declared
+gaps. A model with no record says so (404).
+
+The records come from `GET /fv/v1/gold` (the index: variant, family, tier,
+GPU, p50, gate, cost per clip, last validated) and
+`GET /fv/v1/gold/{variant}` (the record as JSON, with `path` and the file's
+`toml`), auth as the native API; `crates/fastvideo-serve/src/gold.rs` embeds
+`lab/gold/*.toml` at build time as the engine embeds `families/*.toml`, and
+a test holds the embedded list to the directory.
 
 ## 3. Model pages
 

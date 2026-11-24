@@ -108,6 +108,9 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Serve, "GET", "/fv/v1/status"),
         // Every mounted endpoint's ParamSpec (plan E2, src/params.rs).
         r(Serve, "GET", "/fv/v1/params"),
+        // The gold lab records (src/gold.rs): the index and one variant.
+        r(Serve, "GET", "/fv/v1/gold"),
+        r(Serve, "GET", "/fv/v1/gold/{variant}"),
         // Request traces (docs/serve/tracing.md, src/trace_http.rs).
         r(Serve, "GET", "/fv/v1/traces/{id}"),
         r(Serve, "POST", "/fv/v1/traces/{id}/events"),

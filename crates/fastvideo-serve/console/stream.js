@@ -28,7 +28,7 @@
 
 import {
   $, el, request, setMsg, topbar, loadAuthMode, needsKey, loadCapabilities, loadCatalog, mountedProtocols, streamKind,
-  recipeText, licenceBanner, modelHref, admit, BUSY,
+  recipeText, licenceBanner, modelHref, admit, BUSY, page,
 } from './common.js';
 import { reactorWatch, reactorModel } from './rtc.js';
 import { outputForm, loadOutputs, playOutput } from './outputs.js';
@@ -92,7 +92,7 @@ function showModel() {
   if (m.caps.canvas && m.caps.canvas.short_edges) parts.push(m.caps.canvas.short_edges.join('/') + 'p');
   if (m.caps.recipe) parts.push('recipe ' + m.caps.recipe + (recipeText(m.recipe) ? ' (' + recipeText(m.recipe) + ')' : ''));
   if (l) parts.push(l.default_max_s + ' s by default, at most ' + l.hard_max_s + ' s' + (l.reset_restarts_clock ? ' (a reset restarts the clock)' : ''));
-  $('model-facts').textContent = parts.join(' · ');
+  $('model-facts').replaceChildren(parts.join(' · ') + ' · ', el('a', { href: page('/console?gold=' + encodeURIComponent(m.caps.id)), 'data-gold': m.caps.id }, 'gold lab record'));
   // The controls read as the session kind does.
   $('length-label').textContent = clip ? 'Clip length (s)' : 'Length (s)';
   $('max-seconds').placeholder = clip ? "the model's default" : 'server default';

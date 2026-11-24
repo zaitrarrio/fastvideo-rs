@@ -145,6 +145,7 @@ pub fn scope(spec: &RouteSpec) -> Scope {
         }
         Owner::Native => match (m, p) {
             (_, "/fv/v1/capabilities") => Scope::Local,
+            (_, p) if p.starts_with("/fv/v1/gold") => Scope::Local,
             (_, p) if p.starts_with("/fv/v1/admin/keys") => Scope::Keys,
             (_, p) if p.starts_with("/fv/v1/streams") => Scope::Pinned,
             ("DELETE", _) => Scope::Pinned,
@@ -315,6 +316,8 @@ mod tests {
             ("GET", "/v1/models", Scope::Local),
             ("GET", "/fv/v1/capabilities", Scope::Local),
             ("GET", "/fv/v1/status", Scope::Local),
+            ("GET", "/fv/v1/gold", Scope::Local),
+            ("GET", "/fv/v1/gold/sol-h3", Scope::Local),
             (
                 "GET",
                 "/fal/schema/minimax/h3-max/text-to-video",
