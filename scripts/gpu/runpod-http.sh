@@ -18,7 +18,9 @@
 #                                is refused (exit 2) with what replaces it, as are
 #                                `all` and `plan` for it
 #   runpod-http.sh weights       weight gate only (verify-weights.sh), no cells
-#   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
+#   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math;
+#                                FV_KERNEL_GROUPS=a,b runs only those groups, e.g.
+#                                sdpa_rule,attn3_bench for ADR-0024 step 2)
 #   runpod-http.sh all [sha]     was kernels, then runpod-matrix.sh's $FV_FAMILY cells,
 #                                on one pod; with the script gone (§22.20) it is
 #                                refused for every family: run `kernels`, then `run`
@@ -366,7 +368,7 @@ if [ "${FV_SKIP_TAE:-0}" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.
 fi
 fi
 if [ "$mode" = kernels ] || [ "$mode" = all ]; then
-  cd "\$OUT" && env ${FV_EXTRA_ENV:-} /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out "\$OUT/gpucheck" kernels >"\$OUT/kernels.out" 2>&1
+  cd "\$OUT" && env ${FV_EXTRA_ENV:-} /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out "\$OUT/gpucheck" kernels${FV_KERNEL_GROUPS:+ --groups "$FV_KERNEL_GROUPS"} >"\$OUT/kernels.out" 2>&1
   echo "exit=\$?" >>"\$OUT/kernels.out"
   cp "\$OUT"/gpucheck/*.json "\$OUT"/ 2>/dev/null
 fi
