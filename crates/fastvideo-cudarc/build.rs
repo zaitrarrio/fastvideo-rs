@@ -572,10 +572,15 @@ impl Nvrtc {
             candidates.push(root.join("lib64/libnvrtc.so"));
             candidates.push(root.join("targets/x86_64-linux/lib/libnvrtc.so"));
         }
-        for var in ["CUDA_HOME", "CUDA_ROOT", "CUDA_PATH"] {
-            if let Ok(p) = env::var(var) {
-                candidates.push(Path::new(&p).join("lib64/libnvrtc.so"));
-            }
+        for root in [
+            env::var("CUDA_HOME"),
+            env::var("CUDA_ROOT"),
+            env::var("CUDA_PATH"),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            candidates.push(Path::new(&root).join("lib64/libnvrtc.so"));
         }
         candidates.push(PathBuf::from("/usr/local/cuda/lib64/libnvrtc.so"));
         let mut tried = Vec::new();
