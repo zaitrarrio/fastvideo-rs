@@ -1,8 +1,9 @@
 # ADR-0024: A driver-only runtime (no JIT, no cuDNN, static CUDA libraries)
 
 - Status: Step 1a accepted and done (PR #245, D1 revised 2026-11-12); step 1b
-  deferred to step 4 (FVID-2026-11-12-defer-wo-1b, D3 suspended); steps 2–4
-  Proposed (D2, D4 open)
+  deferred to step 4 (FVID-2026-11-12-defer-wo-1b, D3 suspended); steps 2–3
+  Proposed (D2 open); step 4 partly done 2026-11-24 as an additional image
+  (`cuda-static`, FVID-2026-11-24-ship-static-fv-serve, D5 below; D4 open)
 - Date: 2026-11-07
 - Decision-id: FVID-2026-11-07-driver-only-runtime
 - Source: owner request, 2026-11-07 ("how could I make it even more
@@ -89,6 +90,15 @@ and each gated on byte identity of outputs where the plan's §1 rule applies:
 4. **Static CUDA libraries** via cudarc's `static-linking` feature: cuBLAS,
    cuBLASLt, cudart, `libculibos`; NVRTC static only if step 1b's measurement
    shows cuBLASLt still needs it with cuDNN gone.
+   *Brought forward 2026-11-24 as a second image beside the dynamic one*
+   (D5): fv-serve's `cuda-static` feature (`fastvideo-cudarc/link-static`)
+   links cuBLAS, cuBLASLt, cudart, NVRTC (+ nvptxcompiler, builtins), CUPTI,
+   `libculibos` and `libstdc++` statically; cuDNN stays the shared library
+   (an empty `libcudnn.a` satisfies cudarc's directive, `dylib=cudnn`
+   resolves the symbols), so the `serve-cuda-static` image stays on
+   `base-cuda` until step 3. Every preset keeps running `cuda`;
+   `cuda-static` is chosen by image tag. `docs/serve/images.md` §"The
+   statically linked image".
 
 ## Owner decisions
 
@@ -119,7 +129,13 @@ and each gated on byte identity of outputs where the plan's §1 rule applies:
   warning and rely on the runtime hard error.
 - **D4 (licensing).** Written confirmation from NVIDIA for the GPU-rental
   product before any image with static NVIDIA libraries serves rented
-  capacity.
+  capacity. Open as of 2026-11-24: the `cuda-static` image is built,
+  smoke-checked and published, and serves no rented capacity until then.
+- **D5 (a static image now). Decided 2026-11-24: ship a statically linked
+  fv-serve in addition to the dynamically linked one**
+  (FVID-2026-11-24-ship-static-fv-serve): a second CUDA image,
+  `cuda-static`, not a replacement; `deploy/deploy.toml` `[[images]]` gains a
+  `link` field (one dynamic CUDA image, at most one static, one CPU).
 
 ## Consequences
 
@@ -127,7 +143,10 @@ and each gated on byte identity of outputs where the plan's §1 rule applies:
   now fails at module load instead of JIT-compiling. Each failure names the
   rebuild (`FV_CUBIN_SMS`).
 - After step 3 the `base-cuda` layer loses cuDNN; after step 4 the runtime
-  image needs no CUDA layer at all.
+  image needs no CUDA layer at all. The 2026-11-24 `cuda-static` image is
+  the step-4 binary on today's `base-cuda`: its own CUDA calls no longer
+  depend on the image's library versions, but cuDNN's engines still load the
+  shared cuBLASLt / NVRTC, so the layer stays until step 3.
 - Step 3 is the large one: it is new kernel work with its own parity gates
   (VAE decode PSNR per family against the cuDNN path) and is not started
   until steps 1–2 land.

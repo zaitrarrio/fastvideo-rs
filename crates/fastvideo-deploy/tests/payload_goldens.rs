@@ -654,12 +654,14 @@ fn gcp_prices_are_read_from_lib_sh() {
 
 /// C3d (ADR-0018 §10.1): the serve templates `fv-deploy templates sync`
 /// creates are `runpod-templates.sh plan`'s bodies (`serve-templates.json`:
-/// `fv-serve-cuda-sls`, `fv-serve-cuda-pod`, `fv-serve-cpu-pod` on the
+/// `fv-serve-cuda-sls`, `fv-serve-cuda-pod`, `fv-serve-cuda-static-sls`,
+/// `fv-serve-cuda-static-pod`, `fv-serve-cpu-pod` on the
 /// stable channel), built by the Runpod provider's template builder from a
 /// template `Launch` whose guards are "not checked".
 #[test]
 fn serve_templates_equal_runpod_templates_sh() {
     use fastvideo_deploy::provider::runpod::{serve_template_body, serve_template_launch};
+    const IMAGE_STATIC: &str = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:3333333333333333333333333333333333333333333333333333333333333333";
     const IMAGE_CPU: &str = "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:2222222222222222222222222222222222222222222222222222222222222222";
     let images = fastvideo_deploy::release::serve_images(&repo());
     assert_eq!(
@@ -667,11 +669,15 @@ fn serve_templates_equal_runpod_templates_sh() {
             .iter()
             .map(|i| (i.id.as_str(), i.cpu))
             .collect::<Vec<_>>(),
-        [("cuda", false), ("cpu", true)],
+        [("cuda", false), ("cuda-static", false), ("cpu", true)],
         "variants.sh FV_IMAGES and its fv_image_flavours (cpu: pod only)"
     );
     let mut got = Vec::new();
-    for (id, image) in [("cuda", IMAGE), ("cpu", IMAGE_CPU)] {
+    for (id, image) in [
+        ("cuda", IMAGE),
+        ("cuda-static", IMAGE_STATIC),
+        ("cpu", IMAGE_CPU),
+    ] {
         let img = images
             .iter()
             .find(|i| i.id == id)

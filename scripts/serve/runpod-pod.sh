@@ -13,7 +13,8 @@
 #
 # The image must be digest-pinned (…@sha256:…); a tag is resolved to its
 # digest first. Default: the one CUDA image, as its Runpod template
-# fv-serve-cuda-pod names it (docs/serve/images.md), else its :cuda tag.
+# fv-serve-cuda-pod names it (docs/serve/images.md), else its :cuda tag;
+# FV_SERVE_LINK=static picks the statically linked cuda-static image the same way.
 # Every pod is recorded in the D1 deployments table
 # (scripts/serve/lib/registry.sh; best effort).
 # The pod starts from the image ENTRYPOINT (fv-boot) with the config sent in
@@ -59,6 +60,11 @@ CONFIG_ENV_JSON="$(fv_config_env_json "$CONFIG")" || die "FV_SERVE_CONFIG=$CONFI
 pick_image() {
   if [[ -n "${1:-}" ]]; then echo "$1"
   elif [[ -n "${FV_SERVE_IMAGE:-}" ]]; then echo "$FV_SERVE_IMAGE"
+  # FV_SERVE_LINK=static: the statically linked CUDA image (docs/serve/images.md §"The statically linked image";
+  # not for rented capacity before ADR-0024 D4).
+  elif [[ "${FV_SERVE_LINK:-dynamic}" == static ]]; then
+    [[ -n "$FV_CUDA_STATIC_IMAGE" ]] || die "FV_SERVE_LINK=static: deploy/deploy.toml has no static CUDA image"
+    fv_image_ref "$FV_CUDA_STATIC_IMAGE" pod
   else fv_image_ref "$FV_CUDA_IMAGE" pod
   fi
 }

@@ -28,7 +28,7 @@
       }
     },
     "images": {
-      "description": "The serve images: one per compute (the CUDA image, the CPU image).",
+      "description": "The serve images: one per compute and link mode (the CUDA image, the\nstatic CUDA image, the CPU image).",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Image"
@@ -222,6 +222,10 @@
         "id": {
           "type": "string"
         },
+        "link": {
+          "description": "The CUDA link mode (GPU images; the CPU image has none to link).",
+          "$ref": "#/$defs/Link"
+        },
         "note": {
           "description": "A short note for the documentation tables.",
           "type": [
@@ -251,6 +255,21 @@
       "required": [
         "what",
         "why"
+      ]
+    },
+    "Link": {
+      "description": "How an image's fv-serve links the CUDA libraries (ADR-0024 step 4;\nowner decision 2026-11-24: a static image beside the dynamic one).",
+      "oneOf": [
+        {
+          "description": "cudarc `dynamic-loading`: the CUDA libraries are dlopened from the\nimage's `base-cuda` layer (`cuda`, the image every preset runs).",
+          "type": "string",
+          "const": "dynamic"
+        },
+        {
+          "description": "cudarc `static-linking`: cuBLAS, cuBLASLt, cudart, NVRTC and CUPTI in\nthe binary; cuDNN stays shared (`cuda-static`).",
+          "type": "string",
+          "const": "static"
+        }
       ]
     },
     "PoolModel": {

@@ -4,7 +4,7 @@
 # scripts/serve/variants.sh.
 #
 # Release keys: `debug` (the all-in-one image: :sha-<s>, :latest, :<channel>)
-# and every serve image of $FV_IMAGES, the one CUDA image and the CPU image
+# and every serve image of $FV_IMAGES, the CUDA image, its static twin and the CPU image
 # (:<i>-sha-<s>, :<i>, :<i>-<channel>). Builds before 2026-10-25 carried one
 # key per image variant (h3-turbo, ltx, …); their D1 rows keep those keys.
 #

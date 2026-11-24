@@ -14,6 +14,8 @@
 #                  builder there, so no AOT/oxide cubins (binary)          fv-gpucheck, .build-id
 #   hf-fm          cargo install hf-fetch-model --features cli (hf-fm)     out/hf-fm, out/hf-fetch-model
 #   serve-cuda     fv-serve --features $FV_SERVE_FEATURES (serve-build)    out/fv-serve, out/fv-serve.features, out/fv-boot
+#   serve-cuda-static  fv-serve --features $FV_STATIC_FEATURES (static-build): static cuBLAS / cuBLASLt / cudart /
+#                  NVRTC / CUPTI from $CUDA_HOME's *_static.a, cuDNN shared  out/fv-serve, out/fv-serve.features, out/fv-boot
 #   serve-cpu      fv-serve --features $FV_CPU_FEATURES (cpu-build)     out/fv-serve, out/fv-serve.features, out/fv-boot
 #   serve-fake     serve-compat.yml's debug fv-serve --features fake,full  fv-serve
 #   gpucheck-tests gpucheck-t0.yml's `cargo test -p fastvideo-gpucheck
@@ -43,10 +45,11 @@ log() { printf '[rel %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 2; }
 : "${FV_REL_SHA:?FV_REL_SHA}" "${FV_BUILD_ID:?FV_BUILD_ID}" "${FV_GIT_SHA:?FV_GIT_SHA}" "${CARGO_TARGET_DIR:?CARGO_TARGET_DIR}" "${CUDA_HOME:?CUDA_HOME}"
 [[ "$FV_REL_SHA" =~ ^[0-9a-f]{40}$ ]] || die "FV_REL_SHA must be a full sha"
-ALL_SETS="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-cpu serve-fake gpucheck-tests"
+ALL_SETS="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-cuda-static serve-cpu serve-fake gpucheck-tests"
 SETS=" ${FV_REL_SETS:-$ALL_SETS} "
 SERVE_FEATURES="${FV_SERVE_FEATURES:-cuda,http-client}"
 CPU_FEATURES="${FV_CPU_FEATURES:-http-client}"
+STATIC_FEATURES="${FV_STATIC_FEATURES:-cuda-static,http-client}"
 MAX_GLIBC="${FV_REL_MAX_GLIBC:-2.35}"
 SRC="$PWD"
 T="$CARGO_TARGET_DIR"
@@ -274,9 +277,33 @@ check_glibc() {
 
 # ---- build ------------------------------------------------------------------
 OXIDE_DIR=""; OXIDE_KEY=""; HF_FM_VERSION=""
-if want oxide || want gpucheck || want serve-cuda || want serve-cpu; then build_oxide; fi
+if want oxide || want gpucheck || want serve-cuda || want serve-cuda-static || want serve-cpu; then build_oxide; fi
 want gpucheck && build_gpucheck
 want serve-cuda && build_serve serve-cuda "$SERVE_FEATURES"
+if want serve-cuda-static; then
+  # The static link (ADR-0024 step 4) takes the toolkit's *_static.a and the driver stub from CUDA_HOME
+  # (docker/gpucheck.Dockerfile static-build installs the same -dev packages); the binary must need no shared
+  # cuBLAS / NVRTC / cudart / CUPTI.
+  for a in cublas_static cublasLt_static cudart_static nvrtc_static nvptxcompiler_static nvrtc-builtins_static culibos cupti_static; do
+    [[ -f "$CUDA_HOME/lib64/lib$a.a" || -f "$CUDA_HOME/targets/x86_64-linux/lib/lib$a.a" ]] || die "serve-cuda-static: no lib$a.a in $CUDA_HOME (install the -dev packages: libcublas-dev, cuda-cupti-dev, cuda-cudart-dev)"
+  done
+  # cudarc also asks for `static:+whole-archive=stdc++` and `=cudnn`, resolved from the same root list when its rlib
+  # is built: a second root whose lib64 links the compiler's libstdc++.a and holds an empty libcudnn.a (cuDNN stays
+  # the shared library; fastvideo-cudarc's build.rs adds dylib=cudnn).
+  # (the loader cache may predate the package's install in a fresh image: refresh it, then look at the usual places)
+  ldconfig 2>/dev/null || true
+  if ! ldconfig -p 2>/dev/null | grep -q 'libcudnn\.so\.9 ' \
+     && [[ ! -f /usr/lib/x86_64-linux-gnu/libcudnn.so.9 && ! -f /usr/lib64/libcudnn.so.9 && ! -f "$CUDA_HOME/lib64/libcudnn.so.9" ]]; then
+    die "serve-cuda-static: no libcudnn.so.9 for the link (cuDNN stays shared: install the cuDNN runtime package; looked in the loader cache, /usr/lib/x86_64-linux-gnu, /usr/lib64, $CUDA_HOME/lib64)"
+  fi
+  static_root="$STAGE/static-link-root"
+  mkdir -p "$static_root/lib64" && ln -sfn "$(c++ -print-file-name=libstdc++.a)" "$static_root/lib64/libstdc++.a"
+  printf '!<arch>\n' > "$static_root/lib64/libcudnn.a"
+  CUDA_TOOLKIT_ROOT_DIR="$static_root" build_serve serve-cuda-static "$STATIC_FEATURES"
+  if ldd "$STAGE/serve-cuda-static/out/fv-serve" | grep -E 'libcublas|libnvrtc|libcudart|libcupti'; then
+    die "serve-cuda-static: fv-serve still needs a shared CUDA library"
+  fi
+fi
 want serve-cpu && build_serve serve-cpu "$CPU_FEATURES"
 want serve-fake && build_serve_fake
 want gpucheck-tests && build_gpucheck_tests
@@ -296,7 +323,7 @@ for d in "$STAGE"/*/; do
     | jq -R -s 'split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: {sha256: .[1], size: (.[2]|tonumber), mode: .[3]}}) | from_entries')"
   feats=""
   case "$set" in
-    serve-cuda) feats="$SERVE_FEATURES" ;; serve-cpu) feats="$CPU_FEATURES" ;;
+    serve-cuda) feats="$SERVE_FEATURES" ;; serve-cuda-static) feats="$STATIC_FEATURES" ;; serve-cpu) feats="$CPU_FEATURES" ;;
     serve-fake) feats="fake,full" ;; gpucheck|gpucheck-vast) feats="cuda" ;; hf-fm) feats="cli" ;;
   esac
   needed="$(while IFS= read -r -d '' f; do

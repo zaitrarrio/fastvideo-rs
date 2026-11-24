@@ -81,14 +81,58 @@ pub mod raw {
         cudnnBackendDescriptor_t,
     ) -> i32;
 
-    // The transmutes only change enum parameters to their `repr(u32)` integer
-    // and the `repr(u32)` status return to `i32`: same size, same ABI.
+    // The entry points as the binary links them: cudarc's lazily loaded table
+    // (`link-dynamic`), or the shared cuDNN's exported symbols declared here
+    // with integer-typed parameters (`link-static`: cuDNN stays a shared
+    // library, docs/serve/images.md). Under `link-dynamic` the transmutes only
+    // change enum parameters to their `repr(u32)` integer and the `repr(u32)`
+    // status return to `i32`: same size, same ABI.
+    #[cfg(not(feature = "link-dynamic"))]
+    mod linked {
+        use super::*;
+        extern "C" {
+            pub fn cudnnBackendCreateDescriptor(ty: u32, d: *mut cudnnBackendDescriptor_t) -> i32;
+            pub fn cudnnBackendDestroyDescriptor(d: cudnnBackendDescriptor_t) -> i32;
+            pub fn cudnnBackendSetAttribute(
+                d: cudnnBackendDescriptor_t,
+                name: u32,
+                ty: u32,
+                n: i64,
+                v: *const c_void,
+            ) -> i32;
+            pub fn cudnnBackendGetAttribute(
+                d: cudnnBackendDescriptor_t,
+                name: u32,
+                ty: u32,
+                cap: i64,
+                n: *mut i64,
+                v: *mut c_void,
+            ) -> i32;
+            pub fn cudnnBackendFinalize(d: cudnnBackendDescriptor_t) -> i32;
+            pub fn cudnnBackendExecute(
+                h: sys::cudnnHandle_t,
+                plan: cudnnBackendDescriptor_t,
+                pack: cudnnBackendDescriptor_t,
+            ) -> i32;
+            pub fn cudnnGetLastErrorString(message: *mut std::ffi::c_char, max_size: usize);
+        }
+    }
+    macro_rules! entry {
+        ($name:ident: $ty:ty) => {{
+            #[cfg(feature = "link-dynamic")]
+            let f: $ty = std::mem::transmute(sys::culib().$name);
+            #[cfg(not(feature = "link-dynamic"))]
+            let f: $ty = linked::$name;
+            f
+        }};
+    }
+
     pub unsafe fn create(ty: u32, d: *mut cudnnBackendDescriptor_t) -> i32 {
-        let f: CreateFn = std::mem::transmute(sys::culib().cudnnBackendCreateDescriptor);
+        let f = entry!(cudnnBackendCreateDescriptor: CreateFn);
         f(ty, d)
     }
     pub unsafe fn destroy(d: cudnnBackendDescriptor_t) -> i32 {
-        let f: DestroyFn = std::mem::transmute(sys::culib().cudnnBackendDestroyDescriptor);
+        let f = entry!(cudnnBackendDestroyDescriptor: DestroyFn);
         f(d)
     }
     pub unsafe fn set(
@@ -98,7 +142,7 @@ pub mod raw {
         n: i64,
         v: *const c_void,
     ) -> i32 {
-        let f: SetFn = std::mem::transmute(sys::culib().cudnnBackendSetAttribute);
+        let f = entry!(cudnnBackendSetAttribute: SetFn);
         f(d, name, ty, n, v)
     }
     pub unsafe fn get(
@@ -109,11 +153,11 @@ pub mod raw {
         n: *mut i64,
         v: *mut c_void,
     ) -> i32 {
-        let f: GetFn = std::mem::transmute(sys::culib().cudnnBackendGetAttribute);
+        let f = entry!(cudnnBackendGetAttribute: GetFn);
         f(d, name, ty, cap, n, v)
     }
     pub unsafe fn finalize(d: cudnnBackendDescriptor_t) -> i32 {
-        let f: FinalizeFn = std::mem::transmute(sys::culib().cudnnBackendFinalize);
+        let f = entry!(cudnnBackendFinalize: FinalizeFn);
         f(d)
     }
     pub unsafe fn execute(
@@ -121,13 +165,17 @@ pub mod raw {
         plan: cudnnBackendDescriptor_t,
         pack: cudnnBackendDescriptor_t,
     ) -> i32 {
-        let f: ExecuteFn = std::mem::transmute(sys::culib().cudnnBackendExecute);
+        let f = entry!(cudnnBackendExecute: ExecuteFn);
         f(h, plan, pack)
     }
     /// cuDNN's last error message (thread-local in the library).
     pub fn last_error() -> String {
         let mut buf = vec![0 as std::ffi::c_char; 1024];
-        unsafe { (sys::culib().cudnnGetLastErrorString)(buf.as_mut_ptr(), buf.len()) };
+        unsafe {
+            let f =
+                entry!(cudnnGetLastErrorString: unsafe extern "C" fn(*mut std::ffi::c_char, usize));
+            f(buf.as_mut_ptr(), buf.len())
+        };
         let s = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) };
         s.to_string_lossy().trim().to_string()
     }

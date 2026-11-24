@@ -226,7 +226,7 @@ pub fn build_engine_resolved(
         }
         EngineBackendKind::Cuda => {
             // WP-11: the CudaBackend from `[[models]]` (one GPU).
-            #[cfg(feature = "cuda")]
+            #[cfg(feature = "cuda-engine")]
             if !models.is_empty() {
                 vec![cuda_backend(c, models.to_vec())?]
             } else {
@@ -248,7 +248,7 @@ pub fn build_engine_resolved(
                     "engine.backend = cuda needs [[models]] (or FV_SFWAN_WEIGHTS)"
                 ));
             }
-            #[cfg(not(feature = "cuda"))]
+            #[cfg(not(feature = "cuda-engine"))]
             return Err(anyhow!(
                 "engine.backend = cuda: this fv-serve was built without the `cuda` feature"
             ));
@@ -342,7 +342,7 @@ pub fn catalog_models(
 }
 
 /// The WP-11 `CudaBackend` (GPU 0) for `[[models]]` ([`cuda_models`]).
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cuda-engine")]
 fn cuda_backend(
     c: &Config,
     models: Vec<fastvideo_engine_service::cuda::CudaModel>,

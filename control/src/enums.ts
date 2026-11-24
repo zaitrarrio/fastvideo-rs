@@ -8,7 +8,7 @@
  * pool and endpoint, the CPU image (fake engine) for CPU ones. No image bakes a worker config: every launch sends one
  * (docs/adr/0011-deploy-section.md, owner decision 2026-10-25). */
 // BEGIN GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit: SERVE_IMAGES
-export const SERVE_IMAGES = { GPU: "cuda", CPU: "cpu" } as const;
+export const SERVE_IMAGES = { GPU: "cuda", GPU_STATIC: "cuda-static", CPU: "cpu" } as const;
 // END GENERATED
 export type ServeImage = (typeof SERVE_IMAGES)[keyof typeof SERVE_IMAGES];
 /** The image a pool, launch or endpoint runs: the compute decides (GPU: the CUDA image; CPU: the CPU image). */

@@ -8,7 +8,7 @@
 //! (`configs/serve/<config>`, sent at boot), queue and timeouts. A **family
 //! preset** is one pool serving the models of several model presets of one
 //! family (owner decision 2026-10-18). Beside them: the serve images CI
-//! builds (one CUDA image and the CPU image: no image bakes a config, every
+//! builds (one CUDA image, its static twin and the CPU image: no image bakes a config, every
 //! launch sends one; owner decision 2026-10-25),
 //! the GCP VM rows, the edge dispatch family of each model family, and the
 //! autoscaler's pools (an opaque table each: `fastvideo-autoscale` owns that
@@ -93,7 +93,8 @@ pub struct DeployManifest {
     pub schema: u32,
     /// Model family id -> its edge / dispatch family (`ltx2` -> `ltx`).
     pub dispatch: BTreeMap<String, String>,
-    /// The serve images: one per compute (the CUDA image, the CPU image).
+    /// The serve images: one per compute and link mode (the CUDA image, the
+    /// static CUDA image, the CPU image).
     pub images: Vec<Image>,
     /// The model presets, in the dashboard's order.
     pub presets: Vec<Preset>,
@@ -116,6 +117,20 @@ pub enum Compute {
     Cpu,
 }
 
+/// How an image's fv-serve links the CUDA libraries (ADR-0024 step 4;
+/// owner decision 2026-11-24: a static image beside the dynamic one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Link {
+    /// cudarc `dynamic-loading`: the CUDA libraries are dlopened from the
+    /// image's `base-cuda` layer (`cuda`, the image every preset runs).
+    #[default]
+    Dynamic,
+    /// cudarc `static-linking`: cuBLAS, cuBLASLt, cudart, NVRTC and CUPTI in
+    /// the binary; cuDNN stays shared (`cuda-static`).
+    Static,
+}
+
 fn is_default<T: Default + PartialEq>(x: &T) -> bool {
     *x == T::default()
 }
@@ -134,6 +149,9 @@ pub struct Image {
     pub carries: Vec<String>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub compute: Compute,
+    /// The CUDA link mode (GPU images; the CPU image has none to link).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub link: Link,
     /// A short note for the documentation tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -428,7 +446,16 @@ impl DeployManifest {
 
     /// The CUDA serve image (validation guarantees exactly one).
     pub fn gpu_image(&self) -> Option<&Image> {
-        self.images.iter().find(|i| i.compute == Compute::Gpu)
+        self.images
+            .iter()
+            .find(|i| i.compute == Compute::Gpu && i.link == Link::Dynamic)
+    }
+
+    /// The statically linked CUDA image (`cuda-static`), when the file has one.
+    pub fn gpu_static_image(&self) -> Option<&Image> {
+        self.images
+            .iter()
+            .find(|i| i.compute == Compute::Gpu && i.link == Link::Static)
     }
 
     /// The rules that need nothing but the file.
@@ -462,17 +489,40 @@ impl DeployManifest {
                 check_text(n, &p("note"))?;
             }
         }
-        // One image per compute: one CUDA image (every preset), at most one CPU
-        // image (owner decision 2026-10-25: no per-variant images).
-        for (compute, name, want_one) in [(Compute::Gpu, "GPU", true), (Compute::Cpu, "CPU", false)]
-        {
-            let n = self.images.iter().filter(|i| i.compute == compute).count();
+        // One image per compute and link mode: one dynamically linked CUDA
+        // image (every preset), at most one static CUDA image (owner decision
+        // 2026-11-24, ADR-0024 step 4) and at most one CPU image (owner
+        // decision 2026-10-25: no per-variant images). A CPU image links no
+        // CUDA library, so its link mode is the default.
+        for (compute, link, name, want_one) in [
+            (Compute::Gpu, Link::Dynamic, "GPU", true),
+            (Compute::Gpu, Link::Static, "static GPU", false),
+            (Compute::Cpu, Link::Dynamic, "CPU", false),
+        ] {
+            let n = self
+                .images
+                .iter()
+                .filter(|i| i.compute == compute && i.link == link)
+                .count();
             if n > 1 || (want_one && n == 0) {
                 return Err(DeployError::field(
                     "images",
-                    format!("{n} {name} images: one CUDA image (and at most one CPU image), configs are sent at boot"),
+                    format!("{n} {name} images: one CUDA image (and at most one static CUDA image and one CPU image), configs are sent at boot"),
                 ));
             }
+        }
+        if let Some(i) = self
+            .images
+            .iter()
+            .find(|i| i.compute == Compute::Cpu && i.link != Link::Dynamic)
+        {
+            return Err(DeployError::field(
+                format!(
+                    "images[{}].link",
+                    self.images.iter().position(|x| x.id == i.id).unwrap_or(0)
+                ),
+                "a CPU image links no CUDA library (no link mode)".to_owned(),
+            ));
         }
         let mut preset_ids = BTreeSet::new();
         let mut claim = |id: &str, path: String| -> Result<(), DeployError> {
@@ -860,6 +910,11 @@ id = "cuda"
 carries = ["runpod-fake.toml"]
 
 [[images]]
+id = "cuda-static"
+carries = ["runpod-fake.toml"]
+link = "static"
+
+[[images]]
 id = "cpu"
 carries = ["runpod-fake.toml"]
 compute = "cpu"
@@ -935,8 +990,14 @@ placements = [{ data_center = "EU-RO-1", volume_id = "bz0ofkfx45" }]
     fn parses_round_trips_and_resolves() {
         let set = families();
         let d = DeployManifest::parse_with(FILE, &set).unwrap();
-        assert_eq!(d.images.len(), 2);
+        assert_eq!(d.images.len(), 3);
         assert_eq!(d.gpu_image().map(|i| i.id.as_str()), Some("cuda"));
+        assert_eq!(
+            d.gpu_static_image().map(|i| i.id.as_str()),
+            Some("cuda-static")
+        );
+        assert_eq!(d.image("cuda-static").unwrap().link, Link::Static);
+        assert_eq!(d.image("cuda").unwrap().link, Link::Dynamic);
         let turbo = d.preset("demo-turbo").unwrap();
         assert_eq!(turbo.models[0].model_id(), "demo");
         assert_eq!(turbo.models[0].recipe_name(), "demo-turbo-alias");
@@ -992,6 +1053,23 @@ placements = [{ data_center = "EU-RO-1", volume_id = "bz0ofkfx45" }]
             "id = \"cuda\"\ncompute = \"cpu\"\ncarries"
         ))
         .contains("0 GPU images"));
+        // At most one static CUDA image; a CPU image has no link mode.
+        assert!(images(with(
+            "[[images]]\nid = \"cpu\"",
+            "[[images]]\nid = \"cuda-static-2\"\ncarries = [\"runpod-fake.toml\"]\nlink = \"static\"\n\n[[images]]\nid = \"cpu\""
+        ))
+        .contains("2 static GPU images"));
+        assert_eq!(
+            path(with(
+                "compute = \"cpu\"",
+                "compute = \"cpu\"\nlink = \"static\""
+            )),
+            Some("images[2].link".into())
+        );
+        assert!(matches!(
+            with("link = \"static\"", "link = \"lto\"").unwrap_err(),
+            DeployError::Syntax(_)
+        ));
         assert_eq!(
             path(with(
                 "id = \"cuda\"\ncarries = [\"runpod-fake.toml\"]",

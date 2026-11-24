@@ -8,7 +8,7 @@
 #
 #   tools-deps.sh <group> <recipe.json>
 #
-# Groups: oxide, serve-cuda, serve-cpu, serve-fake, gpucheck, gpucheck-tests,
+# Groups: oxide, serve-cuda, serve-cuda-static, serve-cpu, serve-fake, gpucheck, gpucheck-tests,
 # gpucheck-vast, hf-fm (the release sets), check-lint, check-test (check.sh).
 # Keep in step with release-artifacts-pod.sh and check.sh: a mismatch only
 # costs time (cargo recompiles what differs), never correctness.
@@ -28,6 +28,33 @@ case "$group" in
   oxide) ;;   # its own stage (fv-oxide-aot), cached by its inputs
   # Each serve set also carries fv-boot (release-artifacts-pod.sh build_serve).
   serve-cuda) rel cook --release -p fastvideo-serve --features cuda,http-client
+    rel cook --release -p fastvideo-deploy --features boot ;;
+  # The static link needs the toolkit's *_static.a (libcublas-dev, cuda-cupti-dev, cuda-cudart-dev) and the driver
+  # stub under CUDA_HOME (docker/gpucheck.Dockerfile static-build installs them), and the compiler's libstdc++.a
+  # under a second root (cudarc asks for `static:+whole-archive=stdc++`; release-artifacts-pod.sh static_link_root).
+  serve-cuda-static)
+    # The dependency image is the build base (nvcc, NVRTC): add the static archives, the driver stub and the cuDNN
+    # runtime, as docker/gpucheck.Dockerfile's static-build stage does (the pinned versions of cuda-13.pins).
+    if [[ -f /etc/fastvideo/cuda-13.pins ]]; then
+      # shellcheck disable=SC1091
+      . /etc/fastvideo/cuda-13.pins
+      # cudart's pin lives in cuda-13-runtime.pins (the base image carries only cuda-13.pins): the same toolkit version.
+      CUDA_CUDART_PKG="${CUDA_CUDART_PKG:-cuda-cudart-13-4=${CUDA_NVCC_PKG##*=}}"
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --allow-downgrades \
+        "$(echo "$CUDA_CUBLAS_PKG" | sed 's/^libcublas-/libcublas-dev-/')" \
+        "$(echo "$CUDA_CUPTI_PKG" | sed 's/^cuda-cupti-/cuda-cupti-dev-/')" \
+        "$(echo "$CUDA_CUDART_PKG" | sed 's/^cuda-cudart-/cuda-cudart-dev-/')" \
+        "$CUDA_CUDNN_PKG" cuda-driver-dev-13-4
+      rm -rf /var/lib/apt/lists/*
+      ldconfig
+      test -f /usr/lib/x86_64-linux-gnu/libcudnn.so.9 || { echo "tools-deps.sh: $CUDA_CUDNN_PKG installed no /usr/lib/x86_64-linux-gnu/libcudnn.so.9" >&2; exit 2; }
+      test -f "$CUDA_HOME/lib64/libcublasLt_static.a" || { echo "tools-deps.sh: no libcublasLt_static.a under $CUDA_HOME/lib64" >&2; exit 2; }
+    fi
+    mkdir -p /opt/fv-static-link/lib64 && ln -sfn "$(c++ -print-file-name=libstdc++.a)" /opt/fv-static-link/lib64/libstdc++.a
+    printf '!<arch>\n' > /opt/fv-static-link/lib64/libcudnn.a   # the empty cuDNN shim (cuDNN stays shared)
+    rel env CUDA_TOOLKIT_ROOT_DIR=/opt/fv-static-link \
+      cargo chef cook --recipe-path "$recipe" --release -p fastvideo-serve --features cuda-static,http-client
     rel cook --release -p fastvideo-deploy --features boot ;;
   serve-cpu) rel cook --release -p fastvideo-serve --features http-client
     rel cook --release -p fastvideo-deploy --features boot ;;

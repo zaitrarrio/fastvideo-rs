@@ -31,7 +31,7 @@ export FV_POD_URL_TEMPLATE="$M/pod/{pod}" FV_SERVE_LEDGER="$T/ledger.tsv"
 # host (the shared build pod). Nothing here waits for it to fire.
 export FV_DEPLOYED_BY=test FV_POD_CAP_S=300
 REPO=ghcr.io/zaitrarrio/fastvideo-rs-serve
-KEYS="debug cuda cpu"
+KEYS="debug cuda cuda-static cpu"
 
 # `docker buildx imagetools create --tag <repo>:<tag> <repo>@<digest>` moves the mock's tag.
 mkdir -p "$T/bin"
@@ -74,7 +74,7 @@ curl -sS -X POST -d "{\"templates\": $tpls}" "$M/__seed" >/dev/null
 # --- resolve -------------------------------------------------------------------
 out="$(rel resolve "${A:0:7}")"
 check "resolve: a short sha gives every image, the full sha from the labels" \
-  test "$(jq -r '.sha, (.digests | length), .digests["cuda"]' <<<"$out" | tr '\n' ' ')" = "$A 3 $REPO@$(jq -r '.["cuda"]' <<<"$DA") "
+  test "$(jq -r '.sha, (.digests | length), .digests["cuda"]' <<<"$out" | tr '\n' ' ')" = "$A 4 $REPO@$(jq -r '.["cuda"]' <<<"$DA") "
 out="$(rel resolve "$REPO@$(jq -r .cuda <<<"$DB")")"
 check "resolve: a digest finds its build through the revision label" test "$(jq -r .short <<<"$out")" = "${B:0:7}"
 
@@ -96,7 +96,7 @@ check "promote: :stable and :<image>-stable point at the build" \
   test "$(tag stable) $(tag cuda-stable) $(tag cpu-stable)" = "$(jq -r '.debug, .cuda, .cpu' <<<"$DA" | xargs)"
 check "promote: stable does not move the plain :<image> tags" test -z "$(tag cuda)"
 check "promote: every template boots the build, with its identity env" \
-  test "$(state | jq -r --arg d "$(jq -r .cuda <<<"$DA")" '[.templates[] | select(.name | startswith("fv-serve-cuda-"))
+  test "$(state | jq -r --arg d "$(jq -r .cuda <<<"$DA")" '[.templates[] | select(.name | test("^fv-serve-cuda-(sls|pod)$"))
     | (.image | endswith($d)) and .env.FV_IMAGE_DIGEST == $d and .env.FV_RELEASE_CHANNEL == "stable"] | all')" = true
 check "promote: the D1 row" \
   test "$(sql "SELECT channel, git_sha, action, notes, templates_updated, promoted_by FROM releases WHERE id = 1" | jq -c '.[0]')" \
@@ -113,13 +113,13 @@ check "promote to latest: :latest, :<v>-latest and :<v>; templates untouched" \
   "$(state)" "$(jq -r '.debug, .cuda, .cuda' <<<"$DB" | xargs)"
 
 out="$(bash "$SERVE/release.sh" promote "${C:0:7}" stable --local 2>&1)"
-check "promote: a build missing an image is refused" bash -c '[[ "$0" == *"has no image for: cpu"* ]]' "$out"
+check "promote: a build missing an image is refused" bash -c '[[ "$0" == *"has no image for: "*"cpu"* ]]' "$out"
 check "promote: refused, nothing moved" test "$(tag stable)" = "$(jq -r .debug <<<"$DB")"
 
 # --- list / history ------------------------------------------------------------
 out="$(rel list --verify)"
 check "list: the head of each channel, the tags verified" \
-  bash -c 'grep -q "^stable   release 2  *bbbbbbb" <<<"$0" && grep -q "^latest   release 3" <<<"$0" && ! grep -q DIFFERS <<<"$0" && grep -c ":.* ok" <<<"$0" | grep -qx 6' "$out"
+  bash -c 'grep -q "^stable   release 2  *bbbbbbb" <<<"$0" && grep -q "^latest   release 3" <<<"$0" && ! grep -q DIFFERS <<<"$0" && grep -c ":.* ok" <<<"$0" | grep -qx 8' "$out"
 out="$(rel history --channel stable)"
 check "history: newest first" bash -c '[[ "$(awk "NR>1 {print \$1}" <<<"$0" | xargs)" == "2 1" ]]' "$out"
 
@@ -152,7 +152,7 @@ check "rollback across the one image: nothing moved, nothing recorded" \
   test "$(tag stable) $(tag cuda-stable) $(tag cpu-stable) $(sql "SELECT COUNT(*) AS n FROM releases" | jq -r '.[0].n')" = "$before $heads_before"
 out="$(bash "$SERVE/release.sh" rollback stable --local --to "$OLDID" --allow-partial 2>&1)"
 check "rollback --allow-partial: the rest moves, :cuda-stable stays and is named" \
-  bash -c '[[ "$0" == *"cuda-stable and its templates stay"* ]] && [[ "$1" == "$2" ]]' "$out" "$(tag cuda-stable)" "$(jq -r .cuda <<<"$DB")"
+  bash -c '[[ "$0" == *":cuda-stable :cuda-static-stable and its templates stay"* ]] && [[ "$1" == "$2" ]]' "$out" "$(tag cuda-stable)" "$(jq -r .cuda <<<"$DB")"
 out="$(rel list --verify)"; rc=$?
 check "list --verify: an image absent from the channel head is flagged, and the check fails" \
   bash -c '[[ "$1" != 0 ]] && grep -q "^    cuda  *NOT IN RELEASE  :cuda-stable is " <<<"$0"' "$out" "$rc"
@@ -160,10 +160,10 @@ check "list --verify: an image absent from the channel head is flagged, and the 
 rel rollback stable --local --to 2 >/dev/null
 
 # --- CI record -----------------------------------------------------------------
-printf 'cuda\t%s\t1000\ncpu\t%s\t300\n' "$REPO@$(jq -r .cuda <<<"$DA")" "$REPO@$(jq -r .cpu <<<"$DA")" >"$T/images.tsv"
+printf 'cuda\t%s\t1000\ncuda-static\t%s\t1100\ncpu\t%s\t300\n' "$REPO@$(jq -r .cuda <<<"$DA")" "$REPO@$(jq -r '.["cuda-static"]' <<<"$DA")" "$REPO@$(jq -r .cpu <<<"$DA")" >"$T/images.tsv"
 out="$(rel record-build latest "$A" "$T/images.tsv" "$REPO@$(jq -r .debug <<<"$DA")")"
 check "record-build: the main build as a latest release" \
-  test "$(sql "SELECT action, digests FROM releases WHERE id = (SELECT MAX(id) FROM releases)" | jq -c '.[0] | [.action, (.digests | fromjson | keys)]')" = '["build",["cpu","cuda","debug"]]'
+  test "$(sql "SELECT action, digests FROM releases WHERE id = (SELECT MAX(id) FROM releases)" | jq -c '.[0] | [.action, (.digests | fromjson | keys)]')" = '["build",["cpu","cuda","cuda-static","debug"]]'
 
 # --- deploy scripts write the registry ------------------------------------------
 line="$(FV_SERVE_IMAGE="$REPO@$(jq -r .cuda <<<"$DA")" FV_SERVE_CONFIG=/etc/fv/runpod.toml bash "$SERVE/runpod-pod.sh" up 2>>"$T/stderr.log")"

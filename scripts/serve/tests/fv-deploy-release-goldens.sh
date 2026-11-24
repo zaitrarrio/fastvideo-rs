@@ -62,11 +62,11 @@ build() { hook __build "$(jq -nc --arg s "$1" --arg k "$2" '{sha: $s, keys: ($k 
 A=aaaaaaa111111111111111111111111111111111
 B=bbbbbbb222222222222222222222222222222222
 C=ccccccc333333333333333333333333333333333
-DA="$(build "$A" "debug cuda cpu")"
-DB="$(build "$B" "debug cuda cpu")"
+DA="$(build "$A" "debug cuda cuda-static cpu")"
+DB="$(build "$B" "debug cuda cuda-static cpu")"
 DC="$(build "$C" "debug cuda")"
 tpls='{}'
-for t in cuda-sls cuda-pod cpu-pod; do
+for t in cuda-sls cuda-pod cuda-static-sls cuda-static-pod cpu-pod; do
   tpls="$(jq -c --arg id "tpl-$t" --arg n "fv-serve-$t" '. + {($id): {id: $id, name: $n, image: "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld", env: {}}}' <<<"$tpls")"
 done
 hook __seed "{\"templates\": $tpls}" >/dev/null

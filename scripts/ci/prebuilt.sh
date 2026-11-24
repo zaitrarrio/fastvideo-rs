@@ -59,7 +59,7 @@ log() { printf '[prebuilt %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 # set -> the Dockerfile stage its directory replaces (a named build context)
 declare -A CONTEXT=(
   [oxide]=oxide [gpucheck]=binary [gpucheck-vast]=binary [hf-fm]=hf-fm
-  [serve-cuda]=serve-build [serve-cpu]=cpu-build
+  [serve-cuda]=serve-build [serve-cuda-static]=static-build [serve-cpu]=cpu-build
 )
 
 fallback() {
@@ -116,7 +116,7 @@ cmd_fetch() {
     fv_boot="$tag"
   else
     fv_boot="compiled@$(head_sha)"
-    if [[ " $* " == *" serve-cuda "* || " $* " == *" serve-cpu "* ]]; then
+    if [[ " $* " == *" serve-cuda "* || " $* " == *" serve-cuda-static "* || " $* " == *" serve-cpu "* ]]; then
       if [[ -z "$(release_boot "$dir" "$@")" ]]; then
         echo "::notice title=fv-boot not in $tag::the image's boot-build stage compiles fv-boot (one small crate) until a tools release carries it"
       else
@@ -183,7 +183,7 @@ cmd_contexts() {
 release_boot() {
   local dir="$1" set; shift
   for set in "$@"; do
-    if [[ ( "$set" == serve-cuda || "$set" == serve-cpu ) && -x "$dir/$set/out/fv-boot" ]]; then echo "$dir/$set"; return; fi
+    if [[ ( "$set" == serve-cuda || "$set" == serve-cuda-static || "$set" == serve-cpu ) && -x "$dir/$set/out/fv-boot" ]]; then echo "$dir/$set"; return; fi
   done
 }
 

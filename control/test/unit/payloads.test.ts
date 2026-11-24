@@ -214,7 +214,7 @@ describe("templates and pool presets", () => {
   });
   it("each preset: a GPU pool on the CUDA image, its config sent inline (a committed configs/serve file), its models repeat the worker's", () => {
     const images = /^FV_IMAGES="([^"]+)"$/m.exec(readFileSync(join(repo, "scripts/serve/variants.sh"), "utf8"))![1]!.split(" ");
-    expect(images).toEqual(["cuda", "cpu"]);
+    expect(images).toEqual(["cuda", "cuda-static", "cpu"]);
     for (const pr of POOL_PRESETS) {
       const p = pr.pool;
       expect("variant" in p, pr.id).toBe(false);

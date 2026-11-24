@@ -31,6 +31,16 @@ wan = "wan"
 id = "cuda"
 carries = ["runpod-fake.toml"]
 
+# The statically linked CUDA fv-serve (cudarc `static-linking`: cuBLAS, cuBLASLt, cudart, NVRTC, CUPTI in the
+# binary; cuDNN still the shared library, so the image stays on base-cuda until ADR-0024 step 3). Shipped beside
+# `cuda` on the owner's decision of 2026-11-24; no preset names it by default (a launch picks it by image tag), and
+# it serves no rented capacity before NVIDIA's written confirmation (ADR-0024 D4).
+[[images]]
+id = "cuda-static"
+carries = ["runpod-fake.toml"]
+link = "static"
+note = "static cuBLAS / cuBLASLt / cudart / NVRTC / CUPTI; cuDNN shared (ADR-0024 step 4)"
+
 [[images]]
 id = "cpu"
 carries = ["runpod-fake.toml"]

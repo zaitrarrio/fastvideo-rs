@@ -84,9 +84,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cudarc, cuda without oxide
-        run: cargo check --locked -p fastvideo-cudarc --features cuda
+        run: cargo check --locked -p fastvideo-cudarc --features cuda,link-dynamic
       - name: engine-service, cuda (the serve feature set)
-        run: cargo check --locked -p fastvideo-engine-service --features cuda
+        run: cargo check --locked -p fastvideo-engine-service --features cuda,fastvideo-cudarc/link-dynamic
 
   nvrtc-compile:
     runs-on: ubuntu-22.04
