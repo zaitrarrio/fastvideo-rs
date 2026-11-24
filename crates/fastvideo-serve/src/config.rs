@@ -2609,7 +2609,10 @@ body_max_mb = 64
     #[cfg(feature = "fal")]
     #[test]
     fn default_fal_apps_are_fals() {
-        assert_eq!(ProtocolsCfg::default().fal_apps, fastvideo_fal::DEFAULT_APPS);
+        assert_eq!(
+            ProtocolsCfg::default().fal_apps,
+            fastvideo_fal::DEFAULT_APPS
+        );
     }
 
     #[test]

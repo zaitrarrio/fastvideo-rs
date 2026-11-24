@@ -1344,10 +1344,23 @@ mod tests {
             .map(|a| a["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, crate::DEFAULT_APPS);
-        assert_eq!(&ids[..5], ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3"]);
+        assert_eq!(
+            &ids[..5],
+            [
+                "minimax/h3-max",
+                "minimax/h3-turbo",
+                "minimax/h3-draft",
+                "minimax/h3-max-turbo",
+                "minimax/h3"
+            ]
+        );
         for (app, name) in crate::H3_VARIANT_APPS {
             let a = FalApp::from_id(app);
-            assert_eq!((a.model.as_str(), a.tier, a.kind()), (name, None, AppKind::H3), "{app}");
+            assert_eq!(
+                (a.model.as_str(), a.tier, a.kind()),
+                (name, None, AppKind::H3),
+                "{app}"
+            );
         }
         assert_eq!(
             c["apps"][0]["endpoints"][2]["endpoint_id"],
