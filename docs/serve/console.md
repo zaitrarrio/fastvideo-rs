@@ -14,7 +14,7 @@ with `curl`.
 | `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys; **Experimental features** (§7) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page, clip or causal (§4) |
-| `/console/stream` | Live stream: a causal model (SF-Wan, LongLive) over the Reactor runtime or a native `/fv/v1/streams` stream to an output (Cloudflare Stream by default, WHIP, RTMPS, SRT) played back by its format (WHEP or HLS); prompt switches, pause, reset, stop, stats, licence (§4c) |
+| `/console/stream` | Live stream: a causal model (SF-Wan, LongLive) over the Reactor runtime or a native `/fv/v1/streams` stream to an output (Cloudflare Stream by default, WHIP, RTMPS, SRT) played back by its format (WHEP or HLS); prompt switches, pause, reset, stop, stats, licence. A clip model (H3, LTX, Wan) streams natively as a clip queue: enqueue, autoplay, reset (§4c) |
 | `/console/native` | Native API: `POST /fv/v1/jobs` with the fields only it takes, on any served model or tier alias (§4d) |
 | `/console/live` | Live input: publish the camera and microphone (`getUserMedia`) to a duplex model and watch its output, over native WHIP ingest or the Reactor runtime (§4b) |
 | `/console/avatar` | Script avatar: photo, script, scene, speech rate, duration, seed (and an optional driving voice) into the Reactor runtime's avatar mode; the WebRTC stream and a per-window table (build time, real-time factor, when it started, how long playout waited) |
@@ -136,6 +136,15 @@ Names are 1-64 characters without control characters. Without a valid admin
 token every call answers `401 {"error":{"kind":"unauthorized",…}}`.
 
 ## 3. Model pages
+
+One page per fal app and endpoint. The default apps (`fastvideo_fal::DEFAULT_APPS`,
+`[protocols] fal_apps`) are the H3 tiers (`minimax/h3-{max,turbo,draft}`),
+fal's `minimax/h3-max-turbo` and `minimax/h3`, and since 2026-11-24 one app
+per H3 variant (`fastvideo_fal::H3_VARIANT_APPS`: `minimax/h3-trim`,
+`minimax/h3-turbo-nvfp4`, `minimax/vdn-h3`, … whose model is the variant's
+public name of `families/h3.toml`), so every served variant has a model page
+and a variant tab; an app whose model a server does not serve lists no
+endpoints there and stays off the home page.
 
 The form is built from the endpoint's input JSON Schema,
 `GET /fal/schema/{owner}/{alias}/{sub}` (catalog: `GET /fal/schema`). The
@@ -298,7 +307,16 @@ busy … retrying", instead of failing.
 
 `/console/stream` (`console/stream.js`, WebRTC helpers in `console/rtc.js`)
 runs a **causal** model (`stream.causal` in `GET /fv/v1/capabilities`:
-SF-Wan, LongLive) as one continuous rollout steered by prompt switches. The
+SF-Wan, LongLive) as one continuous rollout steered by prompt switches, or
+(since 2026-11-24) a **clip** model (`stream.clip`: H3, LTX, Wan) as a clip
+queue over the native stream only: the opening prompt is the first clip
+(with "Clip length" when given, `clips: [{prompt, seconds}]`), **Enqueue
+clip** adds one (`enqueue {prompt, seconds}`, marked queued → playing →
+played from the stream object's `clip_started` / `clip_finished` events),
+Pause / Resume toggle autoplay (`set_autoplay`), Reset drops the queue
+(`reset`); the stats show the clip player's state (`session`: playing,
+queue, clip length, autoplay, canvas). The home page links both kinds to
+this page. For a causal model, the
 facts line shows its block size and fps, canvas, recipe and the
 session-length rule (`stream_limits`: 120 s by default, at most 300 s; a
 reset restarts the clock); a fal app whose director runs the model in

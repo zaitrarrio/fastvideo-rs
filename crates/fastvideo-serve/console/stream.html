@@ -10,7 +10,7 @@
 <body>
 <main class="page">
   <div class="page-head">
-    <h1>Live stream <small>a causal model (SF-Wan, LongLive) generating one continuous video you steer with prompts</small></h1>
+    <h1>Live stream <small>a causal model (SF-Wan, LongLive) generating one continuous video you steer with prompts, or a clip model (H3, LTX, Wan) playing a queue of clips you add prompts to</small></h1>
   </div>
   <div id="key-banner" class="banner" hidden>No API key in this browser. Streams need one: <a href="/console/admin">mint one</a> or enter it on the <a href="/console">Models</a> page.</div>
   <div id="licence"></div>
@@ -33,7 +33,7 @@
         <textarea id="prompt" rows="4">A first-person drive along a coastal road at golden hour, waves breaking on the rocks below.</textarea>
         <div class="row">
           <div><label for="seed">Seed</label><input id="seed" inputmode="numeric" placeholder="random"></div>
-          <div><label for="max-seconds">Length (s)</label><input id="max-seconds" type="number" min="1" step="1" placeholder="server default"></div>
+          <div><label for="max-seconds" id="length-label">Length (s)</label><input id="max-seconds" type="number" min="1" step="1" placeholder="server default"></div>
         </div>
         <div class="actions">
           <button id="start" class="primary" type="button">Start stream</button>
@@ -55,7 +55,7 @@
       <div class="stage-body">
         <label for="next">Next prompt</label>
         <textarea id="next" rows="2" placeholder="The road turns inland through a pine forest."></textarea>
-        <p class="hint">Applied at the next block boundary (a LongLive model re-caches its KV window once per switch).</p>
+        <p class="hint" id="next-hint">Applied at the next block boundary (a LongLive model re-caches its KV window once per switch).</p>
         <div class="actions">
           <button id="switch" class="primary" type="button" disabled>Switch prompt</button>
           <button id="pause" type="button" disabled>Pause</button>

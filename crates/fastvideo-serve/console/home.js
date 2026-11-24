@@ -72,7 +72,8 @@ $('toggle-key').onclick = () => {
 
 // The served models (`/fv/v1/capabilities`): id, tier, the recipe it runs
 // (attention, VAE, steps, profile), tasks, and the live pages for stream
-// models (causal: Live stream, with its session-length rule; duplex: Live input).
+// models (causal: Live stream, with its session-length rule; clip: Live
+// stream as a clip queue; duplex: Live input).
 async function renderServed(caps) {
   const box = $('served');
   const models = (caps && Array.isArray(caps.models)) ? caps.models : [];
@@ -86,10 +87,12 @@ async function renderServed(caps) {
     const c = m.caps || {};
     const kind = streamKind(m);
     const l = m.stream_limits;
+    const streamLink = (label) => pageOn('stream') ? el('a', { href: page('/console/stream?model=' + encodeURIComponent(c.id)), 'data-live': c.id }, 'Live stream') : label;
     const live = kind === 'causal'
-      ? el('span', {}, pageOn('stream') ? el('a', { href: page('/console/stream?model=' + encodeURIComponent(c.id)), 'data-live': c.id }, 'Live stream') : 'causal stream',
+      ? el('span', {}, streamLink('causal stream'),
         l ? el('small', { class: 'hint' }, ' ' + l.default_max_s + ' s default, ' + l.hard_max_s + ' s max' + (l.reset_restarts_clock ? '; reset restarts the clock' : '')) : '')
-      : kind === 'duplex' ? (pageOn('live') ? el('a', { href: page('/console/live') }, 'Live input') : 'duplex stream') : kind === 'clip' ? 'clip stream' : '–';
+      : kind === 'duplex' ? (pageOn('live') ? el('a', { href: page('/console/live') }, 'Live input') : 'duplex stream')
+      : kind === 'clip' ? el('span', {}, streamLink('clip stream'), el('small', { class: 'hint' }, ' clip queue')) : '–';
     const lic = licences[c.id] || (c.served_names || []).map((n) => licences[n]).find(Boolean) || m.licence;
     return el('tr', { 'data-model': c.id },
       el('td', { class: 'mono' }, c.id, aliasesOf(c.id).length ? el('div', { class: 'hint' }, 'aka ' + aliasesOf(c.id).join(', ')) : ''),
