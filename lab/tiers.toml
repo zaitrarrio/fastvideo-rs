@@ -1286,3 +1286,24 @@ weights = "volume+r2"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
 cells = ["history-forcing", "upscale", "h3-plug"]
+
+# WO-2b of ADR-0024 step 2 (docs/plan/2026-11-24-adr24-step2-wo.md): the calibrated SageAttention2 gate per Wan
+# model on sm_12x, one cell per model and canvas. fv-lab's own (FV_LAB_OWN): `fv-lab pod up --family sage-wan
+# --lpips --yes --wait`. The verdict is offline: scripts/gpu/sage-calib.py over the fetched compares.
+[[tier]]
+name = "sage-wan"
+description = "The calibrated SageAttention2 quality gate (docs/perf/sage-attention.md section 8.2, the three-prompt rule of section 9) on the Wan models at their served canvases: cuDNN and fwd2 bf16 controls against Sage"
+provider = "runpod-pod"
+gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+gpu_count = 1
+cloud = "SECURE"
+region = "eu"
+image = "runtime"
+max_usd_per_hr = 3.0
+wall_cap_s = 5400
+cell_timeout_s = 2700
+container_disk_gb = 120
+weights = "volume+r2"
+preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
+tae = true
+cells = ["sage-fastwan22-720p"]

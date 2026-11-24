@@ -1,0 +1,188 @@
+# WO-2b of ADR-0024 step 2 (docs/plan/2026-11-24-adr24-step2-wo.md; owner decision FVID-2026-11-24-drop-cudnn-sdpa:
+# take the cuDNN margin back with SageAttention2 where a model's quality gate allows it): the calibrated Sage gate of
+# docs/perf/sage-attention.md section 8.2 on FastWan 2.2 TI2V-5B at its served 720p canvas (1280x704, 121 frames, the
+# 24 x 27 280 self-attention shape where cuDNN measured 7.7-8.8 % over fwd2). Three warm `wan gen` processes over the
+# same nine clips (the three LTX gate prompts at seeds 42, +1000, +2000: scripts/gpu/prompts-sage-wan3x3.json, read
+# from the runtime image's scripts/gpu), kernel picks pinned: `cud` (cuDNN, control 1 and the pairs' reference),
+# `fw2` (flash_mma_fwd2, control 2: the bf16 noise band), `sage` (the candidate). Then compare-clips per clip on the
+# control pair cud--fw2, the Sage pair cud--sage and fw2--sage (reported). The verdict is section 9's three-prompt
+# rule (2 of 3 prompts in band, no outlier, denoise speedup >= 1.10), computed offline by
+# scripts/gpu/sage-calib.py over the fetched compares. Full VAE decode on every arm (the served decoder); the UMT5
+# text cache is shared by the arms (the text encoder is not under test). Schema: crates/fastvideo-lab/schemas/cell.v1.json.
+schema = 1
+name = "sage-fastwan22-720p"
+description = "The calibrated SageAttention2 gate on FastWan 2.2 TI2V-5B at 1280x704 x 121 frames: cuDNN and fwd2 bf16 controls against Sage over nine clips, compare-clips per clip"
+
+[workload]
+model = "wan"
+seed = 42
+width = 1280
+height = 704
+frames = 121
+steps = 3
+note = "The served 720p canvas and frame count of fastwan22-ti2v-5b (families/wan.toml engine.default), the recipe's 3 DMD steps at flow shift 5.0; the nine prompts and seeds come from the prompt set (the workload seed is the default `--seed` only)"
+
+[lists]
+gen = ["--keep-going", "--mode", "fast", "wan", "gen", "--preset", "fast_wan_2_2_ti2v_5b", "--weights", "{weights}/fastwan22-ti2v-5b",
+  "--prompts", "/opt/fastvideo-rs/scripts/gpu/prompts-sage-wan3x3.json", "--seed", "{seed}", "--width", "{width}", "--height", "{height}",
+  "--num-frames", "{frames}", "--steps", "{steps}", "--flow-shift", "5.0", "--fps", "24", "--full-vae", "--warm",
+  "--text-cache", "{scratch}/sage-wan-text-cache", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "fw2"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_FLASH_KERNEL=v2"]
+note = "bf16 control 2: flash_mma_fwd2, what `auto` runs since D2"
+argv = ["{@gen}"]
+
+[[arm]]
+name = "cud"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_FLASH_KERNEL=cudnn"]
+note = "bf16 control 1: cuDNN's unified SDPA (the diagnostic override), the reference of the pairs"
+argv = ["{@gen}"]
+
+[[arm]]
+name = "sage"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_ATTN_SAGE=2", "FASTVIDEO_FLASH_KERNEL=v2"]
+note = "candidate: SageAttention2 (INT8 QK, FP8 PV) on the self-attention, fwd2 below its minimum sequence"
+argv = ["{@gen}"]
+
+[[compare]]
+tag = "cud--fw2-ltx-multishot-s42"
+baseline = "{runs}/cud/frames/ltx-multishot-s42"
+candidate = "{runs}/fw2/frames/ltx-multishot-s42"
+
+[[compare]]
+tag = "cud--fw2-ltx-multishot-s1042"
+baseline = "{runs}/cud/frames/ltx-multishot-s1042"
+candidate = "{runs}/fw2/frames/ltx-multishot-s1042"
+
+[[compare]]
+tag = "cud--fw2-ltx-multishot-s2042"
+baseline = "{runs}/cud/frames/ltx-multishot-s2042"
+candidate = "{runs}/fw2/frames/ltx-multishot-s2042"
+
+[[compare]]
+tag = "cud--fw2-ltx-newsbroadcast-s42"
+baseline = "{runs}/cud/frames/ltx-newsbroadcast-s42"
+candidate = "{runs}/fw2/frames/ltx-newsbroadcast-s42"
+
+[[compare]]
+tag = "cud--fw2-ltx-newsbroadcast-s1042"
+baseline = "{runs}/cud/frames/ltx-newsbroadcast-s1042"
+candidate = "{runs}/fw2/frames/ltx-newsbroadcast-s1042"
+
+[[compare]]
+tag = "cud--fw2-ltx-newsbroadcast-s2042"
+baseline = "{runs}/cud/frames/ltx-newsbroadcast-s2042"
+candidate = "{runs}/fw2/frames/ltx-newsbroadcast-s2042"
+
+[[compare]]
+tag = "cud--fw2-ltx-frogyoga-s42"
+baseline = "{runs}/cud/frames/ltx-frogyoga-s42"
+candidate = "{runs}/fw2/frames/ltx-frogyoga-s42"
+
+[[compare]]
+tag = "cud--fw2-ltx-frogyoga-s1042"
+baseline = "{runs}/cud/frames/ltx-frogyoga-s1042"
+candidate = "{runs}/fw2/frames/ltx-frogyoga-s1042"
+
+[[compare]]
+tag = "cud--fw2-ltx-frogyoga-s2042"
+baseline = "{runs}/cud/frames/ltx-frogyoga-s2042"
+candidate = "{runs}/fw2/frames/ltx-frogyoga-s2042"
+
+[[compare]]
+tag = "cud--sage-ltx-multishot-s42"
+baseline = "{runs}/cud/frames/ltx-multishot-s42"
+candidate = "{runs}/sage/frames/ltx-multishot-s42"
+
+[[compare]]
+tag = "cud--sage-ltx-multishot-s1042"
+baseline = "{runs}/cud/frames/ltx-multishot-s1042"
+candidate = "{runs}/sage/frames/ltx-multishot-s1042"
+
+[[compare]]
+tag = "cud--sage-ltx-multishot-s2042"
+baseline = "{runs}/cud/frames/ltx-multishot-s2042"
+candidate = "{runs}/sage/frames/ltx-multishot-s2042"
+
+[[compare]]
+tag = "cud--sage-ltx-newsbroadcast-s42"
+baseline = "{runs}/cud/frames/ltx-newsbroadcast-s42"
+candidate = "{runs}/sage/frames/ltx-newsbroadcast-s42"
+
+[[compare]]
+tag = "cud--sage-ltx-newsbroadcast-s1042"
+baseline = "{runs}/cud/frames/ltx-newsbroadcast-s1042"
+candidate = "{runs}/sage/frames/ltx-newsbroadcast-s1042"
+
+[[compare]]
+tag = "cud--sage-ltx-newsbroadcast-s2042"
+baseline = "{runs}/cud/frames/ltx-newsbroadcast-s2042"
+candidate = "{runs}/sage/frames/ltx-newsbroadcast-s2042"
+
+[[compare]]
+tag = "cud--sage-ltx-frogyoga-s42"
+baseline = "{runs}/cud/frames/ltx-frogyoga-s42"
+candidate = "{runs}/sage/frames/ltx-frogyoga-s42"
+
+[[compare]]
+tag = "cud--sage-ltx-frogyoga-s1042"
+baseline = "{runs}/cud/frames/ltx-frogyoga-s1042"
+candidate = "{runs}/sage/frames/ltx-frogyoga-s1042"
+
+[[compare]]
+tag = "cud--sage-ltx-frogyoga-s2042"
+baseline = "{runs}/cud/frames/ltx-frogyoga-s2042"
+candidate = "{runs}/sage/frames/ltx-frogyoga-s2042"
+
+[[compare]]
+tag = "fw2--sage-ltx-multishot-s42"
+baseline = "{runs}/fw2/frames/ltx-multishot-s42"
+candidate = "{runs}/sage/frames/ltx-multishot-s42"
+
+[[compare]]
+tag = "fw2--sage-ltx-multishot-s1042"
+baseline = "{runs}/fw2/frames/ltx-multishot-s1042"
+candidate = "{runs}/sage/frames/ltx-multishot-s1042"
+
+[[compare]]
+tag = "fw2--sage-ltx-multishot-s2042"
+baseline = "{runs}/fw2/frames/ltx-multishot-s2042"
+candidate = "{runs}/sage/frames/ltx-multishot-s2042"
+
+[[compare]]
+tag = "fw2--sage-ltx-newsbroadcast-s42"
+baseline = "{runs}/fw2/frames/ltx-newsbroadcast-s42"
+candidate = "{runs}/sage/frames/ltx-newsbroadcast-s42"
+
+[[compare]]
+tag = "fw2--sage-ltx-newsbroadcast-s1042"
+baseline = "{runs}/fw2/frames/ltx-newsbroadcast-s1042"
+candidate = "{runs}/sage/frames/ltx-newsbroadcast-s1042"
+
+[[compare]]
+tag = "fw2--sage-ltx-newsbroadcast-s2042"
+baseline = "{runs}/fw2/frames/ltx-newsbroadcast-s2042"
+candidate = "{runs}/sage/frames/ltx-newsbroadcast-s2042"
+
+[[compare]]
+tag = "fw2--sage-ltx-frogyoga-s42"
+baseline = "{runs}/fw2/frames/ltx-frogyoga-s42"
+candidate = "{runs}/sage/frames/ltx-frogyoga-s42"
+
+[[compare]]
+tag = "fw2--sage-ltx-frogyoga-s1042"
+baseline = "{runs}/fw2/frames/ltx-frogyoga-s1042"
+candidate = "{runs}/sage/frames/ltx-frogyoga-s1042"
+
+[[compare]]
+tag = "fw2--sage-ltx-frogyoga-s2042"
+baseline = "{runs}/fw2/frames/ltx-frogyoga-s2042"
+candidate = "{runs}/sage/frames/ltx-frogyoga-s2042"
