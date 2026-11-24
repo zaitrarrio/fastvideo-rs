@@ -1,0 +1,442 @@
+{
+  "checks": [
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s1_self",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": 0.016130642590497513,
+        "cudnn_ms": 4.700549,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.016130642590497513,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 9690,
+        "sq": 9690,
+        "v2_ms": 4.777615
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s1_text",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": null,
+        "cudnn_ms": 0.9309430000000001,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.3462628753854962,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 1024,
+        "sq": 9690,
+        "v2_ms": 0.608592
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s1_a2v",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": null,
+        "cudnn_ms": 0.570901,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.31857362309752474,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 151,
+        "sq": 9690,
+        "v2_ms": 0.389027
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s2_self",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": 0.03264999723295999,
+        "cudnn_ms": 62.875088999999996,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.03264999723295999,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 38760,
+        "sq": 38760,
+        "v2_ms": 64.99724900000001
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s2_text",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": 0.06454251559780258,
+        "cudnn_ms": 2.225473,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.06454251559780258,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 1024,
+        "sq": 38760,
+        "v2_ms": 2.379021
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s2_a2v",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": 0.08731201697420342,
+        "cudnn_ms": 0.8577250000000001,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.08731201697420342,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 151,
+        "sq": 38760,
+        "v2_ms": 0.9397789999999999
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_audio_text",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": null,
+        "cudnn_ms": 0.408982,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.729518658522869,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 1024,
+        "sq": 151,
+        "v2_ms": 0.110622
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_v2a",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": null,
+        "cudnn_ms": 1.8812010000000001,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.03327714582333308,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 38760,
+        "sq": 151,
+        "v2_ms": 1.8186
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx720_s2_self",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": 0.09416755598752573,
+        "cudnn_ms": 13.580037999999998,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.09416755598752573,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 17480,
+        "sq": 17480,
+        "v2_ms": 14.991776999999999
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx512p",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": 0.06974957861277409,
+        "cudnn_ms": 2.199312,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.06974957861277409,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 6144,
+        "sq": 6144,
+        "v2_ms": 2.3642149999999997
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_h3_768p",
+      "ok": true,
+      "values": {
+        "bh": 56,
+        "cudnn_margin_left": 0.03506696200175773,
+        "cudnn_ms": 105.715082,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.03506696200175773,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 37966,
+        "sq": 37966,
+        "v2_ms": 109.55690999999999
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_h3_1080p",
+      "ok": true,
+      "values": {
+        "bh": 56,
+        "cudnn_margin_left": 0.038039062362582775,
+        "cudnn_ms": 426.41661400000004,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.038039062362582775,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 76150,
+        "sq": 76150,
+        "v2_ms": 443.278513
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_wan_580p",
+      "ok": true,
+      "values": {
+        "bh": 24,
+        "cudnn_margin_left": 0.004698424775493464,
+        "cudnn_ms": 18.690616,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.004698424775493464,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 23616,
+        "sq": 23616,
+        "v2_ms": 18.778847000000003
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_wan_720p",
+      "ok": true,
+      "values": {
+        "bh": 24,
+        "cudnn_margin_left": 0.08782391722506526,
+        "cudnn_ms": 22.897704,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.08782391722506526,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 27280,
+        "sq": 27280,
+        "v2_ms": 25.102285
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_wan_cross",
+      "ok": true,
+      "values": {
+        "bh": 24,
+        "cudnn_margin_left": 0.27983662246001373,
+        "cudnn_ms": 0.753234,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.27983662246001373,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 512,
+        "sq": 27280,
+        "v2_ms": 1.045921
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_edge_24k_lo",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": 0.10168708559805076,
+        "cudnn_ms": 24.146246,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.10168708559805076,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 24330,
+        "sq": 24330,
+        "v2_ms": 26.879549
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_edge_24k_hi",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": 0.07867440944518746,
+        "cudnn_ms": 25.270801,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.07867440944518746,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 24822,
+        "sq": 24822,
+        "v2_ms": 27.428741
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx_1080p20s",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": 0.03920119057569431,
+        "cudnn_ms": 652.082754,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.03920119057569431,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 124440,
+        "sq": 124440,
+        "v2_ms": 678.688137
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx_4k5s",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_margin_left": null,
+        "cudnn_ms": 754.928208,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.00901343588422394,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 130560,
+        "sq": 130560,
+        "v2_ms": 748.123711
+      }
+    },
+    {
+      "limits": {},
+      "name": "sdpa_rule_table",
+      "ok": true,
+      "values": {
+        "cudnn_candidate": false,
+        "cudnn_faster_at": [
+          "ltx1080_s1_self (sq 9690, sk 9690): cuDNN 1.6 % faster",
+          "ltx1080_s2_self (sq 38760, sk 38760): cuDNN 3.3 % faster",
+          "ltx1080_s2_text (sq 38760, sk 1024): cuDNN 6.5 % faster",
+          "ltx1080_s2_a2v (sq 38760, sk 151): cuDNN 8.7 % faster",
+          "ltx720_s2_self (sq 17480, sk 17480): cuDNN 9.4 % faster",
+          "ltx512p (sq 6144, sk 6144): cuDNN 7.0 % faster",
+          "h3_768p (sq 37966, sk 37966): cuDNN 3.5 % faster",
+          "h3_1080p (sq 76150, sk 76150): cuDNN 3.8 % faster",
+          "wan_580p (sq 23616, sk 23616): cuDNN 0.5 % faster",
+          "wan_720p (sq 27280, sk 27280): cuDNN 8.8 % faster",
+          "wan_cross (sq 27280, sk 512): cuDNN 28.0 % faster",
+          "edge_24k_lo (sq 24330, sk 24330): cuDNN 10.2 % faster",
+          "edge_24k_hi (sq 24822, sk 24822): cuDNN 7.9 % faster",
+          "ltx_1080p20s (sq 124440, sk 124440): cuDNN 3.9 % faster"
+        ],
+        "rule": "",
+        "rule_suggestion": [],
+        "sm_major": 12,
+        "worst_rule_loss": 0.0
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "gemm_math": "F32",
+    "limits": {
+      "denoise": 0.002,
+      "forward": 0.001,
+      "op": 0.00001
+    },
+    "mode": "exact"
+  },
+  "elapsed_s": 33.209804012,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "kernels",
+  "status": "pass"
+}
