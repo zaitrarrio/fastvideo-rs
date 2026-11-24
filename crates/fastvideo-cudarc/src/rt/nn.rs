@@ -1722,6 +1722,7 @@ impl Linear {
         self.branch.as_ref().map_or(0, |b| b.bytes)
     }
 
+    #[cfg(feature = "cuda")]
     fn refuse_branch(&self, what: &str) -> Result<()> {
         if self.branch.is_some() {
             return Err(msg(format!(

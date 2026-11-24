@@ -110,10 +110,13 @@ step gcp-instance-items jq '.metadata.items |= map(
 step gcp-instance-json canon "$TMP/i2.json" >"$TMP/gcp-instance.json"
 step gcp-firewall-json canon "$TMP/f.json" >"$TMP/gcp-firewall.json"
 
-# runpod-templates.sh plan: the create bodies of fv-serve-cuda-sls, fv-serve-cuda-pod (the CUDA image) and
-# fv-serve-cpu-pod (the CPU image, a second digest), on the stable channel.
+# runpod-templates.sh plan: the create bodies of fv-serve-cuda-sls, fv-serve-cuda-pod (the CUDA image),
+# fv-serve-cuda-static-sls, fv-serve-cuda-static-pod (the statically linked CUDA image, a second digest) and
+# fv-serve-cpu-pod (the CPU image, a third digest), on the stable channel.
+IMAGE_STATIC="ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:3333333333333333333333333333333333333333333333333333333333333333"
 IMAGE_CPU="ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:2222222222222222222222222222222222222222222222222222222222222222"
 FV_RELEASE_CHANNEL=stable step serve-templates-cuda bash "$ROOT/scripts/serve/runpod-templates.sh" plan cuda "$IMAGE" >"$TMP/tc.json"
+FV_RELEASE_CHANNEL=stable step serve-templates-cuda-static bash "$ROOT/scripts/serve/runpod-templates.sh" plan cuda-static "$IMAGE_STATIC" >>"$TMP/tc.json"
 FV_RELEASE_CHANNEL=stable step serve-templates-cpu bash "$ROOT/scripts/serve/runpod-templates.sh" plan cpu "$IMAGE_CPU" >>"$TMP/tc.json"
 step serve-templates-json bash -c 'jq -s . "$1" | jq -S "(.. | numbers) |= . + 0"' _ "$TMP/tc.json" >"$TMP/serve-templates.json"
 

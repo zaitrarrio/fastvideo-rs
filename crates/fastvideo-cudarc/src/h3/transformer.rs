@@ -2609,7 +2609,6 @@ impl Block {
     /// The block under bf16 activations with Sol-H3's fused elementwise chain
     /// ([`fused16`]); MXFP8 consumers receive their activation pre-quantized.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     fn forward_fused(
         &self,
         input: BlockIn,

@@ -83,15 +83,14 @@ build() {
     tags="$FV_IMAGE:$v-sha-$FV_SHORT_SHA"
     [[ "${FV_LATEST:-0}" == 1 ]] && tags+=",$FV_IMAGE:$v,$FV_IMAGE:$v-latest"
     [[ "$COMPRESSION" == gzip ]] || tags="${tags//:$v-sha-/:$v-$COMPRESSION-sha-}"
-    # One registry cache per build graph: cuda's, and cpu's own.
+    # One registry cache per build graph: cuda's, cuda-static's (the static-build stage on cuda's builder) and cpu's own.
     cache_to=()
     case "$v" in
-      cuda) cache_to=(--cache-to "type=registry,ref=$FV_IMAGE:buildcache-cuda,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true") ;;
-      cpu) cache_to=(--cache-to "type=registry,ref=$FV_IMAGE:buildcache-cpu,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true") ;;
-      *) die "unknown serve image $v (cuda, cpu; deploy/deploy.toml [[images]])" ;;
+      cuda|cuda-static|cpu) cache_to=(--cache-to "type=registry,ref=$FV_IMAGE:buildcache-$v,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true") ;;
+      *) die "unknown serve image $v (cuda, cuda-static, cpu; deploy/deploy.toml [[images]])" ;;
     esac
     args=()
-    for c in ${FV_CACHE_FROM:-} "$FV_IMAGE:buildcache-cuda" "$FV_IMAGE:buildcache-cpu"; do
+    for c in ${FV_CACHE_FROM:-} "$FV_IMAGE:buildcache-cuda" "$FV_IMAGE:buildcache-cuda-static" "$FV_IMAGE:buildcache-cpu"; do
       args+=(--cache-from "type=registry,ref=$c")
     done
     while IFS= read -r c; do
@@ -136,12 +135,16 @@ smoke() {
   # The entrypoint is fv-boot (docs/adr/0014-fv-boot.md).
   local ep; ep="$(docker image inspect "$img" --format '{{json .Config.Entrypoint}}')"
   [[ "$ep" == '["/opt/fastvideo-rs/bin/fv-boot"]' ]] || die "serve-$v: entrypoint $ep, expected [\"/opt/fastvideo-rs/bin/fv-boot\"]"
-  bounded "serve-$v: --version" "$img" --version
+  # cuda-static's fv-serve needs libcuda.so.1 at load (DT_NEEDED; the dynamic one dlopens it): on this GPU-less
+  # runner the image's driver stub stands in, through LD_LIBRARY_PATH for these runs only (it is off the loader path).
+  local -a stub=()
+  [[ "$v" != cuda-static ]] || stub=(-e LD_LIBRARY_PATH=/opt/fastvideo-rs/lib/driver-stub)
+  bounded "serve-$v: --version" "${stub[@]}" "$img" --version
   # Every dynamic library resolves; ffmpeg does what the code asks of it;
   # no config is baked (FV_CONFIG unset) and the one the image carries parses;
   # the CUDA image has the CUDA libraries, the cpu image none; none has the
   # debug tooling.
-  SMOKE_TIMEOUT_S=$((SMOKE_TIMEOUT_S * 3)) bounded "serve-$v: image checks" --entrypoint bash -e V="$v" "$img" -euo pipefail -c '
+  SMOKE_TIMEOUT_S=$((SMOKE_TIMEOUT_S * 3)) bounded "serve-$v: image checks" --entrypoint bash -e V="$v" "${stub[@]}" "$img" -euo pipefail -c '
     bad() { echo "FAIL: $*"; exit 1; }
     for b in /opt/fastvideo-rs/bin/fv-serve /opt/fastvideo-rs/bin/fv-boot /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; do
       ldd "$b" | grep "not found" && bad "$b: unresolved libraries"
@@ -163,6 +166,17 @@ smoke() {
     test -e /opt/fastvideo-rs/oxide && bad "the oxide directory is in the image"
     ldconfig -p | grep -E "libcupti|libcudnn_adv|libcudnn_ext|libnvblas|libnvJitLink" && bad "CUPTI / cudnn_adv / cudnn_ext / nvblas / nvJitLink present"
     find / -xdev \( -name "*.a" -path "*cuda*" -o -name "cudnn*.h" -o -name "cublas*.h" \) 2>/dev/null | grep . && bad "static CUDA libraries or headers present"
+    # The link mode the image name promises (ADR-0024 step 4): the cuda-static fv-serve carries cuBLAS / cuBLASLt /
+    # cudart / NVRTC / CUPTI and needs none of them shared (cuDNN still is); the cuda one loads them from base-cuda.
+    if [ "$V" = cuda-static ]; then
+      grep -q cuda-static /opt/fastvideo-rs/bin/fv-serve.features || bad "cuda-static built without the cuda-static feature"
+      ldd /opt/fastvideo-rs/bin/fv-serve | grep -E "libcublas|libnvrtc|libcudart|libcupti" && bad "cuda-static fv-serve needs a shared CUDA library"
+      ldd /opt/fastvideo-rs/bin/fv-serve | grep -q "libcudnn.so.9" || bad "cuda-static fv-serve does not load the shared cuDNN"
+      test -f /opt/fastvideo-rs/lib/driver-stub/libcuda.so.1 || bad "no driver stub for the GPU-less run"
+      ldconfig -p | grep -q "libcuda.so.1" && bad "a libcuda.so.1 is on the loader path (the stub must not shadow the host driver)"
+    elif [ "$V" = cuda ]; then
+      grep -q cuda-static /opt/fastvideo-rs/bin/fv-serve.features && bad "cuda built with the cuda-static feature"
+    fi
     if [ "$V" = cpu ]; then
       grep -q cuda /opt/fastvideo-rs/bin/fv-serve.features && bad "cpu built with cuda"
       ldconfig -p | grep -E "libcudnn|libcublas|libnvrtc" && bad "CUDA libraries in the cpu image"
@@ -187,14 +201,14 @@ smoke() {
   # Bounded: an fv-boot that serves fv-serve's default instead never exits (serve-image run 286).
   local out rc=0
   out="$(bounded "serve-$v: the refusal without a config (an fv-boot that does not refuse serves fv-serve's default and never exits)" \
-    -e FV_FAIL_SLEEP_S=0 "$img" 2>&1)" || rc=$?
+    -e FV_FAIL_SLEEP_S=0 "${stub[@]}" "$img" 2>&1)" || rc=$?
   [[ "$rc" != 124 ]] || die "serve-$v: started without a config, it did not refuse within ${SMOKE_TIMEOUT_S}s (it serves instead: is the image's fv-boot older than ADR-0011?): $(tail -3 <<<"$out")"
   [[ "$rc" != 0 ]] || die "serve-$v: started without a config, it booted (exit 0)"
   grep -q "FAILED: no worker config" <<<"$out" || die "serve-$v: no refusal message without a config: $(tail -3 <<<"$out")"
   echo "refused without a config (exit $rc): $(grep -m1 'FAILED: no worker config' <<<"$out")"
   # HTTP mode on the fake engine through the image entrypoint, the config named explicitly
   # (FV_WORKER_CONFIG, the escape hatch for this check): /healthz 200.
-  cid="$(timeout 120 docker run -d -p 18001:8000 -e FV_ENGINE=fake -e FV_AUTH_MODE=none -e "FV_WORKER_CONFIG=$SMOKE_CONFIG" "$img")"
+  cid="$(timeout 120 docker run -d -p 18001:8000 -e FV_ENGINE=fake -e FV_AUTH_MODE=none -e "FV_WORKER_CONFIG=$SMOKE_CONFIG" "${stub[@]}" "$img")"
   for _ in $(seq 1 60); do
     if curl -fsS -m 5 localhost:18001/healthz; then ok=1; break; fi
     sleep 1

@@ -234,6 +234,10 @@ mod tests {
                 cpu: false,
             },
             ServeImage {
+                id: "cuda-static".into(),
+                cpu: false,
+            },
+            ServeImage {
                 id: "cpu".into(),
                 cpu: true,
             },
@@ -257,7 +261,10 @@ mod tests {
         ] {
             assert!(check_channel(bad, &imgs()).is_err(), "{bad}");
         }
-        assert_eq!(release_keys(&imgs()), ["debug", "cuda", "cpu"]);
+        assert_eq!(
+            release_keys(&imgs()),
+            ["debug", "cuda", "cuda-static", "cpu"]
+        );
     }
 
     #[test]

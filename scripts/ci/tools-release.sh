@@ -366,7 +366,7 @@ cmd_notes() {
 #     plan -> build --local on the build pod's self-hosted runner -> upload
 #     from a GitHub-hosted job with the job's GITHUB_TOKEN;
 #   the coordinator by hand: publish = plan -> build --pod -> upload.
-SETS_ALL="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-cpu serve-fake gpucheck-tests"
+SETS_ALL="oxide gpucheck gpucheck-vast hf-fm serve-cuda serve-cuda-static serve-cpu serve-fake gpucheck-tests"
 
 # next_version <workspace version> <highest released version or "">: the
 # workspace version when it is above the highest release (a manual bump in

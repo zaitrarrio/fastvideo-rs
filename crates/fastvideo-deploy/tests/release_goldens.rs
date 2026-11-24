@@ -412,11 +412,17 @@ fn release_templates_and_reconcile_send_what_the_scripts_send() {
             Some(json!({"sha": sha, "keys": keys})),
         )
     };
-    let da = build(A, &["debug", "cuda", "cpu"]);
-    let db = build(B, &["debug", "cuda", "cpu"]);
+    let da = build(A, &["debug", "cuda", "cuda-static", "cpu"]);
+    let db = build(B, &["debug", "cuda", "cuda-static", "cpu"]);
     let dc = build(C, &["debug", "cuda"]);
     let mut tpls = serde_json::Map::new();
-    for t in ["cuda-sls", "cuda-pod", "cpu-pod"] {
+    for t in [
+        "cuda-sls",
+        "cuda-pod",
+        "cuda-static-sls",
+        "cuda-static-pod",
+        "cpu-pod",
+    ] {
         tpls.insert(
             format!("tpl-{t}"),
             json!({"id": format!("tpl-{t}"), "name": format!("fv-serve-{t}"), "image": format!("{REPO}@sha256:0ld"), "env": {}}),

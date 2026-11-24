@@ -27,6 +27,7 @@
 //! (`scripts/ref/esrgan_parity.py`) reproduces it byte for byte.
 
 use std::path::{Path, PathBuf};
+#[cfg(feature = "cuda")]
 use std::sync::OnceLock;
 use std::time::Instant;
 

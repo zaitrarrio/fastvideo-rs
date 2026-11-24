@@ -8,6 +8,9 @@ export interface DeployImage {
   /** The worker configs the image carries under /etc/fv (FV_WORKER_CONFIG may name one): the smoke config. */
   carries: string[];
   compute: "gpu" | "cpu";
+  /** How the CUDA libraries are linked (ADR-0024 step 4): `dynamic` (dlopened from base-cuda, every preset's image)
+   * or `static` (cuBLAS, cuBLASLt, cudart, NVRTC, CUPTI in the binary; cuDNN still shared). CPU images: `dynamic`. */
+  link: "dynamic" | "static";
   note: string | null;
 }
 export interface DeployModel {
@@ -58,7 +61,17 @@ export const DEPLOY_IMAGES: DeployImage[] = [
       "runpod-fake.toml"
     ],
     "compute": "gpu",
+    "link": "dynamic",
     "note": null
+  },
+  {
+    "id": "cuda-static",
+    "carries": [
+      "runpod-fake.toml"
+    ],
+    "compute": "gpu",
+    "link": "static",
+    "note": "static cuBLAS / cuBLASLt / cudart / NVRTC / CUPTI; cuDNN shared (ADR-0024 step 4)"
   },
   {
     "id": "cpu",
@@ -66,6 +79,7 @@ export const DEPLOY_IMAGES: DeployImage[] = [
       "runpod-fake.toml"
     ],
     "compute": "cpu",
+    "link": "dynamic",
     "note": "CPU only, fake engine; `gateway` until 2026-10-06"
   }
 ];

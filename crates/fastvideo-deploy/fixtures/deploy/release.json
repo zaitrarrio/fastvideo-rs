@@ -26,9 +26,12 @@
       "stdout": [
         "  retag  :cpu-stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
         "  retag  :cuda-stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "  retag  :cuda-static-stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>",
         "  retag  :stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>",
         "  template fv-serve-cuda-sls: ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
         "  template fv-serve-cuda-pod: ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "  template fv-serve-cuda-static-sls: ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>",
+        "  template fv-serve-cuda-static-pod: ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>",
         "  template fv-serve-cpu-pod: ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:0ld -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
         "(dry run: nothing changed)"
       ]
@@ -85,7 +88,7 @@
           [
             "stable",
             "aaaaaaa111111111111111111111111111111111",
-            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cuda-static\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
             "promote",
             "<now>",
             "test",
@@ -103,9 +106,12 @@
       "order": [
         "retag cpu-stable",
         "retag cuda-stable",
+        "retag cuda-static-stable",
         "retag stable",
         "PATCH /v2/templates/tpl-cuda-sls",
         "PATCH /v2/templates/tpl-cuda-pod",
+        "PATCH /v2/templates/tpl-cuda-static-sls",
+        "PATCH /v2/templates/tpl-cuda-static-pod",
         "PATCH /v2/templates/tpl-cpu-pod",
         "d1 INSERT releases"
       ],
@@ -118,6 +124,10 @@
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
           "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-static-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>"
         ],
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
@@ -178,6 +188,65 @@
             },
             "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
             "name": "fv-serve-cuda-pod",
+            "ports": [
+              "8000/http",
+              "70000/tcp"
+            ]
+          }
+        ],
+        [
+          "PATCH",
+          "/v2/templates/tpl-cuda-static-sls",
+          {
+            "disk": 20,
+            "env": {
+              "FV_AUTH_MODE": "trust-gateway",
+              "FV_CACHE_DIR": "/fvstate/cache",
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<A.cuda-static>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "runpod-queue",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/runpod-volume/weights",
+              "RUST_LOG": "info"
+            },
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>",
+            "name": "fv-serve-cuda-static-sls"
+          }
+        ],
+        [
+          "PATCH",
+          "/v2/templates/tpl-cuda-static-pod",
+          {
+            "disk": 30,
+            "env": {
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<A.cuda-static>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_FORWARD": "1",
+              "FV_SERVE_MODE": "http",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/workspace/weights",
+              "RUST_LOG": "info"
+            },
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>",
+            "name": "fv-serve-cuda-static-pod",
             "ports": [
               "8000/http",
               "70000/tcp"
@@ -250,7 +319,7 @@
           [
             "latest",
             "bbbbbbb222222222222222222222222222222222",
-            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cuda-static\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
             "promote",
             "<now>",
             "test",
@@ -270,6 +339,8 @@
         "retag cpu",
         "retag cuda-latest",
         "retag cuda",
+        "retag cuda-static-latest",
+        "retag cuda-static",
         "retag latest",
         "d1 INSERT releases"
       ],
@@ -290,6 +361,14 @@
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda",
           "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-static-latest",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-static",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>"
         ],
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:latest",
@@ -333,7 +412,7 @@
           [
             "stable",
             "bbbbbbb222222222222222222222222222222222",
-            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cuda-static\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
             "promote",
             "<now>",
             "test",
@@ -351,6 +430,7 @@
       "order": [
         "retag cpu-stable",
         "retag cuda-stable",
+        "retag cuda-static-stable",
         "retag stable",
         "d1 INSERT releases"
       ],
@@ -363,6 +443,10 @@
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
           "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-static-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>"
         ],
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
@@ -393,9 +477,12 @@
       "stdout": [
         "  retag  :cpu-stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>",
         "  retag  :cuda-stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>",
+        "  retag  :cuda-static-stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>",
         "  retag  :stable -> ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>",
         "  template fv-serve-cuda-sls: image already <A.cuda:12>; env gains FV_RELEASE_CHANNEL=stable",
         "  template fv-serve-cuda-pod: image already <A.cuda:12>; env gains FV_RELEASE_CHANNEL=stable",
+        "  template fv-serve-cuda-static-sls: image already <A.cuda-static:12>; env gains FV_RELEASE_CHANNEL=stable",
+        "  template fv-serve-cuda-static-pod: image already <A.cuda-static:12>; env gains FV_RELEASE_CHANNEL=stable",
         "  template fv-serve-cpu-pod: image already <A.cpu:12>; env gains FV_RELEASE_CHANNEL=stable",
         "(dry run: nothing changed)"
       ]
@@ -421,7 +508,7 @@
           [
             "stable",
             "aaaaaaa111111111111111111111111111111111",
-            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cuda-static\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
             "rollback",
             "<now>",
             "test",
@@ -439,6 +526,7 @@
       "order": [
         "retag cpu-stable",
         "retag cuda-stable",
+        "retag cuda-static-stable",
         "retag stable",
         "d1 UPDATE releases",
         "d1 INSERT releases"
@@ -452,6 +540,10 @@
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
           "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-static-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>"
         ],
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
@@ -503,7 +595,7 @@
           [
             "stable",
             "bbbbbbb222222222222222222222222222222222",
-            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cuda-static\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
             "rollback",
             "<now>",
             "test",
@@ -521,9 +613,12 @@
       "order": [
         "retag cpu-stable",
         "retag cuda-stable",
+        "retag cuda-static-stable",
         "retag stable",
         "PATCH /v2/templates/tpl-cuda-sls",
         "PATCH /v2/templates/tpl-cuda-pod",
+        "PATCH /v2/templates/tpl-cuda-static-sls",
+        "PATCH /v2/templates/tpl-cuda-static-pod",
         "PATCH /v2/templates/tpl-cpu-pod",
         "d1 UPDATE releases",
         "d1 INSERT releases"
@@ -537,6 +632,10 @@
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
           "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-static-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>"
         ],
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
@@ -597,6 +696,65 @@
             },
             "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>",
             "name": "fv-serve-cuda-pod",
+            "ports": [
+              "8000/http",
+              "70000/tcp"
+            ]
+          }
+        ],
+        [
+          "PATCH",
+          "/v2/templates/tpl-cuda-static-sls",
+          {
+            "disk": 20,
+            "env": {
+              "FV_AUTH_MODE": "trust-gateway",
+              "FV_CACHE_DIR": "/fvstate/cache",
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<B.cuda-static>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_MODE": "runpod-queue",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/runpod-volume/weights",
+              "RUST_LOG": "info"
+            },
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>",
+            "name": "fv-serve-cuda-static-sls"
+          }
+        ],
+        [
+          "PATCH",
+          "/v2/templates/tpl-cuda-static-pod",
+          {
+            "disk": 30,
+            "env": {
+              "FV_CF_ACCOUNT_ID": "{{ RUNPOD_SECRET_fv_cf_account_id }}",
+              "FV_CF_API_TOKEN": "{{ RUNPOD_SECRET_fv_cf_api_token }}",
+              "FV_D1_DATABASE_ID": "{{ RUNPOD_SECRET_fv_d1_database_id }}",
+              "FV_IMAGE_DIGEST": "<B.cuda-static>",
+              "FV_IMAGE_REF": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>",
+              "FV_R2_ACCESS_KEY_ID": "{{ RUNPOD_SECRET_fv_r2_access_key_id }}",
+              "FV_R2_BUCKET": "{{ RUNPOD_SECRET_fv_r2_bucket }}",
+              "FV_R2_ENDPOINT": "{{ RUNPOD_SECRET_fv_r2_endpoint }}",
+              "FV_R2_SECRET_ACCESS_KEY": "{{ RUNPOD_SECRET_fv_r2_secret_access_key }}",
+              "FV_RELEASE_CHANNEL": "stable",
+              "FV_SERVE_FORWARD": "1",
+              "FV_SERVE_MODE": "http",
+              "FV_STATE_DIR": "/fvstate",
+              "FV_WEBHOOK_ED25519_KEY": "{{ RUNPOD_SECRET_fv_webhook_ed25519_key }}",
+              "FV_WEIGHTS": "/workspace/weights",
+              "RUST_LOG": "info"
+            },
+            "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>",
+            "name": "fv-serve-cuda-static-pod",
             "ports": [
               "8000/http",
               "70000/tcp"
@@ -810,7 +968,7 @@
           [
             "stable",
             "bbbbbbb222222222222222222222222222222222",
-            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>\",\"cuda-static\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cpu>\"}",
             "rollback",
             "<now>",
             "test",
@@ -828,6 +986,7 @@
       "order": [
         "retag cpu-stable",
         "retag cuda-stable",
+        "retag cuda-static-stable",
         "retag stable",
         "PATCH /v2/templates/tpl-cpu-pod",
         "d1 UPDATE releases",
@@ -842,6 +1001,10 @@
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
           "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-static-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<B.cuda-static>"
         ],
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
@@ -1377,6 +1540,7 @@
       "order": [
         "retag cpu-stable",
         "retag cuda-stable",
+        "retag cuda-static-stable",
         "retag stable",
         "PATCH /v2/templates/tpl-cuda-sls"
       ],
@@ -1389,6 +1553,10 @@
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable",
           "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-static-stable",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>"
         ],
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:stable",
@@ -1440,7 +1608,7 @@
           [
             "canary",
             "aaaaaaa111111111111111111111111111111111",
-            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
+            "{\"debug\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.debug>\",\"cuda\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>\",\"cuda-static\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>\",\"cpu\":\"ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cpu>\"}",
             "promote",
             "<now>",
             "test",
@@ -1458,6 +1626,7 @@
       "order": [
         "retag cpu-canary",
         "retag cuda-canary",
+        "retag cuda-static-canary",
         "retag canary",
         "d1 INSERT releases"
       ],
@@ -1470,6 +1639,10 @@
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-canary",
           "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda>"
+        ],
+        [
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-static-canary",
+          "ghcr.io/zaitrarrio/fastvideo-rs-serve@<A.cuda-static>"
         ],
         [
           "ghcr.io/zaitrarrio/fastvideo-rs-serve:canary",

@@ -27,7 +27,8 @@ $T prune --dry-run        # retention (publish runs it)
   --prerelease`): `tools-v<version>-pre.<sha12>`; they are only ever picked
   by an exact input-hash match, never as "latest".
 - **Assets**: one gzip tarball per set (`oxide gpucheck gpucheck-vast hf-fm
-  serve-cuda serve-cpu serve-fake gpucheck-tests`, about 200 MB in all;
+  serve-cuda serve-cuda-static serve-cpu serve-fake gpucheck-tests`, about 200 MB in all
+  before the static set;
   the sets and their build settings are in docs/dev/build-pod.md "Release
   artifacts") and `manifest.json`: version, tag, input hash, inputs, source
   commit, build id/time, builder (rustc, cargo, nvcc, tileiras, glibc,
@@ -164,7 +165,7 @@ When no build pod is idle, the build runs on GitHub-hosted runners, as a
 
 | job | builds / runs |
 |---|---|
-| `hosted <set>` (oxide, serve-cuda, serve-cpu, serve-fake, gpucheck, gpucheck-tests, gpucheck-vast, hf-fm) | that set (`tools-release.sh build-sets --sets <set>`) |
+| `hosted <set>` (oxide, serve-cuda, serve-cuda-static, serve-cpu, serve-fake, gpucheck, gpucheck-tests, gpucheck-vast, hf-fm) | that set (`tools-release.sh build-sets --sets <set>`) |
 | `hosted check-lint`, `hosted check-test` | `FV_SERVE_STAGES=lint\|test scripts/serve/check.sh` (gate 1) |
 | `unit tests k/4` (after the sets) | the shipped gpucheck-tests binaries, a quarter each (`FV_TESTS_SHARD=k/4 prebuilt.sh run-tests`, gate 2) |
 

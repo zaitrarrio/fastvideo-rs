@@ -43,7 +43,7 @@ tasks:
 
   build:cuda:
     desc: Type-check the CUDA feature (no GPU needed)
-    cmds: ['cargo check -p fastvideo-cudarc -p fastvideo-gpucheck --features cuda']
+    cmds: ['cargo check -p fastvideo-cudarc -p fastvideo-gpucheck --features cuda,fastvideo-cudarc/link-dynamic']
 
   dist:
     desc: Release binary for rented boxes (Docker, linked for the runtime image)

@@ -416,6 +416,55 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cp /target/release/fv-serve /out/fv-serve \
  && echo "$FV_SERVE_FEATURES" > /out/fv-serve.features
 
+# static-build: the statically linked CUDA fv-serve (ADR-0024 step 4; owner decision 2026-11-24: shipped beside the
+# dynamically linked one). cudarc `static-linking` through fastvideo-serve's `cuda-static` feature: cuBLAS, cuBLASLt,
+# cudart, NVRTC (+ nvptxcompiler, builtins) and CUPTI from the toolkit's `*_static.a` (the -dev packages of the
+# pinned versions; the licence allows redistributing them unmodified), cuDNN still the shared library the image
+# carries (its licence allows only the runtime .so; the same runtime package here, for the link; fastvideo-cudarc's
+# build.rs links it by file name past the empty shim), libcuda from the driver stub
+# at link time and the host's at run time. The stage checks the binary needs no shared cuBLAS / NVRTC / cudart.
+FROM build AS static-build
+ARG FV_SERVE_STATIC_FEATURES=cuda-static,http-client
+ARG BUILD_ID=unknown
+ARG FV_GIT_SHA=unknown
+ARG FV_BUILD_TIME=
+COPY scripts/gpu/cuda-13-runtime.pins /etc/fastvideo/cuda-13-runtime.pins
+RUN apt-get update \
+ && . /etc/fastvideo/cuda-13.pins && . /etc/fastvideo/cuda-13-runtime.pins \
+ && apt-get install -y --no-install-recommends --allow-downgrades cmake \
+      "$(echo "$CUDA_CUBLAS_PKG" | sed 's/^libcublas-/libcublas-dev-/')" \
+      "$(echo "$CUDA_CUPTI_PKG" | sed 's/^cuda-cupti-/cuda-cupti-dev-/')" \
+      "$(echo "$CUDA_CUDART_PKG" | sed 's/^cuda-cudart-/cuda-cudart-dev-/')" \
+      "$CUDA_CUDNN_PKG" \
+      cuda-driver-dev-13-4 \
+ && rm -rf /var/lib/apt/lists/* \
+ && L=/usr/local/cuda-13.4/targets/x86_64-linux/lib \
+ && for a in cublas_static cublasLt_static cudart_static nvrtc_static nvptxcompiler_static nvrtc-builtins_static culibos cupti_static; do \
+      test -f "$L/lib$a.a" || { echo "static-build: no lib$a.a"; exit 1; }; done \
+ && test -f "$L/stubs/libcuda.so" \
+ && test -f /usr/lib/x86_64-linux-gnu/libcudnn.so.9 \
+ && mkdir -p /opt/fv-static-link/lib64 \
+ && ln -s "$(c++ -print-file-name=libstdc++.a)" /opt/fv-static-link/lib64/libstdc++.a \
+ && printf '!<arch>\n' > /opt/fv-static-link/lib64/libcudnn.a \
+ && test -f /opt/fv-static-link/lib64/libstdc++.a
+# cudarc's static build searches the roots named by CUDA_HOME / CUDA_PATH / CUDA_ROOT / CUDA_TOOLKIT_ROOT_DIR (lib64,
+# lib64/stubs for the driver stub, ...) and asks for `static:+whole-archive=stdc++` and `=cudnn`, which rustc resolves
+# from that same list when it builds cudarc's rlib: a second root whose lib64 links the compiler's libstdc++.a and
+# holds an empty libcudnn.a (cuDNN stays the shared library: its licence allows only the runtime .so, ADR-0024;
+# fastvideo-cudarc's build.rs adds dylib=cudnn).
+ENV CUDA_ROOT=/usr/local/cuda-13.4 \
+    CUDA_TOOLKIT_ROOT_DIR=/opt/fv-static-link
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/target \
+    cargo build --release -p fastvideo-serve --features "$FV_SERVE_STATIC_FEATURES" \
+ && mkdir -p /out \
+ && cp /target/release/fv-serve /out/fv-serve \
+ && echo "$FV_SERVE_STATIC_FEATURES" > /out/fv-serve.features \
+ && if ldd /out/fv-serve | grep -E 'libcublas|libcublasLt|libnvrtc|libcudart|libcupti'; then \
+      echo "static-build: fv-serve still needs a shared CUDA library"; exit 1; fi \
+ && ldd /out/fv-serve | grep -q libcudnn.so.9 \
+ && ls -la /out/fv-serve
+
 # boot-build: fv-boot (docs/adr/0014-fv-boot.md), the serve images' entrypoint. No CUDA: one binary for the CUDA and
 # cpu images. Its own stage, so a tools release that carries it replaces only this (prebuilt.sh boot-build=…), and
 # one from before fv-boot leaves this stage compiling it while serve-build / cpu-build stay prebuilt.
@@ -545,6 +594,33 @@ LABEL org.opencontainers.image.description="fv-serve cuda: every preset, the wor
 EXPOSE 8000
 # fv-boot (docs/adr/0014-fv-boot.md; it replaced deploy/runpod/fv-entry.sh): driver check, config, weights plan,
 # the upsampler sidecar, then exec fv-serve with the entrypoint's arguments.
+ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-boot"]
+
+
+# ---- serve-cuda-static: the statically linked CUDA serve image (ADR-0024 step 4; owner decision 2026-11-24): the
+# static-build fv-serve on the same base-cuda layer (cuDNN and its engines still load the shared cuBLASLt / NVRTC
+# until ADR-0024 step 3 removes cuDNN; the image then leaves base-cuda). Otherwise serve-cuda's twin: the same
+# sidecar, the same boot-time config contract, FV_VARIANT=cuda-static. No preset names it (a launch picks it by
+# image tag), and it serves no rented capacity before NVIDIA's written confirmation (ADR-0024 D4).
+FROM base-cuda AS serve-cuda-static
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 curl \
+ && rm -rf /var/lib/apt/lists/*
+COPY scripts/gpu/r2-fetch.py /opt/fastvideo-rs/bin/r2-fetch.py
+COPY --from=llama-server /llama-server /llama-server.version /opt/fastvideo-rs/bin/
+COPY deploy/runpod/fv-upsampler.sh /opt/fastvideo-rs/bin/fv-upsampler
+RUN if ldd /opt/fastvideo-rs/bin/llama-server | grep 'not found'; then echo "llama-server: unresolved libraries"; exit 1; fi \
+ && cat /opt/fastvideo-rs/bin/llama-server.version
+COPY --from=static-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
+# The static binary names libcuda.so.1 in its DT_NEEDED (the dynamic one dlopens it), so it cannot start on a host
+# without the driver. The toolkit's driver stub, off the loader's path: only CI's no-GPU smoke check points
+# LD_LIBRARY_PATH at it (ci-images.sh smoke); on a GPU host the real libcuda.so.1 is on the default path.
+COPY --from=static-build /usr/local/cuda-13.4/targets/x86_64-linux/lib/stubs/libcuda.so /opt/fastvideo-rs/lib/driver-stub/libcuda.so.1
+COPY --from=boot-build /out/fv-boot /opt/fastvideo-rs/bin/
+COPY configs/serve/runpod-fake.toml /etc/fv/
+ENV FV_VARIANT=cuda-static
+LABEL org.opencontainers.image.description="fv-serve cuda-static: static cuBLAS / cuBLASLt / cudart / NVRTC / CUPTI (cuDNN shared), the worker config sent at boot (FV_WORKER_TOML_B64 / FV_WORKER_CONFIG)"
+EXPOSE 8000
 ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-boot"]
 
 

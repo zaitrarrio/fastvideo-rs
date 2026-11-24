@@ -1,18 +1,21 @@
 # shellcheck shell=bash
-# The serve images and their Runpod templates (docs/serve/images.md): the one CUDA image every preset runs and the
-# CPU image (owner decision 2026-10-25, docs/adr/0011-deploy-section.md; the file keeps its old name, its callers
+# The serve images and their Runpod templates (docs/serve/images.md): the one CUDA image every preset runs, its
+# statically linked twin (FV_CUDA_STATIC_IMAGE, chosen by image tag; owner decision 2026-11-24, ADR-0024 step 4) and
+# the CPU image (owner decision 2026-10-25, docs/adr/0011-deploy-section.md; the file keeps its old name, its callers
 # source it). Sourced by runpod-templates.sh, runpod-endpoint.sh, runpod-pod.sh, release.sh and lib/ghcr.sh.
 # BEGIN GENERATED from deploy/deploy.toml by control/gen-configs.mjs; do not edit
 #
-#   image  compute  carries (FV_WORKER_CONFIG)  GHCR tag        Runpod templates          note
-#   cuda   gpu      runpod-fake.toml            …:cuda[-sha-…]  fv-serve-cuda-sls / -pod
-#   cpu    cpu      runpod-fake.toml            …:cpu[-sha-…]   fv-serve-cpu-pod          CPU only, fake engine; gateway until 2026-10-06
+#   image        compute  link     carries (FV_WORKER_CONFIG)  GHCR tag               Runpod templates                 note
+#   cuda         gpu      dynamic  runpod-fake.toml            …:cuda[-sha-…]         fv-serve-cuda-sls / -pod
+#   cuda-static  gpu      static   runpod-fake.toml            …:cuda-static[-sha-…]  fv-serve-cuda-static-sls / -pod  static cuBLAS / cuBLASLt / cudart / NVRTC / CUPTI; cuDNN shared (ADR-0024 step 4)
+#   cpu          cpu      -        runpod-fake.toml            …:cpu[-sha-…]          fv-serve-cpu-pod                 CPU only, fake engine; gateway until 2026-10-06
 #
 # No image bakes a worker config: a launch sends one (FV_WORKER_TOML_B64, or FV_WORKER_CONFIG naming a file the
 # image carries; fv_config_env_json below), and an image started without one refuses to boot.
 
-FV_IMAGES="cuda cpu"
+FV_IMAGES="cuda cuda-static cpu"
 FV_CUDA_IMAGE="cuda"
+FV_CUDA_STATIC_IMAGE="cuda-static"
 # END GENERATED
 FV_SERVE_REPO="${FV_SERVE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-serve}"
 # The config every serve image carries (deploy/deploy.toml SMOKE_CONFIG): the one a launch may name in the image.

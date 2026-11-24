@@ -1477,7 +1477,23 @@ mod device_impl {
             usize,
         ) -> lt::cublasStatus_t;
         // Same C ABI: the typed binding's enum argument is a 32-bit C enum.
+        // `link-dynamic`: cudarc's lazily loaded table; `link-static`: the
+        // statically linked cuBLASLt's symbol, declared here with the integer
+        // attribute.
+        #[cfg(feature = "link-dynamic")]
         let f: SetAttr = std::mem::transmute(lt::culib().cublasLtMatmulDescSetAttribute);
+        #[cfg(not(feature = "link-dynamic"))]
+        let f: SetAttr = {
+            extern "C" {
+                fn cublasLtMatmulDescSetAttribute(
+                    desc: lt::cublasLtMatmulDesc_t,
+                    attr: u32,
+                    buf: *const std::ffi::c_void,
+                    size: usize,
+                ) -> lt::cublasStatus_t;
+            }
+            cublasLtMatmulDescSetAttribute
+        };
         check(
             f(desc, attr, (v as *const T).cast(), std::mem::size_of::<T>()),
             &format!("cublasLtMatmulDescSetAttribute({attr})"),

@@ -77,6 +77,11 @@ CONFIG_ENV_JSON="$(fv_config_env_json "$CONFIG")" || die "FV_SERVE_CONFIG=$CONFI
 pick_image() {
   if [[ -n "${1:-}" ]]; then echo "$1"
   elif [[ -n "${FV_SERVE_IMAGE:-}" ]]; then echo "$FV_SERVE_IMAGE"
+  # FV_SERVE_LINK=static: the statically linked CUDA image (docs/serve/images.md §"The statically linked image";
+  # not for rented capacity before ADR-0024 D4).
+  elif [[ "${FV_SERVE_LINK:-dynamic}" == static ]]; then
+    [[ -n "$FV_CUDA_STATIC_IMAGE" ]] || die "FV_SERVE_LINK=static: deploy/deploy.toml has no static CUDA image"
+    fv_image_ref "$FV_CUDA_STATIC_IMAGE" sls
   else fv_image_ref "$FV_CUDA_IMAGE" sls
   fi
 }
