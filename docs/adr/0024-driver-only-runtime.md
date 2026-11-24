@@ -101,7 +101,16 @@ and each gated on byte identity of outputs where the plan's §1 rule applies:
   `use_fast_math` only emits `--fmad=true` and the served MoE module was
   never fast math.
 - **D2 (step 2 margin).** The acceptable slowdown, per tier GPU, for dropping
-  the cuDNN SDPA candidate.
+  the cuDNN SDPA candidate. **Measured 2026-11-24** on an RTX PRO 6000 (the
+  only tier GPU where the rule picks cuDNN):
+  `docs/perf/2026-11-24-sdpa-rule-cudnn-margins.md`. cuDNN is 4-8 % faster
+  than `flash_mma_fwd2` on the long self-attention shapes (H3 768p +4.6 %,
+  H3 1080p +4.1 %, LTX 1080p 20 s +4.1 %, Wan 720p +7.7 %), within noise or
+  slower on cross attention, short sequences and 4K; at the denoise-step level
+  that is about 3 % (up to about 5 % where the kernel margin is 7-8 %), 0 %
+  on every other GPU. Open: the owner picks between dropping the candidate
+  now at that cost, dropping it together with step 3, or dropping it and
+  taking the margin back with SageAttention2 where the quality gate allows.
 - **D3 (step 1b CI type-check). Decided 2026-11-07: the recommendation**
   (FVID-2026-11-07-no-jit-build-gate); suspended 2026-11-12 with step 1b. `task build:cuda` runs `cargo check` with
   no nvcc; without `jit` that binary would embed no kernels. Recommended:

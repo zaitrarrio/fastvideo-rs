@@ -1,0 +1,718 @@
+{
+  "checks": [
+    {
+      "limits": {
+        "v3_bit_mismatches_first_heads": 0
+      },
+      "name": "attn3_bench_dense_h3_768p",
+      "ok": true,
+      "values": {
+        "auto_ms": 104.087026,
+        "bh": 56,
+        "cudnn_composite": {
+          "cfg0": {
+            "error": "cudnn sdpa (composite): no executable plan (CUDNN_HEUR_MODE_FALLBACK: 0 engine configs)"
+          }
+        },
+        "cudnn_softmax": {
+          "cfg0": {
+            "configs": 1,
+            "ms": 105.04795,
+            "plan": "graph softmax CUDNN_HEUR_MODE_A config 0 of 1, engine 1, numerical notes [0], ",
+            "tflops": 388.1355936522321,
+            "vs_v2_first_heads": {
+              "cosine": 1.0,
+              "max_abs": 0.0,
+              "non_finite": 9653760,
+              "ref_norm": 0.0,
+              "rel_l2": 0.0
+            }
+          },
+          "cfg1": {
+            "error": "cudnn sdpa (softmax): no executable plan (CUDNN_HEUR_MODE_FALLBACK: 0 engine configs)"
+          }
+        },
+        "cudnn_unified": {
+          "cfg0": {
+            "configs": 2,
+            "ms": 104.30551,
+            "plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+            "tflops": 390.89831817322016,
+            "vs_v2_first_heads": {
+              "cosine": 0.9999999478572446,
+              "max_abs": 0.0009765625,
+              "non_finite": 0,
+              "ref_norm": 111.79834105932169,
+              "rel_l2": 0.00032293370139343435
+            }
+          },
+          "cfg1": {
+            "configs": 2,
+            "ms": 110.716785,
+            "plan": "graph unified CUDNN_HEUR_MODE_A config 1 of 2, engine 8, numerical notes [0], ",
+            "tflops": 368.26257586146494,
+            "vs_v2_first_heads": {
+              "cosine": 0.9999999478572446,
+              "max_abs": 0.0009765625,
+              "non_finite": 0,
+              "ref_norm": 111.79834105932169,
+              "rel_l2": 0.00032293370139343435
+            }
+          }
+        },
+        "tokens": 37710,
+        "v2_ms": 107.400035,
+        "v2_tflops": 379.6353365732143,
+        "v3_bit_mismatches_first_heads": 0,
+        "v3_ms": 110.53351,
+        "v3_tflops": 368.8731899964092,
+        "v3s_ms": 109.447899,
+        "v3s_tflops": 372.5320340338374,
+        "v3s_vs_v2_first_heads": {
+          "cosine": 0.9999999580143315,
+          "max_abs": 0.0009765625,
+          "non_finite": 0,
+          "ref_norm": 111.79834105932169,
+          "rel_l2": 0.00028977964646186846
+        }
+      }
+    },
+    {
+      "limits": {
+        "v3_bit_mismatches_first_heads": 0
+      },
+      "name": "attn3_bench_dense_ltx_512p",
+      "ok": true,
+      "values": {
+        "auto_ms": 1.920928,
+        "bh": 32,
+        "cudnn_composite": {
+          "cfg0": {
+            "error": "cudnn sdpa (composite): no executable plan (CUDNN_HEUR_MODE_FALLBACK: 0 engine configs)"
+          }
+        },
+        "cudnn_softmax": {
+          "cfg0": {
+            "configs": 1,
+            "ms": 1.972916,
+            "plan": "graph softmax CUDNN_HEUR_MODE_A config 0 of 1, engine 1, numerical notes [0], ",
+            "tflops": 313.48282979305765,
+            "vs_v2_first_heads": {
+              "cosine": 1.0,
+              "max_abs": 0.0,
+              "non_finite": 1572864,
+              "ref_norm": 0.0,
+              "rel_l2": 0.0
+            }
+          },
+          "cfg1": {
+            "error": "cudnn sdpa (softmax): no executable plan (CUDNN_HEUR_MODE_FALLBACK: 0 engine configs)"
+          }
+        },
+        "cudnn_unified": {
+          "cfg0": {
+            "configs": 2,
+            "ms": 1.9899560000000003,
+            "plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+            "tflops": 310.7984752547292,
+            "vs_v2_first_heads": {
+              "cosine": 0.9999999869568165,
+              "max_abs": 0.0009765625,
+              "non_finite": 0,
+              "ref_norm": 69.92163563758916,
+              "rel_l2": 0.00016151281681150802
+            }
+          },
+          "cfg1": {
+            "configs": 2,
+            "ms": 1.9690969999999999,
+            "plan": "graph unified CUDNN_HEUR_MODE_A config 1 of 2, engine 8, numerical notes [0], ",
+            "tflops": 314.0908196112228,
+            "vs_v2_first_heads": {
+              "cosine": 0.9999999869568165,
+              "max_abs": 0.0009765625,
+              "non_finite": 0,
+              "ref_norm": 69.92163563758916,
+              "rel_l2": 0.00016151281681150802
+            }
+          }
+        },
+        "tokens": 6144,
+        "v2_ms": 1.9855960000000001,
+        "v2_tflops": 311.48093097689554,
+        "v3_bit_mismatches_first_heads": 0,
+        "v3_ms": 2.025245,
+        "v3_tflops": 305.3829490377707,
+        "v3s_ms": 2.044254,
+        "v3s_tflops": 302.54327036855494,
+        "v3s_vs_v2_first_heads": {
+          "cosine": 0.9999999943607732,
+          "max_abs": 0.0009765625,
+          "non_finite": 0,
+          "ref_norm": 69.92163563758916,
+          "rel_l2": 0.00010620017476547166
+        }
+      }
+    },
+    {
+      "limits": {
+        "v3_bit_mismatches_first_heads": 0
+      },
+      "name": "attn3_bench_dense_ltx_1080p20s",
+      "ok": true,
+      "values": {
+        "auto_ms": 651.855999,
+        "bh": 32,
+        "cudnn_composite": {
+          "cfg0": {
+            "error": "cudnn sdpa (composite): no executable plan (CUDNN_HEUR_MODE_FALLBACK: 0 engine configs)"
+          }
+        },
+        "cudnn_softmax": {
+          "cfg0": {
+            "configs": 1,
+            "ms": 671.038617,
+            "plan": "graph softmax CUDNN_HEUR_MODE_A config 0 of 1, engine 1, numerical notes [0], ",
+            "tflops": 378.0875967416939,
+            "vs_v2_first_heads": {
+              "cosine": 1.0,
+              "max_abs": 0.0,
+              "non_finite": 31856640,
+              "ref_norm": 0.0,
+              "rel_l2": 0.0
+            }
+          },
+          "cfg1": {
+            "error": "cudnn sdpa (softmax): no executable plan (CUDNN_HEUR_MODE_FALLBACK: 0 engine configs)"
+          }
+        },
+        "cudnn_unified": {
+          "cfg0": {
+            "configs": 2,
+            "ms": 652.816063,
+            "plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+            "tflops": 388.641444967631,
+            "vs_v2_first_heads": {
+              "cosine": 0.9999998224268408,
+              "max_abs": 0.001953125,
+              "non_finite": 0,
+              "ref_norm": 151.05112291231228,
+              "rel_l2": 0.0005959446056351714
+            }
+          },
+          "cfg1": {
+            "configs": 2,
+            "ms": 696.798655,
+            "plan": "graph unified CUDNN_HEUR_MODE_A config 1 of 2, engine 8, numerical notes [0], ",
+            "tflops": 364.1100283444146,
+            "vs_v2_first_heads": {
+              "cosine": 0.9999998224268408,
+              "max_abs": 0.001953125,
+              "non_finite": 0,
+              "ref_norm": 151.05112291231228,
+              "rel_l2": 0.0005959446056351714
+            }
+          }
+        },
+        "tokens": 124440,
+        "v2_ms": 677.377474,
+        "v2_tflops": 374.54947612031157,
+        "v3_bit_mismatches_first_heads": 0,
+        "v3_ms": 694.118029,
+        "v3_tflops": 365.51619093933664,
+        "v3s_ms": 690.5329959999999,
+        "v3s_tflops": 367.4138375603416,
+        "v3s_vs_v2_first_heads": {
+          "cosine": 0.9999998306363357,
+          "max_abs": 0.001953125,
+          "non_finite": 0,
+          "ref_norm": 151.05112291231228,
+          "rel_l2": 0.0005820058338330511
+        }
+      }
+    },
+    {
+      "limits": {
+        "v3_bit_mismatches_first_heads": 0
+      },
+      "name": "attn3_bench_dense_ltx_4k5s",
+      "ok": true,
+      "values": {
+        "auto_ms": 754.98766,
+        "bh": 32,
+        "cudnn_composite": {
+          "cfg0": {
+            "error": "cudnn sdpa (composite): no executable plan (CUDNN_HEUR_MODE_FALLBACK: 0 engine configs)"
+          }
+        },
+        "cudnn_softmax": {
+          "cfg0": {
+            "configs": 1,
+            "ms": 734.170638,
+            "plan": "graph softmax CUDNN_HEUR_MODE_A config 0 of 1, engine 1, numerical notes [0], ",
+            "tflops": 380.40236692549394,
+            "vs_v2_first_heads": {
+              "cosine": 1.0,
+              "max_abs": 0.0,
+              "non_finite": 33423360,
+              "ref_norm": 0.0,
+              "rel_l2": 0.0
+            }
+          },
+          "cfg1": {
+            "error": "cudnn sdpa (softmax): no executable plan (CUDNN_HEUR_MODE_FALLBACK: 0 engine configs)"
+          }
+        },
+        "cudnn_unified": {
+          "cfg0": {
+            "configs": 2,
+            "ms": 760.5684590000001,
+            "plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+            "tflops": 367.19935611003297,
+            "vs_v2_first_heads": {
+              "cosine": 0.9999998101940094,
+              "max_abs": 0.001953125,
+              "non_finite": 0,
+              "ref_norm": 149.0558060135752,
+              "rel_l2": 0.0006161327460350169
+            }
+          },
+          "cfg1": {
+            "configs": 2,
+            "ms": 754.124705,
+            "plan": "graph unified CUDNN_HEUR_MODE_A config 1 of 2, engine 8, numerical notes [0], ",
+            "tflops": 370.33695696575813,
+            "vs_v2_first_heads": {
+              "cosine": 0.9999998101940094,
+              "max_abs": 0.001953125,
+              "non_finite": 0,
+              "ref_norm": 149.0558060135752,
+              "rel_l2": 0.0006161327460350169
+            }
+          }
+        },
+        "tokens": 130560,
+        "v2_ms": 752.287034,
+        "v2_tflops": 371.2416083226021,
+        "v3_bit_mismatches_first_heads": 0,
+        "v3_ms": 770.618375,
+        "v3_tflops": 362.41057504293224,
+        "v3s_ms": 767.282416,
+        "v3s_tflops": 363.9862488682394,
+        "v3s_vs_v2_first_heads": {
+          "cosine": 0.9999998179058439,
+          "max_abs": 0.001953125,
+          "non_finite": 0,
+          "ref_norm": 149.0558060135752,
+          "rel_l2": 0.0006034867317378712
+        }
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s1_self",
+      "ok": false,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 3.896014,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.07378370359663525,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.07966141805445259,
+        "sk": 9690,
+        "sq": 9690,
+        "v2_ms": 4.206376000000001
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s1_text",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 0.557975,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.009480711501411398,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 1024,
+        "sq": 9690,
+        "v2_ms": 0.552685
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s1_a2v",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 0.211204,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.043559781064752466,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 151,
+        "sq": 9690,
+        "v2_ms": 0.20200400000000002
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s2_self",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 64.099935,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.022834580178363772,
+        "rule": "cudnn",
+        "rule_loss": 0.0,
+        "sk": 38760,
+        "sq": 38760,
+        "v2_ms": 65.59783399999999
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s2_text",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 1.906738,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.002709321215658845,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 1024,
+        "sq": 38760,
+        "v2_ms": 1.911918
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_s2_a2v",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 0.554775,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.027560722815555754,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 151,
+        "sq": 38760,
+        "v2_ms": 0.539485
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_audio_text",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 0.08008799999999999,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.1358373706529128,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 1024,
+        "sq": 151,
+        "v2_ms": 0.092677
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx1080_v2a",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 1.400902,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.012955938388267129,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 38760,
+        "sq": 151,
+        "v2_ms": 1.382752
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx720_s2_self",
+      "ok": false,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 12.628606000000001,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.07732625662601098,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.08380671627573144,
+        "sk": 17480,
+        "sq": 17480,
+        "v2_ms": 13.686968
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx512p",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 1.937007,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.0050441051002477425,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 6144,
+        "sq": 6144,
+        "v2_ms": 1.9468269999999999
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_h3_768p",
+      "ok": true,
+      "values": {
+        "bh": 56,
+        "cudnn_ms": 107.16135200000001,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.04568897839533358,
+        "rule": "cudnn",
+        "rule_loss": 0.0,
+        "sk": 37966,
+        "sq": 37966,
+        "v2_ms": 112.29185199999999
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_h3_1080p",
+      "ok": true,
+      "values": {
+        "bh": 56,
+        "cudnn_ms": 431.48408,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.04147441540177799,
+        "rule": "cudnn",
+        "rule_loss": 0.0,
+        "sk": 76150,
+        "sq": 76150,
+        "v2_ms": 450.153952
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_wan_580p",
+      "ok": true,
+      "values": {
+        "bh": 24,
+        "cudnn_ms": 18.33811,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.0024761548491093275,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 23616,
+        "sq": 23616,
+        "v2_ms": 18.292702000000002
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_wan_720p",
+      "ok": true,
+      "values": {
+        "bh": 24,
+        "cudnn_ms": 22.77583,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.07657626336488052,
+        "rule": "cudnn",
+        "rule_loss": 0.0,
+        "sk": 27280,
+        "sq": 27280,
+        "v2_ms": 24.664549
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_wan_cross",
+      "ok": true,
+      "values": {
+        "bh": 24,
+        "cudnn_ms": 0.609134,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 8, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.0005253359687688606,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 512,
+        "sq": 27280,
+        "v2_ms": 0.608814
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_edge_24k_lo",
+      "ok": false,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 23.966558,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.07641307320999763,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.08273511782543008,
+        "sk": 24330,
+        "sq": 24330,
+        "v2_ms": 25.949434
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_edge_24k_hi",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 25.191224000000002,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.07387994457078662,
+        "rule": "cudnn",
+        "rule_loss": 0.0,
+        "sk": 24822,
+        "sq": 24822,
+        "v2_ms": 27.200819000000003
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx_1080p20s",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 658.05976,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "cudnn",
+        "margin": 0.04066910920939463,
+        "rule": "cudnn",
+        "rule_loss": 0.0,
+        "sk": 124440,
+        "sq": 124440,
+        "v2_ms": 685.957021
+      }
+    },
+    {
+      "limits": {
+        "rule_loss_max": 0.02
+      },
+      "name": "sdpa_rule_ltx_4k5s",
+      "ok": true,
+      "values": {
+        "bh": 32,
+        "cudnn_ms": 760.200279,
+        "cudnn_plan": "graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], ",
+        "faster": "flash_mma_fwd2",
+        "margin": -0.007218663491177127,
+        "rule": "flash_mma_fwd2",
+        "rule_loss": 0.0,
+        "sk": 130560,
+        "sq": 130560,
+        "v2_ms": 754.712649
+      }
+    },
+    {
+      "limits": {},
+      "name": "sdpa_rule_table",
+      "ok": true,
+      "values": {
+        "rule": "sm_12x d=128 sq 24576..=inf sk 24576..=128000 -> cudnn",
+        "rule_suggestion": [
+          "ltx1080_s1_self (sq 9690, sk 9690): cudnn is 8.0 % faster",
+          "ltx720_s2_self (sq 17480, sk 17480): cudnn is 8.4 % faster",
+          "edge_24k_lo (sq 24330, sk 24330): cudnn is 8.3 % faster"
+        ],
+        "sm_major": 12,
+        "worst_rule_loss": 0.08380671627573144
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "gemm_math": "F32",
+    "limits": {
+      "denoise": 0.002,
+      "forward": 0.001,
+      "op": 0.00001
+    },
+    "mode": "exact"
+  },
+  "elapsed_s": 90.312830653,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": "check failed: 3 check(s) failed: kernels/sdpa_rule_ltx1080_s1_self: {\"bh\":32,\"cudnn_ms\":3.896014,\"cudnn_plan\":\"graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], \",\"faster\":\"cudnn\",\"margin\":0.07378370359663525,\"rule\":\"flash_mma_fwd2\",\"rule_loss\":0.07966141805445259,\"sk\":9690,\"sq\":9690,\"v2_ms\":4.206376000000001} vs limits {\"rule_loss_max\":0.02}; kernels/sdpa_rule_ltx720_s2_self: {\"bh\":32,\"cudnn_ms\":12.628606000000001,\"cudnn_plan\":\"graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], \",\"faster\":\"cudnn\",\"margin\":0.07732625662601098,\"rule\":\"flash_mma_fwd2\",\"rule_loss\":0.08380671627573144,\"sk\":17480,\"sq\":17480,\"v2_ms\":13.686968} vs limits {\"rule_loss_max\":0.02}; kernels/sdpa_rule_edge_24k_lo: {\"bh\":32,\"cudnn_ms\":23.966558,\"cudnn_plan\":\"graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, numerical notes [0], \",\"faster\":\"cudnn\",\"margin\":0.07641307320999763,\"rule\":\"flash_mma_fwd2\",\"rule_loss\":0.08273511782543008,\"sk\":24330,\"sq\":24330,\"v2_ms\":25.949434} vs limits {\"rule_loss_max\":0.02}",
+  "git_sha": null,
+  "stage": "kernels",
+  "status": "fail"
+}
