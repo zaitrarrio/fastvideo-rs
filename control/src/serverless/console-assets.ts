@@ -4966,16 +4966,19 @@ async function startNative(m, prompt, params) {
   document.body.dataset.output = (s.output && s.output.kind) || '';
   log('→ POST /fv/v1/streams: ' + s.id + ' (' + s.mode + ', ' + s.max_seconds + ' s) → ' + ((s.output && s.output.kind) || 'output'));
   // The player follows the output's format (WHEP for WebRTC, HLS for RTMPS / SRT).
+  // It connects in the background: a clip model's first frame comes seconds
+  // after the stream opens (its first clip builds), and the output is not
+  // playable before it, so the commands and the status poll must not wait.
   let player = null;
-  try {
-    player = await playOutput($('video'), s.playback, dest.pasted(), { log });
-    document.body.dataset.player = player.kind || 'none';
-    $('playback-info').textContent = player.kind ? 'Player: ' + player.kind.toUpperCase() + ' · ' + player.url : 'Player: ' + player.why;
-  } catch (e) {
+  const playing = playOutput($('video'), s.playback, dest.pasted(), { log }).then((p) => {
+    player = p;
+    document.body.dataset.player = p.kind || 'none';
+    $('playback-info').textContent = p.kind ? 'Player: ' + p.kind.toUpperCase() + ' · ' + p.url : 'Player: ' + p.why;
+  }).catch((e) => {
     document.body.dataset.player = 'failed';
     log('playback: ' + e.message);
     setMsg('stream-msg', 'Playback: ' + e.message, 'bad');
-  }
+  });
   const poll = setInterval(async () => {
     try {
       const v = await request('GET', path, { auth: 'bearer' });
@@ -5014,6 +5017,7 @@ async function startNative(m, prompt, params) {
       return reply;
     },
     close: async (ended) => {
+      await playing;
       if (player) await player.close();
       if (!ended) { try { await request('DELETE', path, { auth: 'bearer' }); } catch (e) { log('DELETE: ' + e.message); } }
     },
@@ -5082,7 +5086,8 @@ $('start').onclick = start;
 $('stop').onclick = () => stop('stopped');
 $('switch').onclick = async () => {
   const text = $('next').value.trim();
-  if (!text || !live) return;
+  if (!live) { setMsg('stream-msg', 'The stream is still starting.'); return; }
+  if (!text) return;
   const v = addSwitch(text, 'sent');
   markSwitch(v, 'sent', 'warn');
   try {
