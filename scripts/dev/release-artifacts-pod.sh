@@ -290,8 +290,12 @@ if want serve-cuda-static; then
   # cudarc also asks for `static:+whole-archive=stdc++` and `=cudnn`, resolved from the same root list when its rlib
   # is built: a second root whose lib64 links the compiler's libstdc++.a and holds an empty libcudnn.a (cuDNN stays
   # the shared library; fastvideo-cudarc's build.rs adds dylib=cudnn).
-  ldconfig -p | grep -q 'libcudnn\.so\.9 ' || [[ -f "$CUDA_HOME/lib64/libcudnn.so.9" ]] \
-    || die "serve-cuda-static: no libcudnn.so.9 for the link (cuDNN stays shared: the cuDNN runtime package)"
+  # (the loader cache may predate the package's install in a fresh image: refresh it, then look at the usual places)
+  ldconfig 2>/dev/null || true
+  if ! ldconfig -p 2>/dev/null | grep -q 'libcudnn\.so\.9 ' \
+     && [[ ! -f /usr/lib/x86_64-linux-gnu/libcudnn.so.9 && ! -f /usr/lib64/libcudnn.so.9 && ! -f "$CUDA_HOME/lib64/libcudnn.so.9" ]]; then
+    die "serve-cuda-static: no libcudnn.so.9 for the link (cuDNN stays shared: install the cuDNN runtime package; looked in the loader cache, /usr/lib/x86_64-linux-gnu, /usr/lib64, $CUDA_HOME/lib64)"
+  fi
   static_root="$STAGE/static-link-root"
   mkdir -p "$static_root/lib64" && ln -sfn "$(c++ -print-file-name=libstdc++.a)" "$static_root/lib64/libstdc++.a"
   printf '!<arch>\n' > "$static_root/lib64/libcudnn.a"

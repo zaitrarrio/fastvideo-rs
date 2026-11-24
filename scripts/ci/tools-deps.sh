@@ -47,6 +47,9 @@ case "$group" in
         "$(echo "$CUDA_CUDART_PKG" | sed 's/^cuda-cudart-/cuda-cudart-dev-/')" \
         "$CUDA_CUDNN_PKG" cuda-driver-dev-13-4
       rm -rf /var/lib/apt/lists/*
+      ldconfig
+      test -f /usr/lib/x86_64-linux-gnu/libcudnn.so.9 || { echo "tools-deps.sh: $CUDA_CUDNN_PKG installed no /usr/lib/x86_64-linux-gnu/libcudnn.so.9" >&2; exit 2; }
+      test -f "$CUDA_HOME/lib64/libcublasLt_static.a" || { echo "tools-deps.sh: no libcublasLt_static.a under $CUDA_HOME/lib64" >&2; exit 2; }
     fi
     mkdir -p /opt/fv-static-link/lib64 && ln -sfn "$(c++ -print-file-name=libstdc++.a)" /opt/fv-static-link/lib64/libstdc++.a
     printf '!<arch>\n' > /opt/fv-static-link/lib64/libcudnn.a   # the empty cuDNN shim (cuDNN stays shared)
