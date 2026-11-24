@@ -281,7 +281,12 @@ fn every_gold_arm_reads_trees_on_the_volume_or_in_r2() {
             "{arm} reads R2 trees"
         );
     }
-    for arm in ["fasth3-8step-dense", "vdn-h3", "h3-larry-turbo", "fasth3-trim-nvfp4"] {
+    for arm in [
+        "fasth3-8step-dense",
+        "vdn-h3",
+        "h3-larry-turbo",
+        "fasth3-trim-nvfp4",
+    ] {
         assert!(
             plan.arm(arm).expect(arm).reads.is_empty(),
             "{arm} reads the volume since 2026-11-24"
