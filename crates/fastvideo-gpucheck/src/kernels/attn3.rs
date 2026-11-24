@@ -330,15 +330,21 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
     Ok(())
 }
 
-/// `sdpa_rule`: the offline generator of the fixed dense-SDPA rule
+/// `sdpa_rule`: the offline measurement behind the fixed dense-SDPA rule
 /// (`fastvideo_cudarc::rt::sdpa_rule`). For every shape below it times
 /// cuDNN's plan and `flash_mma_fwd2` (bf16 in and out, median of three
-/// synchronized calls after a warm-up) and reports the faster, the margin,
-/// what the rule picks and what that costs against the faster. The check
-/// fails when the rule's pick is more than `FV_SDPA_RULE_TOL` (default 2 %)
-/// slower than the faster kernel at a shape where the margin is real;
-/// `rule_suggestion` lists the shapes to move. `FV_SDPA_RULE_SHAPES` limits
-/// the run to named shapes.
+/// synchronized calls after a warm-up) and reports the faster, the margin
+/// and what the rule picks. Since D2 of ADR-0024 (2026-11-24,
+/// FVID-2026-11-24-drop-cudnn-sdpa) cuDNN is not a candidate of `auto`, so
+/// the check holds the rule to the faster of the kernels it may pick (fwd2
+/// alone today: the loss is 0 by construction) and the cuDNN margin is
+/// information: `cudnn_margin_left` in each row and `cudnn_faster_at` in the
+/// table note list the shapes where cuDNN still beats fwd2, the margin the
+/// owner takes back with SageAttention2 and fwd2 tuning
+/// (`docs/perf/2026-11-24-sdpa-rule-cudnn-margins.md`). The check fails when
+/// the rule's pick is more than `FV_SDPA_RULE_TOL` (default 2 %) slower than
+/// the faster eligible kernel; `FV_SDPA_RULE_SHAPES` limits the run to named
+/// shapes.
 pub(super) fn sdpa_rule(c: &mut Ctx<'_>) -> StageResult<()> {
     use fastvideo_cudarc::rt::sdpa_rule as rule;
     let dev = dev()?;
@@ -386,6 +392,7 @@ pub(super) fn sdpa_rule(c: &mut Ctx<'_>) -> StageResult<()> {
         ("ltx_4k5s".into(), 32, 130_560, 130_560),
     ];
     let mut suggestions = Vec::new();
+    let mut cudnn_faster_at = Vec::new();
     let mut worst = 0.0f64;
     let scale = 1.0 / (D as f32).sqrt();
     for (name, bh, sq, sk) in shapes {
@@ -419,15 +426,29 @@ pub(super) fn sdpa_rule(c: &mut Ctx<'_>) -> StageResult<()> {
             Err(_) => None,
         };
         let picked = rule::pick(dev.sm_major, sq, sk, D);
-        let (best_kernel, best) = match &cudnn {
-            Some((t, _)) if *t < v2 => (rule::DensePick::Cudnn, *t),
-            _ => (rule::DensePick::V2, v2),
+        // The faster of the two, for the record.
+        let faster = match &cudnn {
+            Some((t, _)) if *t < v2 => rule::DensePick::Cudnn,
+            _ => rule::DensePick::V2,
         };
+        // The faster kernel `auto` may pick (D2: cuDNN is not one), and what
+        // the rule's pick costs against it. Sub-50 us differences are timer
+        // noise, not a margin.
+        let mut eligible = vec![(rule::DensePick::V2, v2)];
+        if let Some((t, _)) = &cudnn {
+            if rule::cudnn_default(dev.sm_major) {
+                eligible.push((rule::DensePick::Cudnn, *t));
+            }
+        }
+        let (best_kernel, best) = eligible
+            .iter()
+            .copied()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("fwd2 is always eligible");
         let rule_s = match (picked, &cudnn) {
             (rule::DensePick::Cudnn, Some((t, _))) => *t,
             _ => v2,
         };
-        // Sub-50 us differences are timer noise, not a margin.
         let loss = if rule_s - best < 50e-6 {
             0.0
         } else {
@@ -441,6 +462,19 @@ pub(super) fn sdpa_rule(c: &mut Ctx<'_>) -> StageResult<()> {
                 loss * 100.0
             ));
         }
+        // What cuDNN would still buy at this shape (information since D2).
+        let cudnn_left = match &cudnn {
+            Some((t, _)) if v2 - *t >= 50e-6 && picked != rule::DensePick::Cudnn => {
+                Some((v2 - *t) / v2)
+            }
+            _ => None,
+        };
+        if let Some(m) = cudnn_left {
+            cudnn_faster_at.push(format!(
+                "{name} (sq {sq}, sk {sk}): cuDNN {:.1} % faster",
+                m * 100.0
+            ));
+        }
         c.report.check(
             format!("sdpa_rule_{name}"),
             loss <= tol,
@@ -449,10 +483,11 @@ pub(super) fn sdpa_rule(c: &mut Ctx<'_>) -> StageResult<()> {
                 "v2_ms": v2 * 1e3,
                 "cudnn_ms": cudnn.as_ref().map(|(t, _)| t * 1e3),
                 "cudnn_plan": cudnn.as_ref().map(|(_, p)| p.clone()),
-                "faster": best_kernel.name(),
+                "faster": faster.name(),
                 "margin": cudnn.as_ref().map(|(t, _)| (v2 - t) / v2.max(*t)),
                 "rule": picked.name(),
                 "rule_loss": loss,
+                "cudnn_margin_left": cudnn_left,
             }),
             json!({"rule_loss_max": tol}),
         )?;
@@ -460,7 +495,8 @@ pub(super) fn sdpa_rule(c: &mut Ctx<'_>) -> StageResult<()> {
     c.report.note(
         "sdpa_rule_table",
         json!({"rule": rule::describe(), "sm_major": dev.sm_major, "worst_rule_loss": worst,
-               "rule_suggestion": suggestions}),
+               "rule_suggestion": suggestions, "cudnn_candidate": rule::cudnn_default(dev.sm_major),
+               "cudnn_faster_at": cudnn_faster_at}),
     );
     Ok(())
 }

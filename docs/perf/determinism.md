@@ -61,7 +61,7 @@ Checked and found deterministic, no change:
 
 | Arch | Head dim | Queries | Keys | Kernel |
 |---|---|---|---|---|
-| sm_12x | 128 | >= 24 576 | 24 576 to 128 000 | cuDNN unified SDPA (heuristic mode A, first deterministic config) |
+| sm_12x | 128 | >= 24 576 | 24 576 to 128 000 | cuDNN unified SDPA (heuristic mode A, first deterministic config) **until 2026-11-24**; fwd2 since (ADR-0024 D2, FVID-2026-11-24-drop-cudnn-sdpa: the table is empty, `auto` never picks cuDNN) |
 | any other | | | | fwd2 (sm_90 / sm_100 take the datacenter kernel before this rule) |
 
 Measured (RTX PRO 6000, cuDNN 9.26, median of three synchronized calls):

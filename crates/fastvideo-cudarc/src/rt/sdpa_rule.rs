@@ -90,34 +90,21 @@ impl DenseRule {
     }
 }
 
-/// The rule for sm_12x, RTX PRO 6000 Blackwell (cuDNN 9.26, heuristic mode A
-/// config 0, engine 11), bf16 in and out, d = 128. Median of three
-/// synchronized calls (`attn3_bench`, `sdpa_rule`; the timed picks logged by
-/// earlier runs):
-///
-/// | shape (bh x sq x sk) | cuDNN | fwd2 | faster |
-/// |---|---:|---:|---|
-/// | 24 x 23 616 x 23 616 | 19.08 | 18.85 | fwd2 1 % |
-/// | 48 x 23 616 x 23 616 | 37.16 | 37.42 | cuDNN 0.7 % |
-/// | 24 x 27 280 x 27 280 | 22.9-23.8 | 24.7-25.2 | cuDNN 4-9 % |
-/// | 24 / 48 x 36 080 x 36 080 | 38.6 / 80.8 | 42.6 / 87.4 | cuDNN 8-10 % |
-/// | 56 x 37 710 x 37 710 (H3 768p) | 104.8-105.0 | 108.4-109.1 | cuDNN 3 % |
-/// | 32 x 124 440 x 124 440 (LTX 1080p 20 s) | 658.8-659.8 | 682.2-682.7 | cuDNN 3.5 % |
-/// | 32 x 130 560 x 130 560 (LTX 4K 5 s) | 766.6-769.0 | 757.2-759.9 | fwd2 1.2 % |
-/// | 32 x 6 144 x 6 144 (LTX 512p) | 1.97-1.99 | 1.98-2.00 | tie |
-/// | any sq x 512 (text cross-attention) | 0.58-1.59 | 0.56-1.60 | tie, either way by run |
-///
-/// So cuDNN for self-attention-sized keys from 24 576 to 128 000 tokens,
-/// fwd2 everywhere else (short keys are a tie; fwd2 needs no plan build).
-pub const RULES: &[DenseRule] = &[DenseRule {
-    sm_major: 12,
-    d: 128,
-    min_sq: 24_576,
-    max_sq: usize::MAX,
-    min_sk: 24_576,
-    max_sk: 128_000,
-    pick: DensePick::Cudnn,
-}];
+/// The rule's rows. **Empty since 2026-11-24** (owner decision D2 of
+/// ADR-0024, FVID-2026-11-24-drop-cudnn-sdpa): `auto` never picks cuDNN's
+/// fused attention, so `flash_mma_fwd2` runs every bf16-output dense SDPA
+/// that reaches this rule, on every architecture. The margins the row bought
+/// on sm_12x are recorded in `docs/perf/2026-11-24-sdpa-rule-cudnn-margins.md`
+/// (cuDNN 4-8 % faster than fwd2 on long self-attention, H3 768p +4.6 %, LTX
+/// 1080p 20 s +4.1 %, Wan 720p +7.7 %; within noise or slower elsewhere):
+/// the owner takes it back with SageAttention2 where a model's quality gate
+/// allows it and with fwd2 tuning for the rest, so that the attention path
+/// needs no cuDNN (step 2 of the driver-only runtime). The row it replaced,
+/// for the record: sm_12x, d = 128, sq >= 24 576, 24 576 <= sk <= 128 000 ->
+/// cuDNN (measured 2026-09-27 on an RTX PRO 6000, cuDNN 9.26, engine 11).
+/// `FASTVIDEO_FLASH_KERNEL=cudnn` still runs it on request, for diagnosis
+/// (fv-gpucheck's `sdpa_rule` and `attn3_bench` groups keep measuring it).
+pub const RULES: &[DenseRule] = &[];
 
 /// The rule's kernel for a bf16-output dense SDPA of `sq` queries over `sk`
 /// keys at head dim `d` on an `sm_major` device: the first matching row of
@@ -294,20 +281,19 @@ pub fn flash_v2_default() -> bool {
     true
 }
 
-/// Whether `auto` lets a bf16-output dense SDPA that V2 would run go to
-/// cuDNN's unified SDPA node instead, per shape ([`pick`]): on sm_12x only.
-/// RTX PRO 6000, cuDNN 9.26, `attn3_bench` (two pods): 104.8-105.0 vs
-/// 108.4-109.1 ms at H3 768p, 658.8-659.8 vs 682.2-682.7 ms at LTX 1080p
-/// 20 s, but 766.6-769.0 vs 757.2-759.9 ms at 4K 5 s (engine 11, heuristic
-/// mode A config 0), hence the per-shape rule. `FASTVIDEO_FLASH_KERNEL=v2`
-/// (or `=cudnn`) fixes the kernel.
+/// Whether `auto` may let a bf16-output dense SDPA that V2 would run go to
+/// cuDNN's unified SDPA node instead, per shape ([`pick`]). **Off since
+/// 2026-11-24** (ADR-0024 D2, FVID-2026-11-24-drop-cudnn-sdpa): the served
+/// attention path uses no cuDNN. It was on for sm_12x from the attn3
+/// generation A/B of 2026-09-27 (FastH3 4-step dense 768p denoise 33.23 ->
+/// 32.28 s, LTX-2.5 1080p 20 s dense stage 2 44.0 -> 42.7 s/step) until then.
+/// `FASTVIDEO_FLASH_KERNEL=v2` (or `=cudnn`) fixes the kernel outright.
 pub fn cudnn_default(sm_major: i32) -> bool {
     CUDNN_DEFAULT_ON && sm_major == 12
 }
 
-/// On since the attn3 generation A/B (FastH3 4-step dense 768p denoise 33.23 -> 32.28 s,
-/// LTX-2.5 1080p 20 s dense stage 2 44.0 -> 42.7 s/step).
-const CUDNN_DEFAULT_ON: bool = true;
+/// Off: owner decision D2 (ADR-0024), 2026-11-24.
+const CUDNN_DEFAULT_ON: bool = false;
 
 // ---------------------------------------------------------------------------
 // The chooser
@@ -546,11 +532,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_measured_shapes_get_the_faster_kernel_or_a_tie() {
-        // Self-attention where cuDNN measured faster.
+    fn no_shape_picks_cudnn_since_d2() {
+        // D2 (ADR-0024, 2026-11-24): the shapes where cuDNN measured faster
+        // run fwd2 too; the margin is taken back elsewhere (SageAttention2,
+        // fwd2 tuning), never by cuDNN.
         for n in [27_280, 36_080, 37_710, 124_440] {
-            assert_eq!(pick(12, n, n, 128), DensePick::Cudnn, "{n}");
+            assert_eq!(pick(12, n, n, 128), DensePick::V2, "{n}");
         }
+        assert!(!cudnn_default(12));
+        assert!(RULES.is_empty());
         // fwd2 faster (4K 5 s, 23 616 at 24 heads) or a tie (512p, cross-attention).
         for (sq, sk) in [
             (130_560, 130_560),
@@ -580,7 +570,7 @@ mod tests {
             .map(|i| pick(12, 20_000 + i * 2_000, 20_000 + i * 2_000, 128))
             .collect();
         assert_eq!(a, b);
-        assert!(describe().contains("cudnn"));
+        assert!(!describe().contains("cudnn"));
     }
 
     #[test]

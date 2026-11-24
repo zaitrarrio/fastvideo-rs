@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-11-24 · FVID-2026-11-24-drop-cudnn-sdpa
+- Trigger: ADR-0024 step 2 measurement (`fv-gpucheck kernels --groups sdpa_rule,attn3_bench`, RTX PRO 6000, docs/perf/2026-11-24-sdpa-rule-cudnn-margins.md): cuDNN's fused attention is 4-8 % faster than `flash_mma_fwd2` on long self-attention (H3 768p +4.6 %, LTX 1080p 20 s +4.1 %, Wan 720p +7.7 %), about 3-5 % of a denoise step, on sm_12x only; the owner asked whether the three options were exclusive
+- Options: drop the cuDNN candidate now and accept the 3-5 %; keep it until step 3 removes cuDNN and drop both together; drop it and take the margin back with SageAttention2 where a model's quality gate allows, tuning fwd2 for the rest
+- Decision: **(owner) drop cuDNN from the attention path now and take the margin back: SageAttention2 on sm_12x for the models whose quality gate allows it (already default for `ltx-pro`, 1.5-1.8x over fwd2), and optimize `flash_mma_fwd2` for every other case** ("I want to drop cuDNN take the margin back with SageAttention2 on sm_12x ... for the models whose quality gate allows it and optimize fwd2 for all other cases"). `sdpa_rule::RULES` is empty and `CUDNN_DEFAULT_ON` false: `auto` never picks cuDNN; `FASTVIDEO_FLASH_KERNEL=cudnn` stays a diagnostic override and fv-gpucheck keeps measuring cuDNN as a reference. D2 of ADR-0024
+- Reason: owner's call; the served attention path then needs no cuDNN before step 3, and the cost is paid back by work on kernels we own instead of a library we cannot ship statically
+- Reversibility: cheap for the switch (one row back in `RULES`, one constant); the Sage gates and fwd2 tuning are additive work (docs/plan/2026-11-24-adr24-step2-wo.md: 2a done here, 2b Sage gates per model, 2c fwd2 sm_12x tuning)
+- Executed by: PR #252 (2a); 2b and 2c pending
+- ADR: docs/adr/0024-driver-only-runtime.md (step 2, D2)
+- Verification: pending. Served outputs on sm_12x change back to fwd2's bytes for the shapes the rule sent to cuDNN (the two kernels round 1-2 bf16 ulp apart; H3 frames moved about 20 dB PSNR between them in the 2026-09-27 A/B): the gold tier (ADR-0023) and the `attn3` cell are the gates; `fv-gpucheck kernels --groups sdpa_rule` reports `cudnn_faster_at` as information
+
 ### FVID · 2026-11-24 · FVID-2026-11-24-ship-static-fv-serve
 - Trigger: the owner asked for the size of the binaries and the roadblocks to static linking (ADR-0024 step 4: cudarc `static-linking`, the cuDNN licence, D4), then: "I'd like us to ship a statically linked version in addition to our dynamically linked version"
 - Options: wait for ADR-0024 steps 2–3 (cuDNN gone) and link statically then, one image; a second CUDA image now with everything but cuDNN static, the dynamic one unchanged; replace the dynamic image outright
