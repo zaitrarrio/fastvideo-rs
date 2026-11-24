@@ -368,7 +368,7 @@ if [ "${FV_SKIP_TAE:-0}" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.
 fi
 fi
 if [ "$mode" = kernels ] || [ "$mode" = all ]; then
-  cd "\$OUT" && env ${FV_EXTRA_ENV:-} /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out "\$OUT/gpucheck" kernels ${FV_KERNEL_GROUPS:+--groups "$FV_KERNEL_GROUPS"} >"\$OUT/kernels.out" 2>&1
+  cd "\$OUT" && env ${FV_EXTRA_ENV:-} /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out "\$OUT/gpucheck" kernels${FV_KERNEL_GROUPS:+ --groups "$FV_KERNEL_GROUPS"} >"\$OUT/kernels.out" 2>&1
   echo "exit=\$?" >>"\$OUT/kernels.out"
   cp "\$OUT"/gpucheck/*.json "\$OUT"/ 2>/dev/null
 fi
