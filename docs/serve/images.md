@@ -190,7 +190,9 @@ CUDA layer goes and the static binary is the whole payload. Measured
 reductions: `nvprune` to one SM takes about 170 MB off cuBLAS + cuBLASLt;
 dropping CUPTI (FASTVIDEO_GPU_TRACE) 58 MB; the NVRTC trio (208 MB) only
 with step 1b. Details in the decision log
-(FVID-2026-11-24-ship-static-fv-serve).
+(FVID-2026-11-24-ship-static-fv-serve). CI's first build of the image
+(serve-image run 45433587741, `99455a8f`): `cuda-static` is 1621 MB
+compressed against about 1080 MB for `cuda`, and its no-GPU smoke passed.
 
 ## One image with boot-time config (2026-10-25)
 

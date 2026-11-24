@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap (drop the `[[images]]` table, the two Dockerfile stages and the `cuda-static` feature; the `link` field defaults to dynamic)
 - Executed by: this PR (branch claude/trusting-hamilton-s480y1); CI builds `cuda cuda-static cpu`
 - ADR: docs/adr/0024-driver-only-runtime.md (step 4, D5; D4 still open: no `cuda-static` image serves rented capacity before NVIDIA's written confirmation)
-- Verification: pending (serve-image CI: the `cuda-static` smoke asserts no shared cuBLAS / NVRTC / cudart / CUPTI and a loaded `libcudnn.so.9`). Local measurement 2026-11-24 (this container, toolkit 13.4.92, cuBLAS 13.8.0.4, cuDNN 9.28.1.4, release profile): see the table below
+- Verification: done 2026-11-24 for the build: serve-image run 45433587741 on `99455a8f` built `serve-cuda-static` (1621 MB compressed, `cuda` about 1080 MB) and its no-GPU smoke passed (no shared cuBLAS / NVRTC / cudart / CUPTI, `libcudnn.so.9` loaded, the driver stub off the loader path); the tools-release set `serve-cuda-static` built on GitHub-hosted runners. Pending: a GPU run of the static binary; D4. Local measurement 2026-11-24 (this container, toolkit 13.4.92, cuBLAS 13.8.0.4, cuDNN 9.28.1.4, release profile): see the table below
 - Size table (local measurement 2026-11-24, this container):
 
   | binary (release profile: fat LTO, 1 codegen unit, opt-level 3; `cuda*,http-client`) | size | gzip -6 | loads at run time |
