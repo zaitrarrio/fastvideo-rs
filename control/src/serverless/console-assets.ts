@@ -4833,7 +4833,9 @@ async function load() {
     return;
   }
   protocols = mountedProtocols(caps);
+  // Causal models first (the page's first use, and the Reactor's), then the clip models.
   models = (caps.models || []).filter((m) => ['causal', 'clip'].includes(streamKind(m)));
+  models.sort((a, b) => (streamKind(a) === 'causal' ? 0 : 1) - (streamKind(b) === 'causal' ? 0 : 1));
   reactorServes = protocols && protocols.reactor === false ? null : await reactorModel();
   dest.setInfo(await loadOutputs());
   try { apps = (await loadCatalog()).apps || []; } catch { apps = []; }
