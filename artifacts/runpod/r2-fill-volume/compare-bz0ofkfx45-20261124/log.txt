@@ -1,0 +1,2 @@
+2026-11-24T11:50:35Z start: mode compare, trees: fasth3-trim-8step-nvfp4 h3-8step
+2026-11-24T11:53:03Z end: 0 step(s) failed

@@ -13,19 +13,26 @@
 # `us` region everywhere that sources this file. (fv-control has the same
 # switch: US_VOLUME_ID in control/src/cluster/regions.ts.)
 
-# EU (owner decision 2026-10-13, "eu volume - reduce to 500 gb plan"): fv-weights-h3-ltx-500, 500 GB in
-# EU-RO-1, H3 + LTX trees only (FV_EU_VOLUME_TREES); everything else comes from R2 (weights_source r2).
-# It replaced jg48s6o1w0 (fv-weights-h3-ltx-hy, 2000 GB, EUR-IS-1; Runpod no longer creates volumes there),
-# which the coordinator deletes once a pod has read the new volume (docs/ops/runpod-volumes.md §0).
+# EU (owner decision 2026-10-13, "eu volume - reduce to 500 gb plan"): fv-weights-h3-ltx-500 in EU-RO-1, H3 + LTX
+# trees (FV_EU_VOLUME_TREES); everything else comes from R2 (weights_source r2). Grown to 1000 GB by 2026-11-24
+# (the Runpod name kept its "500"). It replaced jg48s6o1w0 (fv-weights-h3-ltx-hy, 2000 GB, EUR-IS-1; Runpod no
+# longer creates volumes there), deleted 2026-10-13 (docs/ops/runpod-volumes.md §0).
 FV_EU_VOLUME_ID=bz0ofkfx45
 FV_EU_VOLUME_NAME=fv-weights-h3-ltx-500
 FV_EU_DC=EU-RO-1
 FV_EU_GPUS="NVIDIA RTX PRO 6000 Blackwell Server Edition"
-# The trees on the EU volume (462.45 GB in weights-r2.tsv), filled from R2 by r2-fill-volume.sh on 2026-10-13.
-# control/src/volumes.ts EU_TREES holds the same list (a unit test compares them).
+# The trees on the EU volume that r2-fill-volume.sh wrote from R2 and compared (785.5 GB in weights-r2.tsv, h3-8step included):
+# 13 on 2026-10-13, and on 2026-11-24 (owner decision, "yes, let's fill the gap") the 8 trees the h3-family
+# preset still lacked (163.3 GB; docs/ops/runpod-volumes.md §0b). control/src/volumes.ts EU_TREES holds the
+# same list (a unit test compares them). fasth3-trim-8step-nvfp4 and h3-8step were put there by other work and
+# compared with their R2 manifests on 2026-11-24 (equal). The volume also carries trees outside this list
+# (h3-8step-mxfp8, fasth3-omni-8step-v1, open-h3-regenerate-2k, pika-h3-flex, inventoried 2026-11-24), which
+# have no R2 manifest to compare with.
 FV_EU_VOLUME_TREES="h3-base h3-base/text_encoder_fp8 h3-base/transformer_prequant_4step-vsa_mxfp8 \
 h3-base/transformer_prequant_sol-h3_mxfp8 FastH3-4-step-Preview-v1-LoRA h3-ref2va ltx25 ltx25-dev \
-ltx25-ic-lora-ingredients upscaler h3-to-ltx auxiliary/tae auxiliary/lpips"
+ltx25-ic-lora-ingredients upscaler h3-to-ltx auxiliary/tae auxiliary/lpips \
+fasth3-4step-vsa-nvfp4 fasth3-v2-nvfp4 fasth3-trim-8step vdn-h3-stage-b-2000 vdn-h3-dmd-250-turbo \
+h3-turbo-loras/larry h3-turbo-loras/lightx2v h3-turbo-loras/lightx2v-v0.1 fasth3-trim-8step-nvfp4 h3-8step"
 
 FV_US_VOLUME_ID=""   # empty = US unavailable (was s2k01690bi, deleted)
 FV_US_VOLUME_NAME="" # empty = US unavailable (was fv-weights-b200-us, deleted)

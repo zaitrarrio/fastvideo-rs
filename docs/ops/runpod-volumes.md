@@ -8,6 +8,26 @@ that expand short revisions. Nothing here was measured on the volumes today
 (the balance was negative, so no pods ran). Anything not backed by a
 recorded source is marked **UNVERIFIED** or **UNKNOWN**.
 
+## 0b. Status 2026-11-24: 1000 GB; the h3-family trees filled
+
+- The volume is **1000 GB** now (`GET /v2/network-volumes`: `size: 1000`; the Runpod name is still
+  `fv-weights-h3-ltx-500`). The repo had not recorded the growth.
+- **Inventory** (a read-only `python:3.12-slim` CPU pod in EU-RO-1, `find -name .fv-revision`): 19 complete trees.
+  The 13 of §0a, and six that other work put there after 2026-10-13 and that no repo list named: `h3-8step` and
+  `fasth3-trim-8step-nvfp4` at their pinned revisions (compared and listed below), `h3-8step-mxfp8`
+  (`3da2ddf…-mxfp8`), and `fasth3-omni-8step-v1`, `open-h3-regenerate-2k`, `pika-h3-flex` at `main-20261112`.
+  The last four stay out of `FV_EU_VOLUME_TREES`: they have no R2 manifest to compare with.
+- **Filled** (owner decision 2026-11-24, "yes, let's fill the gap"; `r2-fill-volume.sh up bz0ofkfx45 fill` in the
+  no-local-key mode, pod `btel28j3o3qk28`, cpu3c, $0.24/h): the 8 trees the `h3-family` preset lacked,
+  163.28 GB in 117 s (1.40 GB/s, 0 bad parts), every tree then compared with its R2 manifest, all equal:
+  `fasth3-4step-vsa-nvfp4`, `fasth3-v2-nvfp4`, `fasth3-trim-8step`, `vdn-h3-stage-b-2000`,
+  `vdn-h3-dmd-250-turbo`, `h3-turbo-loras/larry`, `h3-turbo-loras/lightx2v`, `h3-turbo-loras/lightx2v-v0.1`.
+  Results: `artifacts/runpod/r2-fill-volume/fill-bz0ofkfx45-20261124/`. A compare-only pod (`jqcee55s6p1g8w`) then
+  checked `fasth3-trim-8step-nvfp4` and `h3-8step`, which other work had put there, against their R2 manifests:
+  equal, so both are listed too (`artifacts/runpod/r2-fill-volume/compare-bz0ofkfx45-20261124/`).
+  `FV_EU_VOLUME_TREES` now lists 23 trees, 785.5 GB; every `h3-family` tree is on the volume, so that
+  preset no longer needs `weights_source r2`.
+
 ## 0a. Status 2026-10-13: the 500 GB H3 + LTX volume in EU-RO-1
 
 Owner decision (2026-10-13): "eu volume - reduce to 500 gb plan", then (the same day, after Runpod refused a
@@ -86,7 +106,7 @@ Data files beside this page:
 | Id | Name | Size | DC | Role |
 |---|---|---:|---|---|
 | ~~`s2k01690bi`~~ | ~~`fv-weights-b200-us`~~ | 2000 GB | US-CA-2 | **deleted by Runpod ~2026-10-05** (negative balance). Was the US weights volume (GPU pods and serverless in US-CA-2). Not rebuilt (§0) |
-| `bz0ofkfx45` | `fv-weights-h3-ltx-500` | 500 GB | EU-RO-1 | **the** weights volume since 2026-10-13 (§0a): H3 + LTX trees only, 462.45 GB, filled from R2 and compared. RTX PRO 6000 pods and serverless in EU-RO-1 |
+| `bz0ofkfx45` | `fv-weights-h3-ltx-500` | 1000 GB | EU-RO-1 | **the** weights volume since 2026-10-13 (§0a; 1000 GB and the h3-family trees since 2026-11-24, §0b): H3 + LTX trees only, 785.5 GB listed in `FV_EU_VOLUME_TREES`, filled from R2 and compared. RTX PRO 6000 pods and serverless in EU-RO-1 |
 | `jg48s6o1w0` | `fv-weights-h3-ltx-hy` | 2000 GB | EUR-IS-1 | **retired 2026-10-13** (§0a); the coordinator deletes it after the switch is deployed and verified. Was the weights volume 2026-10-06 to 2026-10-13, ~1.45 TB used |
 | `pxy4hlsnwq` | `fv-build` | 200 GB | EU-RO-1 | build caches for the shared build pod (toolchains, sccache, crates). No weights. Section 8 |
 

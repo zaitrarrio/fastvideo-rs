@@ -358,7 +358,7 @@ stale_after_s = 60
 [[family_presets]]
 id = "h3-family"
 title = "H3 family: every H3 variant on one pod"
-description = "Every H3 variant a preset serves on ONE GPU, one fv-serve process ({members}, and the 480p draft tier): turbo resident, the others loaded on their first request (one DiT at a time: a switch unloads the resident one and loads the next from the pod's disk, about a minute). RTX PRO 6000 (96 GB, sm_120) or B200: the NVFP4 releases need NVFP4 tensor cores and VDN-H3 a 96 GB card. Weights from R2 by default (the EU volume lacks the NVFP4, Trim, LoRA and VDN trees): about 396 GB, a 485 GB container disk."
+description = "Every H3 variant a preset serves on ONE GPU, one fv-serve process ({members}, and the 480p draft tier): turbo resident, the others loaded on their first request (one DiT at a time: a switch unloads the resident one and loads the next from the pod's disk, about a minute). RTX PRO 6000 (96 GB, sm_120) or B200: the NVFP4 releases need NVFP4 tensor cores and VDN-H3 a 96 GB card. Weights on the EU volume since 2026-11-24 (its NVFP4, Trim, LoRA and VDN trees were filled from R2, docs/ops/runpod-volumes.md §0b); from R2 otherwise: about 396 GB, a 485 GB container disk."
 image = "cuda"
 config = "runpod-family-h3.toml"
 min_vram_gb = 96

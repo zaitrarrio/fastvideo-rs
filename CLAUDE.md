@@ -4,11 +4,12 @@
 
 - The weights live in the R2 weights store (bucket `fv-weights`,
   `docs/ops/r2-weights.md`); new trees are published there, never only on a
-  pod's container disk. **EU volume: 500 GB, H3 + LTX only (owner decision,
-  2026-10-13, "eu volume - reduce to 500 gb plan"):** `bz0ofkfx45`
-  (`fv-weights-h3-ltx-500`, EU-RO-1) holds the trees of
+  pod's container disk. **EU volume: H3 + LTX only (owner decision,
+  2026-10-13, "eu volume - reduce to 500 gb plan"; 1000 GB since 2026-11):**
+  `bz0ofkfx45` (`fv-weights-h3-ltx-500`, EU-RO-1) holds the trees of
   `scripts/gpu/volumes.sh` `FV_EU_VOLUME_TREES` (filled from R2 with
-  `scripts/gpu/r2-fill-volume.sh`); everything else comes from R2
+  `scripts/gpu/r2-fill-volume.sh`; the h3-family trees added 2026-11-24 on
+  the owner's decision); everything else comes from R2
   (`weights_source r2`, the default for those presets). fv-control's `eu`
   region is EU-RO-1. It replaced `jg48s6o1w0` (`fv-weights-h3-ltx-hy`,
   2000 GB, EUR-IS-1, where Runpod no longer creates volumes),
