@@ -18,6 +18,9 @@
 # in stock: default "cpu3c cpu5c cpu3g cpu5g cpu3m cpu5m"). Only the read-only R2 key pair
 # (/root/.config/fv/r2_weights_ro_*) goes into the pod's env; nothing is printed. The scripts reach the pod as a
 # tarball in the staging bucket (fv-weights-staging, tmp/), fetched through a presigned URL and checked by SHA-256.
+# Without the local key files (a machine that holds no R2 key): FV_FILL_SCRIPTS_REF=<pushed git ref> fetches the
+# scripts from raw.githubusercontent.com at that ref instead of the staging bucket, and the pod reads R2 with the
+# account's `fv_r2_*` Runpod secrets (resolved by Runpod inside the pod; the bucket is still fv-weights).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=volumes.sh
@@ -53,22 +56,41 @@ case "$cmd" in
     dc="$(jq -r '.dataCenter' <<<"$vj")"
     bal="$(balance)"
     awk -v b="$bal" -v m="$MIN_BALANCE" 'BEGIN{exit !(b+0 >= m+2)}' || { log "balance \$$bal too close to the \$$MIN_BALANCE floor"; exit 1; }
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
-    tar czf "$tmp/bundle.tgz" -C "$HERE" r2-weights.py r2-fetch.py r2-fill-volume-pod.sh weights-manifest.tsv weights-revisions.tsv weights-sha256.tsv weights-r2.tsv
-    sha="$(sha256sum "$tmp/bundle.tgz" | cut -d' ' -f1)"
-    url="$(python3 "$HERE/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/r2-fill-bundle-$sha.tgz" --ttl "$CAP_S")"
-    log "balance \$$bal; volume $vol ($(jq -r '.name' <<<"$vj"), $(jq -r '.size' <<<"$vj") GB, $dc); mode $mode; bundle ${sha:0:12} staged"
-    # shellcheck disable=SC2016 # expanded on the pod, not here
-    start='mkdir -p /srv /opt/fv && cd /srv && (python -m http.server 8000 --directory /srv >/dev/null 2>&1 &) && python -c "
+    files="r2-weights.py r2-fetch.py r2-fill-volume-pod.sh weights-manifest.tsv weights-revisions.tsv weights-sha256.tsv weights-r2.tsv"
+    if [[ -n "${FV_FILL_SCRIPTS_REF:-}" ]]; then
+      # No local R2 key: the scripts from the repository at a pushed ref, the R2 key from the Runpod secrets.
+      raw="https://raw.githubusercontent.com/zaitrarrio/fastvideo-rs/$FV_FILL_SCRIPTS_REF/scripts/gpu"
+      sha="ref-$FV_FILL_SCRIPTS_REF"; url=""
+      # shellcheck disable=SC2016 # expanded on the pod, not here
+      # (python:3.12-slim has no curl: urllib fetches the files)
+      fetch='python -c "
+import os, urllib.request
+for f in \"'"$files"'\".split():
+    urllib.request.urlretrieve(\"'"$raw"'/\" + f, os.path.join(\"/opt/fv\", f))
+" >>/srv/log.txt 2>&1'
+      log "balance \$$bal; volume $vol ($(jq -r '.name' <<<"$vj"), $(jq -r '.size' <<<"$vj") GB, $dc); mode $mode; scripts from $raw"
+      export FVX_URL="" FVX_ROID='{{ RUNPOD_SECRET_fv_r2_access_key_id }}' FVX_ROSEC='{{ RUNPOD_SECRET_fv_r2_secret_access_key }}'
+    else
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+      # shellcheck disable=SC2086 # the file list splits on purpose
+      tar czf "$tmp/bundle.tgz" -C "$HERE" $files
+      sha="$(sha256sum "$tmp/bundle.tgz" | cut -d' ' -f1)"
+      url="$(python3 "$HERE/r2-weights.py" --bucket fv-weights-staging put-temp "$tmp/bundle.tgz" --key "tmp/r2-fill-bundle-$sha.tgz" --ttl "$CAP_S")"
+      log "balance \$$bal; volume $vol ($(jq -r '.name' <<<"$vj"), $(jq -r '.size' <<<"$vj") GB, $dc); mode $mode; bundle ${sha:0:12} staged"
+      # shellcheck disable=SC2016 # expanded on the pod, not here
+      fetch='python -c "
 import hashlib, io, os, tarfile, urllib.request
 b = urllib.request.urlopen(os.environ[\"FV_BUNDLE_URL\"], timeout=120).read()
 assert hashlib.sha256(b).hexdigest() == os.environ[\"FV_BUNDLE_SHA256\"], \"bundle sha256\"
 tarfile.open(fileobj=io.BytesIO(b)).extractall(\"/opt/fv\")
-" >>/srv/log.txt 2>&1 && FV_POD_ID="$RUNPOD_POD_ID" bash /opt/fv/r2-fill-volume-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; sleep infinity'
-    # The keys and the presigned URL go into jq through its environment (env.X), never through argv.
-    export FVX_URL="$url" FVX_ROID FVX_ROSEC
-    FVX_ROID="$(cat "$CFG/r2_weights_ro_access_key_id")"; FVX_ROSEC="$(cat "$CFG/r2_weights_ro_secret_access_key")"
+" >>/srv/log.txt 2>&1'
+      # The keys and the presigned URL go into jq through its environment (env.X), never through argv.
+      export FVX_URL="$url" FVX_ROID FVX_ROSEC
+      FVX_ROID="$(cat "$CFG/r2_weights_ro_access_key_id")"; FVX_ROSEC="$(cat "$CFG/r2_weights_ro_secret_access_key")"
+    fi
+    # shellcheck disable=SC2016 # expanded on the pod, not here
+    start='mkdir -p /srv /opt/fv && cd /srv && (python -m http.server 8000 --directory /srv >/dev/null 2>&1 &) && '"$fetch"' && FV_POD_ID="$RUNPOD_POD_ID" bash /opt/fv/r2-fill-volume-pod.sh; [ -f /srv/DONE ] || echo 1 >/srv/DONE; sleep infinity'
     payload="$(jq -n --arg name "fv-p0-r2fill-$mode-$(date -u +%m%d%H%M)" --arg vol "$vol" --arg dc "$dc" --arg start "$start" \
       --arg vcpu "${FV_FILL_VCPU:-16}" --arg flavors "${FV_FILL_FLAVORS:-cpu3c cpu5c cpu3g cpu5g cpu3m cpu5m}" --arg sha "$sha" --arg ep "https://$ACCT.r2.cloudflarestorage.com" --arg mode "$mode" --arg trees "$trees" --arg tag "${FV_FILL_TAG:-}" '{
         name: $name, image: "python:3.12-slim", cloud: "SECURE",
