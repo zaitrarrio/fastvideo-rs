@@ -428,8 +428,9 @@ ARG FV_SERVE_STATIC_FEATURES=cuda-static,http-client
 ARG BUILD_ID=unknown
 ARG FV_GIT_SHA=unknown
 ARG FV_BUILD_TIME=
+COPY scripts/gpu/cuda-13-runtime.pins /etc/fastvideo/cuda-13-runtime.pins
 RUN apt-get update \
- && . /etc/fastvideo/cuda-13.pins \
+ && . /etc/fastvideo/cuda-13.pins && . /etc/fastvideo/cuda-13-runtime.pins \
  && apt-get install -y --no-install-recommends --allow-downgrades cmake \
       "$(echo "$CUDA_CUBLAS_PKG" | sed 's/^libcublas-/libcublas-dev-/')" \
       "$(echo "$CUDA_CUPTI_PKG" | sed 's/^cuda-cupti-/cuda-cupti-dev-/')" \

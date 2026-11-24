@@ -33,6 +33,21 @@ case "$group" in
   # stub under CUDA_HOME (docker/gpucheck.Dockerfile static-build installs them), and the compiler's libstdc++.a
   # under a second root (cudarc asks for `static:+whole-archive=stdc++`; release-artifacts-pod.sh static_link_root).
   serve-cuda-static)
+    # The dependency image is the build base (nvcc, NVRTC): add the static archives, the driver stub and the cuDNN
+    # runtime, as docker/gpucheck.Dockerfile's static-build stage does (the pinned versions of cuda-13.pins).
+    if [[ -f /etc/fastvideo/cuda-13.pins ]]; then
+      # shellcheck disable=SC1091
+      . /etc/fastvideo/cuda-13.pins
+      # cudart's pin lives in cuda-13-runtime.pins (the base image carries only cuda-13.pins): the same toolkit version.
+      CUDA_CUDART_PKG="${CUDA_CUDART_PKG:-cuda-cudart-13-4=${CUDA_NVCC_PKG##*=}}"
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --allow-downgrades \
+        "$(echo "$CUDA_CUBLAS_PKG" | sed 's/^libcublas-/libcublas-dev-/')" \
+        "$(echo "$CUDA_CUPTI_PKG" | sed 's/^cuda-cupti-/cuda-cupti-dev-/')" \
+        "$(echo "$CUDA_CUDART_PKG" | sed 's/^cuda-cudart-/cuda-cudart-dev-/')" \
+        "$CUDA_CUDNN_PKG" cuda-driver-dev-13-4
+      rm -rf /var/lib/apt/lists/*
+    fi
     mkdir -p /opt/fv-static-link/lib64 && ln -sfn "$(c++ -print-file-name=libstdc++.a)" /opt/fv-static-link/lib64/libstdc++.a
     printf '!<arch>\n' > /opt/fv-static-link/lib64/libcudnn.a   # the empty cuDNN shim (cuDNN stays shared)
     rel env CUDA_TOOLKIT_ROOT_DIR=/opt/fv-static-link \
