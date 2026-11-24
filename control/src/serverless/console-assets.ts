@@ -211,6 +211,14 @@ export const CONSOLE_PAGES: Record<string, string> = {
         <div id="served-msg" class="msg" role="status"></div>
       </div>
     </section>
+    <section class="stage span2" id="gold-stage" aria-labelledby="h-gold" hidden>
+      <div class="stage-head"><h2 id="h-gold">Gold lab record <span id="gold-title" class="mono"></span></h2><span id="gold-state" class="pill"></span></div>
+      <div class="stage-body">
+        <p class="hint">The variant's gold standard (<code>lab/gold/&lt;variant&gt;.toml</code>, ADR-0009): every number is copied from the source that cites it or declared a gap; <code>fv-lab run gold</code> fills "last validated". Click a served model's name to open it.</p>
+        <div id="gold"></div>
+        <div id="gold-msg" class="msg" role="status"></div>
+      </div>
+    </section>
     <section class="stage span2" aria-labelledby="h-models">
       <div class="stage-head"><h2 id="h-models">fal apps</h2></div>
       <div class="stage-body">
@@ -472,7 +480,7 @@ export const CONSOLE_PAGES: Record<string, string> = {
 <body>
 <main class="page">
   <div class="page-head">
-    <h1>Live stream <small>a causal model (SF-Wan, LongLive) generating one continuous video you steer with prompts</small></h1>
+    <h1>Live stream <small>a causal model (SF-Wan, LongLive) generating one continuous video you steer with prompts, or a clip model (H3, LTX, Wan) playing a queue of clips you add prompts to</small></h1>
   </div>
   <div id="key-banner" class="banner" hidden>No API key in this browser. Streams need one: <a href="/console/admin">mint one</a> or enter it on the <a href="/console">Models</a> page.</div>
   <div id="licence"></div>
@@ -495,7 +503,7 @@ export const CONSOLE_PAGES: Record<string, string> = {
         <textarea id="prompt" rows="4">A first-person drive along a coastal road at golden hour, waves breaking on the rocks below.</textarea>
         <div class="row">
           <div><label for="seed">Seed</label><input id="seed" inputmode="numeric" placeholder="random"></div>
-          <div><label for="max-seconds">Length (s)</label><input id="max-seconds" type="number" min="1" step="1" placeholder="server default"></div>
+          <div><label for="max-seconds" id="length-label">Length (s)</label><input id="max-seconds" type="number" min="1" step="1" placeholder="server default"></div>
         </div>
         <div class="actions">
           <button id="start" class="primary" type="button">Start stream</button>
@@ -517,7 +525,7 @@ export const CONSOLE_PAGES: Record<string, string> = {
       <div class="stage-body">
         <label for="next">Next prompt</label>
         <textarea id="next" rows="2" placeholder="The road turns inland through a pine forest."></textarea>
-        <p class="hint">Applied at the next block boundary (a LongLive model re-caches its KV window once per switch).</p>
+        <p class="hint" id="next-hint">Applied at the next block boundary (a LongLive model re-caches its KV window once per switch).</p>
         <div class="actions">
           <button id="switch" class="primary" type="button" disabled>Switch prompt</button>
           <button id="pause" type="button" disabled>Pause</button>
@@ -2764,9 +2772,66 @@ $('toggle-key').onclick = () => {
   f.type = show ? 'text' : 'password'; $('toggle-key').textContent = show ? 'Hide key' : 'Show key';
 };
 
+// A model's gold lab record (\`GET /fv/v1/gold/{variant}\`, src/gold.rs): the
+// tables of lab/gold/<variant>.toml as key / value rows, the sources and the
+// declared gaps; a model with no record says so.
+const GOLD_SECTIONS = [
+  ['model', 'Model'], ['tier', 'Tier'], ['workload', 'Workload'], ['upstream', 'Upstream'], ['latency', 'Latency'],
+  ['quality', 'Quality'], ['cost', 'Cost'], ['last_validated', 'Last validated'],
+];
+const fmtVal = (v) => (v === null || v === undefined) ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+function goldRows(obj) {
+  return Object.entries(obj || {}).filter(([, v]) => v !== null && v !== undefined && v !== '')
+    .flatMap(([k, v]) => [el('dt', {}, k.replace(/_/g, ' ')), el('dd', { 'data-gold-field': k }, fmtVal(v))]);
+}
+export async function showGold(variant) {
+  const stage = $('gold-stage');
+  stage.hidden = false;
+  $('gold-title').textContent = variant;
+  $('gold-state').textContent = 'loading…'; $('gold-state').className = 'pill warn';
+  setMsg('gold-msg', '');
+  $('gold').replaceChildren();
+  let g;
+  try {
+    g = await request('GET', '/fv/v1/gold/' + encodeURIComponent(variant), { auth: 'bearer' });
+  } catch (e) {
+    $('gold-state').textContent = e.status === 404 ? 'no record' : 'error'; $('gold-state').className = 'pill ' + (e.status === 404 ? '' : 'bad');
+    setMsg('gold-msg', e.status === 404 ? 'No gold lab record for ' + variant + ' (lab/gold/' + variant + '.toml).' : e.message, e.status === 404 ? '' : 'bad');
+    stage.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    return;
+  }
+  const lv = g.last_validated || {};
+  $('gold-state').textContent = lv.commit ? 'validated ' + (lv.date || '') + ' @ ' + lv.commit : 'not yet validated';
+  $('gold-state').className = 'pill ' + (lv.commit ? 'ok' : 'warn');
+  const parts = [];
+  for (const [key, title] of GOLD_SECTIONS) {
+    const sec = g[key];
+    if (!sec || typeof sec !== 'object' || !Object.keys(sec).length) continue;
+    const { env, ...rest } = sec;
+    const rows = goldRows(rest);
+    if (env && Object.keys(env).length) rows.push(el('dt', {}, 'env'), el('dd', {}, Object.entries(env).map(([k, v]) => k + '=' + v).join(' ')));
+    parts.push(el('h3', {}, title), el('dl', { class: 'gold-section', 'data-gold-section': key }, ...rows));
+  }
+  const sources = Array.isArray(g.source) ? g.source : [];
+  if (sources.length) {
+    parts.push(el('h3', {}, 'Sources (' + sources.length + ')'), el('ul', { class: 'gold-sources' }, ...sources.map((src) => el('li', {},
+      el('span', { class: 'mono' }, src.path + (src.heading ? ' § ' + src.heading : '')), src.date ? ' (' + src.date + ')' : '',
+      src.fields && src.fields.length ? el('div', { class: 'hint' }, 'fields: ' + src.fields.join(', ')) : '',
+      src.note ? el('div', { class: 'hint' }, src.note) : ''))));
+  }
+  const gaps = Array.isArray(g.gap) ? g.gap : [];
+  if (gaps.length) {
+    parts.push(el('h3', {}, 'Gaps (' + gaps.length + ')'), el('ul', { class: 'gold-gaps' }, ...gaps.map((x) => el('li', {}, el('span', { class: 'mono' }, x.field), ': ' + x.why))));
+  }
+  parts.push(el('p', { class: 'hint' }, el('span', { class: 'mono' }, g.path)));
+  $('gold').replaceChildren(...parts);
+  stage.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
 // The served models (\`/fv/v1/capabilities\`): id, tier, the recipe it runs
 // (attention, VAE, steps, profile), tasks, and the live pages for stream
-// models (causal: Live stream, with its session-length rule; duplex: Live input).
+// models (causal: Live stream, with its session-length rule; clip: Live
+// stream as a clip queue; duplex: Live input).
 async function renderServed(caps) {
   const box = $('served');
   const models = (caps && Array.isArray(caps.models)) ? caps.models : [];
@@ -2780,13 +2845,16 @@ async function renderServed(caps) {
     const c = m.caps || {};
     const kind = streamKind(m);
     const l = m.stream_limits;
+    const streamLink = (label) => pageOn('stream') ? el('a', { href: page('/console/stream?model=' + encodeURIComponent(c.id)), 'data-live': c.id }, 'Live stream') : label;
     const live = kind === 'causal'
-      ? el('span', {}, pageOn('stream') ? el('a', { href: page('/console/stream?model=' + encodeURIComponent(c.id)), 'data-live': c.id }, 'Live stream') : 'causal stream',
+      ? el('span', {}, streamLink('causal stream'),
         l ? el('small', { class: 'hint' }, ' ' + l.default_max_s + ' s default, ' + l.hard_max_s + ' s max' + (l.reset_restarts_clock ? '; reset restarts the clock' : '')) : '')
-      : kind === 'duplex' ? (pageOn('live') ? el('a', { href: page('/console/live') }, 'Live input') : 'duplex stream') : kind === 'clip' ? 'clip stream' : '–';
+      : kind === 'duplex' ? (pageOn('live') ? el('a', { href: page('/console/live') }, 'Live input') : 'duplex stream')
+      : kind === 'clip' ? el('span', {}, streamLink('clip stream'), el('small', { class: 'hint' }, ' clip queue')) : '–';
     const lic = licences[c.id] || (c.served_names || []).map((n) => licences[n]).find(Boolean) || m.licence;
     return el('tr', { 'data-model': c.id },
-      el('td', { class: 'mono' }, c.id, aliasesOf(c.id).length ? el('div', { class: 'hint' }, 'aka ' + aliasesOf(c.id).join(', ')) : ''),
+      el('td', { class: 'mono' }, el('a', { href: '#gold-stage', 'data-gold': c.id, title: 'The gold lab record of ' + c.id }, c.id),
+        aliasesOf(c.id).length ? el('div', { class: 'hint' }, 'aka ' + aliasesOf(c.id).join(', ')) : ''),
       el('td', {}, c.tier || '–', lic ? el('div', {}, el('span', { class: 'pill warn', title: lic, 'data-licence': 'non-commercial' }, /non-commercial/i.test(lic) ? 'non-commercial' : 'licence')) : ''),
       el('td', { 'data-recipe': '' }, el('div', { class: 'mono' }, c.recipe || ''), el('div', { class: 'hint' }, recipeText(m.recipe))),
       el('td', {}, (c.tasks || []).join(', ')),
@@ -2794,12 +2862,15 @@ async function renderServed(caps) {
       el('td', {}, el('a', { href: page('/console/native?model=' + encodeURIComponent(c.id)) }, 'Native API')));
   });
   box.replaceChildren(...rows);
+  for (const a of box.querySelectorAll('a[data-gold]')) a.onclick = (e) => { e.preventDefault(); showGold(a.dataset.gold); };
   $('served-table').hidden = !rows.length;
   const tiers = (caps && Array.isArray(caps.tiers)) ? caps.tiers : [];
   $('served-tiers').textContent = tiers.length
     ? 'Tier bindings: ' + tiers.map((t) => (t.alias || t.name || [t.family, t.tier].filter(Boolean).join('/')) + ' → ' + (t.model || t.id || '?')).join(', ') + '.'
     : '';
   setMsg('served-msg', rows.length ? '' : 'Connect with a key to list the served models (GET /fv/v1/capabilities).');
+  const want = new URLSearchParams(location.search).get('gold');
+  if (want && rows.length && !$('gold-title').textContent) showGold(want);
 }
 
 async function renderModels() {
@@ -4691,7 +4762,13 @@ export function protocolSnippets(proto, ctx) {
 ` },
   "stream.js": { type: "text/javascript; charset=utf-8", body: `// Live stream: a causal model (SF-Wan, LongLive; \`caps.stream.causal\` in
 // \`GET /fv/v1/capabilities\`) generating one continuous video that prompt
-// switches steer, over one of two transports.
+// switches steer, over one of two transports; or a clip model (H3, LTX, Wan;
+// \`caps.stream.clip\`) playing a queue of clips over the native stream only:
+// the opening prompt is the first clip, "Enqueue clip" adds one (\`enqueue\`
+// {prompt, seconds}), Pause / Resume toggle autoplay (\`set_autoplay\`), Reset
+// drops the queue (\`reset\`); the stream object's \`session\` is the clip
+// player's state and its \`events\` (clip_started, clip_finished) mark the
+// timeline.
 //
 // Reactor runtime (when its \`[reactor] model\` is this model, \`GET /schema\`):
 //   POST /start_session {seed, max_seconds} -> recvonly WebRTC (rtc.js
@@ -4713,7 +4790,7 @@ export function protocolSnippets(proto, ctx) {
 
 import {
   $, el, request, setMsg, topbar, loadAuthMode, needsKey, loadCapabilities, loadCatalog, mountedProtocols, streamKind,
-  recipeText, licenceBanner, modelHref, admit, BUSY,
+  recipeText, licenceBanner, modelHref, admit, BUSY, page,
 } from './common.js';
 import { reactorWatch, reactorModel } from './rtc.js';
 import { outputForm, loadOutputs, playOutput } from './outputs.js';
@@ -4745,6 +4822,8 @@ function setState(text, kind) {
 }
 
 const current = () => models.find((m) => m.caps.id === $('model').value);
+const kindOf = (m) => (m ? streamKind(m) : null);
+const isClip = () => kindOf(current()) === 'clip';
 const answers = (m, name) => !!name && (m.caps.id === name || (m.caps.served_names || []).includes(name));
 // The fal app whose model is this one (its licence, its causal director).
 const appFor = (m) => apps.find((a) => answers(m, a.model));
@@ -4765,14 +4844,25 @@ function showModel() {
   $('licence').replaceChildren();
   $('director-link').hidden = true;
   if (!m) { $('model-facts').textContent = ''; return; }
+  const clip = kindOf(m) === 'clip';
   const c = m.caps.stream.causal || {};
+  const k = m.caps.stream.clip || {};
   const l = m.stream_limits;
   const parts = [];
+  if (clip) parts.push('clip queue' + (k.min_s != null ? ', clips of ' + k.min_s + ' to ' + k.max_s + ' s' : ''));
   if (c.block_frames) parts.push(c.block_frames + '-frame blocks at ' + (c.target_fps || '?') + ' fps');
   if (m.caps.canvas && m.caps.canvas.short_edges) parts.push(m.caps.canvas.short_edges.join('/') + 'p');
   if (m.caps.recipe) parts.push('recipe ' + m.caps.recipe + (recipeText(m.recipe) ? ' (' + recipeText(m.recipe) + ')' : ''));
   if (l) parts.push(l.default_max_s + ' s by default, at most ' + l.hard_max_s + ' s' + (l.reset_restarts_clock ? ' (a reset restarts the clock)' : ''));
-  $('model-facts').textContent = parts.join(' · ');
+  $('model-facts').replaceChildren(parts.join(' · ') + ' · ', el('a', { href: page('/console?gold=' + encodeURIComponent(m.caps.id)), 'data-gold': m.caps.id }, 'gold lab record'));
+  // The controls read as the session kind does.
+  $('length-label').textContent = clip ? 'Clip length (s)' : 'Length (s)';
+  $('max-seconds').placeholder = clip ? "the model's default" : 'server default';
+  $('switch').textContent = clip ? 'Enqueue clip' : 'Switch prompt';
+  $('next-hint').textContent = clip
+    ? 'Queued behind the clips already generating; each clip starts from the last frame of the one before (a scene cut on Reset).'
+    : 'Applied at the next block boundary (a LongLive model re-caches its KV window once per switch).';
+  if (!live) $('pause').textContent = 'Pause';
   const app = appFor(m);
   const licence = m.licence || (app && app.licence);
   if (licence) $('licence').replaceChildren(licenceBanner(licence));
@@ -4782,14 +4872,16 @@ function showModel() {
   }
   // Transports: the Reactor runtime only when it streams this model; the
   // native stream when the build can publish.
-  const reactorOk = answers(m, reactorServes);
+  // A clip model streams natively only (the Reactor runtime runs causal models).
+  const reactorOk = !clip && answers(m, reactorServes);
   const whipOk = !protocols || protocols.streams !== false;
   const t = $('transport');
   t.querySelector('[value="reactor"]').disabled = !reactorOk;
   t.querySelector('[value="native"]').disabled = !whipOk;
   if (t.selectedOptions[0] && t.selectedOptions[0].disabled) t.value = reactorOk ? 'reactor' : 'native';
   $('transport-note').textContent = !reactorOk
-    ? (reactorServes ? 'The Reactor runtime streams ' + reactorServes + ' on this server ([reactor] model), not this model.' : 'This server does not mount the Reactor runtime.')
+    ? (clip ? 'A clip model streams as a native stream (a clip queue published to an output).'
+      : reactorServes ? 'The Reactor runtime streams ' + reactorServes + ' on this server ([reactor] model), not this model.' : 'This server does not mount the Reactor runtime.')
       + (whipOk ? '' : ' This build cannot publish native streams either (it needs the webrtc and http-client features).')
     : '';
   showTransport();
@@ -4809,15 +4901,17 @@ async function load() {
     return;
   }
   protocols = mountedProtocols(caps);
-  models = (caps.models || []).filter((m) => streamKind(m) === 'causal');
+  // Causal models first (the page's first use, and the Reactor's), then the clip models.
+  models = (caps.models || []).filter((m) => ['causal', 'clip'].includes(streamKind(m)));
+  models.sort((a, b) => (streamKind(a) === 'causal' ? 0 : 1) - (streamKind(b) === 'causal' ? 0 : 1));
   reactorServes = protocols && protocols.reactor === false ? null : await reactorModel();
   dest.setInfo(await loadOutputs());
   try { apps = (await loadCatalog()).apps || []; } catch { apps = []; }
-  $('model').replaceChildren(...models.map((m) => el('option', { value: m.caps.id }, m.caps.id + ((m.caps.served_names || []).filter((n) => n !== m.caps.id).length ? ' (' + m.caps.served_names.filter((n) => n !== m.caps.id).join(', ') + ')' : ''))));
+  $('model').replaceChildren(...models.map((m) => el('option', { value: m.caps.id }, m.caps.id + ' · ' + streamKind(m) + ((m.caps.served_names || []).filter((n) => n !== m.caps.id).length ? ' (' + m.caps.served_names.filter((n) => n !== m.caps.id).join(', ') + ')' : ''))));
   const want = new URLSearchParams(location.search).get('model');
   const pick = models.find((m) => answers(m, want));
   if (pick) $('model').value = pick.caps.id;
-  if (!models.length) setMsg('stream-msg', 'This server serves no causal streaming model (SF-Wan, LongLive).', 'bad');
+  if (!models.length) setMsg('stream-msg', 'This server serves no streaming model (causal: SF-Wan, LongLive; clip: H3, LTX, Wan).', 'bad');
   showModel();
 }
 
@@ -4845,6 +4939,23 @@ function promptNow(prompt) {
   for (const [v, s] of switches) if (v <= hit && s.state !== 'applied' && !String(s.state).startsWith('refused')) markSwitch(v, 'applied', 'ok');
 }
 
+// A clip stream's events mark the queued clips: started → playing, finished → played.
+const seenEvents = new Set();
+function clipEvents(events) {
+  for (const e of events || []) {
+    const clip = e && e.data && e.data.clip;
+    if (!clip || !clip.clip_id) continue;
+    const key = e.type + ':' + clip.clip_id;
+    if (seenEvents.has(key)) continue;
+    seenEvents.add(key);
+    const st = e.type === 'clip_started' ? 'playing' : e.type === 'clip_finished' ? 'played' : e.type === 'clip_generated' ? 'generated' : null;
+    if (!st) continue;
+    for (const [v, sw] of switches) {
+      if (sw.text === clip.prompt && sw.state !== 'played' && !String(sw.state).startsWith('refused')) { markSwitch(v, st, st === 'played' ? '' : 'ok'); break; }
+    }
+  }
+}
+
 // ---- transports --------------------------------------------------------------
 
 function attachVideo() {
@@ -4855,6 +4966,16 @@ function attachVideo() {
 
 function stateRows(s) {
   if (!s) return [];
+  if (s.clip_seconds != null || s.playout_queued != null) {
+    return [
+      ['playing', s.playing ? 'yes' + (s.playing_clip_id ? ' (' + String(s.playing_clip_id).slice(0, 8) + ')' : '') : 'no'],
+      ['queue', (s.generation_queued || 0) + ' generating, ' + (s.playout_queued || 0) + ' ready to play, ' + (s.clips_played || 0) + ' played'],
+      ['clip length', s.clip_seconds != null ? Number(s.clip_seconds).toFixed(1) + ' s (' + s.clip_seconds_min + ' to ' + s.clip_seconds_max + ')' : null],
+      ['autoplay', s.autoplay ? 'on' : 'off'],
+      ['canvas', s.width ? s.width + '×' + s.height + (s.aspect ? ' ' + s.aspect : '') : null],
+      ['seed', s.seed != null ? String(s.seed) : null],
+    ];
+  }
   return [
     ['prompt', s.prompt],
     ['paused', s.paused ? 'yes' : 'no'],
@@ -4903,23 +5024,31 @@ async function startReactor(m, prompt, params) {
 
 async function startNative(m, prompt, params) {
   const output = dest.read();
-  const body = { model: m.caps.id, prompt, ...params, output };
+  const clip = kindOf(m) === 'clip';
+  // Causal: the opening prompt and the session length. Clip: the first clip
+  // (with its length when given); \`max_seconds\` is not a clip session's.
+  const body = clip
+    ? { model: m.caps.id, ...(params.max_seconds ? { clips: [{ prompt, seconds: params.max_seconds }] } : { prompt }), ...(params.seed != null ? { seed: params.seed } : {}), output }
+    : { model: m.caps.id, prompt, ...params, output };
   const s = await admit(() => request('POST', '/fv/v1/streams', { auth: 'bearer', body }), { isBusy: (e, failed) => failed && BUSY.has(e.status), onWait: waiting });
   const path = '/fv/v1/streams/' + encodeURIComponent(s.id);
   document.body.dataset.stream = s.id;
   document.body.dataset.output = (s.output && s.output.kind) || '';
   log('→ POST /fv/v1/streams: ' + s.id + ' (' + s.mode + ', ' + s.max_seconds + ' s) → ' + ((s.output && s.output.kind) || 'output'));
   // The player follows the output's format (WHEP for WebRTC, HLS for RTMPS / SRT).
+  // It connects in the background: a clip model's first frame comes seconds
+  // after the stream opens (its first clip builds), and the output is not
+  // playable before it, so the commands and the status poll must not wait.
   let player = null;
-  try {
-    player = await playOutput($('video'), s.playback, dest.pasted(), { log });
-    document.body.dataset.player = player.kind || 'none';
-    $('playback-info').textContent = player.kind ? 'Player: ' + player.kind.toUpperCase() + ' · ' + player.url : 'Player: ' + player.why;
-  } catch (e) {
+  const playing = playOutput($('video'), s.playback, dest.pasted(), { log }).then((p) => {
+    player = p;
+    document.body.dataset.player = p.kind || 'none';
+    $('playback-info').textContent = p.kind ? 'Player: ' + p.kind.toUpperCase() + ' · ' + p.url : 'Player: ' + p.why;
+  }).catch((e) => {
     document.body.dataset.player = 'failed';
     log('playback: ' + e.message);
     setMsg('stream-msg', 'Playback: ' + e.message, 'bad');
-  }
+  });
   const poll = setInterval(async () => {
     try {
       const v = await request('GET', path, { auth: 'bearer' });
@@ -4943,6 +5072,7 @@ async function startNative(m, prompt, params) {
       ]);
       setState(st.state === 'streaming' ? 'streaming' : st.state, st.state === 'streaming' ? 'ok' : st.state === 'closed' ? '' : 'warn');
       if (v.session && v.session.prompt) promptNow(v.session.prompt);
+      if (clip) clipEvents(v.events);
       if (st.state === 'closed') stop('the stream ended: ' + (st.end_reason || 'closed') + (st.error ? ' (' + st.error + ')' : ''), true);
     } catch (e) { log('status: ' + e.message); }
   }, 1000);
@@ -4950,13 +5080,14 @@ async function startNative(m, prompt, params) {
     kind: 'native', poll,
     command: async (type, data) => {
       log('→ ' + type + (data && data.prompt ? ' ' + JSON.stringify(data.prompt) : ''));
-      const r = await request('POST', path + '/commands', { auth: 'bearer', body: data ? { type, data } : { type } });
+      const r = await request('POST', path + '/commands', { auth: 'bearer', body: data === undefined || data === null ? { type } : { type, data } });
       const reply = r && r.reply;
       if (reply && reply.type === 'command_error') throw new Error((reply.data && reply.data.reason) || 'refused');
       if (reply && reply.type === 'state_update' && reply.data && reply.data.prompt) promptNow(reply.data.prompt);
       return reply;
     },
     close: async (ended) => {
+      await playing;
       if (player) await player.close();
       if (!ended) { try { await request('DELETE', path, { auth: 'bearer' }); } catch (e) { log('DELETE: ' + e.message); } }
     },
@@ -4974,7 +5105,8 @@ async function start() {
   if (live) return;
   setMsg('stream-msg', '');
   const m = current();
-  if (!m) { setMsg('stream-msg', 'Pick a causal model.', 'bad'); return; }
+  if (!m) { setMsg('stream-msg', 'Pick a streaming model.', 'bad'); return; }
+  if (kindOf(m) === 'clip' && $('transport').value !== 'native') $('transport').value = 'native';
   await loadAuthMode();
   if (needsKey()) { setMsg('stream-msg', 'Set an API key first.', 'bad'); return; }
   const prompt = $('prompt').value.trim();
@@ -4982,7 +5114,7 @@ async function start() {
   const params = {};
   if ($('seed').value.trim()) params.seed = Number($('seed').value.trim());
   if ($('max-seconds').value) params.max_seconds = Number($('max-seconds').value);
-  switches.clear(); $('timeline').replaceChildren(); version = 0; $('stream-stats').replaceChildren(); $('stream-log').replaceChildren();
+  switches.clear(); seenEvents.clear(); $('timeline').replaceChildren(); version = 0; $('stream-stats').replaceChildren(); $('stream-log').replaceChildren();
   for (const k of ['stream', 'player', 'output']) delete document.body.dataset[k];
   delete $('video').dataset.hlsEngine;
   setState('starting', 'warn');
@@ -5024,11 +5156,16 @@ $('start').onclick = start;
 $('stop').onclick = () => stop('stopped');
 $('switch').onclick = async () => {
   const text = $('next').value.trim();
-  if (!text || !live) return;
+  if (!live) { setMsg('stream-msg', 'The stream is still starting.'); return; }
+  if (!text) return;
   const v = addSwitch(text, 'sent');
   markSwitch(v, 'sent', 'warn');
   try {
-    await live.command('set_prompt', { prompt: text });
+    if (isClip()) {
+      const secs = Number($('max-seconds').value);
+      await live.command('enqueue', secs > 0 ? { prompt: text, seconds: secs } : { prompt: text });
+      markSwitch(v, 'queued', 'warn');
+    } else await live.command('set_prompt', { prompt: text });
     $('next').value = '';
   } catch (e) { markSwitch(v, 'refused: ' + e.message, 'bad'); setMsg('stream-msg', e.message, 'bad'); }
 };
@@ -5036,12 +5173,16 @@ $('next').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaK
 $('pause').onclick = async () => {
   if (!live) return;
   live.paused = !live.paused;
-  try { await live.command('set_paused', { paused: live.paused }); } catch (e) { setMsg('stream-msg', e.message, 'bad'); }
+  try {
+    // Causal: pause the rollout. Clip: stop autoplay (the queue keeps generating; Resume plays on).
+    if (isClip()) await live.command('set_autoplay', !live.paused);
+    else await live.command('set_paused', { paused: live.paused });
+  } catch (e) { setMsg('stream-msg', e.message, 'bad'); }
   $('pause').textContent = live.paused ? 'Resume' : 'Pause';
 };
 $('reset').onclick = async () => {
   if (!live) return;
-  try { await live.command('reset', null); log('reset: the rollout restarts from the current prompt'); } catch (e) { setMsg('stream-msg', e.message, 'bad'); }
+  try { await live.command('reset', null); log(isClip() ? 'reset: the queue is dropped (the next clip is a scene cut)' : 'reset: the rollout restarts from the current prompt'); } catch (e) { setMsg('stream-msg', e.message, 'bad'); }
 };
 $('model').onchange = showModel;
 $('transport').onchange = showTransport;

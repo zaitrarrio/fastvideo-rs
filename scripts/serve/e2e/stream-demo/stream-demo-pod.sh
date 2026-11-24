@@ -30,6 +30,12 @@
 #           (fetch-hub-tree.py; the recorded hashes checked), any data centre.
 # stream-demo-plan.py resolves the preset's trees against the source.
 #
+# Output: the page offers the Cloudflare live input over WHIP (WHEP playback)
+# or over RTMPS (HLS playback). WHIP needs UDP out of the pod: on 2026-11-24
+# two RTX PRO 6000 hosts (US-PA-1, EU-RO-1) gathered only a host candidate
+# (no STUN answer) and every WHIP peer timed out in negotiation, while RTMPS
+# published at once from the same pod; an H100 host on 2026-11-04 did WHIP.
+#
 # Alongside fv-serve (:8000, API keys, the console on) the pod serves the demo
 # page on :8001 (python3 http.server); both go through Runpod's HTTPS proxy:
 # https://<pod>-8000.proxy.runpod.net (API + /console/stream) and

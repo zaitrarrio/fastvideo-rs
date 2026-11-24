@@ -1,5 +1,5 @@
 [sol-bench-g1] matrix start image=unknown
-[sol-bench-g1] dry-run weights /fvscratch/weights: 10 volume trees linked from /workspace/weights; 3 R2 trees (194.75 GB) fetched before the arms that read them, at most 126.35 GB on the container disk at once
+[sol-bench-g1] dry-run weights /fvscratch/weights: 20 volume trees linked from /workspace/weights; 3 R2 trees (194.75 GB) fetched before the arms that read them, at most 126.35 GB on the container disk at once
 [sol-bench-g1] dry-run r2 pisa-parity: fetch wan22-ti2v-5b@b8fff7315c768468a5333511427288870b2e9635 (34.20 GB) into /fvscratch/weights
 [sol-bench-g1] dry-run pisa-parity: /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast kernels --groups pisa 
 [sol-bench-g1] dry-run r2 ltx23-hq-fullopt: drop wan22-ti2v-5b (34.20 GB); fetch ltx23@22b09fb1860a944bf10fa21f033d957d9ab9ec20 (71.60 GB), ltx23-dev@3c6a4e66e5d0a684231950b9c74dd4ded7b6fadc (54.75 GB) into /fvscratch/weights

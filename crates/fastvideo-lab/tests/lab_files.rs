@@ -87,7 +87,7 @@ fn trees_and_gates_exist() {
 }
 
 #[test]
-fn only_fasth3_8step_needs_a_tree_the_eu_volume_lacks() {
+fn every_rtx6000_arm_has_its_trees_on_the_eu_volume() {
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let eu: BTreeSet<String> = parse_eu_trees(&read("scripts/gpu/volumes.sh"))
         .into_iter()
@@ -101,21 +101,23 @@ fn only_fasth3_8step_needs_a_tree_the_eu_volume_lacks() {
         .filter(|a| a.trees.iter().any(|t| !eu.contains(t)))
         .map(|a| a.name.clone())
         .collect();
-    // h3-8step is R2-only since 2026-10-13: runpod-matrix.sh records the arm
-    // as skipped ("weights incomplete") on bz0ofkfx45, and so does fv-lab.
-    assert_eq!(missing, ["fasth3-8step"]);
+    // h3-8step was R2-only from 2026-10-13 (runpod-matrix.sh and fv-lab
+    // recorded the fasth3-8step arm as skipped, "weights incomplete", on
+    // bz0ofkfx45) until it was found on the volume and compared with its R2
+    // manifest on 2026-11-24 (docs/ops/runpod-volumes.md §0b).
+    assert_eq!(missing, Vec::<String>::new());
 }
 
 #[test]
-fn the_trees_tiers_lack_on_the_eu_volume_are_h3_8step_fastwan22_and_the_older_ltx2s() {
+fn the_trees_tiers_lack_on_the_eu_volume_are_fastwan22_and_the_older_ltx2s() {
     // Every other tree an arm reads is on bz0ofkfx45 (volumes.sh
     // FV_EU_VOLUME_TREES): the GPU runs exercise every arm but these, which
-    // both runners record as skipped there: h3-8step (R2-only since
-    // 2026-10-13; rtx6000, the D1b families, the oracle's fasth3-8step
-    // cells, fuse's 8-step arms), fastwan22-ti2v-5b (det-short's wan group,
-    // ADR-0019 §15), and ltx23 and ltx2 (the ltx tier's LTX-2.3 and LTX-2.0
-    // arms, D1f §17, gated in the script from then until its branch went,
-    // §17.6).
+    // both runners record as skipped there: fastwan22-ti2v-5b (det-short's
+    // wan group, ADR-0019 §15), and ltx23 and ltx2 (the ltx tier's LTX-2.3
+    // and LTX-2.0 arms, D1f §17, gated in the script from then until its
+    // branch went, §17.6). h3-8step (rtx6000, the D1b families, the oracle's
+    // fasth3-8step cells, fuse's 8-step arms) left this set on 2026-11-24
+    // (docs/ops/runpod-volumes.md §0b).
     let lab = Lab::load(&repo_root()).expect("lab/ parses");
     let eu: BTreeSet<String> = parse_eu_trees(&read("scripts/gpu/volumes.sh"))
         .into_iter()
@@ -129,7 +131,7 @@ fn the_trees_tiers_lack_on_the_eu_volume_are_h3_8step_fastwan22_and_the_older_lt
         .collect();
     assert_eq!(
         lacking,
-        BTreeSet::from(["h3-8step", "fastwan22-ti2v-5b", "ltx23", "ltx2"])
+        BTreeSet::from(["fastwan22-ti2v-5b", "ltx23", "ltx2"])
     );
     let older_ltx: Vec<&str> = script_cells(&lab)
         .into_iter()

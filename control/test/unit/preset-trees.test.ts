@@ -19,8 +19,9 @@ import { AUX_FILES, HUB_TREES } from "../../src/weights-sources";
 import type { Env } from "../../src/env";
 
 const ROOT = new URL("../../../", import.meta.url).pathname;
-/** h3/ltx presets whose trees are not all on the EU volume (R2 only). */
-const R2_ONLY_PRESETS = new Set(["h3-larry-turbo", "h3-lightx2v-turbo", "h3-lightx2v-turbo-v01", "h3-family"]);
+/** h3/ltx presets whose trees are not all on the EU volume (R2 only). Empty since 2026-11-24: the owner had the
+ * NVFP4, Trim, LoRA and VDN trees filled onto the (now 1000 GB) volume (docs/ops/runpod-volumes.md §0b). */
+const R2_ONLY_PRESETS = new Set<string>([]);
 const rust = (p: string) => readFileSync(`${ROOT}${p}`, "utf8");
 /** A preset's worker config: its inline TOML (every preset sends its config at boot), else the named file's. */
 const configOf = (p: (typeof POOL_PRESETS)[number]) => {
@@ -64,11 +65,11 @@ describe("preset trees: each preset lists every tree its config reads", () => {
       for (const t of [...p.weights, ...(p.prequant ?? [])]) {
         expect(R2_TREES[t], `${p.id}: ${t} is published in the R2 weights store`).toBeTruthy();
       }
-      // The 500 GB EU volume holds H3 + LTX only (owner decision 2026-10-13): a preset's trees are all on it (it
-      // mounts the volume) or the Runpod pool defaults to weights_source r2.
+      // The EU volume holds H3 + LTX only (owner decision 2026-10-13; every H3 tree the presets read since the
+      // 2026-11-24 fill): a preset's trees are all on it (it mounts the volume) or the Runpod pool defaults to
+      // weights_source r2.
       const off = missingTrees("bz0ofkfx45", [...p.weights, ...(p.prequant ?? [])])!;
-      // The Turbo LoRA presets read adapters published to R2 only (docs/ports/h3-turbo-loras.md): they default to r2.
-      if (/^(h3|ltx)/.test(p.id) && !R2_ONLY_PRESETS.has(p.id)) expect(off, `${p.id}: on the EU volume`).toEqual([]);
+      if (/^(h3|fasth3|vdn-h3|ltx)/.test(p.id) && !R2_ONLY_PRESETS.has(p.id)) expect(off, `${p.id}: on the EU volume`).toEqual([]);
       else expect(off.length, `${p.id}: not on the EU volume`).toBeGreaterThan(0);
       expect(weightsSource({ ...p.pool }), `${p.id}: Runpod default`).toBe(off.length ? "r2" : "volume");
       // a nested tree sits inside a tree of the same preset (the fetcher places it there, as on the volume)
@@ -101,9 +102,9 @@ describe("the H3 NVFP4 tier, its fast previews and the fastest Trim (owner decis
       expect(RECIPE_TREES[recipe]!.catalog).toBe(catalog);
       expect(MANIFEST_VARIANTS[catalog], `${catalog} is a variant of the family manifests (the fv-serve catalog)`).toBeTruthy();
       expect([...p.weights].sort()).toEqual(["h3-base", ...trees].sort());
-      // The NVFP4 / Trim release trees are in R2 only: those presets default to weights_source r2.
-      const r2Only = trees.some((t) => t.startsWith("fasth3-"));
-      expect(weightsSource({ ...p.pool }), id).toBe(r2Only ? "r2" : "volume");
+      // The NVFP4 / Trim release trees were R2 only until the 2026-11-24 fill put them on the EU volume: every one
+      // of these presets defaults to the volume now.
+      expect(weightsSource({ ...p.pool }), id).toBe("volume");
     });
   }
   it("the preview and fastest choices are never a default: the standard H3 pools are unchanged", () => {

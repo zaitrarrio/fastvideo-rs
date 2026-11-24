@@ -74,13 +74,60 @@ pub fn tier_alias(family: Family, tier: Tier) -> String {
     }
 }
 
-/// The apps mounted when none are configured.
-pub const DEFAULT_APPS: [&str; 5] = [
+/// The H3 variant apps (`minimax/<alias>` → the variant's public name of
+/// `families/h3.toml`, which the engine's aliases resolve): one fal app, and
+/// so one console model page, per served H3 variant beyond the three tiers.
+/// An app whose model a server does not serve lists no endpoints there.
+pub const H3_VARIANT_APPS: [(&str, &str); 16] = [
+    ("minimax/h3-trim", "MiniMax-H3-Trim"),
+    ("minimax/h3-trim-nvfp4", "MiniMax-H3-Trim-NVFP4"),
+    ("minimax/h3-trim-nvfp4-fast", "MiniMax-H3-Trim-NVFP4-Fast"),
+    ("minimax/h3-turbo-nvfp4", "MiniMax-H3-Turbo-NVFP4"),
+    (
+        "minimax/h3-turbo-nvfp4-preview",
+        "MiniMax-H3-Turbo-NVFP4-Preview",
+    ),
+    ("minimax/h3-turbo-preview", "MiniMax-H3-Turbo-Preview"),
+    ("minimax/h3-v2-nvfp4", "MiniMax-H3-V2-NVFP4"),
+    ("minimax/h3-v2-nvfp4-preview", "MiniMax-H3-V2-NVFP4-Preview"),
+    ("minimax/h3-turbo-lora", "MiniMax-H3-Turbo-Lora"),
+    ("minimax/h3-turbo-lightx2v", "MiniMax-H3-Turbo-Lightx2v"),
+    (
+        "minimax/h3-turbo-lightx2v-v0.1",
+        "MiniMax-H3-Turbo-Lightx2v-v0.1",
+    ),
+    ("minimax/h3-plug", "MiniMax-H3-Plug"),
+    ("minimax/h3-plug-cfg", "MiniMax-H3-Plug-CFG"),
+    ("minimax/h3-8step", "fasth3-8step-dense"),
+    ("minimax/vdn-h3", "VDN-H3"),
+    ("minimax/vdn-h3-8step", "VDN-H3-8step"),
+];
+
+/// The apps mounted when none are configured: the H3 tiers, fal's own
+/// `minimax/h3-max-turbo` and base `minimax/h3` ids, and the H3 variant apps
+/// ([`H3_VARIANT_APPS`]).
+pub const DEFAULT_APPS: [&str; 21] = [
     "minimax/h3-max",
     "minimax/h3-turbo",
     "minimax/h3-draft",
     "minimax/h3-max-turbo",
     "minimax/h3",
+    "minimax/h3-trim",
+    "minimax/h3-trim-nvfp4",
+    "minimax/h3-trim-nvfp4-fast",
+    "minimax/h3-turbo-nvfp4",
+    "minimax/h3-turbo-nvfp4-preview",
+    "minimax/h3-turbo-preview",
+    "minimax/h3-v2-nvfp4",
+    "minimax/h3-v2-nvfp4-preview",
+    "minimax/h3-turbo-lora",
+    "minimax/h3-turbo-lightx2v",
+    "minimax/h3-turbo-lightx2v-v0.1",
+    "minimax/h3-plug",
+    "minimax/h3-plug-cfg",
+    "minimax/h3-8step",
+    "minimax/vdn-h3",
+    "minimax/vdn-h3-8step",
 ];
 
 /// The endpoint ids (`app/sub`) of a configured app id, for route tables.
@@ -117,7 +164,9 @@ impl FalApp {
     }
 
     /// fal's `minimax/h3-max-turbo` (the H3 Turbo tier) and `minimax/h3`
-    /// (base H3; served by the H3 Max tier, 480P / 768P only).
+    /// (base H3; served by the H3 Max tier, 480P / 768P only), and the H3
+    /// variant apps ([`H3_VARIANT_APPS`]: the variant's public name, no tier
+    /// fallback, so an app serves only where its variant is).
     pub fn h3_named(id: &str) -> Option<Self> {
         let (alias, tier) = match id {
             "minimax/h3-max" => ("h3-max", Tier::Max),
@@ -125,7 +174,14 @@ impl FalApp {
             "minimax/h3-draft" => ("h3-draft", Tier::Draft),
             "minimax/h3-max-turbo" => ("h3-turbo", Tier::Turbo),
             "minimax/h3" => ("h3-max", Tier::Max),
-            _ => return None,
+            _ => {
+                let (_, name) = H3_VARIANT_APPS.iter().find(|(app, _)| *app == id)?;
+                return Some(Self {
+                    id: id.to_owned(),
+                    model: (*name).to_owned(),
+                    tier: None,
+                });
+            }
         };
         Some(Self {
             id: id.to_owned(),

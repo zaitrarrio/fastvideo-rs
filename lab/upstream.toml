@@ -35,9 +35,10 @@ min_ram_gb = 192
 cell_timeout_s = 7200
 env = ["FASTVIDEO_DUMP_OPS=0,1,24,47"]
 
-# The 8-step checkpoint's view (its h3-8step tree is not on the EU volume:
-# the runtime arms skip on `weights incomplete`) and the Diffusers view, as
-# oracle.sh's union for any fasth3-* target.
+# The 8-step checkpoint's view (its h3-8step tree was not on the EU volume
+# until 2026-11-24, docs/ops/runpod-volumes.md §0b: the runtime arms skipped on
+# `weights incomplete`) and the Diffusers view, as oracle.sh's union for any
+# fasth3-* target.
 [[stack.target]]
 name = "fasth3-8step"
 steps = ["weights:fasth3-8step", "weights:h3-diffusers"]

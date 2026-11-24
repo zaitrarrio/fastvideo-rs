@@ -158,7 +158,13 @@ const FAKE: Record<string, { family: string; recipe: string; public_names?: stri
 
 /** fv-serve's [protocols] defaults (crates/fastvideo-serve/src/config.rs ProtocolsCfg::default). */
 const PROTOCOL_DEFAULTS: Record<string, boolean> = { openai_videos: true, fastwan: false, minimax: true, fal: true, fal_director: true, ltx: true, reactor: true, native: true };
-const DEFAULT_FAL_APPS = ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3"];
+const DEFAULT_FAL_APPS = [
+  "minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3",
+  // The H3 variant apps (fastvideo_fal::H3_VARIANT_APPS): one model page per served variant.
+  "minimax/h3-trim", "minimax/h3-trim-nvfp4", "minimax/h3-trim-nvfp4-fast", "minimax/h3-turbo-nvfp4", "minimax/h3-turbo-nvfp4-preview",
+  "minimax/h3-turbo-preview", "minimax/h3-v2-nvfp4", "minimax/h3-v2-nvfp4-preview", "minimax/h3-turbo-lora", "minimax/h3-turbo-lightx2v",
+  "minimax/h3-turbo-lightx2v-v0.1", "minimax/h3-plug", "minimax/h3-plug-cfg", "minimax/h3-8step", "minimax/vdn-h3", "minimax/vdn-h3-8step",
+];
 /** What each API is, for the endpoint page. */
 export const PROTOCOL_INFO: Record<string, string> = {
   native: "native (/fv/v1/jobs)",

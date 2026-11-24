@@ -59,6 +59,14 @@
         <div id="served-msg" class="msg" role="status"></div>
       </div>
     </section>
+    <section class="stage span2" id="gold-stage" aria-labelledby="h-gold" hidden>
+      <div class="stage-head"><h2 id="h-gold">Gold lab record <span id="gold-title" class="mono"></span></h2><span id="gold-state" class="pill"></span></div>
+      <div class="stage-body">
+        <p class="hint">The variant's gold standard (<code>lab/gold/&lt;variant&gt;.toml</code>, ADR-0009): every number is copied from the source that cites it or declared a gap; <code>fv-lab run gold</code> fills "last validated". Click a served model's name to open it.</p>
+        <div id="gold"></div>
+        <div id="gold-msg" class="msg" role="status"></div>
+      </div>
+    </section>
     <section class="stage span2" aria-labelledby="h-models">
       <div class="stage-head"><h2 id="h-models">fal apps</h2></div>
       <div class="stage-body">

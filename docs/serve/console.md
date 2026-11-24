@@ -10,11 +10,11 @@ with `curl`.
 
 | Page | What it does |
 |---|---|
-| `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, the mounted APIs (its `protocols`), the **served models** with tier, recipe (attention, VAE, steps, profile), tasks and their live page (causal: Live stream, with the session-length rule; duplex: Live input), the tier bindings, and the mounted fal apps and endpoints (an app whose model is not served lists none). With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
+| `/console` | Server URL (defaults to the page's origin) and API key (kept in `localStorage`), key check via `GET /fv/v1/capabilities`, the mounted APIs (its `protocols`), the **served models** with tier, recipe (attention, VAE, steps, profile), tasks and their live page (causal: Live stream, with the session-length rule; clip: Live stream as a clip queue; duplex: Live input), the tier bindings, and the mounted fal apps and endpoints (an app whose model is not served lists none). **A model's name opens its gold lab record** (§2b; `?gold=<variant>` opens one on load). With `FV_AUTH_MODE=none` (capabilities report `auth.mode = "none"`) there is no key field, banner or check, and the console sends no `Authorization`; the admin page still needs the admin token |
 | `/console/admin` | Admin token (kept in `sessionStorage`, this tab only); create, list and revoke API keys; **Experimental features** (§7) |
 | `/console/models/{owner}/{alias}/{task}` | One endpoint, e.g. `minimax/h3-max/reference-to-video`: variant switcher (`h3-max`, `h3-turbo`, `h3-draft`), task tabs, Playground and API tabs |
 | `/console/models/{owner}/{alias}/director` | Live director (WebRTC) page, clip or causal (§4) |
-| `/console/stream` | Live stream: a causal model (SF-Wan, LongLive) over the Reactor runtime or a native `/fv/v1/streams` stream to an output (Cloudflare Stream by default, WHIP, RTMPS, SRT) played back by its format (WHEP or HLS); prompt switches, pause, reset, stop, stats, licence (§4c) |
+| `/console/stream` | Live stream: a causal model (SF-Wan, LongLive) over the Reactor runtime or a native `/fv/v1/streams` stream to an output (Cloudflare Stream by default, WHIP, RTMPS, SRT) played back by its format (WHEP or HLS); prompt switches, pause, reset, stop, stats, licence. A clip model (H3, LTX, Wan) streams natively as a clip queue: enqueue, autoplay, reset (§4c) |
 | `/console/native` | Native API: `POST /fv/v1/jobs` with the fields only it takes, on any served model or tier alias (§4d) |
 | `/console/live` | Live input: publish the camera and microphone (`getUserMedia`) to a duplex model and watch its output, over native WHIP ingest or the Reactor runtime (§4b) |
 | `/console/avatar` | Script avatar: photo, script, scene, speech rate, duration, seed (and an optional driving voice) into the Reactor runtime's avatar mode; the WebRTC stream and a per-window table (build time, real-time factor, when it started, how long playout waited) |
@@ -135,7 +135,38 @@ curl -s -X DELETE "$BASE/fv/v1/admin/keys/key_…" -H "Authorization: Bearer $AD
 Names are 1-64 characters without control characters. Without a valid admin
 token every call answers `401 {"error":{"kind":"unauthorized",…}}`.
 
+## 2b. Gold lab records
+
+Clicking a served model's name on `/console` (or the "gold lab record" link
+in the Live stream page's model facts) opens the variant's gold standard
+(`lab/gold/<variant>.toml`, ADR-0009; filled by `fv-lab run gold`, ADR-0023)
+in a panel under the served models: the pill says when it was last
+validated (`last_validated.commit`, date) or "not yet validated"; then the
+Model, Tier (GPU, SM, VRAM, the offer), Workload (canvas, frames, fps,
+prompt set, seeds, steps, env), Upstream, Latency (what is measured, p50 /
+min / max, denoise, decode, load, peak memory), Quality (the gate verdict,
+the cell, PSNR / LPIPS / sharpness / jitter), Cost (per hour, per clip) and
+Last validated tables as key / value rows, the sources every number is
+copied from (path, heading, date, the fields they cover) and the declared
+gaps. A model with no record says so (404).
+
+The records come from `GET /fv/v1/gold` (the index: variant, family, tier,
+GPU, p50, gate, cost per clip, last validated) and
+`GET /fv/v1/gold/{variant}` (the record as JSON, with `path` and the file's
+`toml`), auth as the native API; `crates/fastvideo-serve/src/gold.rs` embeds
+`lab/gold/*.toml` at build time as the engine embeds `families/*.toml`, and
+a test holds the embedded list to the directory.
+
 ## 3. Model pages
+
+One page per fal app and endpoint. The default apps (`fastvideo_fal::DEFAULT_APPS`,
+`[protocols] fal_apps`) are the H3 tiers (`minimax/h3-{max,turbo,draft}`),
+fal's `minimax/h3-max-turbo` and `minimax/h3`, and since 2026-11-24 one app
+per H3 variant (`fastvideo_fal::H3_VARIANT_APPS`: `minimax/h3-trim`,
+`minimax/h3-turbo-nvfp4`, `minimax/vdn-h3`, … whose model is the variant's
+public name of `families/h3.toml`), so every served variant has a model page
+and a variant tab; an app whose model a server does not serve lists no
+endpoints there and stays off the home page.
 
 The form is built from the endpoint's input JSON Schema,
 `GET /fal/schema/{owner}/{alias}/{sub}` (catalog: `GET /fal/schema`). The
@@ -298,7 +329,16 @@ busy … retrying", instead of failing.
 
 `/console/stream` (`console/stream.js`, WebRTC helpers in `console/rtc.js`)
 runs a **causal** model (`stream.causal` in `GET /fv/v1/capabilities`:
-SF-Wan, LongLive) as one continuous rollout steered by prompt switches. The
+SF-Wan, LongLive) as one continuous rollout steered by prompt switches, or
+(since 2026-11-24) a **clip** model (`stream.clip`: H3, LTX, Wan) as a clip
+queue over the native stream only: the opening prompt is the first clip
+(with "Clip length" when given, `clips: [{prompt, seconds}]`), **Enqueue
+clip** adds one (`enqueue {prompt, seconds}`, marked queued → playing →
+played from the stream object's `clip_started` / `clip_finished` events),
+Pause / Resume toggle autoplay (`set_autoplay`), Reset drops the queue
+(`reset`); the stats show the clip player's state (`session`: playing,
+queue, clip length, autoplay, canvas). The home page links both kinds to
+this page. For a causal model, the
 facts line shows its block size and fps, canvas, recipe and the
 session-length rule (`stream_limits`: 120 s by default, at most 300 s; a
 reset restarts the clock); a fal app whose director runs the model in

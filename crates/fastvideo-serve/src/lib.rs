@@ -58,6 +58,7 @@ pub mod flags;
 #[cfg(feature = "http-client")]
 pub mod front;
 pub mod gate;
+pub mod gold;
 pub mod health;
 /// Native WHIP ingest into duplex models (`/fv/v1/streams/ingest`).
 #[cfg(feature = "webrtc")]

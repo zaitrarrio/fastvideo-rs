@@ -1133,6 +1133,8 @@ pub fn assemble(
         // with native auth: mounted with the native API, like
         // `/fv/v1/capabilities`.
         kit = kit.merge(crate::params::routes(mcfg.clone()));
+        // The gold lab records the console shows per model (src/gold.rs).
+        kit = kit.merge(crate::gold::routes());
         kit = kit.merge(native::routes(
             gate.clone(),
             mcfg.body_max,

@@ -526,14 +526,32 @@ impl Default for ProtocolsCfg {
             ltx: true,
             reactor: true,
             native: true,
-            // = fastvideo_fal::DEFAULT_APPS (the H3 tiers plus fal's own
-            // `minimax/h3-max-turbo` and base `minimax/h3` ids).
+            // = fastvideo_fal::DEFAULT_APPS (the H3 tiers, fal's own
+            // `minimax/h3-max-turbo` and base `minimax/h3` ids, and the H3
+            // variant apps, one model page each; `default_fal_apps_are_fals`
+            // compares them).
             fal_apps: [
                 "minimax/h3-max",
                 "minimax/h3-turbo",
                 "minimax/h3-draft",
                 "minimax/h3-max-turbo",
                 "minimax/h3",
+                "minimax/h3-trim",
+                "minimax/h3-trim-nvfp4",
+                "minimax/h3-trim-nvfp4-fast",
+                "minimax/h3-turbo-nvfp4",
+                "minimax/h3-turbo-nvfp4-preview",
+                "minimax/h3-turbo-preview",
+                "minimax/h3-v2-nvfp4",
+                "minimax/h3-v2-nvfp4-preview",
+                "minimax/h3-turbo-lora",
+                "minimax/h3-turbo-lightx2v",
+                "minimax/h3-turbo-lightx2v-v0.1",
+                "minimax/h3-plug",
+                "minimax/h3-plug-cfg",
+                "minimax/h3-8step",
+                "minimax/vdn-h3",
+                "minimax/vdn-h3-8step",
             ]
             .map(String::from)
             .to_vec(),
@@ -2584,6 +2602,17 @@ body_max_mb = 64
             assert!(!shown.contains(secret), "{secret} leaked");
         }
         assert!(shown.contains("fv-media"));
+    }
+
+    /// The default fal apps are fastvideo-fal's (`DEFAULT_APPS`), kept as a
+    /// literal here because the crate is optional.
+    #[cfg(feature = "fal")]
+    #[test]
+    fn default_fal_apps_are_fals() {
+        assert_eq!(
+            ProtocolsCfg::default().fal_apps,
+            fastvideo_fal::DEFAULT_APPS
+        );
     }
 
     #[test]

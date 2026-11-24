@@ -243,8 +243,9 @@ cells = ["b4a-h3-fullopt-env", "b4a-h3-fullopt-prof", "b4a-h3-4step-tea"]
 # named by variant id, which is how `fv-lab report tiers` finds them. The rtx6000
 # tier's pod: the PRO 6000 every gold file's [tier] names, the same preflight
 # cells, caps and TAE fetch. Weights `volume+r2` (docs/adr/0019-fv-lab.md §16):
-# the trees on the EU volume are read from it, every other tree (Wan,
-# LongLive, the NVFP4, trim, VDN and turbo-LoRA trees) is fetched from the R2
+# the trees on the EU volume are read from it (since 2026-11-24 the NVFP4,
+# trim, VDN, turbo-LoRA and h3-8step trees too, docs/ops/runpod-volumes.md
+# §0b), every other tree (Wan, LongLive) is fetched from the R2
 # weights store onto the container disk before the arms that read it, so every
 # variant runs; a tree in neither is still recorded as skipped (weights
 # incomplete). The container disk: the largest arm's R2 trees (h3-8step,

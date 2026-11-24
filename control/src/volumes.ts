@@ -26,6 +26,16 @@ export const EU_TREES = [
   "h3-to-ltx",
   "auxiliary/tae",
   "auxiliary/lpips",
+  "fasth3-4step-vsa-nvfp4",
+  "fasth3-v2-nvfp4",
+  "fasth3-trim-8step",
+  "vdn-h3-stage-b-2000",
+  "vdn-h3-dmd-250-turbo",
+  "h3-turbo-loras/larry",
+  "h3-turbo-loras/lightx2v",
+  "h3-turbo-loras/lightx2v-v0.1",
+  "fasth3-trim-8step-nvfp4",
+  "h3-8step",
 ] as const;
 // END GENERATED
 

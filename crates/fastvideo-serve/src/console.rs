@@ -3,10 +3,10 @@
 //!
 //! | Route | Page |
 //! |---|---|
-//! | `GET /console` | Connect (server URL, API key in local storage) and the model list (`GET /fal/schema`) |
+//! | `GET /console` | Connect (server URL, API key in local storage), the served models (a name opens its gold lab record, `GET /fv/v1/gold/{variant}`) and the model list (`GET /fal/schema`) |
 //! | `GET /console/admin` | Admin token (session storage), mint / list / revoke API keys (`/fv/v1/admin/keys`) |
 //! | `GET /console/live` | Live input: publish the camera and microphone (getUserMedia) to a duplex model over native WHIP ingest or the Reactor runtime, and watch its output |
-//! | `GET /console/stream` | Live stream: a causal model (SF-Wan, LongLive) over the Reactor runtime (played here) or a native `/fv/v1/streams` stream to an output (Cloudflare Stream by default, WHIP, RTMPS, SRT; played back over WHEP or HLS by output format, docs/serve/stream-outputs.md); prompt switches, pause, reset, stop, stream stats; the model's licence label |
+//! | `GET /console/stream` | Live stream: a causal model (SF-Wan, LongLive) over the Reactor runtime (played here) or a native `/fv/v1/streams` stream to an output, or a clip model (H3, LTX, Wan) as a native clip queue (Cloudflare Stream by default, WHIP, RTMPS, SRT; played back over WHEP or HLS by output format, docs/serve/stream-outputs.md); prompt switches, pause, reset, stop, stream stats; the model's licence label |
 //! | `GET /console/native` | Native API: `POST /fv/v1/jobs` with the fields only it takes (steps, guidance, reference strengths, retake / extend), on any served model or tier (including tiers with no fal endpoint); `flow_shift` / `guidance_scale_2` through OpenAI `/v1/videos` where the model honours them |
 //! | `GET /console/avatar` | The script avatar (Reactor `ltx` over the Reactor runtime in avatar mode): photo, script, scene, speech rate, duration, seed; the WebRTC stream and per-window timings |
 //! | `GET /console/models/{owner}/{alias}/{task}` | A fal model page: Playground (schema-driven form, uploads, result, logs, history) and API snippets; `task = director` is the live WebRTC page |

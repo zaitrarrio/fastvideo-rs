@@ -106,18 +106,21 @@ describe("family templates: one pod per family", () => {
         expect(r2DiskGb(env, plan.trees), `${p.id}: ${plan.trees.join(", ")}`).toBeLessThanOrEqual(500);
       }
     }
-    // H3: the union without the MXFP8 pre-quantized trees fits (about 396 GB, 485 GB of disk); with them it would not.
+    // H3: on the EU volume since the 2026-11-24 fill (docs/ops/runpod-volumes.md §0b). From R2 (a pool that asks for
+    // it), the union without the MXFP8 pre-quantized trees fits (about 396 GB, 485 GB of disk); with them it would not.
     const h3 = preset("h3-family");
-    const plan = weightsPlan({ ...h3.pool }, env);
-    expect(weightsSource({ ...h3.pool }, env)).toBe("r2");
+    expect(weightsSource({ ...h3.pool }, env)).toBe("volume");
+    const plan = weightsPlan({ ...h3.pool, weights_source: "r2" }, env);
     expect(r2Bytes(env, plan.trees) / 1e9).toBeGreaterThan(390);
     expect(r2DiskGb(env, plan.trees)).toBeLessThanOrEqual(500);
     const pq = ["h3-base/text_encoder_fp8", "h3-base/transformer_prequant_4step-vsa_mxfp8", "h3-base/transformer_prequant_sol-h3_mxfp8"];
     expect(r2DiskGb(env, [...plan.trees, ...pq])).toBeGreaterThan(500);
     expect(h3.prequant).toEqual([]);
     expect(h3.min_vram_gb).toBe(96); // VDN-H3
-    // FastH3 keeps turbo's pre-quantized trees; LTX is on the EU volume; streaming from R2.
-    expect(weightsPlan({ ...preset("fasth3-family").pool }, env).trees).toEqual(expect.arrayContaining(["h3-base/transformer_prequant_4step-vsa_mxfp8"]));
+    // FastH3 keeps turbo's pre-quantized trees (when fetched from R2); H3, FastH3 and LTX are on the EU volume;
+    // streaming from R2.
+    expect(weightsPlan({ ...preset("fasth3-family").pool, weights_source: "r2" }, env).trees).toEqual(expect.arrayContaining(["h3-base/transformer_prequant_4step-vsa_mxfp8"]));
+    expect(weightsSource({ ...preset("fasth3-family").pool }, env)).toBe("volume");
     expect(weightsSource({ ...preset("ltx-family").pool }, env)).toBe("volume");
     expect(weightsSource({ ...preset("streaming-family").pool }, env)).toBe("r2");
   });
