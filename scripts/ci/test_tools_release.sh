@@ -110,11 +110,11 @@ mkgroup() { # dir sets... : a fake build of those sets for HEAD; binaries print 
     '{schema: 1, sha: $sha, build_id: "b", build_time: "", oxide_key: "", hf_fetch_model_version: "", build_seconds: 1, sets: $sets}' >"$dir/manifest.json"
 }
 rm -rf "$tmp/in" && mkdir -p "$tmp/in"
-mkgroup "$tmp/in/a" oxide serve-cuda serve-cpu
+mkgroup "$tmp/in/a" oxide serve-cuda serve-cuda-static serve-cpu
 mkgroup "$tmp/in/b" serve-fake gpucheck gpucheck-tests
 mkgroup "$tmp/in/c" gpucheck-vast hf-fm
 echo 2 >"$tmp/in/b/gate-unit-tests.count"
-check "assemble joins the groups into one staged release" "8 2" "$(
+check "assemble joins the groups into one staged release" "9 2" "$(
   bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/in" --out "$tmp/asm" >/dev/null 2>"$tmp/asm.log"
   jq -r '"\(.sets | length) \(.tests | capture("the (?<n>[0-9]+) shipped").n)"' "$tmp/asm/release/manifest.json" 2>/dev/null)"
 grep -q "^manifest-sha256: $(sha256sum "$tmp/asm/release/manifest.json" 2>/dev/null | cut -d' ' -f1)$" "$tmp/asm/release/body.md" 2>/dev/null \
@@ -122,10 +122,10 @@ grep -q "^manifest-sha256: $(sha256sum "$tmp/asm/release/manifest.json" 2>/dev/n
 check "assemble refuses a wrong -V" 2 "$(bash "$T" assemble HEAD --version 0.1.12 --tag tools-v0.1.12 --in "$tmp/in" --out "$tmp/asm4" >/dev/null 2>"$tmp/asm4.log"; echo $?)"
 grep -q "expected 0.1.12" "$tmp/asm4.log" && echo "ok   (because of -V)" || { echo "FAIL -V reason"; tail -3 "$tmp/asm4.log"; fail=1; }
 # fv-boot in the serve set: its `version` must be the release's.
-rm -rf "$tmp/inb" && cp -a "$tmp/in" "$tmp/inb" && FAKE_BOOT_VERSION=0.1.11 mkgroup "$tmp/inb/a" oxide serve-cuda serve-cpu
+rm -rf "$tmp/inb" && cp -a "$tmp/in" "$tmp/inb" && FAKE_BOOT_VERSION=0.1.11 mkgroup "$tmp/inb/a" oxide serve-cuda serve-cuda-static serve-cpu
 check "assemble checks fv-boot's version" 0 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/inb" --out "$tmp/asm5" >/dev/null 2>"$tmp/asm5.log"; echo $?)"
 grep -q "serve-cpu/out/fv-boot: fv-boot 0.1.11" "$tmp/asm5.log" && echo "ok   (fv-boot 0.1.11 checked)" || { echo "FAIL fv-boot not checked"; tail -3 "$tmp/asm5.log"; fail=1; }
-FAKE_BOOT_VERSION=0.1.1 mkgroup "$tmp/inb/a" oxide serve-cuda serve-cpu
+FAKE_BOOT_VERSION=0.1.1 mkgroup "$tmp/inb/a" oxide serve-cuda serve-cuda-static serve-cpu
 check "assemble refuses an fv-boot with another version" 2 "$(bash "$T" assemble HEAD --version 0.1.11 --tag tools-v0.1.11 --in "$tmp/inb" --out "$tmp/asm6" >/dev/null 2>"$tmp/asm6.log"; echo $?)"
 grep -q "fv-boot version says 'fv-boot 0.1.1', expected fv-boot 0.1.11" "$tmp/asm6.log" && echo "ok   (because of fv-boot version)" || { echo "FAIL fv-boot reason"; tail -3 "$tmp/asm6.log"; fail=1; }
 # fv-lab in the gpucheck set: its -V must be the release's.
