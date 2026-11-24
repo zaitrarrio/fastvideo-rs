@@ -130,10 +130,11 @@ fn pod_body_equals_runpod_http_sh_but_the_runner() {
     // read R2 trees (ADR-0019 §16, §21, §22 S3, S4, S5, S6), and the 20
     // sol-bench tiers but a1 / a3 (§23); every other tier's pod is unchanged.
     // The variants tier (fv-lab's own, FV_LAB_OWN) fetches Wan trees and
-    // the Plug adapters from R2 too.
+    // the Plug adapters from R2 too, and sage-wan (own, WO-2b of ADR-0024
+    // step 2) fetches fastwan22-ti2v-5b.
     assert_eq!(
-        r2_tiers, 27,
-        "six volume+r2 tiers (gold, oracle-r2, serve-engine, sfstream, mmaudio, wan), 20 sol-bench tiers and variants"
+        r2_tiers, 28,
+        "six volume+r2 tiers (gold, oracle-r2, serve-engine, sfstream, mmaudio, wan), 20 sol-bench tiers, variants and sage-wan"
     );
     // The sol-bench tiers' pods (ADR-0019 §23): the TAE fetch skipped (tae =
     // false), the self-delete at the 3900 s cap, the 3300 s cell cap; a
