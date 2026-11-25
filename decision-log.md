@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: high (a new entry point beside the base kernel; the default variant flips only on acceptance; `auto` unchanged until the gates)
 - Executed by: PR #258 (branch `claude/adr24-step3b-igemm`), the WO-3b-ii section
 - ADR: docs/adr/0024-driver-only-runtime.md (step 3, D6)
-- Verification: pending (the WO's acceptance criteria; GPU runs need a Runpod top-up: balance $8.60 against the $8 floor)
+- Verification: done 2026-11-25, the WO's kill criterion met (runs a9ae65d and 5111c99, `docs/perf/2026-11-25-conv-routes.md` "WO-3b-ii"): the warp-specialised kernel is correct but bound by the producer warps' memory-issue rate (one producer 2.7-3.5× cuDNN, two 1.7-1.9×), with no register room for more at two CTAs per SM; the base kernel (1.2-1.3× micro, 1.42× on the LTX decode) stays the best. The margin decision is open
 
 ### FVID · 2026-11-25 · FVID-2026-11-25-conv-route
 - Trigger: ADR-0024 step 3 WO-3a (`docs/plan/2026-11-25-adr24-step3-wo.md`), the routed spike on an RTX PRO 6000 (`docs/perf/2026-11-25-conv-routes.md`, record `artifacts/runpod/rtx6000/a9ee908-11250652/`): two cuDNN-free dense-conv routes against today's cuDNN bf16 on the served Wan 2.1 / 2.2, LTX-2.5 and encoder shapes

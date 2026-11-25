@@ -368,9 +368,57 @@ tail flushed in two steps) and adds `ws2`, two producer warps (192
 threads, 8 + 8 chunks per lane, the same 168-register budget), to
 separate issue rate from latency in run 2.
 
-### Run 2 (5111c99): not run
+### Run 2 (5111c99): the producer side is the limit
 
-The Runpod balance read $7.88 after run 1, below the $8 floor of
-CLAUDE.md; the run is prepared (the runtime image `sha-5111c99` builds
-in CI) and waits for a top-up. Expected cost: one 600 s-capped kernels
-run, about $0.1-0.45.
+Record `artifacts/runpod/rtx6000/5111c99-11251921/`, every check passing
+(the owner waived the balance floor for this run).
+
+| shape | w32 | ws (run 1, lag 1) | ws (lag 2) | ws2 (two producers, lag 2) | probe_dense | probe_noload |
+|---|---|---|---|---|---|---|
+| wan22-1024-s1 | **1.31** | 2.68 | 3.55 | 1.89 | 1.17 | 0.95 |
+| wan22-512-s2 | **1.21** | 2.40 | 3.06 | 1.69 | 1.06 | 0.87 |
+| wan21-96 | **0.89** | 1.50 | 1.85 | 1.15 | 0.82 | 0.71 |
+| ltx-1024 | **1.32** | 2.41 | 3.15 | 1.82 | 1.23 | 1.01 |
+| ltx-up-4096 | **1.34** | 2.61 | 3.30 | 1.86 | 1.24 | 1.02 |
+| ltx-256 | **1.12** | 2.21 | 2.79 | 1.57 | 1.02 | 0.85 |
+
+Two producer warps run the kernel in half the time of one (ws2 vs ws,
+same signalling), and signalling later (more latency hiding) made the
+one-producer kernel slower, not faster. So the warp-specialised kernel
+is not latency-bound; it is bound by how fast a warp can issue the
+gathered `cp.async` traffic: a producer warp's 32 copies per k-tile (16 B
+per lane, eight 64-byte row segments per instruction) serialise in that
+warp's memory pipeline, and the time per k-tile scales with the number
+of warps that share the issuing. The base kernel already spreads the
+same copies over its eight warps; that is why it is the fastest
+arrangement found.
+
+Why there is no room to add producers: with 64×64 consumer tiles (128
+accumulators) a CTA can hold two producer warps at two CTAs per SM
+(twelve warps per SM, 168 registers); a third puts four warps on a
+sub-partition (128 registers) and spills the accumulators; eight 64×32
+consumers (the base kernel's warps) plus P producers must fit twenty
+warps per SM at about 100 registers, so P ≤ 2 again. One CTA per SM
+would allow more producers but halves the computing warps per SM, which
+every one-CTA variant of the tuning rounds already showed losing.
+
+### Outcome: the kill criterion applies
+
+The WO's stop rule (above 1.15× on the carrying shapes once correct at
+two CTAs per SM): ws2 is at 1.7-1.9×, the base kernel at 1.2-1.3×, and
+the measurements say the remaining cost on this GPU is the memory
+pipeline's handling of 64-byte row segments (half a 128-byte line per
+`cp.async` row at BK = 32), which only a BK = 64 tile (128-byte
+segments) would change; at two CTAs per SM that tile does not fit the
+128 KB of shared memory of compute capability 12.0 (round 2 and 3). No
+`convgate` run. The implicit GEMM stays at about 1.2-1.3× cuDNN's NCDHW
+plans on the micro-benchmark and 1.42× cuDNN's NHWC plans on the LTX-2.5
+decode, correct and quality-gated; the margin decision returns to the
+owner with the three options of 2026-11-25 (accept the slowdown on the
+static image only; park step 3; a datacentre-only kernel as WP-G).
+
+One in-budget idea the rounds did not try, for the record: a
+128×64×64 two-stage tile (A 16 KB + B 8 KB per stage, 48 KB) keeps two
+CTAs per SM with 128-byte row segments at the cost of half the N reuse
+and a two-stage ring (the spike's two-stage kernel was within 5 % of the
+three-stage one).
