@@ -168,3 +168,36 @@ channels-last) the NDHWC-native entry, which skips the transposes
 entirely. In-kernel, the epilogue's scattered f32 stores and a BK = 64 /
 dynamic-smem variant are the next candidates once the real decode gates
 say where the wall time goes.
+
+## WO-3b increment 2: the first decode gate (convgate tier, 2026-11-25)
+
+`fv-lab pod up --family convgate` at `6dea13e` (PR #258) on an RTX PRO 6000:
+the LTX-2.5 fast decoder at 1080p 20 s (481 frames, synthetic latents, the
+real tiles and temporal chunks), cuDNN bf16 NHWC convs (today's path)
+against the implicit GEMM through its NDHWC entry (`FASTVIDEO_CONV3D=igemm`,
+no transposes, bf16 from the epilogue). Record:
+`artifacts/runpod/convgate/6dea13e-1125094821-944c/`.
+
+| | cuDNN bf16 (NHWC plans) | igemm |
+|---|---|---|
+| decode wall time (481 frames) | 13.17 s | 18.74 s (**1.42×**) |
+| peak device memory | 8 834 MiB | 7 042 MiB (no cuDNN workspace) |
+| first tile vs the streaming decoder (`FASTVIDEO_LTX_VAE_CHECK`), rel_l2 | 7.2e-3 | 6.8e-3 |
+| frames, igemm vs cuDNN: PSNR mean / min | | 55.8 dB / 54.9 dB |
+| LPIPS mean / max (44 sampled pairs) | | 1.4e-4 / 1.9e-4 |
+| sharpness ratio, temporal jitter ratio | | 1.0000, 1.0000 |
+| max abs pixel difference (uint8) | | 6 |
+
+Quality is settled: the two decoders differ by bf16 summation order only
+(55.8 dB, LPIPS 1e-4, no sharpness or jitter change), and the igemm arm
+sits closer to the f32 streaming decoder than cuDNN does.
+
+Speed is not: 1.42× on the real decode against the 1.2× the micro-benchmark
+suggested. The difference is the baseline, not the kernel: the fast
+decoder's cuDNN runs NHWC-native plans (no layout change inside cuDNN),
+while `conv_routes` compared against `cudnn_conv_bf16` on NCDHW tensors,
+which pays a layout change inside cuDNN. Against cuDNN's best kernels the
+implicit GEMM is 1.4× behind on LTX's shapes. The owner's margin (proposed
+1.10×) is not met; what remains is mainloop work: BK = 64 with dynamic
+shared memory (half the barriers per k), the classic 256×128 CTA tile with
+64×64 warp tiles, and the epilogue's scattered stores.

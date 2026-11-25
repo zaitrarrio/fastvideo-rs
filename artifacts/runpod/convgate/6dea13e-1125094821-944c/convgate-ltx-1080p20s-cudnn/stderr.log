@@ -1,0 +1,7 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] ltx vae: channels-last bf16 decoder (0.02s to convert weights)
+[INFO] ltx2/vae_check {"fast_s":0.179272807,"max_abs":0.0703125,"rel_l2":0.007185303459423172,"same_shape":true,"streaming_s":0.51307399,"tile":[1,128,10,14,24]}
+[fastvideo] ltx2 video decode 13.17s: vae 13.14s, rgb 0.78s, push 0.00s, wait 1.28s
+[fastvideo] video writer: 481 frames, png deferred (0 inline, 481 after the mp4 in 0.87s, 1.66 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 2.81 GiB of 43.62
+ltx2 vae-bench fast: decode 13.17s (vae 13.14s, rgb 0.78s, push 0.00s, wait 1.28s, mp4 tail 0.00s), png frames after 0.87s, peak Some(8834) MiB
+[PASS] stage ltx2 → gpucheck-out/ltx2.json (31.7s)
