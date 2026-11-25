@@ -463,7 +463,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && if ldd /out/fv-serve | grep -E 'libcublas|libcublasLt|libnvrtc|libcudart|libcupti'; then \
       echo "static-build: fv-serve still needs a shared CUDA library"; exit 1; fi \
  && ldd /out/fv-serve | grep -q libcudnn.so.9 \
- && ls -la /out/fv-serve
+ && mkdir -p /out/driver-stub \
+ && cp /usr/local/cuda-13.4/targets/x86_64-linux/lib/stubs/libcuda.so /out/driver-stub/libcuda.so.1 \
+ && ls -la /out/fv-serve /out/driver-stub
 
 # boot-build: fv-boot (docs/adr/0014-fv-boot.md), the serve images' entrypoint. No CUDA: one binary for the CUDA and
 # cpu images. Its own stage, so a tools release that carries it replaces only this (prebuilt.sh boot-build=…), and
@@ -614,8 +616,10 @@ RUN if ldd /opt/fastvideo-rs/bin/llama-server | grep 'not found'; then echo "lla
 COPY --from=static-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
 # The static binary names libcuda.so.1 in its DT_NEEDED (the dynamic one dlopens it), so it cannot start on a host
 # without the driver. The toolkit's driver stub, off the loader's path: only CI's no-GPU smoke check points
-# LD_LIBRARY_PATH at it (ci-images.sh smoke); on a GPU host the real libcuda.so.1 is on the default path.
-COPY --from=static-build /usr/local/cuda-13.4/targets/x86_64-linux/lib/stubs/libcuda.so /opt/fastvideo-rs/lib/driver-stub/libcuda.so.1
+# LD_LIBRARY_PATH at it (ci-images.sh smoke); on a GPU host the real libcuda.so.1 is on the default path. It is part
+# of the stage's /out, so the prebuilt serve-cuda-static set (release-artifacts-pod.sh) carries it too: with prebuilt
+# tools this stage is a build context of that set, which has no toolkit (serve-image run 45525120232).
+COPY --from=static-build /out/driver-stub/libcuda.so.1 /opt/fastvideo-rs/lib/driver-stub/libcuda.so.1
 COPY --from=boot-build /out/fv-boot /opt/fastvideo-rs/bin/
 COPY configs/serve/runpod-fake.toml /etc/fv/
 ENV FV_VARIANT=cuda-static
