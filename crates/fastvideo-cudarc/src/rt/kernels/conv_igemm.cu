@@ -369,21 +369,23 @@ __device__ __forceinline__ void ig_bar_arrive(int id, int count) {
 }
 
 // WO-3b-ii: the warp-specialised mainloop. 128 x 128 x 32 tile, four consumer
-// warps (2 x 2 of 64 x 64) that never issue a global load, one producer warp
-// that fills the STAGES-deep cp.async ring (the im2col gather for A, the
-// weight rows for B) and signals each stage through a named barrier; the
-// consumers release a stage through another. 160 threads, 48 KB, two CTAs per
-// SM. The three capped tuning rounds (docs/perf/2026-11-25-conv-routes.md)
+// warps (2 x 2 of 64 x 64) that never issue a global load, P producer warps
+// that fill the STAGES-deep cp.async ring (the im2col gather for A, the
+// weight rows for B) and signal each stage through a named barrier; the
+// consumers release a stage through another. 128 + 32 P threads, 48 KB, two
+// CTAs per SM. The three capped tuning rounds (docs/perf/2026-11-25-conv-routes.md)
 // put the base kernel's loss against cuDNN in the loads' issue and address
 // work inside the computing warps, not in latency a deeper ring would hide
 // (sm_120's 128 KB per SM caps the ring at three stages anyway).
 //   full[s]  (id 1 + s):          producer arrives (32), consumers sync (128).
 //   empty[s] (id 1 + STAGES + s): consumers arrive (128), producer syncs (32).
-// The producer signals stage kt after issuing kt + 1 and waiting for all but
-// the newest group, so two stages are in flight while one is computed, as in
-// the base kernel. MODE 0: the convolution. MODE 3 (probe): no epilogue
-// stores (the accumulators are reduced to one NaN test per thread).
-template <int STAGES, int MODE>
+// A producer signals stage kt after issuing kt + 2 and waiting for all but
+// its two newest groups, so two stages are in flight while one is computed,
+// as in the base kernel (run 1 of the WO signalled after kt + 1: one stage of
+// latency hiding, and the kernel ran at half the base kernel's speed).
+// MODE 0: the convolution. MODE 3 (probe): no epilogue stores (the
+// accumulators are reduced to one NaN test per thread).
+template <int P, int STAGES, int MODE>
 __device__ __forceinline__ void ig_ws_body(
     const unsigned short* __restrict__ x, const unsigned short* __restrict__ w, float* __restrict__ y,
     unsigned short* __restrict__ y16, int out16,
@@ -394,10 +396,12 @@ __device__ __forceinline__ void ig_ws_body(
     constexpr int BM = 128, BN = 128, BK = 32, WM = 64, WN = 64;
     constexpr int WARPS_N = BN / WN;
     constexpr int CONSUMERS = (BM / WM) * WARPS_N * 32;   // 128
-    constexpr int NT = CONSUMERS + 32;                    // 160
+    constexpr int NT = CONSUMERS + 32 * P;
     constexpr int MT = WM / 16, NTL = WN / 8;
     constexpr int ROWB = BK * 2, CHUNKS = BK / 8, KC = BK / 16;
-    constexpr int A_CH = BM * CHUNKS / 32, B_CH = BN * CHUNKS / 32;   // 16 B chunks per producer lane per stage
+    constexpr int PL = 32 * P;                                          // producer lanes
+    constexpr int A_CH = BM * CHUNKS / PL, B_CH = BN * CHUNKS / PL;     // 16 B chunks per producer lane per stage
+    static_assert(A_CH * PL == BM * CHUNKS && B_CH * PL == BN * CHUNKS, "chunks split evenly over the producer lanes");
     constexpr int TILE_A = BM * ROWB, TILE_B = BN * ROWB, STAGE_B = TILE_A + TILE_B;
     static_assert(STAGES >= 3 && STAGES <= 7, "named barrier ids 1..15");
 
@@ -415,8 +419,8 @@ __device__ __forceinline__ void ig_ws_body(
     if (m0 >= M || n0 >= N || nk <= 0) return;
     y += (long)z * M * N;
 
-    if (warp == BM / WM * WARPS_N) {
-        // ---- the producer warp ----
+    if (warp >= BM / WM * WARPS_N) {
+        // ---- the producer warps ----
         // Lane l owns chunk column l % CHUNKS of rows l / CHUNKS + 8 i.
         // Per row (16 per lane): the output pixel's first input coordinate per
         // axis (od * stride - pad, before the tap offset), d and h packed into
@@ -424,12 +428,13 @@ __device__ __forceinline__ void ig_ws_body(
         // tap offset brings it in range), and the batch's element offset:
         // four registers a row (the budget is 168: five warps a CTA, ten an SM,
         // three on one sub-partition).
-        const int cc = lane % CHUNKS, rowl = lane / CHUNKS;
+        const int gl = (warp - BM / WM * WARPS_N) * 32 + lane;
+        const int cc = gl % CHUNKS, rowl = gl / CHUNKS;
         int a_dh[A_CH], a_w0[A_CH];
         long a_off[A_CH];
         #pragma unroll
         for (int i = 0; i < A_CH; i++) {
-            const int row = rowl + i * (32 / CHUNKS);
+            const int row = rowl + i * (PL / CHUNKS);
             const long m = m0 + row;
             const int ok = m < M;
             const long mm = ok ? m : 0;
@@ -453,7 +458,7 @@ __device__ __forceinline__ void ig_ws_body(
             const int kdd = kd * DD, khd = kh * DH, kwd = kw * DW;
             #pragma unroll
             for (int i = 0; i < A_CH; i++) {
-                const int row = rowl + i * (32 / CHUNKS);
+                const int row = rowl + i * (PL / CHUNKS);
                 const int id = (a_dh[i] >> 16) + kdd, ih = (int)((short)(a_dh[i] & 0xffff)) + khd, iw = a_w0[i] + kwd;
                 const int ok = kok && (unsigned)id < (unsigned)D && (unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W;
                 const unsigned short* src = ok ? x + a_off[i] + id * row_d + ih * row_h + (long)iw * C + ci : x;
@@ -461,7 +466,7 @@ __device__ __forceinline__ void ig_ws_body(
             }
             #pragma unroll
             for (int i = 0; i < B_CH; i++) {
-                const int row = rowl + i * (32 / CHUNKS);
+                const int row = rowl + i * (PL / CHUNKS);
                 const int n = n0 + row;
                 const int bok = (n < N) && kok;
                 mma_cp_async16_zfill(sB + ig_swz<BK>(row, cc), bok ? (const void*)(w + (long)n * K + k) : (const void*)w, bok);
@@ -472,11 +477,16 @@ __device__ __forceinline__ void ig_ws_body(
             const int s = kt % STAGES;
             if (kt >= STAGES) ig_bar_sync(1 + STAGES + s, NT);   // the consumers are done with kt - STAGES
             load_stage(kt, s);
-            if (kt >= 1) {
-                mma_cp_wait<1>();            // every group but the newest: kt - 1 has landed
+            if (kt >= 2) {
+                mma_cp_wait<2>();            // every group but the two newest: kt - 2 has landed
                 __threadfence_block();
-                ig_bar_arrive(1 + (kt - 1) % STAGES, NT);
+                ig_bar_arrive(1 + (kt - 2) % STAGES, NT);
             }
+        }
+        if (nk >= 2) {
+            mma_cp_wait<1>();
+            __threadfence_block();
+            ig_bar_arrive(1 + (nk - 2) % STAGES, NT);
         }
         mma_cp_wait<0>();
         __threadfence_block();
@@ -594,18 +604,26 @@ extern "C" __global__ void __launch_bounds__(128, 2) conv_igemm_bf16_w64(IG_ARGS
 #endif
 }
 
-// WO-3b-ii: the warp-specialised mainloop (ig_ws_body), 160 threads, 48 KB
-// static, two CTAs per SM; and its no-epilogue probe (MODE 3, wrong values).
+// WO-3b-ii: the warp-specialised mainloop (ig_ws_body) with one producer warp
+// (160 threads) and with two (192 threads; five or six warps a CTA, ten or
+// twelve an SM: three on one sub-partition either way, 168 registers), 48 KB
+// static, two CTAs per SM; and the one-producer no-epilogue probe (MODE 3).
 extern "C" __global__ void __launch_bounds__(160, 2) conv_igemm_bf16_ws(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     __shared__ __align__(128) unsigned char smem[3 * (128 + 128) * 64];
-    ig_ws_body<3, 0>(IG_PASS, smem);
+    ig_ws_body<1, 3, 0>(IG_PASS, smem);
+#endif
+}
+extern "C" __global__ void __launch_bounds__(192, 2) conv_igemm_bf16_ws2(IG_ARGS) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    __shared__ __align__(128) unsigned char smem[3 * (128 + 128) * 64];
+    ig_ws_body<2, 3, 0>(IG_PASS, smem);
 #endif
 }
 extern "C" __global__ void __launch_bounds__(160, 2) conv_igemm_bf16_ws_probe_noepi(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     __shared__ __align__(128) unsigned char smem[3 * (128 + 128) * 64];
-    ig_ws_body<3, 3>(IG_PASS, smem);
+    ig_ws_body<1, 3, 3>(IG_PASS, smem);
 #endif
 }
 
