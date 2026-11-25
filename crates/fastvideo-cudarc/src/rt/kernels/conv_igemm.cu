@@ -387,20 +387,31 @@ extern "C" __global__ void __launch_bounds__(128, 2) conv_igemm_bf16_w64(IG_ARGS
 #endif
 }
 
-// 128 x 128 x 64, 256 threads (2 x 4 warps of 64 x 32), 2 stages: 64 KB dynamic, one CTA per SM.
-extern "C" __global__ void __launch_bounds__(256, 1) conv_igemm_bf16_bk64(IG_ARGS) {
+// 128 x 128 x 64, 256 threads, 2 stages: 64 KB dynamic. Round 2 ran it at one
+// CTA per SM (184 registers) and lost 25 %; round 3 holds it to two CTAs per
+// SM (128 registers) to separate the occupancy from the k-tile length.
+extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16_bk64(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     extern __shared__ __align__(128) unsigned char ig_dyn_smem[];
     ig_body<128, 128, 64, 64, 32, 2, 0>(IG_PASS, ig_dyn_smem);
 #endif
 }
 
-// 256 x 128 x 32, 512 threads (4 x 4 warps of 64 x 32), 3 stages: 72 KB dynamic, one CTA per SM
-// (16 warps: the same warps per SM as two 128-row CTAs, twice the mma per barrier).
-extern "C" __global__ void __launch_bounds__(512, 1) conv_igemm_bf16_m256(IG_ARGS) {
+// The base tile with deeper cp.async rings in dynamic smem at two CTAs per
+// SM: 4 stages (64 KB, 128 KB per SM) and 6 stages (96 KB, 192 KB per SM;
+// sm_100 / sm_120 have 228 KB). Round 3: the probes put the cost of the
+// loads at 20-25 points with the gather removed, which a pipeline two
+// stages deep at 2 CTAs per SM does not cover.
+extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16_s4(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     extern __shared__ __align__(128) unsigned char ig_dyn_smem[];
-    ig_body<256, 128, 32, 64, 32, 3, 0>(IG_PASS, ig_dyn_smem);
+    ig_body<128, 128, 32, 64, 32, 4, 0>(IG_PASS, ig_dyn_smem);
+#endif
+}
+extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16_s6(IG_ARGS) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    extern __shared__ __align__(128) unsigned char ig_dyn_smem[];
+    ig_body<128, 128, 32, 64, 32, 6, 0>(IG_PASS, ig_dyn_smem);
 #endif
 }
 

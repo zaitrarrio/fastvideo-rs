@@ -989,7 +989,8 @@ pub const IGEMM_VARIANTS: &[IgemmVariant] = &[
     variant("w32", 128, 128, 256, 0, false),
     variant("w64", 128, 128, 128, 0, false),
     variant("bk64", 128, 128, 256, 2 * (128 + 128) * 128, false),
-    variant("m256", 256, 128, 512, 3 * (256 + 128) * 64, false),
+    variant("s4", 128, 128, 256, 4 * (128 + 128) * 64, false),
+    variant("s6", 128, 128, 256, 6 * (128 + 128) * 64, false),
     variant("probe_dense", 128, 128, 256, 0, true),
     variant("probe_noload", 128, 128, 256, 0, true),
 ];
@@ -1088,7 +1089,8 @@ fn igemm_launch<'a>(
     let func: &cudarc::driver::CudaFunction = match v.name {
         "w64" => &dev.kernels.conv_igemm_bf16_w64,
         "bk64" => &dev.kernels.conv_igemm_bf16_bk64,
-        "m256" => &dev.kernels.conv_igemm_bf16_m256,
+        "s4" => &dev.kernels.conv_igemm_bf16_s4,
+        "s6" => &dev.kernels.conv_igemm_bf16_s6,
         "probe_dense" => &dev.kernels.conv_igemm_bf16_probe_dense,
         "probe_noload" => &dev.kernels.conv_igemm_bf16_probe_noload,
         _ => &dev.kernels.conv_igemm_bf16,

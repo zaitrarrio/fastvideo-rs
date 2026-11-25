@@ -246,5 +246,44 @@ current kernel.
 
 ### Round 2 (14300de): BK = 64 and the 256×128 tile
 
-(run pending)
+Two variants beside the current kernel (`w32`), record
+`artifacts/runpod/rtx6000/14300de-11251423/`, every check passing:
+
+- `bk64`: 128×128×64, two stages, 64 KB dynamic smem. ptxas gives it 184
+  registers, so it runs one CTA per SM.
+- `m256`: 256×128×32, 16 warps (512 threads), three stages, 72 KB: one
+  CTA per SM, the same 16 warps per SM as two base CTAs, twice the mma
+  per barrier.
+
+| shape | w32 | bk64 | m256 | probe_dense | probe_noload |
+|---|---|---|---|---|---|
+| wan22-1024-s1 | **1.34** | 1.63 | 1.64 | 1.15 | 0.92 |
+| wan22-512-s2 | **1.23** | 1.47 | 1.51 | 1.01 | 0.84 |
+| wan21-96 | **0.92** | 1.11 | 1.09 | 0.84 | 0.73 |
+| ltx-1024 | **1.34** | 1.64 | 1.72 | 1.25 | 0.99 |
+| ltx-up-4096 | **1.28** | 1.60 | 1.60 | 1.21 | 0.98 |
+| ltx-256 | **1.07** | 1.31 | 1.36 | 0.97 | 0.81 |
+| bench-192x6x120x208 | **1.24** | 1.49 | 1.55 | 1.09 | 0.88 |
+
+Both lose by 20-30 % on every shape. The barrier count per FLOP is not
+the limiter: `m256` has the same warps per SM as the base kernel and half
+the barriers, and is the slower of the two. What both share is one CTA
+per SM: a `__syncthreads` then stalls all 16 warps of the SM's work at
+once, where two independent CTAs cover each other's barrier and pipeline
+waits. The round confirms round 1's finding from the other side:
+occupancy (two CTAs per SM) is worth more than anything inside the
+k-tile.
+
+### Round 3 (the last): deeper rings at two CTAs per SM
+
+The probes' arithmetic for the wide shapes: no loads 0.92, dense loads
+1.15, the gather 1.34. The 23 points between no loads and dense loads are
+the cost of plain, coalesced cp.async traffic that a ring only two stages
+deep (three stages, one being computed) does not hide at 32 k per stage.
+Round 3 keeps two CTAs per SM and deepens the ring in dynamic smem: `s4`
+(four stages, 64 KB per CTA, 128 KB per SM) and `s6` (six stages, 96 KB,
+192 KB of the SM's 228 KB), both at 113-114 registers; `bk64` runs again
+held to two CTAs per SM (`__launch_bounds__(256, 2)`, 126 registers, no
+spills) to separate its occupancy loss from the k-tile length. `m256` is
+dropped (settled above).
 
