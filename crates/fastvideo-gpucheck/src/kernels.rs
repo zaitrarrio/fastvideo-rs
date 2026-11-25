@@ -2957,13 +2957,13 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             let (xd, wd) = (xt.device_slice().unwrap(), wt.device_slice().unwrap());
             type Run<'a> = Box<dyn Fn() -> anyhow::Result<(CudaSlice<f32>, Vec<usize>)> + 'a>;
             let (xs, ws, pd, st) = (&x_shape, &w_shape, &pad, &stride);
-            let variant = |wn: usize| -> Run<'_> {
+            let variant = |wn: usize, probe: u8| -> Run<'_> {
                 Box::new(move || {
-                    let plan = conv::igemm_plan_with(xs, ws, pd, st, wn)?;
+                    let plan = conv::igemm_plan_with(xs, ws, pd, st, wn, probe)?;
                     Ok(conv::conv3d_igemm_with(xd, xs, wd, ws, pd, st, Some(plan))?)
                 })
             };
-            let routes: [(&str, Run<'_>); 5] = [
+            let routes: [(&str, Run<'_>); 7] = [
                 (
                     "cudnn_bf16",
                     Box::new(|| {
@@ -2994,8 +2994,10 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                         )?)
                     }),
                 ),
-                ("igemm_w32", variant(32)),
-                ("igemm_w64", variant(64)),
+                ("igemm_w32", variant(32, 0)),
+                ("igemm_w64", variant(64, 0)),
+                ("igemm_probe_dense", variant(32, 1)),
+                ("igemm_probe_noload", variant(32, 2)),
             ];
             // Reference output: cuDNN bf16 (kept on the device).
             let (y_ref, y_shape) = (routes[0].1)()?;
@@ -3026,9 +3028,11 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                 values.insert("igemm_wn".into(), json!(plan.wn));
                 values.insert("igemm_splits".into(), json!(plan.splits));
             }
-            for &wn in conv::IGEMM_VARIANTS {
-                if let Ok(plan) = conv::igemm_plan_with(&x_shape, &w_shape, &pad, &stride, wn) {
-                    values.insert(format!("igemm_w{wn}_splits"), json!(plan.splits));
+            for &(name, wn, probe) in conv::IGEMM_VARIANTS {
+                if let Ok(plan) =
+                    conv::igemm_plan_with(&x_shape, &w_shape, &pad, &stride, wn, probe)
+                {
+                    values.insert(format!("igemm_{name}_splits"), json!(plan.splits));
                 }
             }
             for (name, run) in &routes {
@@ -3053,7 +3057,9 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                     )?;
                     continue;
                 }
-                if let Some(want) = want_host.as_ref() {
+                // The probes are timing only (wrong values by design).
+                let probe = name.contains("probe");
+                if let (Some(want), false) = (want_host.as_ref(), probe) {
                     c.cmp(
                         &format!("conv_routes_{}_{name}_vs_host", sh.tag),
                         &down(&y)?,
@@ -3061,7 +3067,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                         5e-3,
                     )?;
                 }
-                if *name != "cudnn_bf16" {
+                if *name != "cudnn_bf16" && !probe {
                     let (num, den) = ops::abs_diff_sums_device(&y, &y_ref)?;
                     let rel_l1 = if den > 0.0 { num / den } else { num };
                     c.report.check(
