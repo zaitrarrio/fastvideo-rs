@@ -913,18 +913,66 @@ fn route_x_nhwc(
     Ok(out)
 }
 
-/// N(D)HWC f32 → NC(D)HW f32.
-fn route_y_nchw(dev: &DeviceContext, y: &CudaSlice<f32>, g: &ConvGeom) -> Result<CudaSlice<f32>> {
+/// `[splits]` × N(D)HWC f32 → NC(D)HW f32, the split-K planes summed in order.
+fn route_y_nchw(
+    dev: &DeviceContext,
+    y: &CudaSlice<f32>,
+    g: &ConvGeom,
+    splits: usize,
+) -> Result<CudaSlice<f32>> {
     let s = g.od * g.oh * g.ow;
-    let mut out = unsafe { dev.stream.alloc::<f32>((g.b * s * g.n).max(1)) }?;
+    let plane = g.b * s * g.n;
+    let mut out = unsafe { dev.stream.alloc::<f32>(plane.max(1)) }?;
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (tiles32(g.n), tiles32(s), g.b.max(1) as u32),
         block_dim: (32, 8, 1),
         shared_mem_bytes: 0,
     };
-    let (c_i, s_i) = (g.n as i64, s as i64);
-    super::kernels::launch!(dev.stream, &dev.kernels.conv_nhwc_to_nchw_f32, cfg; y, &mut out, &c_i, &s_i)?;
+    let (c_i, s_i, z_i, plane_i) = (g.n as i64, s as i64, splits as i64, plane as i64);
+    super::kernels::launch!(dev.stream, &dev.kernels.conv_nhwc_to_nchw_f32, cfg; y, &mut out, &c_i, &s_i, &z_i, &plane_i)?;
     Ok(out)
+}
+
+/// The implicit GEMM's launch plan for one geometry: the CTA tile and the
+/// deterministic split-K factor (`docs/perf/2026-11-25-conv-routes.md`: the
+/// 128 tile leaves SMs idle below about two CTAs per SM, so small-M / small-N
+/// shapes take the 64 tile and then split K, each split keeping at least
+/// eight k-tiles). Chosen from shapes and the SM count, never from timing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IgemmPlan {
+    /// CTA tile side: 128 or 64 (square tiles).
+    pub tile: usize,
+    /// Split-K factor (grid.z); the planes are summed in order.
+    pub splits: usize,
+}
+
+impl IgemmPlan {
+    pub fn for_geom(g: &ConvGeom, sms: usize) -> Self {
+        let (m, n) = (g.m(), g.n);
+        let nk = g.k().div_ceil(32);
+        let tiles = |t: usize| m.div_ceil(t) * n.div_ceil(t);
+        let target = 2 * sms.max(1);
+        let tile = if tiles(128) >= target { 128 } else { 64 };
+        let ctas = tiles(tile);
+        let mut splits = 1;
+        if ctas < target {
+            splits = target.div_ceil(ctas).min(nk / 8).clamp(1, 16);
+        }
+        Self { tile, splits }
+    }
+}
+
+/// The plan [`conv3d_igemm`] would use for these shapes on this device.
+pub fn igemm_plan(
+    x_shape: &[usize],
+    w_shape: &[usize],
+    pad: &[usize],
+    stride: &[usize],
+) -> Result<IgemmPlan> {
+    let dev = global_device()
+        .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let g = ConvGeom::new(x_shape, w_shape, pad, stride)?;
+    Ok(IgemmPlan::for_geom(&g, super::ops::sm_count(&dev)))
 }
 
 /// `[oc, ic, taps]` f32 → bf16 `[oc, K]` (`kn` false) or `[K, oc]` (`kn` true),
@@ -949,8 +997,9 @@ fn route_weight(
     Ok(out)
 }
 
-/// Route R2: the implicit GEMM (`conv_igemm_bf16`, mma.sync bf16, f32
-/// accumulate), one 128×128×32 tile config. Same contract as [`cudnn_conv`].
+/// Route R2: the implicit GEMM (`conv_igemm_bf16*`, mma.sync bf16, f32
+/// accumulate) with the tile and split-K of [`IgemmPlan`]. Same contract as
+/// [`cudnn_conv`].
 pub fn conv3d_igemm(
     x: &CudaSlice<f32>,
     x_shape: &[usize],
@@ -965,10 +1014,20 @@ pub fn conv3d_igemm(
     let x16 = route_x_nhwc(&dev, x, &g)?;
     let w16 = route_weight(&dev, w, &g, false)?;
     let (m, n) = (g.m(), g.n);
-    let mut y = unsafe { dev.stream.alloc::<f32>((m * n).max(1)) }?;
+    let plan = IgemmPlan::for_geom(&g, super::ops::sm_count(&dev));
+    let mut y = unsafe { dev.stream.alloc::<f32>((m * n * plan.splits).max(1)) }?;
+    let (func, threads) = if plan.tile == 128 {
+        (&dev.kernels.conv_igemm_bf16, 256)
+    } else {
+        (&dev.kernels.conv_igemm_bf16_64, 128)
+    };
     let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (n.div_ceil(128) as u32, m.div_ceil(128) as u32, 1),
-        block_dim: (256, 1, 1),
+        grid_dim: (
+            n.div_ceil(plan.tile) as u32,
+            m.div_ceil(plan.tile) as u32,
+            plan.splits as u32,
+        ),
+        block_dim: (threads, 1, 1),
         shared_mem_bytes: 0,
     };
     let i = |v: usize| v as i32;
@@ -994,13 +1053,13 @@ pub fn conv3d_igemm(
         i(g.ph),
         i(g.pw),
     );
-    let one = 1i32;
-    super::kernels::launch!(dev.stream, &dev.kernels.conv_igemm_bf16, cfg;
+    let (one, splits_i) = (1i32, plan.splits as i32);
+    super::kernels::launch!(dev.stream, func, cfg;
         &x16, &w16, &mut y, &b, &d, &h, &wd, &c, &od, &oh, &ow, &nn,
-        &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &one, &one, &one)?;
+        &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &one, &one, &one, &splits_i)?;
     drop(x16);
     drop(w16);
-    let out = route_y_nchw(&dev, &y, &g)?;
+    let out = route_y_nchw(&dev, &y, &g, plan.splits)?;
     Ok((out, g.out_shape(x_shape.len())))
 }
 
@@ -1071,7 +1130,7 @@ pub fn conv3d_unfold_lt(
     drop(a16);
     drop(x16);
     drop(w16);
-    let out = route_y_nchw(&dev, &y, &g)?;
+    let out = route_y_nchw(&dev, &y, &g, 1)?;
     Ok((out, g.out_shape(x_shape.len())))
 }
 

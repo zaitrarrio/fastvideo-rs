@@ -3686,7 +3686,7 @@ pub fn sol_splits_for(nt: usize, bh: usize, sms: usize, env: &str) -> usize {
 }
 
 #[cfg(feature = "cuda")]
-fn sm_count(dev: &super::device::DeviceContext) -> usize {
+pub(crate) fn sm_count(dev: &super::device::DeviceContext) -> usize {
     use cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT;
     dev.ctx
         .attribute(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)

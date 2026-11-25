@@ -3013,6 +3013,10 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                 "gflop".into(),
                 json!(2.0 * n_out as f64 * (sh.ci * sh.k[0] * sh.k[1] * sh.k[2]) as f64 / 1e9),
             );
+            if let Ok(plan) = conv::igemm_plan(&x_shape, &w_shape, &pad, &stride) {
+                values.insert("igemm_tile".into(), json!(plan.tile));
+                values.insert("igemm_splits".into(), json!(plan.splits));
+            }
             for (name, run) in &routes {
                 let (y, shape) = match run() {
                     Ok(v) => v,
