@@ -1113,7 +1113,9 @@ pub fn conv3d_igemm_with(
 /// `ltx2/vae_fast.rs`): `x` is `[b, d, h, w, c]` bf16 (a view into the padded
 /// activation), `w16` the `[n, kd, kh, kw, c]` bf16 filter (cuDNN's NHWC
 /// layout, which is this kernel's `[N, K]`), `y` gets `[b, od, oh, ow, n]`
-/// bf16. One split writes bf16 from the epilogue; more splits sum the f32
+/// bf16. `x_shape` and `w_shape` give the geometry in the NC(D)HW / OI(D)HW
+/// order every conv entry takes (`[b, c, d, h, w]`), whatever the memory
+/// layout. One split writes bf16 from the epilogue; more splits sum the f32
 /// planes in order (`conv_sum_planes_bf16`). Same semantics as [`cudnn_conv`].
 #[allow(clippy::too_many_arguments)]
 pub fn conv3d_igemm_nhwc_bf16(

@@ -931,7 +931,9 @@ mod device {
                     x,
                     w,
                     y,
-                    &[1, nt + 2, h, ww, cin],
+                    // Geometry in NC(D)HW order (the entry's contract); the
+                    // buffers are NDHWC.
+                    &[1, cin, nt + 2, h, ww],
                     &[cout, cin, 3, 3, 3],
                     &[0, 1, 1],
                     &[1, 1, 1],
