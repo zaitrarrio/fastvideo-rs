@@ -16,7 +16,7 @@ mod tests {
     /// `rt/kernels/conv_igemm.cu` (ADR-0024 WO-3a). Changing a kernel
     /// changes this on purpose; update it in the same commit.
     const KERNELS_CU_SHA256: &str =
-        "8bfe4cff5f4aa88e04e5957692908fd3617eee482424214bf7a728f08e811ec5";
+        "3ddb55b008700c7b9cb20ebd08fac81c950ce3c2836dd6f68be12227b430e1f6";
 
     fn sha256_hex(bytes: &[u8]) -> String {
         Sha256::digest(bytes)
