@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-11-25 · FVID-2026-11-25-conv-route
+- Trigger: ADR-0024 step 3 WO-3a (`docs/plan/2026-11-25-adr24-step3-wo.md`), the routed spike on an RTX PRO 6000 (`docs/perf/2026-11-25-conv-routes.md`, record `artifacts/runpod/rtx6000/a9ee908-11250652/`): two cuDNN-free dense-conv routes against today's cuDNN bf16 on the served Wan 2.1 / 2.2, LTX-2.5 and encoder shapes
+- Options: R1 explicit unfold + cuBLASLt (no new tensor-core code; 2.3-7.5x cuDNN on the stages that matter); R2 our implicit GEMM in `rt/kernels/conv_igemm.cu` (untuned, one tile config: 0.94-1.35x cuDNN per shape, about 1.15-1.18x decode-weighted on Wan, 1.35x on LTX; both routes match the f64 reference at rel_l2 2.3e-3 against cuDNN bf16's 2.8e-3); R3 CUTLASS implicit GEMM (not measured: the owner chose two routes, no new submodule)
+- Decision: **(owner) R2, the in-tree implicit GEMM, as the step 3 conv route; WO-3b starts** ("go with R2, start 3b", 2026-11-25). R1 stays as the zero-kernel fallback for shapes the kernel has no tile for
+- Reason: within 6-35 % of cuDNN with no tuning and faster on the narrow full-resolution stages; the losses are tile quantization on small-M shapes (ordinary GEMM tuning: a 64x64 tile, deterministic split-K, a 3-stage pipeline); AOT like every other kernel, no new dependency
+- Reversibility: high until 3b flips `auto` (the routes are opt-in functions; cuDNN stays until 3d)
+- Executed by: PR #257 (3a); 3b in progress
+- ADR: docs/adr/0024-driver-only-runtime.md (step 3, D6)
+- Verification: the 3b gates (per-conv rel_l2 <= 5e-3 vs the f64 reference, the `convgate` and `ltxvae` tiers, determinism, decode wall time within the owner's margin, proposed <= 1.10x cuDNN)
+
 ### FVID · 2026-11-24 · FVID-2026-11-24-drop-cudnn-sdpa
 - Trigger: ADR-0024 step 2 measurement (`fv-gpucheck kernels --groups sdpa_rule,attn3_bench`, RTX PRO 6000, docs/perf/2026-11-24-sdpa-rule-cudnn-margins.md): cuDNN's fused attention is 4-8 % faster than `flash_mma_fwd2` on long self-attention (H3 768p +4.6 %, LTX 1080p 20 s +4.1 %, Wan 720p +7.7 %), about 3-5 % of a denoise step, on sm_12x only; the owner asked whether the three options were exclusive
 - Options: drop the cuDNN candidate now and accept the 3-5 %; keep it until step 3 removes cuDNN and drop both together; drop it and take the margin back with SageAttention2 where a model's quality gate allows, tuning fwd2 for the rest
