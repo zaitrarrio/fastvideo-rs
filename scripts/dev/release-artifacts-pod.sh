@@ -306,6 +306,14 @@ if want serve-cuda-static; then
     die "serve-cuda-static: fv-serve still needs a shared CUDA library"
   fi
   rm -rf "$static_root"
+  # The toolkit's driver stub rides in the set as out/driver-stub/libcuda.so.1: the image's serve-cuda-static stage
+  # copies it from static-build's /out (docker/gpucheck.Dockerfile), and with prebuilt tools that stage is this set.
+  stub=""
+  for c in "$CUDA_HOME/lib64/stubs/libcuda.so" "$CUDA_HOME/targets/x86_64-linux/lib/stubs/libcuda.so"; do
+    [[ -f "$c" ]] && { stub="$c"; break; }
+  done
+  [[ -n "$stub" ]] || die "serve-cuda-static: no driver stub libcuda.so under $CUDA_HOME (install cuda-driver-dev)"
+  mkdir -p "$STAGE/serve-cuda-static/out/driver-stub" && cp "$stub" "$STAGE/serve-cuda-static/out/driver-stub/libcuda.so.1"
 fi
 want serve-cpu && build_serve serve-cpu "$CPU_FEATURES"
 want serve-fake && build_serve_fake
