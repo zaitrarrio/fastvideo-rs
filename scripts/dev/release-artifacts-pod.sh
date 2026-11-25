@@ -296,13 +296,16 @@ if want serve-cuda-static; then
      && [[ ! -f /usr/lib/x86_64-linux-gnu/libcudnn.so.9 && ! -f /usr/lib64/libcudnn.so.9 && ! -f "$CUDA_HOME/lib64/libcudnn.so.9" ]]; then
     die "serve-cuda-static: no libcudnn.so.9 for the link (cuDNN stays shared: install the cuDNN runtime package; looked in the loader cache, /usr/lib/x86_64-linux-gnu, /usr/lib64, $CUDA_HOME/lib64)"
   fi
-  static_root="$STAGE/static-link-root"
+  # Outside $STAGE: every directory there is packed as a set (0.1.88's publish refused a static-link-root.tar.gz).
+  static_root="$OUT/static-link-root"
+  rm -rf "$static_root"
   mkdir -p "$static_root/lib64" && ln -sfn "$(c++ -print-file-name=libstdc++.a)" "$static_root/lib64/libstdc++.a"
   printf '!<arch>\n' > "$static_root/lib64/libcudnn.a"
   CUDA_TOOLKIT_ROOT_DIR="$static_root" build_serve serve-cuda-static "$STATIC_FEATURES"
   if ldd "$STAGE/serve-cuda-static/out/fv-serve" | grep -E 'libcublas|libnvrtc|libcudart|libcupti'; then
     die "serve-cuda-static: fv-serve still needs a shared CUDA library"
   fi
+  rm -rf "$static_root"
 fi
 want serve-cpu && build_serve serve-cpu "$CPU_FEATURES"
 want serve-fake && build_serve_fake
@@ -317,6 +320,7 @@ mtime="@$(date -d "${FV_BUILD_TIME:-1970-01-01T00:00:00Z}" +%s 2>/dev/null || ec
 sets_json='{}'
 for d in "$STAGE"/*/; do
   set="$(basename "$d")"
+  want "$set" || die "pack: $set under $STAGE is not a requested set (SETS:$SETS)"
   tar -C "$d" --sort=name --owner=0 --group=0 --numeric-owner --mtime="$mtime" -cf - . | gzip -n -6 >"$OUT/$set.tar.gz"
   files="$(cd "$d" && find . -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r p; do
       printf '%s\t%s\t%s\t%s\n' "$p" "$(sha256sum "$p" | cut -d' ' -f1)" "$(stat -c %s "$p")" "$(stat -c %a "$p")"; done \
