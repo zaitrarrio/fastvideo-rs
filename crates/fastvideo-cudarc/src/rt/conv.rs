@@ -933,54 +933,56 @@ fn route_y_nchw(
     Ok(out)
 }
 
-/// The implicit GEMM's launch plan for one geometry: the CTA tile and the
-/// deterministic split-K factor (`docs/perf/2026-11-25-conv-routes.md`: the
-/// 128 tile leaves SMs idle below about two CTAs per SM, so small-M / small-N
-/// shapes take the 64 tile and then split K, each split keeping at least
-/// eight k-tiles). Chosen from shapes and the SM count, never from timing.
+/// The implicit GEMM's launch plan for one geometry: the CTA tile, the
+/// pipeline depth and the deterministic split-K factor. Chosen from shapes
+/// and the SM count, never from timing (`docs/perf/2026-11-25-conv-routes.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IgemmPlan {
-    /// CTA tile side: 128 or 64 (square tiles).
-    pub tile: usize,
+    /// CTA tile rows (output pixels): 128 or 64.
+    pub bm: usize,
+    /// CTA tile columns (output channels): 256, 128 or 64.
+    pub bn: usize,
     /// cp.async pipeline depth: 2 or 3.
     pub stages: usize,
     /// Split-K factor (grid.z); the planes are summed in order.
     pub splits: usize,
 }
 
+/// The tile variants the kernel file instantiates: (bm, bn, stages).
+pub const IGEMM_VARIANTS: &[(usize, usize, usize)] =
+    &[(128, 128, 3), (128, 256, 2), (128, 64, 3), (64, 64, 3)];
+
 impl IgemmPlan {
-    /// The default plan: the 128 tile with two stages (the spike's config,
-    /// 1.06-1.35x cuDNN) when it fills two CTAs per SM, else the 64 tile and
-    /// split-K. The stage choice is re-decided from the `conv_routes`
-    /// variants (see `docs/perf/2026-11-25-conv-routes.md`).
+    /// The default plan: the 128 × 128 3-stage tile (the best variant on every
+    /// shape of the 2026-11-25 run), the 128 × 64 tile when N is a multiple of
+    /// 64 but not of 128 (the 192- and 64-wide stages), and split-K up to
+    /// four waves of CTAs.
     pub fn for_geom(g: &ConvGeom, sms: usize) -> Self {
-        let tile = if Self::tiles(g, 128) >= 2 * sms.max(1) {
-            128
-        } else {
+        let bn = if g.n % 128 != 0 && g.n % 64 == 0 {
             64
+        } else {
+            128
         };
-        Self::with(g, sms, tile, 2)
+        Self::with(g, sms, 128, bn, 3)
     }
 
-    /// A plan with the given tile and stages; splits from the SM count (two
-    /// CTAs per SM as the target, each split at least eight k-tiles).
-    pub fn with(g: &ConvGeom, sms: usize, tile: usize, stages: usize) -> Self {
+    /// A plan with the given tile and stages; the split from the SM count:
+    /// enough splits for four waves of two CTAs per SM, each split keeping at
+    /// least eight k-tiles, at most 16.
+    pub fn with(g: &ConvGeom, sms: usize, bm: usize, bn: usize, stages: usize) -> Self {
         let nk = g.k().div_ceil(32);
-        let target = 2 * sms.max(1);
-        let ctas = Self::tiles(g, tile);
+        let waves4 = 8 * sms.max(1);
+        let ctas = g.m().div_ceil(bm) * g.n.div_ceil(bn);
         let mut splits = 1;
-        if ctas < target {
-            splits = target.div_ceil(ctas).min(nk / 8).clamp(1, 16);
+        if ctas < waves4 {
+            splits = waves4.div_ceil(ctas).min(nk / 8).clamp(1, 16);
         }
         Self {
-            tile,
+            bm,
+            bn,
             stages,
             splits,
         }
-    }
-
-    fn tiles(g: &ConvGeom, t: usize) -> usize {
-        g.m().div_ceil(t) * g.n.div_ceil(t)
     }
 }
 
@@ -990,7 +992,8 @@ pub fn igemm_plan_with(
     w_shape: &[usize],
     pad: &[usize],
     stride: &[usize],
-    tile: usize,
+    bm: usize,
+    bn: usize,
     stages: usize,
 ) -> Result<IgemmPlan> {
     let dev = global_device()
@@ -999,7 +1002,8 @@ pub fn igemm_plan_with(
     Ok(IgemmPlan::with(
         &g,
         super::ops::sm_count(&dev),
-        tile,
+        bm,
+        bn,
         stages,
     ))
 }
@@ -1073,16 +1077,16 @@ pub fn conv3d_igemm_with(
     let (m, n) = (g.m(), g.n);
     let plan = plan.unwrap_or_else(|| IgemmPlan::for_geom(&g, super::ops::sm_count(&dev)));
     let mut y = unsafe { dev.stream.alloc::<f32>((m * n * plan.splits).max(1)) }?;
-    let (func, threads) = match (plan.tile, plan.stages) {
-        (128, 3) => (&dev.kernels.conv_igemm_bf16, 256),
-        (128, _) => (&dev.kernels.conv_igemm_bf16_s2, 256),
-        (_, 3) => (&dev.kernels.conv_igemm_bf16_64, 128),
-        _ => (&dev.kernels.conv_igemm_bf16_64_s2, 128),
+    let (func, threads) = match (plan.bm, plan.bn) {
+        (128, 256) => (&dev.kernels.conv_igemm_bf16_128x256, 256),
+        (128, 64) => (&dev.kernels.conv_igemm_bf16_128x64, 256),
+        (64, 64) => (&dev.kernels.conv_igemm_bf16_64, 128),
+        _ => (&dev.kernels.conv_igemm_bf16, 256),
     };
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (
-            n.div_ceil(plan.tile) as u32,
-            m.div_ceil(plan.tile) as u32,
+            n.div_ceil(plan.bn) as u32,
+            m.div_ceil(plan.bm) as u32,
             plan.splits as u32,
         ),
         block_dim: (threads, 1, 1),

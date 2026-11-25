@@ -285,13 +285,16 @@ __device__ __forceinline__ void ig_body(
     int KD, int KH, int KW, int SD, int SH, int SW, int PD, int PH, int PW, int DD, int DH, int DW, int splits
 #define IG_PASS x, w, y, B, D, H, W, C, OD, OH, OW, N, KD, KH, KW, SD, SH, SW, PD, PH, PW, DD, DH, DW, splits
 
-// Variants timed side by side by fv-gpucheck `conv_routes` (igemm_128s3,
-// igemm_128s2, igemm_64s3, igemm_64s2); rt/conv.rs `IgemmPlan` picks one.
-// Every variant asks for two CTAs per SM: the 2026-11-25 run with one CTA
-// per SM on the 3-stage 128 tile (`__launch_bounds__(256, 1)`, 48 KB) was
-// 1.5-2.1x cuDNN against the 2-stage spike's 1.06-1.35x.
+// Variants timed side by side by fv-gpucheck `conv_routes`; rt/conv.rs
+// `IgemmPlan` picks one. Measured 2026-11-25 on an RTX PRO 6000
+// (docs/perf/2026-11-25-conv-routes.md): the 128 x 128 3-stage tile at two
+// CTAs per SM beat the 2-stage spike and the 64 x 64 tile on every shape
+// (at one CTA per SM it was 1.5-2.1x cuDNN: `__launch_bounds__` matters).
+// The remaining gap to cuDNN is the mainloop (ldmatrix per mma) and wave
+// quantization, hence the 128 x 256 tile with 64 x 64 warp tiles and the
+// 128 x 64 tile for narrow channel counts.
 
-// 128 x 128 x 32, 256 threads, 3 stages: 3 * (128 + 128) * 64 B = 48 KB.
+// 128 x 128 x 32, 256 threads (2 x 4 warps of 64 x 32), 3 stages: 48 KB.
 extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     __shared__ __align__(128) unsigned char smem[3 * (128 + 128) * IG_ROWB];
@@ -299,26 +302,28 @@ extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16(IG_ARGS) {
 #endif
 }
 
-// 128 x 128 x 32, 256 threads, 2 stages (the spike's config): 32 KB.
-extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16_s2(IG_ARGS) {
+// 128 x 256 x 32, 256 threads (2 x 4 warps of 64 x 64: half the ldmatrix
+// traffic per mma), 2 stages: 48 KB, one CTA per SM (128 accumulators).
+extern "C" __global__ void __launch_bounds__(256, 1) conv_igemm_bf16_128x256(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    __shared__ __align__(128) unsigned char smem[2 * (128 + 128) * IG_ROWB];
-    ig_body<128, 128, 64, 32, 2>(IG_PASS, smem);
+    __shared__ __align__(128) unsigned char smem[2 * (128 + 256) * IG_ROWB];
+    ig_body<128, 256, 64, 64, 2>(IG_PASS, smem);
 #endif
 }
 
-// 64 x 64 x 32, 128 threads, 3 stages: 24 KB.
+// 128 x 64 x 32, 256 threads (4 x 2 warps of 32 x 32), 3 stages: 36 KB. For
+// N = 64 k (the 192- and 64-wide stages the 128 tile pads by a quarter).
+extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16_128x64(IG_ARGS) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    __shared__ __align__(128) unsigned char smem[3 * (128 + 64) * IG_ROWB];
+    ig_body<128, 64, 32, 32, 3>(IG_PASS, smem);
+#endif
+}
+
+// 64 x 64 x 32, 128 threads (2 x 2 warps of 32 x 32), 3 stages: 24 KB.
 extern "C" __global__ void __launch_bounds__(128, 4) conv_igemm_bf16_64(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     __shared__ __align__(128) unsigned char smem[3 * (64 + 64) * IG_ROWB];
     ig_body<64, 64, 32, 32, 3>(IG_PASS, smem);
-#endif
-}
-
-// 64 x 64 x 32, 128 threads, 2 stages: 16 KB.
-extern "C" __global__ void __launch_bounds__(128, 4) conv_igemm_bf16_64_s2(IG_ARGS) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    __shared__ __align__(128) unsigned char smem[2 * (64 + 64) * IG_ROWB];
-    ig_body<64, 64, 32, 32, 2>(IG_PASS, smem);
 #endif
 }

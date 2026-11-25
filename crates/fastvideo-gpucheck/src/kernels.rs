@@ -2957,9 +2957,9 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             let (xd, wd) = (xt.device_slice().unwrap(), wt.device_slice().unwrap());
             type Run<'a> = Box<dyn Fn() -> anyhow::Result<(CudaSlice<f32>, Vec<usize>)> + 'a>;
             let (xs, ws, pd, st) = (&x_shape, &w_shape, &pad, &stride);
-            let variant = |tile: usize, stages: usize| -> Run<'_> {
+            let variant = |bm: usize, bn: usize, stages: usize| -> Run<'_> {
                 Box::new(move || {
-                    let plan = conv::igemm_plan_with(xs, ws, pd, st, tile, stages)?;
+                    let plan = conv::igemm_plan_with(xs, ws, pd, st, bm, bn, stages)?;
                     Ok(conv::conv3d_igemm_with(xd, xs, wd, ws, pd, st, Some(plan))?)
                 })
             };
@@ -2994,10 +2994,10 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                         )?)
                     }),
                 ),
-                ("igemm_128s3", variant(128, 3)),
-                ("igemm_128s2", variant(128, 2)),
-                ("igemm_64s3", variant(64, 3)),
-                ("igemm_64s2", variant(64, 2)),
+                ("igemm_128x128s3", variant(128, 128, 3)),
+                ("igemm_128x256s2", variant(128, 256, 2)),
+                ("igemm_128x64s3", variant(128, 64, 3)),
+                ("igemm_64x64s3", variant(64, 64, 3)),
             ];
             // Reference output: cuDNN bf16 (kept on the device).
             let (y_ref, y_shape) = (routes[0].1)()?;
@@ -3025,15 +3025,19 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                 json!(2.0 * n_out as f64 * (sh.ci * sh.k[0] * sh.k[1] * sh.k[2]) as f64 / 1e9),
             );
             if let Ok(plan) = conv::igemm_plan(&x_shape, &w_shape, &pad, &stride) {
-                values.insert("igemm_tile".into(), json!(plan.tile));
+                values.insert("igemm_bm".into(), json!(plan.bm));
+                values.insert("igemm_bn".into(), json!(plan.bn));
                 values.insert("igemm_stages".into(), json!(plan.stages));
                 values.insert("igemm_splits".into(), json!(plan.splits));
             }
-            for (tile, stages) in [(128usize, 3usize), (128, 2), (64, 3), (64, 2)] {
+            for &(bm, bn, stages) in conv::IGEMM_VARIANTS {
                 if let Ok(plan) =
-                    conv::igemm_plan_with(&x_shape, &w_shape, &pad, &stride, tile, stages)
+                    conv::igemm_plan_with(&x_shape, &w_shape, &pad, &stride, bm, bn, stages)
                 {
-                    values.insert(format!("igemm_{tile}s{stages}_splits"), json!(plan.splits));
+                    values.insert(
+                        format!("igemm_{bm}x{bn}s{stages}_splits"),
+                        json!(plan.splits),
+                    );
                 }
             }
             for (name, run) in &routes {
