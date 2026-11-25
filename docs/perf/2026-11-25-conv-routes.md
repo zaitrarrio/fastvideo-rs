@@ -201,3 +201,50 @@ implicit GEMM is 1.4× behind on LTX's shapes. The owner's margin (proposed
 1.10×) is not met; what remains is mainloop work: BK = 64 with dynamic
 shared memory (half the barriers per k), the classic 256×128 CTA tile with
 64×64 warp tiles, and the epilogue's scattered stores.
+
+## WO-3b option 1: the capped tuning rounds (2026-11-25, PR #258)
+
+After the convgate gate the owner chose to keep tuning the mainloop, capped
+at three more rounds, and to decide on the margin after them. Each round is
+one `conv_routes` run on an RTX PRO 6000 pod (about a minute of pod time,
+900 s wall cap; records under `artifacts/runpod/rtx6000/`). Ratios are
+igemm / cuDNN bf16 (NCDHW plans) on the same pod.
+
+### Round 1 (195a944): where the time goes
+
+The kernel loads the whole k-tile's fragments before any mma (two-deep
+fragment ring) and gains two timing-only probes, launched on the same grid
+as the real kernel and excluded from the correctness checks:
+
+- `probe_dense`: the A loader reads a dense (non-gathered) tile, so the
+  gather's address arithmetic and its scattered 16-byte reads are gone,
+  the pipeline, barriers and mma unchanged.
+- `probe_noload`: no global loads at all (the smem ring is used as is),
+  so only the pipeline overhead and the mma remain: the kernel's ceiling.
+
+| shape | igemm | probe_dense | probe_noload | cuDNN ms |
+|---|---|---|---|---|
+| wan22-1024-s1 | 1.24 | 1.14 | **0.90** | 4.99 |
+| wan22-512-s2 | 1.15 | 1.03 | 0.83 | 5.41 |
+| wan21-96 | 0.93 | 0.84 | 0.72 | 1.73 |
+| ltx-1024 | 1.33 | 1.21 | 0.99 | 1.45 |
+| ltx-up-4096 | 1.28 | 1.20 | 0.98 | 5.44 |
+| ltx-256 | 1.07 | 0.99 | 0.82 | 3.07 |
+| bench-192x6x120x208 | 1.23 | 1.08 | 0.87 | 1.02 |
+
+What the probes say: the gather costs 8-12 %, every other global load a
+further 10-20 %, and the no-load kernel, which does nothing but the smem
+pipeline and the mma, is at 0.9× cuDNN on the wide Wan shape and 1.0× on
+the LTX shapes: about 350 TFLOP/s against the GPU's ~1 PFLOP/s dense bf16
+peak. So the limiter is not the memory system but the per-k-tile
+overhead (one `__syncthreads` and a full fragment reload every 32 k, at
+four warps' worth of mma between them). Round 2 therefore attacks that
+overhead directly: a BK = 64 variant (half the barriers per FLOP, 64 KB
+dynamic shared memory) and a 256×128 tile with 16 warps (twice the mma per
+barrier at the same warps per SM, 72 KB), measured side by side with the
+current kernel.
+
+### Round 2 (14300de): BK = 64 and the 256×128 tile
+
+(run pending)
+
