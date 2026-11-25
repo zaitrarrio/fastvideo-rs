@@ -2956,19 +2956,11 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             let wt = t(w_host.clone(), &w_shape)?;
             let (xd, wd) = (xt.device_slice().unwrap(), wt.device_slice().unwrap());
             type Run<'a> = Box<dyn Fn() -> anyhow::Result<(CudaSlice<f32>, Vec<usize>)> + 'a>;
+            let (xs, ws, pd, st) = (&x_shape, &w_shape, &pad, &stride);
             let variant = |tile: usize, stages: usize| -> Run<'_> {
                 Box::new(move || {
-                    let plan =
-                        conv::igemm_plan_with(&x_shape, &w_shape, &pad, &stride, tile, stages)?;
-                    Ok(conv::conv3d_igemm_with(
-                        xd,
-                        &x_shape,
-                        wd,
-                        &w_shape,
-                        &pad,
-                        &stride,
-                        Some(plan),
-                    )?)
+                    let plan = conv::igemm_plan_with(xs, ws, pd, st, tile, stages)?;
+                    Ok(conv::conv3d_igemm_with(xd, xs, wd, ws, pd, st, Some(plan))?)
                 })
             };
             let routes: [(&str, Run<'_>); 7] = [
