@@ -184,7 +184,9 @@ FV_LAB_WRITE=crates/fastvideo-lab cargo test -p fastvideo-lab --test own_tiers  
 
 `tests/own_tiers.rs` holds the dry run and `tests/payload_golden.rs` the pod body; a change to the tier's cells
 changes the dry-run fixture in the same PR. `runpod-http.sh` refuses `run` / `all` for it (`fv-lab pod up --sha <7>
---family <tier> --yes --wait` runs it) and `plan` writes its body. The first is `variants` (docs/ports/variants-parity.md).
+--family <tier> --yes --wait` runs it) and `plan` writes its body. The first is `variants` (docs/ports/variants-parity.md);
+`convgate` is ADR-0024 step 3's conv gate (`docs/plan/2026-11-25-adr24-step3-wo.md`, WO-3b): the decoders on the
+in-tree implicit GEMM (`FASTVIDEO_CONV3D=igemm`) against cuDNN, frames compared.
 
 ### `runpod-http.sh` for a retired tier
 

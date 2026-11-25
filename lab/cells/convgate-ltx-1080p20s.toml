@@ -1,0 +1,40 @@
+# The convgate family's LTX cell (ADR-0024 step 3, WO-3b increment 3): the
+# LTX-2.5 fast decoder's convs on cuDNN bf16 (today's `auto`) against the
+# in-tree implicit GEMM (`FASTVIDEO_CONV3D=igemm`, D6), same synthetic
+# latents at the 1080p20s geometry, same tiles, frames for compare-clips.
+# `FASTVIDEO_LTX_VAE_CHECK=1` also holds each arm's first tile to the
+# streaming decoder on the same backend (NDHWC fast vs NCDHW streaming).
+# Schema: crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md.
+schema = 1
+name = "convgate-ltx-1080p20s"
+description = "LTX-2.5 fast VAE decode at 1080p20s: cuDNN bf16 convs vs the implicit GEMM (igemm), with frames for compare-clips"
+
+[workload]
+model = "ltx2"
+note = "synthetic latents at the 1080p20s geometry (--workload); no prompt, no seed"
+
+[[arm]]
+name = "convgate-ltx-1080p20s-cudnn"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_CONV3D=cudnn-bf16",
+  "FASTVIDEO_LTX_VAE_CHECK=1",
+]
+argv = ["--mode", "fast", "ltx2", "vae-bench", "--weights", "{weights}/ltx25", "--workload", "1080p20s",
+  "--decoder", "fast", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "convgate-ltx-1080p20s-igemm"
+gate = "ltx25-two-stage"
+trees = ["ltx25"]
+env = [
+  "FASTVIDEO_CONV3D=igemm",
+  "FASTVIDEO_LTX_VAE_CHECK=1",
+]
+argv = ["--mode", "fast", "ltx2", "vae-bench", "--weights", "{weights}/ltx25", "--workload", "1080p20s",
+  "--decoder", "fast", "--warm", "--clip", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "convgate-ltx-1080p20s-cudnn"
+candidate = "convgate-ltx-1080p20s-igemm"

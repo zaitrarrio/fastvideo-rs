@@ -1,0 +1,6 @@
+[convgate] matrix start image=unknown
+[convgate] dry-run weights /fvscratch/weights: 20 volume trees linked from /workspace/weights; 0 R2 trees (0.00 GB) fetched before the arms that read them, at most 0.00 GB on the container disk at once
+[convgate] dry-run convgate-ltx-1080p20s-cudnn: env FASTVIDEO_CONV3D=cudnn-bf16 FASTVIDEO_LTX_VAE_CHECK=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /fvscratch/weights/ltx25 --workload 1080p20s --decoder fast --warm --clip /fvscratch/runs/convgate/1234567-10241200/convgate-ltx-1080p20s-cudnn/frames 
+[convgate] dry-run convgate-ltx-1080p20s-igemm: env FASTVIDEO_CONV3D=igemm FASTVIDEO_LTX_VAE_CHECK=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /fvscratch/weights/ltx25 --workload 1080p20s --decoder fast --warm --clip /fvscratch/runs/convgate/1234567-10241200/convgate-ltx-1080p20s-igemm/frames 
+[convgate] dry-run compare convgate-ltx-1080p20s-cudnn--convgate-ltx-1080p20s-igemm 
+[convgate] matrix done
