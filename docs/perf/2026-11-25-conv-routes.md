@@ -331,3 +331,46 @@ across the k-tile boundary), the im2col gather precomputed as offsets
 rather than decoded per chunk, or the epilogue's scattered f32 stores
 replaced by a staged smem transpose. Each is a WO of its own, outside
 the three rounds the owner capped.
+
+## WO-3b-ii: the warp-specialised mainloop (2026-11-25, PR #258)
+
+Owner decision FVID-2026-11-25-conv-igemm-ws-wo: one more work order
+(`docs/plan/2026-11-25-adr24-step3-wo.md` "WORK ORDER 3b-ii") before the
+margin decision. The kernel `conv_igemm_bf16_ws`: 128×128×32, four
+consumer warps (2×2 of 64×64) that never issue a global load, one
+producer warp that owns the im2col gather and the weight rows, named
+barriers per stage, the 48 KB three-stage ring, two CTAs per SM. ptxas:
+168 registers (five warps a CTA, ten an SM, three on one of the four
+sub-partitions: 65536 / 3 / 32), 50-120 bytes of spills on every SM
+(each branch alone fits without; the union does not).
+
+### Run 1 (a9ae65d): correct, half the base kernel's speed
+
+Record `artifacts/runpod/rtx6000/a9ae65d-11251818/`, every check passing
+(the ws kernel matches the f64 reference and cuDNN bf16 exactly as the
+base kernel does).
+
+| shape | w32 | ws | ws_probe_noepi | probe_dense | probe_noload |
+|---|---|---|---|---|---|
+| wan22-1024-s1 | **1.24** | 2.68 | 2.56 | 1.11 | 0.90 |
+| wan22-512-s2 | **1.22** | 2.40 | 2.39 | 1.06 | 0.87 |
+| wan21-96 | **0.89** | 1.50 | 1.47 | 0.82 | 0.71 |
+| ltx-1024 | **1.26** | 2.41 | 2.42 | 1.17 | 0.97 |
+| ltx-up-4096 | **1.34** | 2.61 | 2.61 | 1.24 | 1.03 |
+| ltx-256 | **1.13** | 2.21 | 2.19 | 1.02 | 0.85 |
+
+The epilogue is not the cost (the no-store probe matches the kernel).
+The producer signalled stage kt after issuing kt + 1 and waiting for all
+but its newest group: one compute period of latency hiding, where the
+base kernel's `wait_group(STAGES − 2)` at the top of each iteration gives
+two. Commit 5111c99 signals after issuing kt + 2 (`wait_group 2`, the
+tail flushed in two steps) and adds `ws2`, two producer warps (192
+threads, 8 + 8 chunks per lane, the same 168-register budget), to
+separate issue rate from latency in run 2.
+
+### Run 2 (5111c99): not run
+
+The Runpod balance read $7.88 after run 1, below the $8 floor of
+CLAUDE.md; the run is prepared (the runtime image `sha-5111c99` builds
+in CI) and waits for a top-up. Expected cost: one 600 s-capped kernels
+run, about $0.1-0.45.
