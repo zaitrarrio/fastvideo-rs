@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-11-25 · FVID-2026-11-25-conv-igemm-ws-wo
+- Trigger: WO-3b's first decode gate (`convgate`, LTX-2.5 1080p20s on an RTX PRO 6000: quality settled at 55.8 dB / LPIPS 1.4e-4, speed 1.42× cuDNN's NHWC plans) and the owner's three capped tuning rounds ("option 1", 2026-11-25; `docs/perf/2026-11-25-conv-routes.md`, records 195a944 / 14300de / bb7ff1f): no faster kernel; the rounds established that the no-load kernel runs at cuDNN's speed, that two CTAs per SM are required, and that compute capability 12.0's 128 KB of shared memory per SM caps the ring at the base kernel's three stages, so the 35-40 points the loads cost are issue time and address work in the computing warps, not latency
+- Options: (1) accept the 1.42× decode on the static image only (`auto` stays cuDNN where cuDNN is linked) and proceed to 3c / 3d; (2) one more work order on the mainloop (a warp-specialised producer, the gather's arithmetic moved with it) before the margin decision; (3) park step 3 and keep cuDNN in the dynamic image
+- Decision: **(owner) option 2: one more work order, WO-3b-ii** ("2", 2026-11-25; `docs/plan/2026-11-25-adr24-step3-wo.md` "WORK ORDER 3b-ii"): a 4-consumer + 1-producer warp CTA (160 threads, 64×64 warp tiles, named barriers, sm_80+, the 48 KB three-stage ring, two CTAs per SM), acceptance ≤ 1.10× cuDNN on the four carrying shapes and on the `convgate` decode, with a kill criterion at 1.15× in `conv_routes`
+- Reason: the rounds' probes say the structure is at cuDNN's speed without loads, and the kernel's remaining cost sits in the warps that should issue mma; moving the loads out of them is the one change the measurements point at that the rounds did not try, and it is a bounded piece of work with a stop rule
+- Reversibility: high (a new entry point beside the base kernel; the default variant flips only on acceptance; `auto` unchanged until the gates)
+- Executed by: PR #258 (branch `claude/adr24-step3b-igemm`), the WO-3b-ii section
+- ADR: docs/adr/0024-driver-only-runtime.md (step 3, D6)
+- Verification: pending (the WO's acceptance criteria; GPU runs need a Runpod top-up: balance $8.60 against the $8 floor)
+
 ### FVID · 2026-11-25 · FVID-2026-11-25-conv-route
 - Trigger: ADR-0024 step 3 WO-3a (`docs/plan/2026-11-25-adr24-step3-wo.md`), the routed spike on an RTX PRO 6000 (`docs/perf/2026-11-25-conv-routes.md`, record `artifacts/runpod/rtx6000/a9ee908-11250652/`): two cuDNN-free dense-conv routes against today's cuDNN bf16 on the served Wan 2.1 / 2.2, LTX-2.5 and encoder shapes
 - Options: R1 explicit unfold + cuBLASLt (no new tensor-core code; 2.3-7.5x cuDNN on the stages that matter); R2 our implicit GEMM in `rt/kernels/conv_igemm.cu` (untuned, one tile config: 0.94-1.35x cuDNN per shape, about 1.15-1.18x decode-weighted on Wan, 1.35x on LTX; both routes match the f64 reference at rel_l2 2.3e-3 against cuDNN bf16's 2.8e-3); R3 CUTLASS implicit GEMM (not measured: the owner chose two routes, no new submodule)
