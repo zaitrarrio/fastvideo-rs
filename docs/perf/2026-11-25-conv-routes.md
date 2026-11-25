@@ -120,3 +120,51 @@ Open before 3b: the speed margin per family (proposed in the WO: decode
 wall time ≤ 1.10× cuDNN; today's untuned kernel sits at 1.15 to 1.35 by
 the weighted view above), and whether to tune on this GPU first or to
 measure sm_90 / sm_100 in the same pass.
+
+## WO-3b increment 1: the tuning runs (2026-11-25, same GPU class, PR #258)
+
+Four more `conv_routes` runs on RTX PRO 6000 pods (each about a minute of
+pod time; records beside the spike's under `artifacts/runpod/rtx6000/`).
+Ratios are igemm / cuDNN bf16 on the same pod; absolute times move with
+the pod (the e78a557 pod ran everything, cuDNN included, 10-40 % slower).
+
+| run | change | wan22-1024 | wan22-512 | wan21-96 | ltx-1024 | ltx-up-4096 | bench-384 (tiny M) |
+|---|---|---|---|---|---|---|---|
+| a9ee908 (spike) | 128×128, 2 stages, 2 CTAs/SM | 1.28 | 1.24 | 0.94 | 1.79 | 1.35 | 3.27 |
+| 9ff8be5 | 3 stages at **1 CTA/SM**, 64 tile + split-K | 2.07 | 1.86 | 1.22 | 2.15 | 2.03 | 1.42 |
+| 42aaad2 | 3 stages at 2 CTAs/SM (four variants) | 1.33 | 1.28 | 0.92 | 1.72 | 1.42 | 1.31 |
+| 98ab3c6 | + 128×256, 128×64 tiles, four-wave split-K | 1.34 | 1.22 | 0.97 | 1.39 | 1.35 | 1.05 |
+| e78a557 | + loader decodes k once per k-tile, paired B ldmatrix | **1.21** | **1.13** | **0.93** | **1.22** | **1.25** | **1.00** |
+
+What the runs settled:
+
+- **Occupancy decides, not tile size.** The 3-stage pipeline at one CTA per
+  SM (`__launch_bounds__(256, 1)`, 48 KB smem) lost 60-80 % against the
+  spike; the same kernel at two CTAs per SM is the best variant on every
+  shape. The 128×256 tile (one CTA per SM, 128 accumulators), the 128×64
+  tile and the 64×64 tile all lost to 128×128 on every shape, including
+  the narrow-N ones they were meant for. The 64×64 warp tile (4 warps,
+  two CTAs per SM) equals the 64×32 one within noise.
+- **Split-K fixes the small-M shapes.** Deterministic (one f32 plane per
+  split, summed in order by the transpose-back kernel): bench-384 went
+  3.27× → 1.00×, ltx-1024 1.79× → 1.22× (four splits), wan-timeconv and
+  enc-s2 by two splits. Rule: enough splits for four waves of two CTAs per
+  SM, each split at least eight k-tiles, at most 16.
+- **The loader's integer divisions were about 10 % of the mainloop.** The
+  A-tile producer decoded (tap, channel, kd, kh, kw) per 16-byte chunk;
+  decoding the tile's first k once per k-tile and advancing within the
+  tap took every shape down 5-12 points. B fragments now load two n-tiles
+  per ldmatrix.x4 (as the attention kernels load K).
+- **Correctness held at every step:** every run passed every check (the
+  routes match the f64 reference at rel_l2 2.3e-3 and cuDNN bf16 at the
+  bf16 output rounding), including the split-K planes.
+
+Decode-weighted at e78a557: about 1.12× cuDNN on the Wan decoders, about
+1.2× on LTX-2.5. Of the remaining gap on the wide stages, the NCDHW →
+NDHWC transpose in, the transpose out and the per-call weight repack are
+about 7 % of the route's time and sit outside the kernel: WO-3b increment 2
+caches the bf16 weights per layer and gives `vae_fast.rs` (already
+channels-last) the NDHWC-native entry, which skips the transposes
+entirely. In-kernel, the epilogue's scattered f32 stores and a BK = 64 /
+dynamic-smem variant are the next candidates once the real decode gates
+say where the wall time goes.
