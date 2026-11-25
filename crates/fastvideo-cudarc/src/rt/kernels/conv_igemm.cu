@@ -357,6 +357,213 @@ __device__ __forceinline__ void ig_body(
 }
 #endif
 
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+// Named CTA barriers (ids 1..15; 0 is __syncthreads): the producer arrives, the
+// consumers sync, or the other way round, `count` threads in all.
+__device__ __forceinline__ void ig_bar_sync(int id, int count) {
+    asm volatile("bar.sync %0, %1;\n" :: "r"(id), "r"(count) : "memory");
+}
+__device__ __forceinline__ void ig_bar_arrive(int id, int count) {
+    asm volatile("bar.arrive %0, %1;\n" :: "r"(id), "r"(count) : "memory");
+}
+
+// WO-3b-ii: the warp-specialised mainloop. 128 x 128 x 32 tile, four consumer
+// warps (2 x 2 of 64 x 64) that never issue a global load, one producer warp
+// that fills the STAGES-deep cp.async ring (the im2col gather for A, the
+// weight rows for B) and signals each stage through a named barrier; the
+// consumers release a stage through another. 160 threads, 48 KB, two CTAs per
+// SM. The three capped tuning rounds (docs/perf/2026-11-25-conv-routes.md)
+// put the base kernel's loss against cuDNN in the loads' issue and address
+// work inside the computing warps, not in latency a deeper ring would hide
+// (sm_120's 128 KB per SM caps the ring at three stages anyway).
+//   full[s]  (id 1 + s):          producer arrives (32), consumers sync (128).
+//   empty[s] (id 1 + STAGES + s): consumers arrive (128), producer syncs (32).
+// The producer signals stage kt after issuing kt + 1 and waiting for all but
+// the newest group, so two stages are in flight while one is computed, as in
+// the base kernel. MODE 0: the convolution. MODE 3 (probe): no epilogue
+// stores (the accumulators are reduced to one NaN test per thread).
+template <int STAGES, int MODE>
+__device__ __forceinline__ void ig_ws_body(
+    const unsigned short* __restrict__ x, const unsigned short* __restrict__ w, float* __restrict__ y,
+    unsigned short* __restrict__ y16, int out16,
+    int B, int D, int H, int W, int C, int OD, int OH, int OW, int N,
+    int KD, int KH, int KW, int SD, int SH, int SW, int PD, int PH, int PW, int DD, int DH, int DW,
+    int splits, unsigned char* smem
+) {
+    constexpr int BM = 128, BN = 128, BK = 32, WM = 64, WN = 64;
+    constexpr int WARPS_N = BN / WN;
+    constexpr int CONSUMERS = (BM / WM) * WARPS_N * 32;   // 128
+    constexpr int NT = CONSUMERS + 32;                    // 160
+    constexpr int MT = WM / 16, NTL = WN / 8;
+    constexpr int ROWB = BK * 2, CHUNKS = BK / 8, KC = BK / 16;
+    constexpr int A_CH = BM * CHUNKS / 32, B_CH = BN * CHUNKS / 32;   // 16 B chunks per producer lane per stage
+    constexpr int TILE_A = BM * ROWB, TILE_B = BN * ROWB, STAGE_B = TILE_A + TILE_B;
+    static_assert(STAGES >= 3 && STAGES <= 7, "named barrier ids 1..15");
+
+    const unsigned int sbase = mma_smem_u32(smem);
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+    const long M = (long)B * OD * OH * OW;
+    const long m0 = (long)blockIdx.y * BM;
+    const int n0 = blockIdx.x * BN;
+    const int taps = KD * KH * KW;
+    const long K = (long)taps * C;
+    const int nk_all = (int)((K + BK - 1) / BK);
+    const int z = blockIdx.z;
+    const int kt0 = (int)((long)nk_all * z / splits), kt1 = (int)((long)nk_all * (z + 1) / splits);
+    const int nk = kt1 - kt0;
+    if (m0 >= M || n0 >= N || nk <= 0) return;
+    y += (long)z * M * N;
+
+    if (warp == BM / WM * WARPS_N) {
+        // ---- the producer warp ----
+        // Lane l owns chunk column l % CHUNKS of rows l / CHUNKS + 8 i.
+        // Per row (16 per lane): the output pixel's first input coordinate per
+        // axis (od * stride - pad, before the tap offset), d and h packed into
+        // one int (both below 32768), w alone (INT_MIN marks a row past M: no
+        // tap offset brings it in range), and the batch's element offset:
+        // four registers a row (the budget is 168: five warps a CTA, ten an SM,
+        // three on one sub-partition).
+        const int cc = lane % CHUNKS, rowl = lane / CHUNKS;
+        int a_dh[A_CH], a_w0[A_CH];
+        long a_off[A_CH];
+        #pragma unroll
+        for (int i = 0; i < A_CH; i++) {
+            const int row = rowl + i * (32 / CHUNKS);
+            const long m = m0 + row;
+            const int ok = m < M;
+            const long mm = ok ? m : 0;
+            int ow = (int)(mm % OW); long q = mm / OW;
+            int oh = (int)(q % OH); q /= OH;
+            int od = (int)(q % OD);
+            int b = (int)(q / OD);
+            a_dh[i] = ((od * SD - PD) << 16) | ((oh * SH - PH) & 0xffff);
+            a_w0[i] = ok ? ow * SW - PW : (int)0x80000000;
+            a_off[i] = (long)b * D * H * W * C;
+        }
+        const long row_h = (long)W * C, row_d = (long)H * row_h;
+        auto load_stage = [&](int kt, int stage) {
+            const unsigned int sA = sbase + stage * STAGE_B, sB = sA + TILE_A;
+            const long kbase = (long)(kt0 + kt) * BK;
+            // This lane's k is fixed per k-tile: decode (tap, channel) once.
+            const long k = kbase + cc * 8;
+            const int kok = k < K;
+            int tap = (int)(k / C), ci = (int)(k - (long)tap * C);
+            int kd = tap / (KH * KW), rem = tap - kd * KH * KW, kh = rem / KW, kw = rem - kh * KW;
+            const int kdd = kd * DD, khd = kh * DH, kwd = kw * DW;
+            #pragma unroll
+            for (int i = 0; i < A_CH; i++) {
+                const int row = rowl + i * (32 / CHUNKS);
+                const int id = (a_dh[i] >> 16) + kdd, ih = (int)((short)(a_dh[i] & 0xffff)) + khd, iw = a_w0[i] + kwd;
+                const int ok = kok && (unsigned)id < (unsigned)D && (unsigned)ih < (unsigned)H && (unsigned)iw < (unsigned)W;
+                const unsigned short* src = ok ? x + a_off[i] + id * row_d + ih * row_h + (long)iw * C + ci : x;
+                mma_cp_async16_zfill(sA + ig_swz<BK>(row, cc), src, ok);
+            }
+            #pragma unroll
+            for (int i = 0; i < B_CH; i++) {
+                const int row = rowl + i * (32 / CHUNKS);
+                const int n = n0 + row;
+                const int bok = (n < N) && kok;
+                mma_cp_async16_zfill(sB + ig_swz<BK>(row, cc), bok ? (const void*)(w + (long)n * K + k) : (const void*)w, bok);
+            }
+            mma_cp_commit();
+        };
+        for (int kt = 0; kt < nk; kt++) {
+            const int s = kt % STAGES;
+            if (kt >= STAGES) ig_bar_sync(1 + STAGES + s, NT);   // the consumers are done with kt - STAGES
+            load_stage(kt, s);
+            if (kt >= 1) {
+                mma_cp_wait<1>();            // every group but the newest: kt - 1 has landed
+                __threadfence_block();
+                ig_bar_arrive(1 + (kt - 1) % STAGES, NT);
+            }
+        }
+        mma_cp_wait<0>();
+        __threadfence_block();
+        ig_bar_arrive(1 + (nk - 1) % STAGES, NT);
+        return;
+    }
+
+    // ---- the consumer warps ----
+    const int wm = warp / WARPS_N, wn = warp % WARPS_N;
+    float acc[MT][NTL][4];
+    #pragma unroll
+    for (int mt = 0; mt < MT; mt++)
+        #pragma unroll
+        for (int nt = 0; nt < NTL; nt++)
+            #pragma unroll
+            for (int e = 0; e < 4; e++) acc[mt][nt][e] = 0.0f;
+
+    // Five warps per CTA, ten per SM: three land on one of the four
+    // sub-partitions, so the register budget is 168, not 204. The 64 x 64
+    // warp tile's 128 accumulators leave room for one k16 chunk of fragments
+    // (no two-deep ring; round 1 measured none from it).
+    unsigned int af[MT][4];
+    unsigned int bfr[4];
+    for (int kt = 0; kt < nk; kt++) {
+        const int s = kt % STAGES;
+        ig_bar_sync(1 + s, NT);
+        const unsigned int sA = sbase + s * STAGE_B, sB = sA + TILE_A;
+        #pragma unroll
+        for (int kc = 0; kc < KC; kc++) {
+            #pragma unroll
+            for (int mt = 0; mt < MT; mt++) {
+                const int row = wm * WM + mt * 16 + (lane & 15);
+                const int col = kc * 16 + (lane >> 4) * 8;
+                mma_ldm_x4(sA + ig_swz<BK>(row, col >> 3), af[mt][0], af[mt][1], af[mt][2], af[mt][3]);
+            }
+            #pragma unroll
+            for (int np = 0; np < NTL / 2; np++) {
+                const int row = wn * WN + np * 16 + (lane & 7) + ((lane >> 4) << 3);
+                const int col = kc * 16 + ((lane >> 3) & 1) * 8;
+                mma_ldm_x4(sB + ig_swz<BK>(row, col >> 3), bfr[0], bfr[1], bfr[2], bfr[3]);
+                #pragma unroll
+                for (int mt = 0; mt < MT; mt++) {
+                    mma_bf16(acc[mt][2 * np], af[mt], bfr);
+                    mma_bf16(acc[mt][2 * np + 1], af[mt], bfr + 2);
+                }
+            }
+        }
+        ig_bar_arrive(1 + STAGES + s, NT);
+    }
+
+    if (MODE == 3) {
+        float t = 0.0f;
+        #pragma unroll
+        for (int mt = 0; mt < MT; mt++)
+            #pragma unroll
+            for (int nt = 0; nt < NTL; nt++)
+                #pragma unroll
+                for (int e = 0; e < 4; e++) t += acc[mt][nt][e];
+        if (t != t) y[0] = t;
+        return;
+    }
+    const int g = lane >> 2, t = lane & 3;
+    #pragma unroll
+    for (int mt = 0; mt < MT; mt++) {
+        #pragma unroll
+        for (int nt = 0; nt < NTL; nt++) {
+            const int n = n0 + wn * WN + nt * 8 + 2 * t;
+            #pragma unroll
+            for (int hh = 0; hh < 2; hh++) {
+                const long m = m0 + wm * WM + mt * 16 + g + hh * 8;
+                if (m < M) {
+                    if (out16) {
+                        unsigned short* yr = y16 + m * N;
+                        if (n < N) yr[n] = fv_bf16_rne(acc[mt][nt][hh * 2]);
+                        if (n + 1 < N) yr[n + 1] = fv_bf16_rne(acc[mt][nt][hh * 2 + 1]);
+                    } else {
+                        float* yr = y + m * N;
+                        if (n < N) yr[n] = acc[mt][nt][hh * 2];
+                        if (n + 1 < N) yr[n + 1] = acc[mt][nt][hh * 2 + 1];
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
+
 #define IG_ARGS \
     const unsigned short* __restrict__ x, const unsigned short* __restrict__ w, float* __restrict__ y, \
     unsigned short* __restrict__ y16, int out16, \
@@ -387,31 +594,18 @@ extern "C" __global__ void __launch_bounds__(128, 2) conv_igemm_bf16_w64(IG_ARGS
 #endif
 }
 
-// 128 x 128 x 64, 256 threads, 2 stages: 64 KB dynamic. Round 2 ran it at one
-// CTA per SM (184 registers) and lost 25 %; round 3 holds it to two CTAs per
-// SM (128 registers) to separate the occupancy from the k-tile length.
-extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16_bk64(IG_ARGS) {
+// WO-3b-ii: the warp-specialised mainloop (ig_ws_body), 160 threads, 48 KB
+// static, two CTAs per SM; and its no-epilogue probe (MODE 3, wrong values).
+extern "C" __global__ void __launch_bounds__(160, 2) conv_igemm_bf16_ws(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    extern __shared__ __align__(128) unsigned char ig_dyn_smem[];
-    ig_body<128, 128, 64, 64, 32, 2, 0>(IG_PASS, ig_dyn_smem);
+    __shared__ __align__(128) unsigned char smem[3 * (128 + 128) * 64];
+    ig_ws_body<3, 0>(IG_PASS, smem);
 #endif
 }
-
-// The base tile with deeper cp.async rings in dynamic smem at two CTAs per
-// SM: 4 stages (64 KB, 128 KB per SM) and 6 stages (96 KB, 192 KB per SM;
-// sm_100 / sm_120 have 228 KB). Round 3: the probes put the cost of the
-// loads at 20-25 points with the gather removed, which a pipeline two
-// stages deep at 2 CTAs per SM does not cover.
-extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16_s4(IG_ARGS) {
+extern "C" __global__ void __launch_bounds__(160, 2) conv_igemm_bf16_ws_probe_noepi(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    extern __shared__ __align__(128) unsigned char ig_dyn_smem[];
-    ig_body<128, 128, 32, 64, 32, 4, 0>(IG_PASS, ig_dyn_smem);
-#endif
-}
-extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16_s6(IG_ARGS) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    extern __shared__ __align__(128) unsigned char ig_dyn_smem[];
-    ig_body<128, 128, 32, 64, 32, 6, 0>(IG_PASS, ig_dyn_smem);
+    __shared__ __align__(128) unsigned char smem[3 * (128 + 128) * 64];
+    ig_ws_body<3, 3>(IG_PASS, smem);
 #endif
 }
 
