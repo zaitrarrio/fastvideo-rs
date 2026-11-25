@@ -942,24 +942,66 @@ fn route_y_nchw(
 pub struct IgemmPlan {
     /// CTA tile side: 128 or 64 (square tiles).
     pub tile: usize,
+    /// cp.async pipeline depth: 2 or 3.
+    pub stages: usize,
     /// Split-K factor (grid.z); the planes are summed in order.
     pub splits: usize,
 }
 
 impl IgemmPlan {
+    /// The default plan: the 128 tile with two stages (the spike's config,
+    /// 1.06-1.35x cuDNN) when it fills two CTAs per SM, else the 64 tile and
+    /// split-K. The stage choice is re-decided from the `conv_routes`
+    /// variants (see `docs/perf/2026-11-25-conv-routes.md`).
     pub fn for_geom(g: &ConvGeom, sms: usize) -> Self {
-        let (m, n) = (g.m(), g.n);
+        let tile = if Self::tiles(g, 128) >= 2 * sms.max(1) {
+            128
+        } else {
+            64
+        };
+        Self::with(g, sms, tile, 2)
+    }
+
+    /// A plan with the given tile and stages; splits from the SM count (two
+    /// CTAs per SM as the target, each split at least eight k-tiles).
+    pub fn with(g: &ConvGeom, sms: usize, tile: usize, stages: usize) -> Self {
         let nk = g.k().div_ceil(32);
-        let tiles = |t: usize| m.div_ceil(t) * n.div_ceil(t);
         let target = 2 * sms.max(1);
-        let tile = if tiles(128) >= target { 128 } else { 64 };
-        let ctas = tiles(tile);
+        let ctas = Self::tiles(g, tile);
         let mut splits = 1;
         if ctas < target {
             splits = target.div_ceil(ctas).min(nk / 8).clamp(1, 16);
         }
-        Self { tile, splits }
+        Self {
+            tile,
+            stages,
+            splits,
+        }
     }
+
+    fn tiles(g: &ConvGeom, t: usize) -> usize {
+        g.m().div_ceil(t) * g.n.div_ceil(t)
+    }
+}
+
+/// [`IgemmPlan::with`] for these shapes on this device.
+pub fn igemm_plan_with(
+    x_shape: &[usize],
+    w_shape: &[usize],
+    pad: &[usize],
+    stride: &[usize],
+    tile: usize,
+    stages: usize,
+) -> Result<IgemmPlan> {
+    let dev = global_device()
+        .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let g = ConvGeom::new(x_shape, w_shape, pad, stride)?;
+    Ok(IgemmPlan::with(
+        &g,
+        super::ops::sm_count(&dev),
+        tile,
+        stages,
+    ))
 }
 
 /// The plan [`conv3d_igemm`] would use for these shapes on this device.
@@ -1008,18 +1050,34 @@ pub fn conv3d_igemm(
     pad: &[usize],
     stride: &[usize],
 ) -> Result<(CudaSlice<f32>, Vec<usize>)> {
+    conv3d_igemm_with(x, x_shape, w, w_shape, pad, stride, None)
+}
+
+/// [`conv3d_igemm`] with an explicit plan (`None`: [`IgemmPlan::for_geom`]);
+/// fv-gpucheck times the variants through it.
+#[allow(clippy::too_many_arguments)]
+pub fn conv3d_igemm_with(
+    x: &CudaSlice<f32>,
+    x_shape: &[usize],
+    w: &CudaSlice<f32>,
+    w_shape: &[usize],
+    pad: &[usize],
+    stride: &[usize],
+    plan: Option<IgemmPlan>,
+) -> Result<(CudaSlice<f32>, Vec<usize>)> {
     let dev = global_device()
         .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
     let g = ConvGeom::new(x_shape, w_shape, pad, stride)?;
     let x16 = route_x_nhwc(&dev, x, &g)?;
     let w16 = route_weight(&dev, w, &g, false)?;
     let (m, n) = (g.m(), g.n);
-    let plan = IgemmPlan::for_geom(&g, super::ops::sm_count(&dev));
+    let plan = plan.unwrap_or_else(|| IgemmPlan::for_geom(&g, super::ops::sm_count(&dev)));
     let mut y = unsafe { dev.stream.alloc::<f32>((m * n * plan.splits).max(1)) }?;
-    let (func, threads) = if plan.tile == 128 {
-        (&dev.kernels.conv_igemm_bf16, 256)
-    } else {
-        (&dev.kernels.conv_igemm_bf16_64, 128)
+    let (func, threads) = match (plan.tile, plan.stages) {
+        (128, 3) => (&dev.kernels.conv_igemm_bf16, 256),
+        (128, _) => (&dev.kernels.conv_igemm_bf16_s2, 256),
+        (_, 3) => (&dev.kernels.conv_igemm_bf16_64, 128),
+        _ => (&dev.kernels.conv_igemm_bf16_64_s2, 128),
     };
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (

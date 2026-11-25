@@ -285,18 +285,40 @@ __device__ __forceinline__ void ig_body(
     int KD, int KH, int KW, int SD, int SH, int SW, int PD, int PH, int PW, int DD, int DH, int DW, int splits
 #define IG_PASS x, w, y, B, D, H, W, C, OD, OH, OW, N, KD, KH, KW, SD, SH, SW, PD, PH, PW, DD, DH, DW, splits
 
+// Variants timed side by side by fv-gpucheck `conv_routes` (igemm_128s3,
+// igemm_128s2, igemm_64s3, igemm_64s2); rt/conv.rs `IgemmPlan` picks one.
+// Every variant asks for two CTAs per SM: the 2026-11-25 run with one CTA
+// per SM on the 3-stage 128 tile (`__launch_bounds__(256, 1)`, 48 KB) was
+// 1.5-2.1x cuDNN against the 2-stage spike's 1.06-1.35x.
+
 // 128 x 128 x 32, 256 threads, 3 stages: 3 * (128 + 128) * 64 B = 48 KB.
-extern "C" __global__ void __launch_bounds__(256, 1) conv_igemm_bf16(IG_ARGS) {
+extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     __shared__ __align__(128) unsigned char smem[3 * (128 + 128) * IG_ROWB];
     ig_body<128, 128, 64, 32, 3>(IG_PASS, smem);
 #endif
 }
 
+// 128 x 128 x 32, 256 threads, 2 stages (the spike's config): 32 KB.
+extern "C" __global__ void __launch_bounds__(256, 2) conv_igemm_bf16_s2(IG_ARGS) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    __shared__ __align__(128) unsigned char smem[2 * (128 + 128) * IG_ROWB];
+    ig_body<128, 128, 64, 32, 2>(IG_PASS, smem);
+#endif
+}
+
 // 64 x 64 x 32, 128 threads, 3 stages: 24 KB.
-extern "C" __global__ void __launch_bounds__(128, 2) conv_igemm_bf16_64(IG_ARGS) {
+extern "C" __global__ void __launch_bounds__(128, 4) conv_igemm_bf16_64(IG_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     __shared__ __align__(128) unsigned char smem[3 * (64 + 64) * IG_ROWB];
     ig_body<64, 64, 32, 32, 3>(IG_PASS, smem);
+#endif
+}
+
+// 64 x 64 x 32, 128 threads, 2 stages: 16 KB.
+extern "C" __global__ void __launch_bounds__(128, 4) conv_igemm_bf16_64_s2(IG_ARGS) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    __shared__ __align__(128) unsigned char smem[2 * (64 + 64) * IG_ROWB];
+    ig_body<64, 64, 32, 32, 2>(IG_PASS, smem);
 #endif
 }
