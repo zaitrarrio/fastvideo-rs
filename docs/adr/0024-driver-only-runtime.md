@@ -90,7 +90,10 @@ and each gated on byte identity of outputs where the plan's §1 rule applies:
 3. **Replace cuDNN convolutions** with an in-tree implicit-GEMM conv kernel
    (2-D / 3-D, grouped incl. depthwise, transposed, f32 and bf16 NDHWC),
    then delete the cuDNN handles from `rt/device.rs` / `rt/graph.rs`.
-   fv-gpucheck and fv-lab may keep cuDNN as references.
+   fv-gpucheck and fv-lab may keep cuDNN as references. *Work order
+   written 2026-11-25 (`docs/plan/2026-11-25-adr24-step3-wo.md`: 3a routed
+   spike, 3b implicit GEMM, 3c small kernels, 3d removal), with the
+   inventory of every cuDNN call site on the served path.*
 4. **Static CUDA libraries** via cudarc's `static-linking` feature: cuBLAS,
    cuBLASLt, cudart, `libculibos`; NVRTC static only if step 1b's measurement
    shows cuBLASLt still needs it with cuDNN gone.
