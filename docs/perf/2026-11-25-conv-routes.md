@@ -274,16 +274,60 @@ waits. The round confirms round 1's finding from the other side:
 occupancy (two CTAs per SM) is worth more than anything inside the
 k-tile.
 
-### Round 3 (the last): deeper rings at two CTAs per SM
+### Round 3 (bb7ff1f, the last): deeper rings in dynamic smem
 
 The probes' arithmetic for the wide shapes: no loads 0.92, dense loads
 1.15, the gather 1.34. The 23 points between no loads and dense loads are
 the cost of plain, coalesced cp.async traffic that a ring only two stages
 deep (three stages, one being computed) does not hide at 32 k per stage.
-Round 3 keeps two CTAs per SM and deepens the ring in dynamic smem: `s4`
-(four stages, 64 KB per CTA, 128 KB per SM) and `s6` (six stages, 96 KB,
-192 KB of the SM's 228 KB), both at 113-114 registers; `bk64` runs again
-held to two CTAs per SM (`__launch_bounds__(256, 2)`, 126 registers, no
-spills) to separate its occupancy loss from the k-tile length. `m256` is
-dropped (settled above).
+Round 3 deepened the ring in dynamic smem: `s4` (four stages, 64 KB per
+CTA) and `s6` (six stages, 96 KB), both at two CTAs per SM by
+`__launch_bounds__` and 113-114 registers, and `bk64` again held to two
+CTAs per SM by registers (126, no spills). Record
+`artifacts/runpod/rtx6000/bb7ff1f-11251452/`, every check passing.
 
+| shape | w32 | bk64 | s4 | s6 | probe_dense | probe_noload |
+|---|---|---|---|---|---|---|
+| wan22-1024-s1 | **1.31** | 1.79 | 1.99 | 1.96 | 1.17 | 0.95 |
+| wan22-512-s2 | **1.23** | 1.62 | 1.80 | 1.77 | 1.07 | 0.88 |
+| wan21-96 | **0.89** | 1.13 | 1.18 | 1.17 | 0.81 | 0.71 |
+| ltx-1024 | **1.28** | 1.70 | 1.87 | 1.85 | 1.18 | 0.98 |
+| ltx-up-4096 | **1.34** | 1.77 | 1.96 | 1.94 | 1.23 | 1.03 |
+| ltx-256 | **1.12** | 1.49 | 1.65 | 1.63 | 1.02 | 0.86 |
+| bench-192x6x120x208 | **1.18** | 1.52 | 1.73 | 1.72 | 1.07 | 0.83 |
+
+All three dynamic-smem variants lose 35-50 %, the deeper rings most, and
+their numbers are the one-CTA-per-SM numbers of round 2 again. The
+reason is the GPU, not the launch bounds: compute capability 12.0 (the
+RTX PRO 6000 Blackwell, GB202) has 128 KB of shared memory per SM and
+99 KB per block, not the 228 KB of the data-centre parts. Two CTAs of
+64 KB (plus the 1 KB the driver reserves per CTA) do not fit, so every
+variant above 63 KB runs one CTA per SM whatever its registers say; the
+base kernel's 48 KB static ring is already the deepest ring that keeps
+two CTAs resident. On this GPU the design space the three rounds
+explored is closed: two CTAs per SM is required (rounds 1-3), two CTAs
+per SM caps the ring at three stages of 32 k (round 3), and within that
+ring the loads cost 35-40 points over the no-load ceiling (round 1).
+
+### Outcome of the three rounds
+
+| | wan22-1024 | wan22-512 | wan21-96 | ltx-1024 | ltx-up-4096 | ltx-256 |
+|---|---|---|---|---|---|---|
+| before the rounds (e78a557) | 1.21 | 1.13 | 0.93 | 1.22 | 1.25 | 1.07 |
+| after (w32 at bb7ff1f) | 1.31 | 1.23 | 0.89 | 1.28 | 1.34 | 1.12 |
+
+The three rounds found no faster kernel: the base kernel of e78a557
+(which round 1's fragment ring did not change within the run-to-run
+spread of about 10 % between pods) remains the best, at 1.2-1.3× cuDNN's
+NCDHW plans on the micro-benchmark and 1.42× cuDNN's NHWC plans on the
+real LTX-2.5 decode. What the rounds bought is the explanation: on
+sm_120 the kernel's no-load ceiling is cuDNN's speed, cuDNN hides its
+loads almost entirely inside the same 128 KB smem budget, and this
+kernel does not. Closing that needs a different mainloop, not a deeper
+one: a warp-specialised producer (one warp issuing cp.async or TMA-style
+bulk copies while the other warps only compute, as CUTLASS's sm80
+"multistage" does with its software pipelining of the fragment loads
+across the k-tile boundary), the im2col gather precomputed as offsets
+rather than decoded per chunk, or the epilogue's scattered f32 stores
+replaced by a staged smem transpose. Each is a WO of its own, outside
+the three rounds the owner capped.
