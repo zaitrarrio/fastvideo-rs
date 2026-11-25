@@ -11,11 +11,12 @@ include!(concat!(env!("OUT_DIR"), "/kernel_src.rs"));
 mod tests {
     use sha2::{Digest, Sha256};
 
-    /// sha256 of `crates/fastvideo-cudarc/src/wan/kernels.cu` at main
-    /// `42da2570` (the single file before the split). Changing a kernel
+    /// sha256 of the concatenated region files: the former
+    /// `crates/fastvideo-cudarc/src/wan/kernels.cu` at main `42da2570` plus
+    /// `rt/kernels/conv_igemm.cu` (ADR-0024 WO-3a). Changing a kernel
     /// changes this on purpose; update it in the same commit.
     const KERNELS_CU_SHA256: &str =
-        "1dbd3ac47cc82f83f0cc56511a1821ea9eb4a7721c13a03e0d913385e310a18f";
+        "7d52fc36ee733fbecf5a218d1fb5c917d25bd700369d5fd377f03171945dac15";
 
     fn sha256_hex(bytes: &[u8]) -> String {
         Sha256::digest(bytes)
