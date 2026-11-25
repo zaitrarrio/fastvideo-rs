@@ -944,44 +944,80 @@ fn route_y_nchw(
 /// Chosen from shapes and the SM count, never from timing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IgemmPlan {
-    /// Warp tile width in output channels: 32 (8 warps of 64 × 32) or 64 (4
-    /// warps of 64 × 64).
-    pub wn: usize,
-    /// 0: the convolution; 1 / 2: the timing probes (gather-free A load / no
-    /// loads), fv-gpucheck only, wrong values.
-    pub probe: u8,
+    /// The kernel variant ([`IGEMM_VARIANTS`]).
+    pub variant: IgemmVariant,
     /// Split-K factor (grid.z); the planes are summed in order.
     pub splits: usize,
 }
 
-/// The CTA tile side.
-pub const IGEMM_TILE: usize = 128;
-/// The variants the kernel file instantiates: (warp tile width, probe).
-pub const IGEMM_VARIANTS: &[(&str, usize, u8)] = &[
-    ("w32", 32, 0),
-    ("w64", 64, 0),
-    ("probe_dense", 32, 1),
-    ("probe_noload", 32, 2),
+/// One instantiation of the kernel file (`conv_igemm_bf16*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IgemmVariant {
+    pub name: &'static str,
+    /// CTA tile rows (output pixels).
+    pub bm: usize,
+    /// CTA tile columns (output channels).
+    pub bn: usize,
+    pub threads: u32,
+    /// Dynamic shared memory the launch asks for (0: the kernel's static smem).
+    pub dyn_smem: u32,
+    /// Timing probe (fv-gpucheck only, wrong values).
+    pub probe: bool,
+}
+
+const fn variant(
+    name: &'static str,
+    bm: usize,
+    bn: usize,
+    threads: u32,
+    dyn_smem: u32,
+    probe: bool,
+) -> IgemmVariant {
+    IgemmVariant {
+        name,
+        bm,
+        bn,
+        threads,
+        dyn_smem,
+        probe,
+    }
+}
+
+/// The variants the kernel file instantiates, timed side by side by
+/// fv-gpucheck `conv_routes`; the first is the default.
+pub const IGEMM_VARIANTS: &[IgemmVariant] = &[
+    variant("w32", 128, 128, 256, 0, false),
+    variant("w64", 128, 128, 128, 0, false),
+    variant("bk64", 128, 128, 256, 2 * (128 + 128) * 128, false),
+    variant("m256", 256, 128, 512, 3 * (256 + 128) * 64, false),
+    variant("probe_dense", 128, 128, 256, 0, true),
+    variant("probe_noload", 128, 128, 256, 0, true),
 ];
 
+impl IgemmVariant {
+    pub fn by_name(name: &str) -> Option<Self> {
+        IGEMM_VARIANTS.iter().copied().find(|v| v.name == name)
+    }
+}
+
 impl IgemmPlan {
-    /// The default plan: the 64 × 32 warp tile, split-K up to four waves.
+    /// The default plan: the first variant, split-K up to four waves.
     pub fn for_geom(g: &ConvGeom, sms: usize) -> Self {
-        Self::with(g, sms, 32, 0)
+        Self::with(g, sms, IGEMM_VARIANTS[0])
     }
 
-    /// A plan with the given warp tile (and probe); the split from the SM
-    /// count: enough splits for four waves of two CTAs per SM, each split
-    /// keeping at least eight k-tiles, at most 16.
-    pub fn with(g: &ConvGeom, sms: usize, wn: usize, probe: u8) -> Self {
+    /// A plan with the given variant; the split from the SM count: enough
+    /// splits for four waves of two CTAs per SM, each split keeping at least
+    /// eight k-tiles, at most 16.
+    pub fn with(g: &ConvGeom, sms: usize, variant: IgemmVariant) -> Self {
         let nk = g.k().div_ceil(32);
         let waves4 = 8 * sms.max(1);
-        let ctas = g.m().div_ceil(IGEMM_TILE) * g.n.div_ceil(IGEMM_TILE);
+        let ctas = g.m().div_ceil(variant.bm) * g.n.div_ceil(variant.bn);
         let mut splits = 1;
         if ctas < waves4 {
             splits = waves4.div_ceil(ctas).min(nk / 8).clamp(1, 16);
         }
-        Self { wn, probe, splits }
+        Self { variant, splits }
     }
 }
 
@@ -991,13 +1027,14 @@ pub fn igemm_plan_with(
     w_shape: &[usize],
     pad: &[usize],
     stride: &[usize],
-    wn: usize,
-    probe: u8,
+    variant: &str,
 ) -> Result<IgemmPlan> {
     let dev = global_device()
         .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
     let g = ConvGeom::new(x_shape, w_shape, pad, stride)?;
-    Ok(IgemmPlan::with(&g, super::ops::sm_count(&dev), wn, probe))
+    let v = IgemmVariant::by_name(variant)
+        .ok_or_else(|| DeviceError::Message(format!("conv igemm: no variant {variant}")))?;
+    Ok(IgemmPlan::with(&g, super::ops::sm_count(&dev), v))
 }
 
 /// The plan [`conv3d_igemm`] would use for these shapes on this device.
@@ -1035,6 +1072,43 @@ fn route_weight(
     Ok(out)
 }
 
+/// The function and launch config of a plan: the variant's kernel, grid
+/// (N tiles, M tiles, splits), threads, and its dynamic shared memory
+/// (opted in once per function; the driver call is idempotent).
+fn igemm_launch<'a>(
+    dev: &'a DeviceContext,
+    plan: &IgemmPlan,
+    m: usize,
+    n: usize,
+) -> Result<(
+    &'a cudarc::driver::CudaFunction,
+    cudarc::driver::LaunchConfig,
+)> {
+    let v = plan.variant;
+    let func: &cudarc::driver::CudaFunction = match v.name {
+        "w64" => &dev.kernels.conv_igemm_bf16_w64,
+        "bk64" => &dev.kernels.conv_igemm_bf16_bk64,
+        "m256" => &dev.kernels.conv_igemm_bf16_m256,
+        "probe_dense" => &dev.kernels.conv_igemm_bf16_probe_dense,
+        "probe_noload" => &dev.kernels.conv_igemm_bf16_probe_noload,
+        _ => &dev.kernels.conv_igemm_bf16,
+    };
+    if v.dyn_smem > 0 {
+        super::ops::opt_in_dynamic_shared(func, v.dyn_smem)
+            .map_err(|e| DeviceError::Message(e.to_string()))?;
+    }
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (
+            n.div_ceil(v.bn) as u32,
+            m.div_ceil(v.bm) as u32,
+            plan.splits as u32,
+        ),
+        block_dim: (v.threads, 1, 1),
+        shared_mem_bytes: v.dyn_smem,
+    };
+    Ok((func, cfg))
+}
+
 /// Route R2: the implicit GEMM (`conv_igemm_bf16*`, mma.sync bf16, f32
 /// accumulate) with the tile and split-K of [`IgemmPlan`]. Same contract as
 /// [`cudnn_conv`].
@@ -1069,21 +1143,7 @@ pub fn conv3d_igemm_with(
     let (m, n) = (g.m(), g.n);
     let plan = plan.unwrap_or_else(|| IgemmPlan::for_geom(&g, super::ops::sm_count(&dev)));
     let mut y = unsafe { dev.stream.alloc::<f32>((m * n * plan.splits).max(1)) }?;
-    let (func, threads) = match (plan.wn, plan.probe) {
-        (64, 0) => (&dev.kernels.conv_igemm_bf16_w64, 128),
-        (_, 1) => (&dev.kernels.conv_igemm_bf16_probe_dense, 256),
-        (_, 2) => (&dev.kernels.conv_igemm_bf16_probe_noload, 256),
-        _ => (&dev.kernels.conv_igemm_bf16, 256),
-    };
-    let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (
-            n.div_ceil(IGEMM_TILE) as u32,
-            m.div_ceil(IGEMM_TILE) as u32,
-            plan.splits as u32,
-        ),
-        block_dim: (threads, 1, 1),
-        shared_mem_bytes: 0,
-    };
+    let (func, cfg) = igemm_launch(&dev, &plan, m, n)?;
     let i = |v: usize| v as i32;
     let (b, d, h, wd, c, od, oh, ow, nn) = (
         i(g.b),
@@ -1150,21 +1210,7 @@ pub fn conv3d_igemm_nhwc_bf16(
         )));
     }
     let plan = IgemmPlan::for_geom(&g, super::ops::sm_count(dev));
-    let (func, threads) = match (plan.wn, plan.probe) {
-        (64, 0) => (&dev.kernels.conv_igemm_bf16_w64, 128),
-        (_, 1) => (&dev.kernels.conv_igemm_bf16_probe_dense, 256),
-        (_, 2) => (&dev.kernels.conv_igemm_bf16_probe_noload, 256),
-        _ => (&dev.kernels.conv_igemm_bf16, 256),
-    };
-    let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (
-            n.div_ceil(IGEMM_TILE) as u32,
-            m.div_ceil(IGEMM_TILE) as u32,
-            plan.splits as u32,
-        ),
-        block_dim: (threads, 1, 1),
-        shared_mem_bytes: 0,
-    };
+    let (func, cfg) = igemm_launch(&dev, &plan, m, n)?;
     let i = |v: usize| v as i32;
     let (b, d, h, wd, c, od, oh, ow, nn) = (
         i(g.b),

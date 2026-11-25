@@ -2957,15 +2957,15 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             let (xd, wd) = (xt.device_slice().unwrap(), wt.device_slice().unwrap());
             type Run<'a> = Box<dyn Fn() -> anyhow::Result<(CudaSlice<f32>, Vec<usize>)> + 'a>;
             let (xs, ws, pd, st) = (&x_shape, &w_shape, &pad, &stride);
-            let variant = |wn: usize, probe: u8| -> Run<'_> {
+            let variant = |name: &'static str| -> Run<'_> {
                 Box::new(move || {
-                    let plan = conv::igemm_plan_with(xs, ws, pd, st, wn, probe)?;
+                    let plan = conv::igemm_plan_with(xs, ws, pd, st, name)?;
                     Ok(conv::conv3d_igemm_with(xd, xs, wd, ws, pd, st, Some(plan))?)
                 })
             };
-            let routes: [(&str, Run<'_>); 7] = [
+            let mut routes: Vec<(String, Run<'_>)> = vec![
                 (
-                    "cudnn_bf16",
+                    "cudnn_bf16".into(),
                     Box::new(|| {
                         Ok(conv::cudnn_conv_bf16(
                             xd, &x_shape, wd, &w_shape, &pad, &stride,
@@ -2973,7 +2973,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                     }),
                 ),
                 (
-                    "unfold_lt",
+                    "unfold_lt".into(),
                     Box::new(|| {
                         Ok(conv::conv3d_unfold_lt(
                             xd,
@@ -2987,18 +2987,17 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                     }),
                 ),
                 (
-                    "igemm",
+                    "igemm".into(),
                     Box::new(|| {
                         Ok(conv::conv3d_igemm(
                             xd, &x_shape, wd, &w_shape, &pad, &stride,
                         )?)
                     }),
                 ),
-                ("igemm_w32", variant(32, 0)),
-                ("igemm_w64", variant(64, 0)),
-                ("igemm_probe_dense", variant(32, 1)),
-                ("igemm_probe_noload", variant(32, 2)),
             ];
+            for v in conv::IGEMM_VARIANTS {
+                routes.push((format!("igemm_{}", v.name), variant(v.name)));
+            }
             // Reference output: cuDNN bf16 (kept on the device).
             let (y_ref, y_shape) = (routes[0].1)()?;
             let n_out: usize = y_shape.iter().product();
@@ -3025,14 +3024,12 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
                 json!(2.0 * n_out as f64 * (sh.ci * sh.k[0] * sh.k[1] * sh.k[2]) as f64 / 1e9),
             );
             if let Ok(plan) = conv::igemm_plan(&x_shape, &w_shape, &pad, &stride) {
-                values.insert("igemm_wn".into(), json!(plan.wn));
+                values.insert("igemm_variant".into(), json!(plan.variant.name));
                 values.insert("igemm_splits".into(), json!(plan.splits));
             }
-            for &(name, wn, probe) in conv::IGEMM_VARIANTS {
-                if let Ok(plan) =
-                    conv::igemm_plan_with(&x_shape, &w_shape, &pad, &stride, wn, probe)
-                {
-                    values.insert(format!("igemm_{name}_splits"), json!(plan.splits));
+            for v in conv::IGEMM_VARIANTS {
+                if let Ok(plan) = conv::igemm_plan_with(&x_shape, &w_shape, &pad, &stride, v.name) {
+                    values.insert(format!("igemm_{}_splits", v.name), json!(plan.splits));
                 }
             }
             for (name, run) in &routes {
