@@ -56,7 +56,9 @@ kernel, model or parity validation.
 
 `FASTVIDEO_CONV3D` picks the 3-D conv backend: `auto` (default: cuDNN on
 bf16 under bf16 math, cuDNN f32 under f32 math, whatever the timing, so the
-output is the same in every run), `cudnn`, `unfold` or `cudnn-bf16`.
+output is the same in every run), `cudnn`, `unfold`, `cudnn-bf16` or `igemm`
+(the in-tree implicit GEMM, ADR-0024 step 3; it also switches the LTX fast
+decoder's convs off cuDNN).
 `FASTVIDEO_CONV3D_TIMED=1` restores the old per-shape timing (bf16 only
 competes under fast mode); it is not reproducible run to run. Every other
 timed kernel pick is fixed the same way (docs/perf/determinism.md).

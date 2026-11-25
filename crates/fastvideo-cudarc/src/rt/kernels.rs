@@ -134,6 +134,7 @@ kernel_fns!(
     conv_unfold_nhwc_bf16,
     conv_igemm_bf16,
     conv_igemm_bf16_w64,
+    conv_sum_planes_bf16,
     index_select_rows,
     flash_attn_f32,
     flash_mma_fwd_d64,

@@ -211,7 +211,9 @@ mod device {
     use std::sync::{Arc, Mutex, OnceLock};
 
     use cudarc::cudnn::{sys, ConvDescriptor, ConvForward, FilterDescriptor, TensorDescriptor};
-    use cudarc::driver::{CudaSlice, DevicePtr, DevicePtrMut, LaunchConfig, PushKernelArg};
+    use cudarc::driver::{
+        CudaSlice, CudaView, CudaViewMut, DevicePtr, DevicePtrMut, LaunchConfig, PushKernelArg,
+    };
     use half::bf16;
 
     use super::super::{Block, TemporalConv, VideoDecoder};
@@ -911,20 +913,32 @@ mod device {
         /// `y = conv(x)` for one temporal chunk: `x` holds `nt + 2` padded
         /// input frames, `y` gets `nt` output frames.
         #[allow(clippy::too_many_arguments)]
-        fn forward<X, Y>(
+        fn forward(
             &mut self,
             dev: &DeviceContext,
-            x: &X,
+            x: &CudaView<'_, bf16>,
             w: &CudaSlice<bf16>,
-            y: &mut Y,
+            y: &mut CudaViewMut<'_, bf16>,
             [nt, h, ww]: [usize; 3],
             cin: usize,
             cout: usize,
-        ) -> Result<()>
-        where
-            X: DevicePtr<bf16>,
-            Y: DevicePtrMut<bf16>,
-        {
+        ) -> Result<()> {
+            if igemm_enabled() {
+                // ADR-0024 step 3: the in-tree implicit GEMM on the same bf16
+                // NDHWC buffers and the same NHWC filter (its [N, K]); no cuDNN.
+                crate::rt::conv::conv3d_igemm_nhwc_bf16(
+                    dev,
+                    x,
+                    w,
+                    y,
+                    &[1, nt + 2, h, ww, cin],
+                    &[cout, cin, 3, 3, 3],
+                    &[0, 1, 1],
+                    &[1, 1, 1],
+                )
+                .map_err(err)?;
+                return Ok(());
+            }
             let key = Key {
                 nt,
                 h,
@@ -1055,5 +1069,11 @@ mod device {
 
     fn tune_enabled() -> bool {
         crate::rt::envflag::string_flag("FASTVIDEO_LTX_VAE_CONV_ALGO", "heuristic") == "tune"
+    }
+
+    /// `FASTVIDEO_CONV3D=igemm` (the same knob as the NCDHW path's
+    /// `conv::conv3d_backend`): the fast decoder's convs on the in-tree kernel.
+    fn igemm_enabled() -> bool {
+        crate::rt::conv::conv3d_backend() == "igemm"
     }
 }

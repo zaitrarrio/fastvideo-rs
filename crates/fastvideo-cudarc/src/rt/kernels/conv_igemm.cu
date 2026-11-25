@@ -82,6 +82,18 @@ extern "C" __global__ void conv_nhwc_to_nchw_f32(
     }
 }
 
+// out[i] = bf16(sum over z of y[z * plane + i]): the split-K planes summed in
+// order into a bf16 channels-last result (no transpose; the LTX fast decoder).
+extern "C" __global__ void conv_sum_planes_bf16(
+    const float* __restrict__ y, unsigned short* __restrict__ out, long plane, long splits
+) {
+    long i = IDX();
+    if (i >= plane) return;
+    float v = 0.0f;
+    for (long z = 0; z < splits; z++) v += y[z * plane + i];
+    out[i] = fv_bf16_rne(v);
+}
+
 // Weight [oc, ic, taps] f32 -> bf16 with k = tap * ic + ci: `kn` = 0 writes
 // [oc, K] (the igemm B operand, K contiguous), `kn` = 1 writes [K, oc] (the
 // cuBLASLt B operand of the unfold route).
@@ -138,6 +150,7 @@ extern "C" __global__ void conv_unfold_nhwc_bf16(
 template <int BM, int BN, int WM, int WN, int STAGES>
 __device__ __forceinline__ void ig_body(
     const unsigned short* __restrict__ x, const unsigned short* __restrict__ w, float* __restrict__ y,
+    unsigned short* __restrict__ y16, int out16,
     int B, int D, int H, int W, int C, int OD, int OH, int OW, int N,
     int KD, int KH, int KW, int SD, int SH, int SW, int PD, int PH, int PW, int DD, int DH, int DW,
     int splits, unsigned char* smem
@@ -163,7 +176,7 @@ __device__ __forceinline__ void ig_body(
     const int kt0 = (int)((long)nk_all * z / splits), kt1 = (int)((long)nk_all * (z + 1) / splits);
     const int nk = kt1 - kt0;
     if (m0 >= M || n0 >= N) return;
-    y += (long)z * M * N;
+    y += (long)z * M * N;   // `out16` (bf16 straight to y16) is only used with one split.
 
     // Loader state: A chunk = tid + i * NT, row = chunk >> 2, chunk column cc =
     // chunk & 3; the row's output pixel decoded once.
@@ -290,9 +303,15 @@ __device__ __forceinline__ void ig_body(
             for (int hh = 0; hh < 2; hh++) {
                 const long m = m0 + wm * WM + mt * 16 + g + hh * 8;
                 if (m < M) {
-                    float* yr = y + m * N;
-                    if (n < N) yr[n] = acc[mt][nt][hh * 2];
-                    if (n + 1 < N) yr[n + 1] = acc[mt][nt][hh * 2 + 1];
+                    if (out16) {
+                        unsigned short* yr = y16 + m * N;
+                        if (n < N) yr[n] = fv_bf16_rne(acc[mt][nt][hh * 2]);
+                        if (n + 1 < N) yr[n + 1] = fv_bf16_rne(acc[mt][nt][hh * 2 + 1]);
+                    } else {
+                        float* yr = y + m * N;
+                        if (n < N) yr[n] = acc[mt][nt][hh * 2];
+                        if (n + 1 < N) yr[n + 1] = acc[mt][nt][hh * 2 + 1];
+                    }
                 }
             }
         }
@@ -302,9 +321,10 @@ __device__ __forceinline__ void ig_body(
 
 #define IG_ARGS \
     const unsigned short* __restrict__ x, const unsigned short* __restrict__ w, float* __restrict__ y, \
+    unsigned short* __restrict__ y16, int out16, \
     int B, int D, int H, int W, int C, int OD, int OH, int OW, int N, \
     int KD, int KH, int KW, int SD, int SH, int SW, int PD, int PH, int PW, int DD, int DH, int DW, int splits
-#define IG_PASS x, w, y, B, D, H, W, C, OD, OH, OW, N, KD, KH, KW, SD, SH, SW, PD, PH, PW, DD, DH, DW, splits
+#define IG_PASS x, w, y, y16, out16, B, D, H, W, C, OD, OH, OW, N, KD, KH, KW, SD, SH, SW, PD, PH, PW, DD, DH, DW, splits
 
 // Variants timed side by side by fv-gpucheck `conv_routes`; rt/conv.rs
 // `IgemmPlan` picks one. Measured 2026-11-25 on an RTX PRO 6000

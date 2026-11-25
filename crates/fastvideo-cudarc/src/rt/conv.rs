@@ -117,6 +117,9 @@ pub enum Conv3dPick {
     /// bf16 operands, F32 accumulate. Only a candidate in fast mode: it changes
     /// the numerics, and exact mode has to stay comparable to the CPU path.
     CudnnBf16,
+    /// The in-tree implicit GEMM (ADR-0024 step 3, D6): bf16 operands,
+    /// channels-last, f32 accumulate, no cuDNN. `FASTVIDEO_CONV3D=igemm`.
+    Igemm,
 }
 
 #[derive(Default)]
@@ -639,6 +642,7 @@ pub fn conv3d(
                 conv3d_unfold(x, x_shape, w, w_shape, [pad[1], pad[2]], stride)
             }
             Conv3dPick::CudnnBf16 => cudnn_conv_bf16(x, x_shape, w, w_shape, &pad, &stride),
+            Conv3dPick::Igemm => conv3d_igemm(x, x_shape, w, w_shape, &pad, &stride),
             _ => cudnn_conv(x, x_shape, w, w_shape, &pad, &stride),
         }
     };
@@ -646,6 +650,7 @@ pub fn conv3d(
         "cudnn" => return run(Conv3dPick::Cudnn),
         "unfold" => return run(Conv3dPick::Unfold),
         "cudnn-bf16" => return run(Conv3dPick::CudnnBf16),
+        "igemm" => return run(Conv3dPick::Igemm),
         _ => {}
     }
     let dev = global_device()
@@ -1092,14 +1097,104 @@ pub fn conv3d_igemm_with(
         i(g.ph),
         i(g.pw),
     );
-    let (one, splits_i) = (1i32, plan.splits as i32);
+    let (one, splits_i, zero) = (1i32, plan.splits as i32, 0i32);
+    // The f32 route never asks for the bf16 epilogue; the kernel still binds a pointer.
+    let mut y16 = unsafe { dev.stream.alloc::<half::bf16>(1) }?;
     super::kernels::launch!(dev.stream, func, cfg;
-        &x16, &w16, &mut y, &b, &d, &h, &wd, &c, &od, &oh, &ow, &nn,
+        &x16, &w16, &mut y, &mut y16, &zero, &b, &d, &h, &wd, &c, &od, &oh, &ow, &nn,
         &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &one, &one, &one, &splits_i)?;
     drop(x16);
     drop(w16);
     let out = route_y_nchw(&dev, &y, &g, plan.splits)?;
     Ok((out, g.out_shape(x_shape.len())))
+}
+
+/// The implicit GEMM on channels-last bf16 buffers (the LTX fast decoder,
+/// `ltx2/vae_fast.rs`): `x` is `[b, d, h, w, c]` bf16 (a view into the padded
+/// activation), `w16` the `[n, kd, kh, kw, c]` bf16 filter (cuDNN's NHWC
+/// layout, which is this kernel's `[N, K]`), `y` gets `[b, od, oh, ow, n]`
+/// bf16. One split writes bf16 from the epilogue; more splits sum the f32
+/// planes in order (`conv_sum_planes_bf16`). Same semantics as [`cudnn_conv`].
+#[allow(clippy::too_many_arguments)]
+pub fn conv3d_igemm_nhwc_bf16(
+    dev: &DeviceContext,
+    x: &cudarc::driver::CudaView<'_, half::bf16>,
+    w16: &CudaSlice<half::bf16>,
+    y: &mut cudarc::driver::CudaViewMut<'_, half::bf16>,
+    x_shape: &[usize],
+    w_shape: &[usize],
+    pad: &[usize],
+    stride: &[usize],
+) -> Result<Vec<usize>> {
+    use cudarc::driver::DevicePtr;
+    let g = ConvGeom::new(x_shape, w_shape, pad, stride)?;
+    let (m, n) = (g.m(), g.n);
+    if x.len() < g.b * g.d * g.h * g.w * g.c || w16.len() != n * g.k() || y.len() < m * n {
+        return Err(DeviceError::Message(format!(
+            "conv igemm nhwc: x {} w {} y {} for x {x_shape:?} w {w_shape:?}",
+            x.len(),
+            w16.len(),
+            y.len()
+        )));
+    }
+    let plan = IgemmPlan::for_geom(&g, super::ops::sm_count(dev));
+    let (func, threads) = if plan.wn == 64 {
+        (&dev.kernels.conv_igemm_bf16_w64, 128)
+    } else {
+        (&dev.kernels.conv_igemm_bf16, 256)
+    };
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (
+            n.div_ceil(IGEMM_TILE) as u32,
+            m.div_ceil(IGEMM_TILE) as u32,
+            plan.splits as u32,
+        ),
+        block_dim: (threads, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let i = |v: usize| v as i32;
+    let (b, d, h, wd, c, od, oh, ow, nn) = (
+        i(g.b),
+        i(g.d),
+        i(g.h),
+        i(g.w),
+        i(g.c),
+        i(g.od),
+        i(g.oh),
+        i(g.ow),
+        i(n),
+    );
+    let (kd, kh, kw, sd, sh, sw, pd, ph, pw) = (
+        i(g.kd),
+        i(g.kh),
+        i(g.kw),
+        i(g.sd),
+        i(g.sh),
+        i(g.sw),
+        i(g.pd),
+        i(g.ph),
+        i(g.pw),
+    );
+    let (one, splits_i) = (1i32, plan.splits as i32);
+    if plan.splits == 1 {
+        let mut yf = unsafe { dev.stream.alloc::<f32>(1) }?;
+        let out16 = 1i32;
+        super::kernels::launch!(dev.stream, func, cfg;
+            x, w16, &mut yf, &mut *y, &out16, &b, &d, &h, &wd, &c, &od, &oh, &ow, &nn,
+            &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &one, &one, &one, &splits_i)?;
+    } else {
+        let plane = m * n;
+        let mut yf = unsafe { dev.stream.alloc::<f32>(plane * plan.splits) }?;
+        let out16 = 0i32;
+        super::kernels::launch!(dev.stream, func, cfg;
+            x, w16, &mut yf, &mut *y, &out16, &b, &d, &h, &wd, &c, &od, &oh, &ow, &nn,
+            &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &one, &one, &one, &splits_i)?;
+        let (plane_i, z_i) = (plane as i64, plan.splits as i64);
+        super::kernels::launch!(dev.stream, &dev.kernels.conv_sum_planes_bf16, super::kernels::cfg_n(plane);
+            &yf, &mut *y, &plane_i, &z_i)?;
+    }
+    let _ = x.device_ptr(&dev.stream);
+    Ok(g.out_shape(x_shape.len()))
 }
 
 /// Route R1: explicit im2col (`conv_unfold_nhwc_bf16`) in chunks of output
