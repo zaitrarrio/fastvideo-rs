@@ -757,3 +757,323 @@ pub fn conv3d_unfold(
         .map_err(|e| DeviceError::Message(e.to_string()))?;
     Ok((perm, out_shape))
 }
+
+// ---- cuDNN-free routes (ADR-0024 step 3, WO-3a spike) -----------------------
+//
+// Two routes for the dense N-D convolution that never call cuDNN, timed
+// against `cudnn_conv_bf16` by fv-gpucheck's `conv_routes` group
+// (docs/plan/2026-11-25-adr24-step3-wo.md). Both take the NC(D)HW f32 tensors
+// every caller has today, work on channels-last bf16 with f32 accumulation
+// (the cast + permute in and the permute out are part of the route and of its
+// timing, as the cuDNN bf16 path's casts are) and return NC(D)HW f32.
+// Constraints of the spike: C_in a multiple of 8, groups 1, dilation 1.
+
+/// Dense N-D convolution geometry; 4-D `[n, c, h, w]` is a 5-D with depth 1.
+#[derive(Debug, Clone, Copy)]
+pub struct ConvGeom {
+    pub b: usize,
+    pub d: usize,
+    pub h: usize,
+    pub w: usize,
+    pub c: usize,
+    pub n: usize,
+    pub kd: usize,
+    pub kh: usize,
+    pub kw: usize,
+    pub sd: usize,
+    pub sh: usize,
+    pub sw: usize,
+    pub pd: usize,
+    pub ph: usize,
+    pub pw: usize,
+    pub od: usize,
+    pub oh: usize,
+    pub ow: usize,
+}
+
+impl ConvGeom {
+    /// `x_shape` `[n, c, (d,) h, w]`, `w_shape` `[oc, ic, (kd,) kh, kw]`, `pad`
+    /// and `stride` per spatial axis (2 or 3 entries, as the shapes).
+    pub fn new(
+        x_shape: &[usize],
+        w_shape: &[usize],
+        pad: &[usize],
+        stride: &[usize],
+    ) -> Result<Self> {
+        let rank = x_shape.len();
+        let bad = |m: String| DeviceError::Message(format!("conv route: {m}"));
+        if !(rank == 4 || rank == 5)
+            || w_shape.len() != rank
+            || pad.len() != rank - 2
+            || stride.len() != rank - 2
+        {
+            return Err(bad(format!(
+                "x {x_shape:?} w {w_shape:?} pad {pad:?} stride {stride:?}: NCHW or NCDHW with one pad/stride per spatial axis"
+            )));
+        }
+        let (b, c) = (x_shape[0], x_shape[1]);
+        let (d, h, w) = if rank == 5 {
+            (x_shape[2], x_shape[3], x_shape[4])
+        } else {
+            (1, x_shape[2], x_shape[3])
+        };
+        let (n, ic) = (w_shape[0], w_shape[1]);
+        let (kd, kh, kw) = if rank == 5 {
+            (w_shape[2], w_shape[3], w_shape[4])
+        } else {
+            (1, w_shape[2], w_shape[3])
+        };
+        let (pd, ph, pw) = if rank == 5 {
+            (pad[0], pad[1], pad[2])
+        } else {
+            (0, pad[0], pad[1])
+        };
+        let (sd, sh, sw) = if rank == 5 {
+            (stride[0], stride[1], stride[2])
+        } else {
+            (1, stride[0], stride[1])
+        };
+        if ic != c {
+            return Err(bad(format!("x has {c} channels, w expects {ic}")));
+        }
+        if c % 8 != 0 {
+            return Err(bad(format!(
+                "C_in = {c} is not a multiple of 8 (the spike's cp.async chunk constraint)"
+            )));
+        }
+        if sd == 0 || sh == 0 || sw == 0 {
+            return Err(bad("zero stride".into()));
+        }
+        let out = |i: usize, k: usize, p: usize, s: usize| -> Result<usize> {
+            (i + 2 * p)
+                .checked_sub(k)
+                .map(|v| v / s + 1)
+                .ok_or_else(|| bad(format!("kernel {k} larger than padded input {}", i + 2 * p)))
+        };
+        Ok(Self {
+            b,
+            d,
+            h,
+            w,
+            c,
+            n,
+            kd,
+            kh,
+            kw,
+            sd,
+            sh,
+            sw,
+            pd,
+            ph,
+            pw,
+            od: out(d, kd, pd, sd)?,
+            oh: out(h, kh, ph, sh)?,
+            ow: out(w, kw, pw, sw)?,
+        })
+    }
+
+    /// Output pixels (GEMM rows).
+    pub fn m(&self) -> usize {
+        self.b * self.od * self.oh * self.ow
+    }
+
+    /// GEMM depth: taps × C_in.
+    pub fn k(&self) -> usize {
+        self.kd * self.kh * self.kw * self.c
+    }
+
+    fn out_shape(&self, rank: usize) -> Vec<usize> {
+        if rank == 5 {
+            vec![self.b, self.n, self.od, self.oh, self.ow]
+        } else {
+            vec![self.b, self.n, self.oh, self.ow]
+        }
+    }
+}
+
+fn tiles32(n: usize) -> u32 {
+    n.div_ceil(32).max(1) as u32
+}
+
+/// NC(D)HW f32 → N(D)HWC bf16 (one tiled transpose + cast).
+fn route_x_nhwc(
+    dev: &DeviceContext,
+    x: &CudaSlice<f32>,
+    g: &ConvGeom,
+) -> Result<CudaSlice<half::bf16>> {
+    let s = g.d * g.h * g.w;
+    let mut out = unsafe { dev.stream.alloc::<half::bf16>((g.b * s * g.c).max(1)) }?;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (tiles32(s), tiles32(g.c), g.b.max(1) as u32),
+        block_dim: (32, 8, 1),
+        shared_mem_bytes: 0,
+    };
+    let (c_i, s_i) = (g.c as i64, s as i64);
+    super::kernels::launch!(dev.stream, &dev.kernels.conv_nchw_to_nhwc_bf16, cfg; x, &mut out, &c_i, &s_i)?;
+    Ok(out)
+}
+
+/// N(D)HWC f32 → NC(D)HW f32.
+fn route_y_nchw(dev: &DeviceContext, y: &CudaSlice<f32>, g: &ConvGeom) -> Result<CudaSlice<f32>> {
+    let s = g.od * g.oh * g.ow;
+    let mut out = unsafe { dev.stream.alloc::<f32>((g.b * s * g.n).max(1)) }?;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (tiles32(g.n), tiles32(s), g.b.max(1) as u32),
+        block_dim: (32, 8, 1),
+        shared_mem_bytes: 0,
+    };
+    let (c_i, s_i) = (g.n as i64, s as i64);
+    super::kernels::launch!(dev.stream, &dev.kernels.conv_nhwc_to_nchw_f32, cfg; y, &mut out, &c_i, &s_i)?;
+    Ok(out)
+}
+
+/// `[oc, ic, taps]` f32 → bf16 `[oc, K]` (`kn` false) or `[K, oc]` (`kn` true),
+/// k = tap × C + ci.
+fn route_weight(
+    dev: &DeviceContext,
+    w: &CudaSlice<f32>,
+    g: &ConvGeom,
+    kn: bool,
+) -> Result<CudaSlice<half::bf16>> {
+    let taps = g.kd * g.kh * g.kw;
+    let total = g.n * g.c * taps;
+    if w.len() != total {
+        return Err(DeviceError::Message(format!(
+            "conv route: weight has {} elements, geometry says {total}",
+            w.len()
+        )));
+    }
+    let mut out = unsafe { dev.stream.alloc::<half::bf16>(total.max(1)) }?;
+    let (oc_i, ic_i, taps_i, kn_i) = (g.n as i64, g.c as i64, taps as i64, i32::from(kn));
+    super::kernels::launch!(dev.stream, &dev.kernels.conv_weight_bf16, super::kernels::cfg_n(total); w, &mut out, &oc_i, &ic_i, &taps_i, &kn_i)?;
+    Ok(out)
+}
+
+/// Route R2: the implicit GEMM (`conv_igemm_bf16`, mma.sync bf16, f32
+/// accumulate), one 128×128×32 tile config. Same contract as [`cudnn_conv`].
+pub fn conv3d_igemm(
+    x: &CudaSlice<f32>,
+    x_shape: &[usize],
+    w: &CudaSlice<f32>,
+    w_shape: &[usize],
+    pad: &[usize],
+    stride: &[usize],
+) -> Result<(CudaSlice<f32>, Vec<usize>)> {
+    let dev = global_device()
+        .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let g = ConvGeom::new(x_shape, w_shape, pad, stride)?;
+    let x16 = route_x_nhwc(&dev, x, &g)?;
+    let w16 = route_weight(&dev, w, &g, false)?;
+    let (m, n) = (g.m(), g.n);
+    let mut y = unsafe { dev.stream.alloc::<f32>((m * n).max(1)) }?;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (n.div_ceil(128) as u32, m.div_ceil(128) as u32, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let i = |v: usize| v as i32;
+    let (b, d, h, wd, c, od, oh, ow, nn) = (
+        i(g.b),
+        i(g.d),
+        i(g.h),
+        i(g.w),
+        i(g.c),
+        i(g.od),
+        i(g.oh),
+        i(g.ow),
+        i(n),
+    );
+    let (kd, kh, kw, sd, sh, sw, pd, ph, pw) = (
+        i(g.kd),
+        i(g.kh),
+        i(g.kw),
+        i(g.sd),
+        i(g.sh),
+        i(g.sw),
+        i(g.pd),
+        i(g.ph),
+        i(g.pw),
+    );
+    let one = 1i32;
+    super::kernels::launch!(dev.stream, &dev.kernels.conv_igemm_bf16, cfg;
+        &x16, &w16, &mut y, &b, &d, &h, &wd, &c, &od, &oh, &ow, &nn,
+        &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &one, &one, &one)?;
+    drop(x16);
+    drop(w16);
+    let out = route_y_nchw(&dev, &y, &g)?;
+    Ok((out, g.out_shape(x_shape.len())))
+}
+
+/// Route R1: explicit im2col (`conv_unfold_nhwc_bf16`) in chunks of output
+/// pixels bounded by `budget_bytes` of unfolded bf16 rows, each multiplied by
+/// the `[K, N]` weight with cuBLASLt (f32 out, written in place into the
+/// N(D)HWC result). Same contract as [`cudnn_conv`].
+pub fn conv3d_unfold_lt(
+    x: &CudaSlice<f32>,
+    x_shape: &[usize],
+    w: &CudaSlice<f32>,
+    w_shape: &[usize],
+    pad: &[usize],
+    stride: &[usize],
+    budget_bytes: usize,
+) -> Result<(CudaSlice<f32>, Vec<usize>)> {
+    let dev = global_device()
+        .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let g = ConvGeom::new(x_shape, w_shape, pad, stride)?;
+    let x16 = route_x_nhwc(&dev, x, &g)?;
+    let w16 = route_weight(&dev, w, &g, true)?;
+    let (m, n, k) = (g.m(), g.n, g.k());
+    let mc = (budget_bytes / (k * 2)).clamp(1, m.max(1));
+    let mut y = unsafe { dev.stream.alloc::<f32>((m * n).max(1)) }?;
+    let mut a16 = unsafe { dev.stream.alloc::<half::bf16>((mc * k).max(1)) }?;
+    let i = |v: usize| v as i32;
+    let (d, h, wd, c, od, oh, ow) = (i(g.d), i(g.h), i(g.w), i(g.c), i(g.od), i(g.oh), i(g.ow));
+    let (kd, kh, kw, sd, sh, sw, pd, ph, pw) = (
+        i(g.kd),
+        i(g.kh),
+        i(g.kw),
+        i(g.sd),
+        i(g.sh),
+        i(g.sw),
+        i(g.pd),
+        i(g.ph),
+        i(g.pw),
+    );
+    let one = 1i32;
+    let mut m0 = 0usize;
+    while m0 < m {
+        let mcur = mc.min(m - m0);
+        // The GEMM wants `a.len() == mcur * k`: the tail chunk gets its own buffer.
+        let mut tail;
+        let a = if mcur == mc {
+            &mut a16
+        } else {
+            tail = unsafe { dev.stream.alloc::<half::bf16>(mcur * k) }?;
+            &mut tail
+        };
+        let (m0_i, mc_i) = (m0 as i64, mcur as i64);
+        super::kernels::launch!(dev.stream, &dev.kernels.conv_unfold_nhwc_bf16, super::kernels::cfg_n(mcur * k);
+            &x16, &mut *a, &m0_i, &mc_i, &d, &h, &wd, &c, &od, &oh, &ow,
+            &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &one, &one, &one)?;
+        let mut view = y.slice_mut(m0 * n..(m0 + mcur) * n);
+        super::device::matmul_2d_strided_batched_out_view_bf16(
+            &*a,
+            &w16,
+            &mut view,
+            mcur * n,
+            1,
+            mcur,
+            k,
+            n,
+        )?;
+        m0 += mcur;
+    }
+    drop(a16);
+    drop(x16);
+    drop(w16);
+    let out = route_y_nchw(&dev, &y, &g)?;
+    Ok((out, g.out_shape(x_shape.len())))
+}
+
+/// The unfold route's default chunk budget (bytes of bf16 im2col rows).
+pub const CONV_UNFOLD_BUDGET_BYTES: usize = 512 << 20;
