@@ -57,6 +57,7 @@ const KERNEL_PARTS: &[&str] = &[
     "src/rt/kernels/dit_fusions.cu",
     "src/wan/kernels/block.cu",
     "src/rt/kernels/lora_fuse.cu",
+    "src/rt/kernels/conv_igemm.cu",
 ];
 /// The FP8 attention module (`rt::attn_fp8`): its own cubins, sm_89 and newer.
 const SRC_FP8: &str = "src/rt/attn_fp8.cu";

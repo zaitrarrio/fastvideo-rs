@@ -150,6 +150,17 @@ and each gated on byte identity of outputs where the plan's §1 rule applies:
   (FVID-2026-11-24-ship-static-fv-serve): a second CUDA image,
   `cuda-static`, not a replacement; `deploy/deploy.toml` `[[images]]` gains a
   `link` field (one dynamic CUDA image, at most one static, one CPU).
+- **D6 (step 3 conv route). Decided 2026-11-25: the in-tree implicit GEMM**
+  (FVID-2026-11-25-conv-route): `rt/kernels/conv_igemm.cu` (mma.sync bf16,
+  channels-last, AOT) replaces the cuDNN convolutions; measured against
+  cuDNN bf16 and an unfold + cuBLASLt route on an RTX PRO 6000
+  (`docs/perf/2026-11-25-conv-routes.md`); CUTLASS not vendored. WO-3b tunes
+  it and gates it per family before `auto` flips. 2026-11-25: correct and
+  quality-gated on the LTX-2.5 decode but 1.42× cuDNN's NHWC plans; three
+  capped tuning rounds found no faster kernel on sm_120 (128 KB smem per
+  SM, two CTAs per SM required); the owner funded one more work order,
+  WO-3b-ii (a warp-specialised mainloop, FVID-2026-11-25-conv-igemm-ws-wo),
+  before deciding the margin.
 
 ## Consequences
 

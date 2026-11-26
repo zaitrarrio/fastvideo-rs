@@ -218,7 +218,7 @@ dense_attention = "auto"   # auto | nvcc:v1 | nvcc:v2 | nvcc:dc (sm 9.0 / 10.0) 
 sol_attention = "x4f"      # auto | v1 | x4 | x4f | ws (sm90+)
 vsa_attention = "auto"     # auto | gather | fused | mma | tma | tma2
 nvfp4_gemm = "cublas"      # cublas | oxide (sm_100 / sm_120 cubins)
-conv3d = "auto"            # auto | cudnn | cudnn-bf16 | nvcc:unfold
+conv3d = "auto"            # auto | cudnn | cudnn-bf16 | nvcc:unfold | nvcc:igemm
 
 [env]                      # optional: raw FASTVIDEO_* settings, lowest level
 FASTVIDEO_VSA_TMA = "1"
@@ -306,7 +306,7 @@ and lists what it implements per `KernelOp`:
 
 | backend | dense attention | Sol attention | VSA attention | NVFP4 GEMM | conv3d |
 |---|---|---|---|---|---|
-| `nvcc` (our CUDA C++, NVRTC or AOT cubins) | `v1`, `v2` | `v1`, `x4`, `x4f`, `ws` (sm90+) | `gather`, `fused`, `mma`, `tma`, `tma2` (sm90+) | — | `unfold` |
+| `nvcc` (our CUDA C++, NVRTC or AOT cubins) | `v1`, `v2` | `v1`, `x4`, `x4f`, `ws` (sm90+) | `gather`, `fused`, `mma`, `tma`, `tma2` (sm90+) | — | `unfold`, `igemm` |
 | `oxide` (Tile-IR cubins, `fastvideo-oxide-kernels`) | — | — | — | `oxide` (sm_100 / sm_120) | — |
 | `cudnn` | `cudnn` | — | — | — | `cudnn`, `cudnn-bf16` |
 | `cublas` | — | — | — | `cublas` (default) | — |

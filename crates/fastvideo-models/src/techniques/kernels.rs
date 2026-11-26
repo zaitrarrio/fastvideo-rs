@@ -140,7 +140,7 @@ pub struct OxideBackend;
 pub struct CudnnBackend;
 pub struct CublasBackend;
 
-static NVCC: [KernelImpl; 16] = [
+static NVCC: [KernelImpl; 17] = [
     k(
         KernelOp::DenseAttention,
         "v1",
@@ -237,6 +237,13 @@ static NVCC: [KernelImpl; 16] = [
         "unfold",
         0,
         "temporal unfold + GEMM",
+    ),
+    k(
+        KernelOp::Conv3d,
+        "igemm",
+        "igemm",
+        80,
+        "implicit GEMM: mma.sync bf16, channels-last, f32 accumulate, no cuDNN (ADR-0024 step 3)",
     ),
 ];
 

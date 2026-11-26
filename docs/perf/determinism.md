@@ -111,7 +111,7 @@ rule stays a pure function of the shape.
 | `FASTVIDEO_FLASH_KERNEL=v1\|v2\|v3\|v3s\|cudnn\|dc` | fixes the dense kernel outright |
 | `FASTVIDEO_ATTN_SAGE=0\|2`, `FASTVIDEO_ATTN_SAGE_MIN_SEQ` | Sage off everywhere / on everywhere (sm_89+); its sequence threshold (default 6 144) |
 | `FASTVIDEO_SDPA_AUTO=timed` | the old per-process timing on sm_12x (not reproducible across processes) |
-| `FASTVIDEO_CONV3D=cudnn\|unfold\|cudnn-bf16`, `FASTVIDEO_CONV3D_TIMED=1` | 3-D conv backend; per-shape timing (not reproducible) |
+| `FASTVIDEO_CONV3D=cudnn\|unfold\|cudnn-bf16\|igemm`, `FASTVIDEO_CONV3D_TIMED=1` | 3-D conv backend (`igemm`: the in-tree implicit GEMM, ADR-0024 step 3, also the LTX fast decoder's convs); per-shape timing (not reproducible) |
 | `FASTVIDEO_LTX_VAE_CONV_ALGO=tune` | LTX VAE conv algorithms by timing (not reproducible) |
 | `FASTVIDEO_CUDNN_SDPA_NONDETERMINISTIC=1` | allows cuDNN SDPA engines that declare themselves nondeterministic |
 | `FASTVIDEO_CONV_BWD_DATA_NONDETERMINISTIC=1` | keeps cuDNN's `ALGO_0` for transposed convs |

@@ -2722,6 +2722,393 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
         Ok(())
     })?;
 
+    // ADR-0024 step 3, WO-3a (docs/plan/2026-11-25-adr24-step3-wo.md): the two
+    // cuDNN-free conv routes (R1 unfold + cuBLASLt, R2 implicit GEMM) against
+    // cuDNN bf16 on the served shapes, as slabs the decoders really run
+    // (chunked time, half width where a full stage would need > 100 M
+    // inputs). Small shapes also meet the f64 host reference; every shape is
+    // held to cuDNN bf16 by a device-side relative L1 (same operand rounding,
+    // different summation order). Opt-in: `--groups conv_routes`.
+    group(&mut c, "conv_routes", |c| {
+        struct Shape {
+            tag: &'static str,
+            ci: usize,
+            co: usize,
+            /// b, d, h, w (d = 1 with k[0] = 1 runs as a 4-D conv2d).
+            dims: [usize; 4],
+            k: [usize; 3],
+            s: [usize; 3],
+            p: [usize; 3],
+            host_ref: bool,
+        }
+        let shapes = [
+            Shape {
+                tag: "small-3d",
+                ci: 16,
+                co: 24,
+                dims: [1, 4, 9, 11],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 1, 1],
+                host_ref: true,
+            },
+            Shape {
+                tag: "small-3d-s2",
+                ci: 16,
+                co: 16,
+                dims: [2, 5, 12, 14],
+                k: [3, 3, 3],
+                s: [1, 2, 2],
+                p: [0, 1, 1],
+                host_ref: true,
+            },
+            Shape {
+                tag: "small-2d",
+                ci: 32,
+                co: 24,
+                dims: [2, 1, 17, 20],
+                k: [1, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 1, 1],
+                host_ref: true,
+            },
+            Shape {
+                tag: "small-timeconv",
+                ci: 32,
+                co: 64,
+                dims: [1, 6, 5, 7],
+                k: [3, 1, 1],
+                s: [1, 1, 1],
+                p: [0, 0, 0],
+                host_ref: true,
+            },
+            Shape {
+                tag: "small-nopad",
+                ci: 24,
+                co: 40,
+                dims: [1, 5, 8, 9],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 0, 0],
+                host_ref: true,
+            },
+            // conv3d_bench's shapes (Wan 2.1 at 480p-class), for continuity.
+            Shape {
+                tag: "bench-384x3x30x52",
+                ci: 384,
+                co: 384,
+                dims: [1, 3, 30, 52],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 1, 1],
+                host_ref: false,
+            },
+            Shape {
+                tag: "bench-192x6x120x208",
+                ci: 192,
+                co: 192,
+                dims: [1, 6, 120, 208],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 1, 1],
+                host_ref: false,
+            },
+            Shape {
+                tag: "bench-96x6x240x416",
+                ci: 96,
+                co: 96,
+                dims: [1, 6, 240, 416],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 1, 1],
+                host_ref: false,
+            },
+            // Wan 2.2 TI2V-5B decoder at 704p, 2-latent-frame chunks (4 frames in).
+            Shape {
+                tag: "wan22-1024-s1",
+                ci: 1024,
+                co: 1024,
+                dims: [1, 4, 88, 160],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 1, 1],
+                host_ref: false,
+            },
+            Shape {
+                tag: "wan22-512-s2",
+                ci: 512,
+                co: 512,
+                dims: [1, 4, 176, 320],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 1, 1],
+                host_ref: false,
+            },
+            Shape {
+                tag: "wan22-256-s3-halfw",
+                ci: 256,
+                co: 256,
+                dims: [1, 4, 352, 320],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 1, 1],
+                host_ref: false,
+            },
+            Shape {
+                tag: "wan21-96-halfw",
+                ci: 96,
+                co: 96,
+                dims: [1, 4, 480, 416],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 1, 1],
+                host_ref: false,
+            },
+            Shape {
+                tag: "wan-timeconv",
+                ci: 1024,
+                co: 2048,
+                dims: [1, 4, 44, 80],
+                k: [3, 1, 1],
+                s: [1, 1, 1],
+                p: [0, 0, 0],
+                host_ref: false,
+            },
+            Shape {
+                tag: "wan-resample2d",
+                ci: 384,
+                co: 192,
+                dims: [8, 1, 120, 208],
+                k: [1, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 1, 1],
+                host_ref: false,
+            },
+            // LTX-2.5 fast decoder tiles (zero pad, replicate time padding done by the caller).
+            Shape {
+                tag: "ltx-1024",
+                ci: 1024,
+                co: 1024,
+                dims: [1, 16, 24, 24],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 0, 0],
+                host_ref: false,
+            },
+            Shape {
+                tag: "ltx-up-4096",
+                ci: 1024,
+                co: 4096,
+                dims: [1, 16, 24, 24],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 0, 0],
+                host_ref: false,
+            },
+            Shape {
+                tag: "ltx-256",
+                ci: 256,
+                co: 256,
+                dims: [1, 8, 192, 192],
+                k: [3, 3, 3],
+                s: [1, 1, 1],
+                p: [0, 0, 0],
+                host_ref: false,
+            },
+            // I2V encoder downsample.
+            Shape {
+                tag: "enc-s2",
+                ci: 512,
+                co: 512,
+                dims: [1, 4, 176, 320],
+                k: [3, 3, 3],
+                s: [1, 2, 2],
+                p: [0, 1, 1],
+                host_ref: false,
+            },
+        ];
+        let iters = 20usize;
+        for sh in &shapes {
+            let [b, d, h, w] = sh.dims;
+            let two_d = d == 1 && sh.k[0] == 1;
+            let x_host = c.rand(b * sh.ci * d * h * w, 1.0);
+            let w_host = c.rand(
+                sh.co * sh.ci * sh.k[0] * sh.k[1] * sh.k[2],
+                (2.0 / (sh.ci * sh.k[0] * sh.k[1] * sh.k[2]) as f32).sqrt(),
+            );
+            let (x_shape, w_shape, pad, stride): (Vec<usize>, Vec<usize>, Vec<usize>, Vec<usize>) =
+                if two_d {
+                    (
+                        vec![b, sh.ci, h, w],
+                        vec![sh.co, sh.ci, sh.k[1], sh.k[2]],
+                        vec![sh.p[1], sh.p[2]],
+                        vec![sh.s[1], sh.s[2]],
+                    )
+                } else {
+                    (
+                        vec![b, sh.ci, d, h, w],
+                        vec![sh.co, sh.ci, sh.k[0], sh.k[1], sh.k[2]],
+                        sh.p.to_vec(),
+                        sh.s.to_vec(),
+                    )
+                };
+            let xt = t(x_host.clone(), &x_shape)?;
+            let wt = t(w_host.clone(), &w_shape)?;
+            let (xd, wd) = (xt.device_slice().unwrap(), wt.device_slice().unwrap());
+            type Run<'a> = Box<dyn Fn() -> anyhow::Result<(CudaSlice<f32>, Vec<usize>)> + 'a>;
+            let (xs, ws, pd, st) = (&x_shape, &w_shape, &pad, &stride);
+            let variant = |name: &'static str| -> Run<'_> {
+                Box::new(move || {
+                    let plan = conv::igemm_plan_with(xs, ws, pd, st, name)?;
+                    Ok(conv::conv3d_igemm_with(xd, xs, wd, ws, pd, st, Some(plan))?)
+                })
+            };
+            let mut routes: Vec<(String, Run<'_>)> = vec![
+                (
+                    "cudnn_bf16".into(),
+                    Box::new(|| {
+                        Ok(conv::cudnn_conv_bf16(
+                            xd, &x_shape, wd, &w_shape, &pad, &stride,
+                        )?)
+                    }),
+                ),
+                (
+                    "unfold_lt".into(),
+                    Box::new(|| {
+                        Ok(conv::conv3d_unfold_lt(
+                            xd,
+                            &x_shape,
+                            wd,
+                            &w_shape,
+                            &pad,
+                            &stride,
+                            conv::CONV_UNFOLD_BUDGET_BYTES,
+                        )?)
+                    }),
+                ),
+                (
+                    "igemm".into(),
+                    Box::new(|| {
+                        Ok(conv::conv3d_igemm(
+                            xd, &x_shape, wd, &w_shape, &pad, &stride,
+                        )?)
+                    }),
+                ),
+            ];
+            for v in conv::IGEMM_VARIANTS {
+                routes.push((format!("igemm_{}", v.name), variant(v.name)));
+            }
+            // Reference output: cuDNN bf16 (kept on the device).
+            let (y_ref, y_shape) = (routes[0].1)()?;
+            let n_out: usize = y_shape.iter().product();
+            let want_host = if sh.host_ref {
+                let (want, _) = ref_conv3d(
+                    &x_host,
+                    &w_host,
+                    None,
+                    (b, sh.ci, d, h, w),
+                    (sh.co, sh.k[0], sh.k[1], sh.k[2]),
+                    (sh.p[0], sh.p[1], sh.p[2]),
+                    (sh.s[0], sh.s[1], sh.s[2]),
+                );
+                Some(want)
+            } else {
+                None
+            };
+            let mut values = serde_json::Map::new();
+            values.insert("x_shape".into(), json!(x_shape));
+            values.insert("w_shape".into(), json!(w_shape));
+            values.insert("y_shape".into(), json!(y_shape));
+            values.insert(
+                "gflop".into(),
+                json!(2.0 * n_out as f64 * (sh.ci * sh.k[0] * sh.k[1] * sh.k[2]) as f64 / 1e9),
+            );
+            if let Ok(plan) = conv::igemm_plan(&x_shape, &w_shape, &pad, &stride) {
+                values.insert("igemm_variant".into(), json!(plan.variant.name));
+                values.insert("igemm_splits".into(), json!(plan.splits));
+            }
+            for v in conv::IGEMM_VARIANTS {
+                if let Ok(plan) = conv::igemm_plan_with(&x_shape, &w_shape, &pad, &stride, v.name) {
+                    values.insert(format!("igemm_{}_splits", v.name), json!(plan.splits));
+                }
+            }
+            for (name, run) in &routes {
+                let (y, shape) = match run() {
+                    Ok(v) => v,
+                    Err(e) => {
+                        c.report.check(
+                            &format!("conv_routes_{}_{name}", sh.tag),
+                            false,
+                            json!({"error": e.to_string()}),
+                            json!({"runs": true}),
+                        )?;
+                        continue;
+                    }
+                };
+                if shape != y_shape {
+                    c.report.check(
+                        &format!("conv_routes_{}_{name}", sh.tag),
+                        false,
+                        json!({"y_shape": shape}),
+                        json!({"y_shape": y_shape}),
+                    )?;
+                    continue;
+                }
+                // The probes are timing only (wrong values by design).
+                let probe = name.contains("probe");
+                if let (Some(want), false) = (want_host.as_ref(), probe) {
+                    c.cmp(
+                        &format!("conv_routes_{}_{name}_vs_host", sh.tag),
+                        &down(&y)?,
+                        want,
+                        5e-3,
+                    )?;
+                }
+                if *name != "cudnn_bf16" && !probe {
+                    let (num, den) = ops::abs_diff_sums_device(&y, &y_ref)?;
+                    let rel_l1 = if den > 0.0 { num / den } else { num };
+                    c.report.check(
+                        &format!("conv_routes_{}_{name}_vs_cudnn_bf16", sh.tag),
+                        rel_l1.is_finite() && rel_l1 <= 2e-3,
+                        json!({"rel_l1": rel_l1}),
+                        json!({"rel_l1": 2e-3}),
+                    )?;
+                }
+                drop(y);
+                // Median of `iters` synchronized launches after three warm-ups.
+                for _ in 0..3 {
+                    drop(run()?);
+                }
+                device::synchronize()?;
+                let mut secs = Vec::with_capacity(iters);
+                for _ in 0..iters {
+                    let timer = std::time::Instant::now();
+                    let y = run()?;
+                    device::synchronize()?;
+                    secs.push(timer.elapsed().as_secs_f64());
+                    drop(y);
+                }
+                secs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                values.insert(format!("{name}_ms"), json!(secs[secs.len() / 2] * 1e3));
+                values.insert(format!("{name}_ms_min"), json!(secs[0] * 1e3));
+            }
+            drop(y_ref);
+            if let (Some(base), Some(r1), Some(r2)) = (
+                values.get("cudnn_bf16_ms").and_then(|v| v.as_f64()),
+                values.get("unfold_lt_ms").and_then(|v| v.as_f64()),
+                values.get("igemm_ms").and_then(|v| v.as_f64()),
+            ) {
+                values.insert("unfold_lt_x_cudnn".into(), json!(r1 / base));
+                values.insert("igemm_x_cudnn".into(), json!(r2 / base));
+            }
+            c.report.note(
+                format!("conv_routes_{}", sh.tag),
+                serde_json::Value::Object(values),
+            );
+        }
+        Ok(())
+    })?;
+
     group(&mut c, "nvfp4_gemm", |c| {
         crate::nvfp4_bench::run(c.report, c.seed)
     })?;
