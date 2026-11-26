@@ -609,6 +609,23 @@ __device__ __forceinline__ void ig_tma_5d(unsigned int smem, const FvTensorMap* 
 __device__ __forceinline__ void ig_tma_prefetch(const FvTensorMap* tm) {
     asm volatile("prefetch.tensormap [%0];\n" :: "l"(tm) : "memory");
 }
+// A bounded mbarrier wait: a transaction count that never completes (a box
+// whose byte count differs from `expect_tx`) returns false after about a
+// second instead of hanging the pod; the caller abandons the tile, and the
+// wrong result fails fv-gpucheck's check.
+__device__ __forceinline__ bool ig_mbar_wait(unsigned int mbar, unsigned int phase) {
+    for (unsigned int spins = 0; spins < (1u << 26); spins++) {
+        unsigned int ok;
+        asm volatile(
+            "{\n"
+            ".reg .pred P1;\n"
+            "mbarrier.try_wait.parity.shared::cta.b64 P1, [%1], %2;\n"
+            "selp.u32 %0, 1, 0, P1;\n"
+            "}\n" : "=r"(ok) : "r"(mbar), "r"(phase) : "memory");
+        if (ok) return true;
+    }
+    return false;
+}
 
 template <int STAGES, int MODE>
 __device__ __forceinline__ void ig_tma_body(
@@ -666,7 +683,7 @@ __device__ __forceinline__ void ig_tma_body(
         if (lane != 0) return;
         for (int kt = 0; kt < nk; kt++) {
             const int s = kt % STAGES, round = kt / STAGES;
-            if (kt >= STAGES) mma_mbar_wait(bar_empty + 8 * s, (round - 1) & 1);
+            if (kt >= STAGES && !ig_mbar_wait(bar_empty + 8 * s, (round - 1) & 1)) return;
             const int kg = kt0 + kt;
             const int tap = kg / cts, c0 = (kg - tap * cts) * BK;
             const int kd = tap / (KH * KW), rem = tap - kd * KH * KW, kh = rem / KW, kw = rem - kh * KW;
@@ -692,7 +709,7 @@ __device__ __forceinline__ void ig_tma_body(
     unsigned int bfr[NTL / 2][4];
     for (int kt = 0; kt < nk; kt++) {
         const int s = kt % STAGES, round = kt / STAGES;
-        mma_mbar_wait(bar_full + 8 * s, round & 1);
+        if (!ig_mbar_wait(bar_full + 8 * s, round & 1)) break;
         const unsigned int sA = sbase + s * STAGE_B, sB = sA + TILE_A;
         #pragma unroll
         for (int kc = 0; kc < KC; kc++) {

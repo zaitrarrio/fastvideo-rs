@@ -1024,15 +1024,16 @@ impl IgemmVariant {
 }
 
 /// Whether the TMA kernel can run this geometry on this device: sm_90+,
-/// C a multiple of 64 (a k-tile never straddles a tap; 128-byte rows), unit
-/// W stride (the strided box is the next increment), W and the strides
-/// within the tensor map's limits.
+/// C a multiple of 64 (a k-tile never straddles a tap; 128-byte rows), conv
+/// strides of 1 or 2 (the box traverses `stride` elements per loaded row:
+/// `boxDim = block * stride <= 256`, `elementStrides = stride`), W and the
+/// strides within the tensor map's limits.
 pub fn igemm_tma_eligible(g: &ConvGeom, sm_major: i32) -> bool {
     sm_major >= 9
         && g.c % 64 == 0
-        && g.sw == 1
-        && g.sh == 1
-        && g.sd == 1
+        && (1..=2).contains(&g.sw)
+        && (1..=2).contains(&g.sh)
+        && (1..=2).contains(&g.sd)
         && g.w <= (1 << 30)
         && (g.b * g.d * g.h * g.w * g.c) < (1u64 << 40) as usize
 }
