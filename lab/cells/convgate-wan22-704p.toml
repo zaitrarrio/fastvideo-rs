@@ -24,7 +24,7 @@ fw22 = ["--weights", "{weights}/fastwan22-ti2v-5b", "--preset", "fast_wan_2_2_ti
 name = "convgate-wan22-704p-cudnn"
 gate = "fastwan22-ti2v-5b"
 trees = ["fastwan22-ti2v-5b"]
-env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_VAE=full", "FASTVIDEO_CONV3D=cudnn-bf16"]
+env = ["FASTVIDEO_WAN_VAE=full", "FASTVIDEO_CONV3D=cudnn-bf16"]
 argv = ["--mode", "fast", "wan", "gen", "{@fw22}", "--height", "704", "--width", "1280", "--num-frames", "121", "--prompt",
   "{prompt}", "--clip-dir", "{runs}/{arm}/frames"]
 
@@ -32,7 +32,7 @@ argv = ["--mode", "fast", "wan", "gen", "{@fw22}", "--height", "704", "--width",
 name = "convgate-wan22-704p-igemm"
 gate = "fastwan22-ti2v-5b"
 trees = ["fastwan22-ti2v-5b"]
-env = ["FASTVIDEO_TAE_DIR={tae}", "FASTVIDEO_WAN_VAE=full", "FASTVIDEO_CONV3D=igemm"]
+env = ["FASTVIDEO_WAN_VAE=full", "FASTVIDEO_CONV3D=igemm"]
 argv = ["--mode", "fast", "wan", "gen", "{@fw22}", "--height", "704", "--width", "1280", "--num-frames", "121", "--prompt",
   "{prompt}", "--clip-dir", "{runs}/{arm}/frames"]
 
