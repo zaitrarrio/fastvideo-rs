@@ -3026,6 +3026,9 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
             if let Ok(plan) = conv::igemm_plan(&x_shape, &w_shape, &pad, &stride) {
                 values.insert("igemm_variant".into(), json!(plan.variant.name));
                 values.insert("igemm_splits".into(), json!(plan.splits));
+                if let Ok(e) = conv::igemm_tma_eligible_for(&x_shape, &w_shape, &pad, &stride) {
+                    values.insert("igemm_tma_eligible".into(), json!(e));
+                }
             }
             for v in conv::IGEMM_VARIANTS {
                 if let Ok(plan) = conv::igemm_plan_with(&x_shape, &w_shape, &pad, &stride, v.name) {

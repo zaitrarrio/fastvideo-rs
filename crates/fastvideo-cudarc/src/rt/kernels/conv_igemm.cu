@@ -574,6 +574,184 @@ __device__ __forceinline__ void ig_ws_body(
 }
 #endif
 
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+// WO-3b-iii: the TMA-fed mainloop (sm_90+, the CC 12.0 path). One elected
+// producer thread issues `cp.async.bulk.tensor` for both tiles of a stage
+// (A: a 5-D box of the NDHWC activation, [64 c, 128 w, 1, 1, 1], with the tap
+// offset in the coordinates and the conv stride as the box's element stride,
+// zero-filled outside the tensor, which is the padding; B: a 2-D box of the
+// [N, K] weights) into a 128-byte-swizzled ring, completing a per-stage
+// mbarrier by bytes; eight consumer warps (2 x 4 of 64 x 32) wait on it, run
+// the mma, and release the stage on a second mbarrier. BK = 64 makes every
+// tile row a whole 128-byte line (half the lines per request of BK = 32); 3
+// stages x 32 KB = 96 KB dynamic, one CTA per SM, 288 threads. The consumers
+// never issue a global load and never share a barrier: the three rounds and
+// WO-3b-ii put the base kernel's loss in the memory pipeline's issue work,
+// which TMA removes from the SM's instruction stream.
+//   M is tiled per output row: blockIdx.y = (b, od, oh) * wtiles + wt, 128
+//   consecutive ow per tile (the last tile of a row ragged: zero-filled in,
+//   predicated out). C % 64 == 0, so a k-tile never straddles a tap.
+__device__ __forceinline__ void ig_mbar_arrive(unsigned int mbar) {
+    asm volatile("mbarrier.arrive.release.cta.shared::cta.b64 _, [%0];\n" :: "r"(mbar) : "memory");
+}
+__device__ __forceinline__ void ig_tma_5d(unsigned int smem, const FvTensorMap* tm, unsigned int mbar,
+                                         int c0, int c1, int c2, int c3, int c4) {
+    asm volatile(
+        "cp.async.bulk.tensor.5d.shared::cta.global.tile.mbarrier::complete_tx::bytes"
+        " [%0], [%1, {%3, %4, %5, %6, %7}], [%2];\n"
+        :: "r"(smem), "l"(tm), "r"(mbar), "r"(c0), "r"(c1), "r"(c2), "r"(c3), "r"(c4) : "memory");
+}
+__device__ __forceinline__ void ig_tma_prefetch(const FvTensorMap* tm) {
+    asm volatile("prefetch.tensormap [%0];\n" :: "l"(tm) : "memory");
+}
+
+template <int STAGES, int MODE>
+__device__ __forceinline__ void ig_tma_body(
+    const FvTensorMap* tmx, const FvTensorMap* tmw, float* __restrict__ y,
+    unsigned short* __restrict__ y16, int out16,
+    int B, int D, int H, int W, int C, int OD, int OH, int OW, int N,
+    int KD, int KH, int KW, int SD, int SH, int SW, int PD, int PH, int PW,
+    int splits, unsigned char* smem_raw
+) {
+    constexpr int BM = 128, BN = 128, BK = 64, WM = 64, WN = 32;
+    constexpr int WARPS_N = BN / WN, CONSUMER_WARPS = (BM / WM) * WARPS_N;   // 8
+    constexpr int MT = WM / 16, NTL = WN / 8, KC = BK / 16;
+    constexpr int TILE_A = BM * BK * 2, TILE_B = BN * BK * 2, STAGE_B = TILE_A + TILE_B;   // 16 KB + 16 KB
+    static_assert(NTL % 2 == 0, "B fragments load in pairs");
+
+    // The ring needs 1024-byte alignment for the 128B swizzle pattern.
+    unsigned int sbase = mma_smem_u32(smem_raw);
+    sbase = (sbase + 1023u) & ~1023u;
+    const unsigned int bar_full = sbase + STAGES * STAGE_B, bar_empty = bar_full + 8 * STAGES;
+
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+    const int wtiles = (OW + BM - 1) / BM;
+    const int row = blockIdx.y / wtiles, wt = blockIdx.y - row * wtiles;
+    const int oh = row % OH, od = (row / OH) % OD, b = row / (OH * OD);
+    const int ow0 = wt * BM;
+    const int n0 = blockIdx.x * BN;
+    const long M = (long)B * OD * OH * OW;
+    const int taps = KD * KH * KW;
+    const int cts = C / BK;                       // k-tiles per tap
+    const int nk_all = taps * cts;
+    const int z = blockIdx.z;
+    const int kt0 = (int)((long)nk_all * z / splits), kt1 = (int)((long)nk_all * (z + 1) / splits);
+    const int nk = kt1 - kt0;
+    if (b >= B || n0 >= N || nk <= 0) return;
+    y += (long)z * M * N;
+
+    if (tid == 0) {
+        #pragma unroll
+        for (int s = 0; s < STAGES; s++) {
+            mma_mbar_init(bar_full + 8 * s, 1);
+            mma_mbar_init(bar_empty + 8 * s, CONSUMER_WARPS);
+        }
+        mma_tma_fence();
+        ig_tma_prefetch(tmx);
+        ig_tma_prefetch(tmw);
+    }
+    __syncthreads();
+
+    if (warp == CONSUMER_WARPS) {
+        // ---- the producer warp: one lane issues, the rest leave ----
+        if (lane != 0) return;
+        for (int kt = 0; kt < nk; kt++) {
+            const int s = kt % STAGES, round = kt / STAGES;
+            if (kt >= STAGES) mma_mbar_wait(bar_empty + 8 * s, (round - 1) & 1);
+            const int kg = kt0 + kt;
+            const int tap = kg / cts, c0 = (kg - tap * cts) * BK;
+            const int kd = tap / (KH * KW), rem = tap - kd * KH * KW, kh = rem / KW, kw = rem - kh * KW;
+            const unsigned int sA = sbase + s * STAGE_B, sB = sA + TILE_A;
+            mma_mbar_expect(bar_full + 8 * s, STAGE_B);
+            ig_tma_5d(sA, tmx, bar_full + 8 * s,
+                      c0, ow0 * SW - PW + kw, oh * SH - PH + kh, od * SD - PD + kd, b);
+            mma_tma_2d(sB, tmw, bar_full + 8 * s, kg * BK, n0);
+        }
+        return;
+    }
+
+    // ---- the consumer warps ----
+    const int wm = warp / WARPS_N, wn = warp % WARPS_N;
+    float acc[MT][NTL][4];
+    #pragma unroll
+    for (int mt = 0; mt < MT; mt++)
+        #pragma unroll
+        for (int nt = 0; nt < NTL; nt++)
+            #pragma unroll
+            for (int e = 0; e < 4; e++) acc[mt][nt][e] = 0.0f;
+    unsigned int af[MT][4];
+    unsigned int bfr[NTL / 2][4];
+    for (int kt = 0; kt < nk; kt++) {
+        const int s = kt % STAGES, round = kt / STAGES;
+        mma_mbar_wait(bar_full + 8 * s, round & 1);
+        const unsigned int sA = sbase + s * STAGE_B, sB = sA + TILE_A;
+        #pragma unroll
+        for (int kc = 0; kc < KC; kc++) {
+            #pragma unroll
+            for (int mt = 0; mt < MT; mt++) {
+                const int r = wm * WM + mt * 16 + (lane & 15);
+                const int col = kc * 16 + (lane >> 4) * 8;
+                mma_ldm_x4(sA + ig_swz<BK>(r, col >> 3), af[mt][0], af[mt][1], af[mt][2], af[mt][3]);
+            }
+            #pragma unroll
+            for (int np = 0; np < NTL / 2; np++) {
+                const int r = wn * WN + np * 16 + (lane & 7) + ((lane >> 4) << 3);
+                const int col = kc * 16 + ((lane >> 3) & 1) * 8;
+                mma_ldm_x4(sB + ig_swz<BK>(r, col >> 3), bfr[np][0], bfr[np][1], bfr[np][2], bfr[np][3]);
+            }
+            #pragma unroll
+            for (int np = 0; np < NTL / 2; np++) {
+                #pragma unroll
+                for (int mt = 0; mt < MT; mt++) {
+                    mma_bf16(acc[mt][2 * np], af[mt], bfr[np]);
+                    mma_bf16(acc[mt][2 * np + 1], af[mt], bfr[np] + 2);
+                }
+            }
+        }
+        __syncwarp();
+        if (lane == 0) ig_mbar_arrive(bar_empty + 8 * s);
+    }
+
+    if (MODE == 3) {
+        float t = 0.0f;
+        #pragma unroll
+        for (int mt = 0; mt < MT; mt++)
+            #pragma unroll
+            for (int nt = 0; nt < NTL; nt++)
+                #pragma unroll
+                for (int e = 0; e < 4; e++) t += acc[mt][nt][e];
+        if (t != t) y[0] = t;
+        return;
+    }
+    const int g = lane >> 2, t = lane & 3;
+    const long mrow = (long)row * OW;
+    #pragma unroll
+    for (int mt = 0; mt < MT; mt++) {
+        #pragma unroll
+        for (int nt = 0; nt < NTL; nt++) {
+            const int n = n0 + wn * WN + nt * 8 + 2 * t;
+            #pragma unroll
+            for (int hh = 0; hh < 2; hh++) {
+                const int owl = ow0 + wm * WM + mt * 16 + g + hh * 8;
+                if (owl < OW) {
+                    const long m = mrow + owl;
+                    if (out16) {
+                        unsigned short* yr = y16 + m * N;
+                        if (n < N) yr[n] = fv_bf16_rne(acc[mt][nt][hh * 2]);
+                        if (n + 1 < N) yr[n + 1] = fv_bf16_rne(acc[mt][nt][hh * 2 + 1]);
+                    } else {
+                        float* yr = y + m * N;
+                        if (n < N) yr[n] = acc[mt][nt][hh * 2];
+                        if (n + 1 < N) yr[n + 1] = acc[mt][nt][hh * 2 + 1];
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
+
 #define IG_ARGS \
     const unsigned short* __restrict__ x, const unsigned short* __restrict__ w, float* __restrict__ y, \
     unsigned short* __restrict__ y16, int out16, \
@@ -624,6 +802,28 @@ extern "C" __global__ void __launch_bounds__(160, 2) conv_igemm_bf16_ws_probe_no
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     __shared__ __align__(128) unsigned char smem[3 * (128 + 128) * 64];
     ig_ws_body<1, 3, 3>(IG_PASS, smem);
+#endif
+}
+
+// WO-3b-iii: the TMA-fed kernel (ig_tma_body), sm_90+ (empty below), 288
+// threads, 96 KB dynamic (+ 1 KB alignment, 48 B barriers), one CTA per SM;
+// and its no-epilogue probe.
+#define IG_TMA_ARGS \
+    const __grid_constant__ FvTensorMap tmx, const __grid_constant__ FvTensorMap tmw, \
+    float* __restrict__ y, unsigned short* __restrict__ y16, int out16, \
+    int B, int D, int H, int W, int C, int OD, int OH, int OW, int N, \
+    int KD, int KH, int KW, int SD, int SH, int SW, int PD, int PH, int PW, int splits
+#define IG_TMA_PASS &tmx, &tmw, y, y16, out16, B, D, H, W, C, OD, OH, OW, N, KD, KH, KW, SD, SH, SW, PD, PH, PW, splits
+extern "C" __global__ void __launch_bounds__(288, 1) conv_igemm_bf16_tma(IG_TMA_ARGS) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+    extern __shared__ __align__(1024) unsigned char ig_tma_smem[];
+    ig_tma_body<3, 0>(IG_TMA_PASS, ig_tma_smem);
+#endif
+}
+extern "C" __global__ void __launch_bounds__(288, 1) conv_igemm_bf16_tma_probe_noepi(IG_TMA_ARGS) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+    extern __shared__ __align__(1024) unsigned char ig_tma_smem[];
+    ig_tma_body<3, 3>(IG_TMA_PASS, ig_tma_smem);
 #endif
 }
 

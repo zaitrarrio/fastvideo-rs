@@ -1464,7 +1464,7 @@ pub(crate) fn opt_in_dynamic_shared(
 #[cfg(feature = "cuda")]
 #[repr(C, align(128))]
 #[derive(Clone, Copy)]
-struct FvTensorMap {
+pub(crate) struct FvTensorMap {
     opaque: [u64; 16],
 }
 

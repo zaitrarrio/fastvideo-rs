@@ -963,6 +963,9 @@ pub struct IgemmVariant {
     pub dyn_smem: u32,
     /// Timing probe (fv-gpucheck only, wrong values).
     pub probe: bool,
+    /// The TMA-fed kernel (`conv_igemm_bf16_tma*`, sm_90+, BK = 64): tensor
+    /// maps instead of pointers, M tiled per output row.
+    pub tma: bool,
 }
 
 const fn variant(
@@ -980,8 +983,25 @@ const fn variant(
         threads,
         dyn_smem,
         probe,
+        tma: false,
     }
 }
+
+const fn tma_variant(name: &'static str, probe: bool) -> IgemmVariant {
+    IgemmVariant {
+        name,
+        bm: 128,
+        bn: 128,
+        threads: 288,
+        dyn_smem: IGEMM_TMA_SMEM,
+        probe,
+        tma: true,
+    }
+}
+
+/// The TMA kernel's dynamic shared memory: three 32 KB stages, 1 KB of
+/// alignment slack, the mbarriers (within CC 12.0's 99 KB per block).
+pub const IGEMM_TMA_SMEM: u32 = 3 * 32 * 1024 + 1024 + 64;
 
 /// The variants the kernel file instantiates, timed side by side by
 /// fv-gpucheck `conv_routes`; the first is the default.
@@ -990,9 +1010,11 @@ pub const IGEMM_VARIANTS: &[IgemmVariant] = &[
     variant("w64", 128, 128, 128, 0, false),
     variant("ws", 128, 128, 160, 0, false),
     variant("ws2", 128, 128, 192, 0, false),
+    tma_variant("tma", false),
     variant("probe_dense", 128, 128, 256, 0, true),
     variant("probe_noload", 128, 128, 256, 0, true),
     variant("ws_probe_noepi", 128, 128, 160, 0, true),
+    tma_variant("tma_probe_noepi", true),
 ];
 
 impl IgemmVariant {
@@ -1001,19 +1023,50 @@ impl IgemmVariant {
     }
 }
 
+/// Whether the TMA kernel can run this geometry on this device: sm_90+,
+/// C a multiple of 64 (a k-tile never straddles a tap; 128-byte rows), unit
+/// W stride (the strided box is the next increment), W and the strides
+/// within the tensor map's limits.
+pub fn igemm_tma_eligible(g: &ConvGeom, sm_major: i32) -> bool {
+    sm_major >= 9
+        && g.c % 64 == 0
+        && g.sw == 1
+        && g.w <= (1 << 30)
+        && (g.b * g.d * g.h * g.w * g.c) < (1u64 << 40) as usize
+}
+
 impl IgemmPlan {
     /// The default plan: the first variant, split-K up to four waves.
-    pub fn for_geom(g: &ConvGeom, sms: usize) -> Self {
-        Self::with(g, sms, IGEMM_VARIANTS[0])
+    pub fn for_geom(g: &ConvGeom, sms: usize, sm_major: i32) -> Self {
+        Self::with(g, sms, sm_major, IGEMM_VARIANTS[0])
+    }
+
+    /// The M tiles of a variant: the TMA kernel tiles each output row in
+    /// 128-pixel runs; the others tile the flattened M.
+    pub fn m_tiles(g: &ConvGeom, v: IgemmVariant) -> usize {
+        if v.tma {
+            g.b * g.od * g.oh * g.ow.div_ceil(v.bm)
+        } else {
+            g.m().div_ceil(v.bm)
+        }
     }
 
     /// A plan with the given variant; the split from the SM count: enough
     /// splits for four waves of two CTAs per SM, each split keeping at least
     /// eight k-tiles, at most 16.
-    pub fn with(g: &ConvGeom, sms: usize, variant: IgemmVariant) -> Self {
-        let nk = g.k().div_ceil(32);
-        let waves4 = 8 * sms.max(1);
-        let ctas = g.m().div_ceil(variant.bm) * g.n.div_ceil(variant.bn);
+    pub fn with(g: &ConvGeom, sms: usize, sm_major: i32, variant: IgemmVariant) -> Self {
+        // A TMA variant the geometry or device cannot run falls back to the
+        // base kernel (fv-gpucheck reports `igemm_tma_eligible`).
+        let variant = if variant.tma && !igemm_tma_eligible(g, sm_major) {
+            IGEMM_VARIANTS[0]
+        } else {
+            variant
+        };
+        let bk = if variant.tma { 64 } else { 32 };
+        let nk = g.k().div_ceil(bk);
+        // Four waves: of two CTAs per SM for the base kernels, one for TMA.
+        let waves4 = if variant.tma { 4 } else { 8 } * sms.max(1);
+        let ctas = Self::m_tiles(g, variant) * g.n.div_ceil(variant.bn);
         let mut splits = 1;
         if ctas < waves4 {
             splits = waves4.div_ceil(ctas).min(nk / 8).clamp(1, 16);
@@ -1035,7 +1088,25 @@ pub fn igemm_plan_with(
     let g = ConvGeom::new(x_shape, w_shape, pad, stride)?;
     let v = IgemmVariant::by_name(variant)
         .ok_or_else(|| DeviceError::Message(format!("conv igemm: no variant {variant}")))?;
-    Ok(IgemmPlan::with(&g, super::ops::sm_count(&dev), v))
+    Ok(IgemmPlan::with(
+        &g,
+        super::ops::sm_count(&dev),
+        dev.sm_major,
+        v,
+    ))
+}
+
+/// Whether the TMA kernel would run these shapes on this device.
+pub fn igemm_tma_eligible_for(
+    x_shape: &[usize],
+    w_shape: &[usize],
+    pad: &[usize],
+    stride: &[usize],
+) -> Result<bool> {
+    let dev = global_device()
+        .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let g = ConvGeom::new(x_shape, w_shape, pad, stride)?;
+    Ok(igemm_tma_eligible(&g, dev.sm_major))
 }
 
 /// The plan [`conv3d_igemm`] would use for these shapes on this device.
@@ -1048,7 +1119,11 @@ pub fn igemm_plan(
     let dev = global_device()
         .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
     let g = ConvGeom::new(x_shape, w_shape, pad, stride)?;
-    Ok(IgemmPlan::for_geom(&g, super::ops::sm_count(&dev)))
+    Ok(IgemmPlan::for_geom(
+        &g,
+        super::ops::sm_count(&dev),
+        dev.sm_major,
+    ))
 }
 
 /// `[oc, ic, taps]` f32 → bf16 `[oc, K]` (`kn` false) or `[K, oc]` (`kn` true),
@@ -1079,7 +1154,7 @@ fn route_weight(
 fn igemm_launch<'a>(
     dev: &'a DeviceContext,
     plan: &IgemmPlan,
-    m: usize,
+    g: &ConvGeom,
     n: usize,
 ) -> Result<(
     &'a cudarc::driver::CudaFunction,
@@ -1091,6 +1166,8 @@ fn igemm_launch<'a>(
         "ws" => &dev.kernels.conv_igemm_bf16_ws,
         "ws2" => &dev.kernels.conv_igemm_bf16_ws2,
         "ws_probe_noepi" => &dev.kernels.conv_igemm_bf16_ws_probe_noepi,
+        "tma" => &dev.kernels.conv_igemm_bf16_tma,
+        "tma_probe_noepi" => &dev.kernels.conv_igemm_bf16_tma_probe_noepi,
         "probe_dense" => &dev.kernels.conv_igemm_bf16_probe_dense,
         "probe_noload" => &dev.kernels.conv_igemm_bf16_probe_noload,
         _ => &dev.kernels.conv_igemm_bf16,
@@ -1102,13 +1179,119 @@ fn igemm_launch<'a>(
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (
             n.div_ceil(v.bn) as u32,
-            m.div_ceil(v.bm) as u32,
+            IgemmPlan::m_tiles(g, v) as u32,
             plan.splits as u32,
         ),
         block_dim: (v.threads, 1, 1),
         shared_mem_bytes: v.dyn_smem,
     };
     Ok((func, cfg))
+}
+
+/// The TMA kernel's tensor maps: the activation as a 5-D bf16 tensor
+/// `[b, d, h, w, c]` (box `[1, 1, 1, 128 w, 64 c]`, 128-byte swizzle, zeros
+/// outside: the padding) and the weights as 2-D `[n, K]` (box `[128, 64]`).
+fn igemm_tma_maps(
+    dev: &DeviceContext,
+    x: cudarc::driver::sys::CUdeviceptr,
+    w: cudarc::driver::sys::CUdeviceptr,
+    g: &ConvGeom,
+) -> Result<(super::ops::FvTensorMap, super::ops::FvTensorMap)> {
+    use cudarc::driver::sys::{
+        self, CUtensorMapDataType, CUtensorMapFloatOOBfill, CUtensorMapInterleave,
+        CUtensorMapL2promotion, CUtensorMapSwizzle,
+    };
+    let _ = dev;
+    let encode = |ptr: sys::CUdeviceptr,
+                  rank: u32,
+                  dims: &[u64],
+                  strides: &[u64],
+                  boxd: &[u32],
+                  es: &[u32]|
+     -> Result<super::ops::FvTensorMap> {
+        let mut raw = std::mem::MaybeUninit::<sys::CUtensorMap>::zeroed();
+        let st = unsafe {
+            sys::cuTensorMapEncodeTiled(
+                raw.as_mut_ptr(),
+                CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,
+                rank,
+                ptr as *mut std::ffi::c_void,
+                dims.as_ptr(),
+                strides.as_ptr(),
+                boxd.as_ptr(),
+                es.as_ptr(),
+                CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE,
+                CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_128B,
+                CUtensorMapL2promotion::CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
+                CUtensorMapFloatOOBfill::CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
+            )
+        };
+        if st != sys::CUresult::CUDA_SUCCESS {
+            return Err(DeviceError::Message(format!(
+                "conv igemm tma: cuTensorMapEncodeTiled: {st:?}"
+            )));
+        }
+        let map = unsafe { raw.assume_init() };
+        Ok(unsafe { std::mem::transmute_copy(&map) })
+    };
+    let (b, d, h, w_, c) = (g.b as u64, g.d as u64, g.h as u64, g.w as u64, g.c as u64);
+    let xdims = [c, w_, h, d, b];
+    let xstrides = [c * 2, w_ * c * 2, h * w_ * c * 2, d * h * w_ * c * 2];
+    let xbox = [64u32, 128 * g.sw as u32, 1, 1, 1];
+    let xes = [1u32, g.sw as u32, 1, 1, 1];
+    let tmx = encode(x, 5, &xdims, &xstrides, &xbox, &xes)?;
+    let k = g.k() as u64;
+    let wdims = [k, g.n as u64];
+    let wstrides = [k * 2];
+    let wbox = [64u32, 128];
+    let wes = [1u32, 1];
+    let tmw = encode(w, 2, &wdims, &wstrides, &wbox, &wes)?;
+    Ok((tmx, tmw))
+}
+
+/// Launch the TMA kernel of `plan` on channels-last bf16 buffers (the same
+/// argument contract as the pointer kernels, minus the dilation).
+#[allow(clippy::too_many_arguments)]
+fn igemm_tma_launch(
+    dev: &DeviceContext,
+    plan: &IgemmPlan,
+    g: &ConvGeom,
+    x: cudarc::driver::sys::CUdeviceptr,
+    w: cudarc::driver::sys::CUdeviceptr,
+    yf: &mut CudaSlice<f32>,
+    y16: &mut cudarc::driver::CudaViewMut<'_, half::bf16>,
+    out16: i32,
+) -> Result<()> {
+    let (tmx, tmw) = igemm_tma_maps(dev, x, w, g)?;
+    let (func, cfg) = igemm_launch(dev, plan, g, g.n)?;
+    let i = |v: usize| v as i32;
+    let (b, d, h, wd, c, od, oh, ow, nn) = (
+        i(g.b),
+        i(g.d),
+        i(g.h),
+        i(g.w),
+        i(g.c),
+        i(g.od),
+        i(g.oh),
+        i(g.ow),
+        i(g.n),
+    );
+    let (kd, kh, kw, sd, sh, sw, pd, ph, pw) = (
+        i(g.kd),
+        i(g.kh),
+        i(g.kw),
+        i(g.sd),
+        i(g.sh),
+        i(g.sw),
+        i(g.pd),
+        i(g.ph),
+        i(g.pw),
+    );
+    let splits_i = plan.splits as i32;
+    super::kernels::launch!(dev.stream, func, cfg;
+        &tmx, &tmw, &mut *yf, &mut *y16, &out16, &b, &d, &h, &wd, &c, &od, &oh, &ow, &nn,
+        &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &splits_i)?;
+    Ok(())
 }
 
 /// Route R2: the implicit GEMM (`conv_igemm_bf16*`, mma.sync bf16, f32
@@ -1143,9 +1326,25 @@ pub fn conv3d_igemm_with(
     let x16 = route_x_nhwc(&dev, x, &g)?;
     let w16 = route_weight(&dev, w, &g, false)?;
     let (m, n) = (g.m(), g.n);
-    let plan = plan.unwrap_or_else(|| IgemmPlan::for_geom(&g, super::ops::sm_count(&dev)));
+    let plan =
+        plan.unwrap_or_else(|| IgemmPlan::for_geom(&g, super::ops::sm_count(&dev), dev.sm_major));
     let mut y = unsafe { dev.stream.alloc::<f32>((m * n * plan.splits).max(1)) }?;
-    let (func, cfg) = igemm_launch(&dev, &plan, m, n)?;
+    if plan.variant.tma {
+        use cudarc::driver::DevicePtr;
+        let mut y16 = unsafe { dev.stream.alloc::<half::bf16>(1) }?;
+        {
+            let (xp, _gx) = x16.device_ptr(&dev.stream);
+            let (wp, _gw) = w16.device_ptr(&dev.stream);
+            let mut y16v = y16.as_view_mut();
+            igemm_tma_launch(&dev, &plan, &g, xp, wp, &mut y, &mut y16v, 0)?;
+        }
+        drop(y16);
+        drop(x16);
+        drop(w16);
+        let out = route_y_nchw(&dev, &y, &g, plan.splits)?;
+        return Ok((out, g.out_shape(x_shape.len())));
+    }
+    let (func, cfg) = igemm_launch(&dev, &plan, &g, n)?;
     let i = |v: usize| v as i32;
     let (b, d, h, wd, c, od, oh, ow, nn) = (
         i(g.b),
@@ -1211,8 +1410,24 @@ pub fn conv3d_igemm_nhwc_bf16(
             y.len()
         )));
     }
-    let plan = IgemmPlan::for_geom(&g, super::ops::sm_count(dev));
-    let (func, cfg) = igemm_launch(&dev, &plan, m, n)?;
+    let plan = IgemmPlan::for_geom(&g, super::ops::sm_count(dev), dev.sm_major);
+    if plan.variant.tma {
+        let (xp, _gx) = x.device_ptr(&dev.stream);
+        let (wp, _gw) = w16.device_ptr(&dev.stream);
+        if plan.splits == 1 {
+            let mut yf = unsafe { dev.stream.alloc::<f32>(1) }?;
+            igemm_tma_launch(dev, &plan, &g, xp, wp, &mut yf, y, 1)?;
+        } else {
+            let plane = m * n;
+            let mut yf = unsafe { dev.stream.alloc::<f32>(plane * plan.splits) }?;
+            igemm_tma_launch(dev, &plan, &g, xp, wp, &mut yf, y, 0)?;
+            let (plane_i, z_i) = (plane as i64, plan.splits as i64);
+            super::kernels::launch!(dev.stream, &dev.kernels.conv_sum_planes_bf16, super::kernels::cfg_n(plane);
+                &yf, &mut *y, &plane_i, &z_i)?;
+        }
+        return Ok(g.out_shape(x_shape.len()));
+    }
+    let (func, cfg) = igemm_launch(dev, &plan, &g, n)?;
     let i = |v: usize| v as i32;
     let (b, d, h, wd, c, od, oh, ow, nn) = (
         i(g.b),
