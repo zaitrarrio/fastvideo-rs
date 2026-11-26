@@ -1032,23 +1032,29 @@ pub fn igemm_tma_eligible(g: &ConvGeom, sm_major: i32) -> bool {
         && g.c % 64 == 0
         && g.sw == 1
         && g.sh == 1
+        && g.sd == 1
         && g.w <= (1 << 30)
         && (g.b * g.d * g.h * g.w * g.c) < (1u64 << 40) as usize
 }
 
-/// The TMA tile's width in output pixels (a power of two, 16..128): the
-/// smallest covering W when W fits a tile, else 64 or 128, whichever wastes
-/// less of the last tile. The tile's height is 128 / width.
-pub fn igemm_tma_bw(ow: usize) -> usize {
-    if ow > 128 {
-        if ow.div_ceil(64) * 64 < ow.div_ceil(128) * 128 {
-            64
-        } else {
-            128
+/// The TMA kernel's M tile as a (BD, BH, BW) block of output pixels, each a
+/// power of two with product 128, BW >= 8: the block that covers the output
+/// volume in the fewest tiles (ties to the widest, then the tallest), so a
+/// 24 x 24 x 16 LTX latent is 2 x 8 x 8 blocks exactly and a 1080p row is
+/// 1 x 1 x 128.
+pub fn igemm_tma_block(g: &ConvGeom) -> (usize, usize, usize) {
+    let mut best = (usize::MAX, (1usize, 1usize, 128usize));
+    for bwl2 in (3..=7).rev() {
+        for bhl2 in (0..=(7 - bwl2)).rev() {
+            let (bw, bh) = (1usize << bwl2, 1usize << bhl2);
+            let bd = 128 / (bw * bh);
+            let tiles = g.ow.div_ceil(bw) * g.oh.div_ceil(bh) * g.od.div_ceil(bd);
+            if tiles < best.0 {
+                best = (tiles, (bd, bh, bw));
+            }
         }
-    } else {
-        ow.max(16).next_power_of_two()
     }
+    best.1
 }
 
 impl IgemmPlan {
@@ -1061,9 +1067,8 @@ impl IgemmPlan {
     /// BH x BW patches ([`igemm_tma_bw`]); the others tile the flattened M.
     pub fn m_tiles(g: &ConvGeom, v: IgemmVariant) -> usize {
         if v.tma {
-            let bw = igemm_tma_bw(g.ow);
-            let bh = v.bm / bw;
-            g.b * g.od * g.oh.div_ceil(bh) * g.ow.div_ceil(bw)
+            let (bd, bh, bw) = igemm_tma_block(g);
+            g.b * g.od.div_ceil(bd) * g.oh.div_ceil(bh) * g.ow.div_ceil(bw)
         } else {
             g.m().div_ceil(v.bm)
         }
@@ -1255,10 +1260,15 @@ fn igemm_tma_maps(
     let (b, d, h, w_, c) = (g.b as u64, g.d as u64, g.h as u64, g.w as u64, g.c as u64);
     let xdims = [c, w_, h, d, b];
     let xstrides = [c * 2, w_ * c * 2, h * w_ * c * 2, d * h * w_ * c * 2];
-    let bw = igemm_tma_bw(g.ow);
-    let bh = 128 / bw;
-    let xbox = [64u32, (bw * g.sw) as u32, (bh * g.sh) as u32, 1, 1];
-    let xes = [1u32, g.sw as u32, g.sh as u32, 1, 1];
+    let (bd, bh, bw) = igemm_tma_block(g);
+    let xbox = [
+        64u32,
+        (bw * g.sw) as u32,
+        (bh * g.sh) as u32,
+        (bd * g.sd) as u32,
+        1,
+    ];
+    let xes = [1u32, g.sw as u32, g.sh as u32, g.sd as u32, 1];
     let tmx = encode(x, 5, &xdims, &xstrides, &xbox, &xes)?;
     let k = g.k() as u64;
     let wdims = [k, g.n as u64];
@@ -1308,10 +1318,11 @@ fn igemm_tma_launch(
         i(g.pw),
     );
     let splits_i = plan.splits as i32;
-    let bwl2 = igemm_tma_bw(g.ow).trailing_zeros() as i32;
+    let (_, bh_, bw_) = igemm_tma_block(g);
+    let (bwl2, bhl2) = (bw_.trailing_zeros() as i32, bh_.trailing_zeros() as i32);
     super::kernels::launch!(dev.stream, func, cfg;
         &tmx, &tmw, &mut *yf, &mut *y16, &out16, &b, &d, &h, &wd, &c, &od, &oh, &ow, &nn,
-        &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &splits_i, &bwl2)?;
+        &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &splits_i, &bwl2, &bhl2)?;
     Ok(())
 }
 

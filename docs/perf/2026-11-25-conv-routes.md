@@ -463,3 +463,28 @@ of itself (37 % on W = 160, the wan22-1024 loss). Commit d8e936e tiles M
 as a BH × BW patch of the output plane (BW a power of two from 16 to 128
 chosen per geometry, BH = 128 / BW, one 5-D box `[64 c, BW w, BH h, 1,
 1]`), which brings the waste to 25 % on W = 24 and 17 % on W = 160.
+
+### Run 2 (d8e936e): patch tiles; the TMA kernel passes cuDNN on three shapes
+
+Record `artifacts/runpod/rtx6000/d8e936e-11260302/`, every check passing.
+
+| shape (W) | w32 | tma (BH × BW patch) | probe_noload |
+|---|---|---|---|
+| wan22-1024-s1 (160) | 1.31 | **1.14** | 0.94 |
+| wan22-512-s2 (320) | 1.22 | **0.92** | 0.87 |
+| wan22-256-s3 (320) | 1.07 | **0.86** | 0.81 |
+| wan-resample2d | 1.05 | **1.00** | 0.82 |
+| ltx-256 (192) | 1.13 | **0.89** | 0.84 |
+| bench-192x6x120x208 (208) | 1.24 | **1.11** | 0.86 |
+| ltx-1024 (24) | 1.27 | 1.39 | 0.97 |
+| ltx-up-4096 (24) | 1.34 | 1.46 | 1.02 |
+
+With the waste gone from the wide shapes the TMA kernel is faster than
+cuDNN's NCDHW plans on wan22-512 (674 TFLOP/s against cuDNN's 620),
+wan22-256 and ltx-256, and within 14 points on wan22-1024. The 24 × 24
+LTX shapes stay at 1.4×: a 24 × 24 plane is 4.5 tiles, so any 2-D patch
+pads it to 6 (33 % more FLOPs) and the 768-CTA grid quantises to waves of
+188. Commit after this run tiles M as a BD × BH × BW block (powers of two
+with product 128, the block covering the output volume in the fewest
+tiles): 2 × 8 × 8 fits 24 × 24 × 16 exactly, 1 × 4 × 32 fits 4 × 88 × 160,
+1 × 1 × 128 the 1080p rows; none of the served shapes wastes a tile.
