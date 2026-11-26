@@ -561,3 +561,13 @@ WO-3b-iii's acceptance is met on LTX. Open before `auto` flips: a Wan
 `det-short` determinism check with the TMA kernel in the plan, and the
 owner's call on flipping `auto` for sm_90+ (the base kernel stays the
 cuDNN-free path for sm_80-sm_89 at 1.2-1.3×).
+
+### Determinism (two convgate runs on 7ef3231): byte-identical across processes
+
+A second `convgate` run on the same image and pod class
+(`artifacts/runpod/convgate/7ef3231-1126035044-fedd/`, a fresh process on a
+different pod): all 481 frames of the igemm arm hash identically to the
+first run's (and the cuDNN arm's to its own), so the TMA kernel's output
+is the same bytes run to run, as the base kernel's was (no atomics, a
+fixed split; `docs/perf/determinism.md`). The decode repeated at 14.01 s
+against cuDNN's 13.39 s (1.046×).

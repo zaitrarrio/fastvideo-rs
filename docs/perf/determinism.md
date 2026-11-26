@@ -218,3 +218,13 @@ processes' frames and audio are identical bit for bit.
 deleted by the driver (GET 404); build pod (shared) about 10 min of jobs
 (≈ $0.16). Balance $34.54 -> $31.95 over the session, other agents' pods
 included.
+
+## The implicit-GEMM conv (ADR-0024 step 3, 2026-11-26)
+
+`FASTVIDEO_CONV3D=igemm` (the base `conv_igemm_bf16` kernel and, on sm_90+
+where the geometry allows, the TMA-fed `conv_igemm_bf16_tma`) has no
+atomics and a fixed split-K (one f32 plane per split, summed in order), so
+it is byte-identical run to run: two `convgate` runs of the LTX-2.5
+1080p20s fast decode on 7ef3231, fresh processes on different pods, hash
+all 481 frames identically (`artifacts/runpod/convgate/7ef3231-*`,
+`docs/perf/2026-11-25-conv-routes.md` "Determinism").
