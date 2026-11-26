@@ -186,7 +186,10 @@ FV_LAB_WRITE=crates/fastvideo-lab cargo test -p fastvideo-lab --test own_tiers  
 changes the dry-run fixture in the same PR. `runpod-http.sh` refuses `run` / `all` for it (`fv-lab pod up --sha <7>
 --family <tier> --yes --wait` runs it) and `plan` writes its body. The first is `variants` (docs/ports/variants-parity.md);
 `convgate` is ADR-0024 step 3's conv gate (`docs/plan/2026-11-25-adr24-step3-wo.md`, WO-3b): the decoders on the
-in-tree implicit GEMM (`FASTVIDEO_CONV3D=igemm`) against cuDNN, frames compared.
+in-tree implicit GEMM (`FASTVIDEO_CONV3D=igemm`) against cuDNN, frames compared: the LTX-2.5 fast decoder at
+1080p20s (`convgate-ltx-1080p20s`, `ltx2 vae-bench`) and FastWan2.2 TI2V-5B at 704x1280x121 with the full Wan 2.2
+VAE (`convgate-wan22-704p`, `wan gen` at 3 steps, which reports the decode time apart from the denoise; its tree
+is R2-only, so the tier's weights are `volume+r2`).
 
 ### `runpod-http.sh` for a retired tier
 

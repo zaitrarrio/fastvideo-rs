@@ -1,0 +1,21 @@
+[06:27:44] [convgate] lpips weights: /fvscratch/weights/auxiliary/lpips
+[06:27:44] [convgate] matrix start image=e117674facb6d5af
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-1a0cb367-9e7d-c6d0-9e90-ba7f56fc72b0)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.112.07
+[06:27:44] [convgate] pod memory: cgroup v2 /sys/fs/cgroup, limit 89645 MiB, oom_kills 0
+[06:27:44] [convgate] weights /fvscratch/weights: 20 volume trees linked from /workspace/weights; 1 R2 trees (24.20 GB) fetched before the arms that read them, at most 24.20 GB on the container disk at once
+[06:27:44] [convgate] skip convgate-ltx-1080p20s-cudnn (not in FV_CELLS)
+[06:27:44] [convgate] skip convgate-ltx-1080p20s-igemm (not in FV_CELLS)
+[06:27:44] [convgate] skip compare convgate-ltx-1080p20s-cudnn--convgate-ltx-1080p20s-igemm (frames missing)
+[06:27:44] [convgate] r2: no python3 in the image: apt-get install python3 (r2-apt.log)
+[06:27:50] [convgate] r2 convgate-wan22-704p-cudnn: fetch fastwan22-ti2v-5b@3e187042a324f6f5fb68fd22110a78725253de8f (24.20 GB) into /fvscratch/weights
+[06:28:18] [convgate] r2 convgate-wan22-704p-cudnn: weights ready: 1 tree(s), 24.20 GB fetched in 26.8s (904 MB/s); retries 0, bad parts 0, resumed parts 0, slow restarts 1
+[06:28:18] [convgate] ▶ convgate-wan22-704p-cudnn  env FASTVIDEO_WAN_VAE=full FASTVIDEO_CONV3D=cudnn-bf16 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/fastwan22-ti2v-5b --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24 --seed 1024 --warm --height 704 --width 1280 --num-frames 121 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip-dir /fvscratch/runs/convgate/5f102c3-1126062710-85ae/convgate-wan22-704p-cudnn/frames  (wall cap 1131s; 0=none)
+[06:29:32] [convgate] ok convgate-wan22-704p-cudnn  74s  /fvscratch/runs/convgate/5f102c3-1126062710-85ae/convgate-wan22-704p-cudnn/stderr.log:wan gen default: total 18.30s (text 0.00s, denoise 4.58s, decode 13.67s) png 0.13s peak Some(60452) MiB frames c4ee6a81c6889d848dafd515b4782aec0f7b46b8cb31ea8881a29fe82538b66b
+[06:29:32] [convgate] ram convgate-wan22-704p-cudnn: ram 28783 MiB of 89645 MiB, oom_kills 0
+[06:29:33] [convgate] ▶ convgate-wan22-704p-igemm  env FASTVIDEO_WAN_VAE=full FASTVIDEO_CONV3D=igemm /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast wan gen --weights /fvscratch/weights/fastwan22-ti2v-5b --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24 --seed 1024 --warm --height 704 --width 1280 --num-frames 121 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --clip-dir /fvscratch/runs/convgate/5f102c3-1126062710-85ae/convgate-wan22-704p-igemm/frames  (wall cap 1056s; 0=none)
+[06:30:49] [convgate] ok convgate-wan22-704p-igemm  76s  /fvscratch/runs/convgate/5f102c3-1126062710-85ae/convgate-wan22-704p-igemm/stderr.log:wan gen default: total 17.84s (text 0.00s, denoise 4.60s, decode 13.21s) png 0.15s peak Some(57892) MiB frames 75e56bcc3776ed9a74e8dc1797541e4e648c12a985c75335efda09dafcfc4e91
+[06:30:49] [convgate] ram convgate-wan22-704p-igemm: ram 27985 MiB of 89645 MiB, oom_kills 0
+[06:30:54] [convgate] compare convgate-wan22-704p-cudnn--convgate-wan22-704p-igemm exit=0 "psnr_mean":59.043800736365576 "max":0.00012011751476340551 "mean":0.00010803362676659269 
+[06:30:54] [convgate] matrix done
+matrix_exit=0

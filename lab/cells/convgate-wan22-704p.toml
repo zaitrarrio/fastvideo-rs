@@ -1,0 +1,41 @@
+# The convgate family's Wan cell (ADR-0024 step 3, WO-3b-iii follow-up, owner
+# 2026-11-26 "run the wan 2.2 decode gate"): FastWan2.2 TI2V-5B at the Wan 2.2
+# canvas (704x1280x121, 3 distilled steps so the decode is most of the wall
+# time) with the full Wan 2.2 VAE, its convs on cuDNN bf16 against the
+# in-tree implicit GEMM (`FASTVIDEO_CONV3D=igemm`: the TMA kernel where the
+# geometry allows, the base kernel elsewhere), frames compared; `wan gen`
+# reports the decode time apart from the denoise. Schema:
+# crates/fastvideo-lab/schemas/cell.v1.json; docs/adr/0019-fv-lab.md.
+schema = 1
+name = "convgate-wan22-704p"
+description = "FastWan2.2 TI2V-5B 704x1280x121 with the full Wan 2.2 VAE: cuDNN bf16 convs vs the implicit GEMM (igemm), decode time and frames compared"
+
+[workload]
+model = "wan"
+prompt = "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+seed = 1024
+note = "runpod-matrix.sh's default PROMPT and SEED; the FastWan2.2 model-card recipe (3 steps, flow shift 5, 24 fps) with the full VAE, as wan-fastwan22-ti2v-5b's fw22 arm"
+
+[lists]
+fw22 = ["--weights", "{weights}/fastwan22-ti2v-5b", "--preset", "fast_wan_2_2_ti2v_5b", "--steps", "3", "--flow-shift",
+  "5.0", "--fps", "24", "--seed", "{seed}", "--warm"]
+
+[[arm]]
+name = "convgate-wan22-704p-cudnn"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_WAN_VAE=full", "FASTVIDEO_CONV3D=cudnn-bf16"]
+argv = ["--mode", "fast", "wan", "gen", "{@fw22}", "--height", "704", "--width", "1280", "--num-frames", "121", "--prompt",
+  "{prompt}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[arm]]
+name = "convgate-wan22-704p-igemm"
+gate = "fastwan22-ti2v-5b"
+trees = ["fastwan22-ti2v-5b"]
+env = ["FASTVIDEO_WAN_VAE=full", "FASTVIDEO_CONV3D=igemm"]
+argv = ["--mode", "fast", "wan", "gen", "{@fw22}", "--height", "704", "--width", "1280", "--num-frames", "121", "--prompt",
+  "{prompt}", "--clip-dir", "{runs}/{arm}/frames"]
+
+[[compare]]
+baseline = "convgate-wan22-704p-cudnn"
+candidate = "convgate-wan22-704p-igemm"
