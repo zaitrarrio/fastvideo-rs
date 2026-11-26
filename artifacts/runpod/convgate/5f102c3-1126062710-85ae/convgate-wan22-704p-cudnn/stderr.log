@@ -1,0 +1,34 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] wan load: host peak RSS 36.1 GiB (eager dit)
+[INFO] wan/load {"dit_residency":"resident","mem_used_mib":21794,"moe":null,"seconds":35.549880743}
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=27280 Sk=27280 D=128
+[fastvideo] dmd step 1/3 t=1000 done in 1621ms
+[fastvideo] dmd step 2/3 t=757 done in 1515ms
+[fastvideo] dmd step 3/3 t=522 done in 1518ms
+[fastvideo] dmd 3 steps done in 4656ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=3520 Sk=3520 D=1024 query_chunk=3520
+[fastvideo] vae.decode done in 11847ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.13s, 0.11 GiB, synced), ffmpeg feed blocked 0.27s, mp4 tail 0.05s, buffered peak 0.30 GiB of 41.38
+[fastvideo] wrote mp4 /fvscratch/runs/convgate/5f102c3-1126062710-85ae/convgate-wan22-704p-cudnn/frames/cold/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/convgate/5f102c3-1126062710-85ae/convgate-wan22-704p-cudnn/frames/cold (text 0.45s, denoise 4.66s, decode+mp4 13.64s, png 0.13s)
+[fastvideo] generate done in 18923ms
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":13.643468699,"decoder":"wan-vae","denoise_s":4.660176516,"step_s":[1.62598485,1.515658859,1.5183835490000002],"text_cache":"miss","text_s":0.451376973,"total_s":18.923595316,"video_encode_s":0.04602867,"video_push_s":0.00008533,"video_rgb_s":0.09767358499253266,"video_vae_s":13.586589630126953,"video_wait_s":1.745708202,"write_s":0.134642699}
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 1525ms
+[fastvideo] dmd step 2/3 t=757 done in 1528ms
+[fastvideo] dmd step 3/3 t=522 done in 1530ms
+[fastvideo] dmd 3 steps done in 4583ms
+[fastvideo] vae.decode done in 11841ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.13s, 0.11 GiB, synced), ffmpeg feed blocked 0.27s, mp4 tail 0.08s, buffered peak 0.30 GiB of 41.29
+[fastvideo] wrote mp4 /fvscratch/runs/convgate/5f102c3-1126062710-85ae/convgate-wan22-704p-cudnn/frames/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/convgate/5f102c3-1126062710-85ae/convgate-wan22-704p-cudnn/frames (text 0.00s, denoise 4.58s, decode+mp4 13.67s, png 0.13s)
+[fastvideo] generate done in 18426ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":13.674143735,"decoder":"wan-vae","denoise_s":4.584666395,"frames_sha256":"c4ee6a81c6889d848dafd515b4782aec0f7b46b8cb31ea8881a29fe82538b66b","peak_mib":60452,"step_s":[1.525727834,1.528149526,1.530673627],"text_cache":"hit","text_s":0.001985917,"total_s":18.295895053,"video_encode_s":0.082679058,"video_push_s":0.00008669,"video_rgb_s":0.08287218697903448,"video_vae_s":13.583581283569334,"video_wait_s":1.7493111799999999,"write_s":0.130685106}
+wan gen default: total 18.30s (text 0.00s, denoise 4.58s, decode 13.67s) png 0.13s peak Some(60452) MiB frames c4ee6a81c6889d848dafd515b4782aec0f7b46b8cb31ea8881a29fe82538b66b
+[PASS] wan/frames {"decoded":121,"written":121} (limits {"expected":121})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/convgate/5f102c3-1126062710-85ae/convgate-wan22-704p-cudnn/frames/frame-060.png","mean":0.4156310733171464,"std":0.23625215870984692} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/convgate/5f102c3-1126062710-85ae/convgate-wan22-704p-cudnn/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (73.8s)

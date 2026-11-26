@@ -571,3 +571,27 @@ first run's (and the cuDNN arm's to its own), so the TMA kernel's output
 is the same bytes run to run, as the base kernel's was (no atomics, a
 fixed split; `docs/perf/determinism.md`). The decode repeated at 14.01 s
 against cuDNN's 13.39 s (1.046×).
+
+### The Wan 2.2 gate (convgate-wan22-704p, 5f102c3): the decode at 0.97× cuDNN
+
+`fv-lab pod up --family convgate --cells convgate-wan22-704p-*` on an RTX
+PRO 6000 (owner 2026-11-26, PR #260; record
+`artifacts/runpod/convgate/5f102c3-1126062710-85ae/`): FastWan2.2 TI2V-5B
+at 704 × 1280 × 121 (3 distilled steps) with the full Wan 2.2 VAE, cuDNN
+bf16 convs against `FASTVIDEO_CONV3D=igemm` (the TMA kernel on the
+eligible layers, the base kernel on the rest, through the NCDHW entry
+with its transposes: the Wan VAE has no channels-last path yet).
+
+| | cuDNN bf16 | igemm |
+|---|---|---|
+| VAE decode (121 frames at 704p) | 13.67 s | **13.21 s (0.97×)** |
+| denoise (3 steps, the patch-embedding conv included) | 4.58 s | 4.60 s |
+| peak device memory | 60 452 MiB | 57 892 MiB |
+| frames, igemm vs cuDNN: PSNR mean | | 59.0 dB |
+| LPIPS mean / max | | 1.1e-4 / 1.2e-4 |
+
+The Wan 2.2 decode is faster on the in-tree kernel than on cuDNN, at
+59 dB and LPIPS 1e-4 between the two decoders (bf16 summation order), and
+2.5 GB less device memory. Both decode gates (LTX 1.05×, Wan 0.97×) are
+within the owner's margin; the `auto` flip for sm_90+ is the owner's
+call.
