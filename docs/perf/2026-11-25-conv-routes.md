@@ -488,3 +488,42 @@ pads it to 6 (33 % more FLOPs) and the 768-CTA grid quantises to waves of
 with product 128, the block covering the output volume in the fewest
 tiles): 2 × 8 × 8 fits 24 × 24 × 16 exactly, 1 × 4 × 32 fits 4 × 88 × 160,
 1 × 1 × 128 the 1080p rows; none of the served shapes wastes a tile.
+
+### Run 3 (8225c78): block tiles and the strided box; at or below cuDNN on every wide shape
+
+Record `artifacts/runpod/rtx6000/8225c78-11260327/`, every check passing,
+the stride-2 shapes (enc-s2, wan22-512-s2's geometry) now through the
+strided box (`boxDim = block × stride`, `elementStrides = stride`:
+confirmed by the checks).
+
+| shape | w32 | tma (BD × BH × BW block) | probe_noload | tma TFLOP/s |
+|---|---|---|---|---|
+| wan22-1024-s1 | 1.31 | **0.99** | 0.95 | 675 |
+| wan22-512-s2 | 1.22 | **0.92** | 0.88 | 671 |
+| wan22-256-s3 | 1.07 | **0.86** | 0.81 | 570 |
+| wan-timeconv | 1.11 | **0.82** | 0.89 | |
+| wan-resample2d | 1.09 | **0.91** | 0.86 | |
+| ltx-256 | 1.13 | **0.89** | 0.85 | 398 |
+| ltx-1024 (24 × 24 × 16) | 1.27 | 1.12 | 0.97 | 316 |
+| ltx-up-4096 (24 × 24 × 16) | 1.34 | 1.16 | 1.03 | 344 |
+| bench-192x6x120x208 | 1.23 | **0.97** | 0.87 | |
+| enc-s2 (stride 2) | 1.05 | **0.84** | 0.81 | |
+
+The TMA kernel is faster than cuDNN's NCDHW plans on every wide served
+shape, 1-18 % below cuDNN's time, and within 12-16 % on the two 24 × 24
+LTX latent shapes, where the grid (576 and 2304 CTAs at one CTA per SM)
+quantises to waves of 188 and the 4096-channel weights stream once per M
+tile. On wan22-1024 and wan22-512 the kernel runs at 675 TFLOP/s dense
+bf16, two thirds of the RTX PRO 6000's 1 PFLOP/s peak, against cuDNN's
+620 on the same shapes.
+
+What changed against the base kernel, in the order the runs established
+it: the loads left the SM's instruction stream (one elected thread's TMA
+instead of eight warps' cp.async and address arithmetic), BK = 64 (whole
+128-byte rows per request, which the two-CTA smem budget forbade with
+cp.async), one CTA per SM with mbarriers instead of `__syncthreads`, and
+an M tile that follows the output volume so no served shape pads a tile.
+
+The plan now picks the TMA kernel wherever the geometry allows (sm_90+,
+C % 64 == 0, strides 1 or 2) and the base kernel elsewhere; `auto` is
+still cuDNN until the decode gates (`convgate`) pass.

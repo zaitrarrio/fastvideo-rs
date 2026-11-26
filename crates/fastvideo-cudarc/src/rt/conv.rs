@@ -1059,9 +1059,16 @@ pub fn igemm_tma_block(g: &ConvGeom) -> (usize, usize, usize) {
 }
 
 impl IgemmPlan {
-    /// The default plan: the first variant, split-K up to four waves.
+    /// The default plan: the TMA kernel where the geometry and the device
+    /// allow it (WO-3b-iii, 2026-11-26: at or below cuDNN on every wide
+    /// served shape), else the base kernel; split-K up to four waves.
     pub fn for_geom(g: &ConvGeom, sms: usize, sm_major: i32) -> Self {
-        Self::with(g, sms, sm_major, IGEMM_VARIANTS[0])
+        let v = if igemm_tma_eligible(g, sm_major) {
+            IgemmVariant::by_name("tma").unwrap_or(IGEMM_VARIANTS[0])
+        } else {
+            IGEMM_VARIANTS[0]
+        };
+        Self::with(g, sms, sm_major, v)
     }
 
     /// The M tiles of a variant: the TMA kernel tiles the output plane in
