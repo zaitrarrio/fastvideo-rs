@@ -422,3 +422,44 @@ One in-budget idea the rounds did not try, for the record: a
 CTAs per SM with 128-byte row segments at the cost of half the N reuse
 and a two-stage ring (the spike's two-stage kernel was within 5 % of the
 three-stage one).
+
+## WO-3b-iii: the TMA-fed mainloop (2026-11-26, PR #259)
+
+Owner go-ahead 2026-11-26 after the deep-research report
+(`reports/cuDNN and Rust GPU kernel optimization.md`): compute capability
+12.0 has TMA and mbarrier, CUTLASS's own SM120 kernels are TMA-fed at one
+CTA per SM, and the `cp.async` producer of WO-3b-ii was issue-bound. The
+kernel `conv_igemm_bf16_tma` (sm_90+): one elected producer thread issues
+two `cp.async.bulk.tensor` per stage (the activation as a 5-D box with the
+tap offset in the coordinates, the map's zero fill being the padding; the
+`[N, K]` weights as a 2-D box), `mbarrier.expect_tx` by bytes, the 128-byte
+TMA swizzle equal to the kernel's `ig_swz<64>`; eight consumer warps (2 × 4
+of 64 × 32) wait on the stage's full barrier and arrive on its empty one;
+BK = 64 (whole 128-byte rows), three 32 KB stages (96 KB), 288 threads, one
+CTA per SM. ptxas: 135-140 registers on sm_120, no spills. Eligibility:
+C % 64 == 0 and unit stride (the strided box is the next increment);
+otherwise the plan runs the base kernel.
+
+### Run 1 (e727b9a): correct on the first run; row tiles waste narrow W
+
+Record `artifacts/runpod/rtx6000/e727b9a-11260241/`, every check passing
+(the padding and the ragged tiles included).
+
+| shape (W) | w32 | tma (128-wide row tiles) | tma_probe_noepi | probe_noload |
+|---|---|---|---|---|
+| wan22-1024-s1 (160) | 1.24 | 1.33 | 1.33 | 0.91 |
+| wan22-512-s2 (320) | 1.23 | **1.07** | 1.06 | 0.89 |
+| wan22-256-s3 (320) | 1.07 | **0.97** | 0.95 | 0.81 |
+| wan-resample2d | 1.07 | **1.01** | 0.98 | 0.84 |
+| ltx-256 (192) | 1.13 | **1.09** | 1.08 | 0.86 |
+| bench-192x6x120x208 (208) | 1.24 | **1.10** | 1.10 | 0.85 |
+| ltx-1024 (24) | 1.27 | 4.02 | 4.04 | 0.97 |
+| ltx-up-4096 (24) | 1.34 | 4.53 | 4.61 | 1.02 |
+
+On the shapes whose W fills the 128-pixel row tile the TMA kernel is
+10-15 points faster than the base kernel and at 0.97-1.10× cuDNN; the
+two LTX shapes with W = 24 ran at 4-4.5× because a row tile wasted 81 %
+of itself (37 % on W = 160, the wan22-1024 loss). Commit d8e936e tiles M
+as a BH × BW patch of the output plane (BW a power of two from 16 to 128
+chosen per geometry, BH = 128 / BW, one 5-D box `[64 c, BW w, BH h, 1,
+1]`), which brings the waste to 25 % on W = 24 and 17 % on W = 160.
