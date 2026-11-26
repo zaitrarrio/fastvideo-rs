@@ -1,0 +1,70 @@
+{
+  "checks": [],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast",
+    "request": {
+      "height": 1088,
+      "latent_shape": [
+        1,
+        128,
+        61,
+        34,
+        60
+      ],
+      "latents": null,
+      "load_s": 0.256937528,
+      "num_frames": 481,
+      "seed": 7,
+      "tiling": "TileSizeConfig { frames: DimSize { tile_size: 80, overlap: 24 }, height: DimSize { tile_size: 448, overlap: 64 }, width: DimSize { tile_size: 768, overlap: 64 } }",
+      "width": 1920
+    },
+    "runs": [
+      {
+        "decode_video_s": 14.010269524,
+        "decoder": "fast",
+        "frames_written": 481,
+        "peak_vram_mib": 7618,
+        "video_encode_s": 0.00008716,
+        "video_push_s": 0.00015932999999999998,
+        "video_rgb_s": 0.7356371570174872,
+        "video_vae_s": 13.986890823066235,
+        "video_wait_s": 1.4087001749999999,
+        "warm_s": 14.473292579,
+        "write_s": 0.84673723,
+        "writer": {
+          "active_at_spawn": 0,
+          "buffer_budget_gib": 43.62960624694824,
+          "buffered_peak_gib": 2.8073501586914062,
+          "ffmpeg_feed_s": 0.0,
+          "frames": 481,
+          "png_deferred": 481,
+          "png_gib": 1.660811798647046,
+          "png_inline": 0,
+          "png_mode": "deferred",
+          "png_s": 0.8466179,
+          "video_tail_s": 0.00008642
+        }
+      }
+    ]
+  },
+  "elapsed_s": 30.251389487,
+  "env": {
+    "FASTVIDEO_CONV3D": "igemm",
+    "FASTVIDEO_LTX_VAE_CHECK": "1"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "ltx2",
+  "status": "pass"
+}

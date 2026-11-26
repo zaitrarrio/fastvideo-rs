@@ -136,6 +136,8 @@ kernel_fns!(
     conv_igemm_bf16_w64,
     conv_igemm_bf16_ws,
     conv_igemm_bf16_ws2,
+    conv_igemm_bf16_tma,
+    conv_igemm_bf16_tma_probe_noepi,
     conv_igemm_bf16_ws_probe_noepi,
     conv_igemm_bf16_probe_dense,
     conv_igemm_bf16_probe_noload,

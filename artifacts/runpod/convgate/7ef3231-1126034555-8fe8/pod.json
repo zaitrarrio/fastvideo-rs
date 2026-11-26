@@ -1,0 +1,15 @@
+{
+  "id": "rj2geckff9or49",
+  "name": "fv-lab-convgate-7ef3231-1126034555-8fe8",
+  "family": "convgate",
+  "tag": "7ef3231-1126034555-8fe8",
+  "sha": "7ef3231",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime@sha256:13e8d11c107dfc849e12d9d26ccd61b38c3cb992ee80ddda60e90b802a9d8915",
+  "url": "https://rj2geckff9or49-8000.proxy.runpod.net",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "usd_per_hr": 2.69,
+  "created_at": 1795664758.313004,
+  "cap_s": 3600,
+  "memory_gb": 94.0,
+  "vcpus": 32.0
+}
