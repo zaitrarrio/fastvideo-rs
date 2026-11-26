@@ -8,9 +8,9 @@ Project code: FVID
 - Decision: **(owner) merge PR #258 and go ahead with the TMA work order** ("merge open pull request and the you have my go-ahead", 2026-11-26): WO-3b-iii in `docs/plan/2026-11-25-adr24-step3-wo.md`; the nvcc → cubin → cudarc path stays; the Runpod balance floor was waived by the owner on 2026-11-25 ("ignore the floor") and the account topped up ($16.52)
 - Reason: the one change the measurements point at that the rounds and WO-3b-ii did not try, and the one NVIDIA's own CC 12.0 kernels use
 - Reversibility: high (a new entry point beside the base kernel; the default flips on eligible geometries only on acceptance)
-- Executed by: branch `claude/adr24-step3b-tma` (PR to follow)
+- Executed by: PR #259 (branch `claude/adr24-step3b-tma`)
 - ADR: docs/adr/0024-driver-only-runtime.md (step 3, D6)
-- Verification: pending (the WO's acceptance criteria)
+- Verification: done 2026-11-26 for the kernel and the LTX gate (`docs/perf/2026-11-25-conv-routes.md` "WO-3b-iii"): three `conv_routes` runs (e727b9a, d8e936e, 8225c78; every check passing, stride 2 included) put the TMA kernel at or below cuDNN's NCDHW plans on every wide served shape (wan22-1024 0.99×, wan22-512 0.92×, ltx-256 0.89×, 675 TFLOP/s on the 1024-channel Wan stages) and 1.12-1.16× on the 24 × 24 LTX latents; `convgate` (7ef3231): the LTX-2.5 1080p20s decode at **1.05× cuDNN NHWC** (from 1.42×), 55.87 dB, LPIPS 1.4e-4, 1 GB less device memory. Pending: a Wan decode gate, det-short, the `auto` flip (owner)
 
 ### FVID · 2026-11-25 · FVID-2026-11-25-conv-igemm-ws-wo
 - Trigger: WO-3b's first decode gate (`convgate`, LTX-2.5 1080p20s on an RTX PRO 6000: quality settled at 55.8 dB / LPIPS 1.4e-4, speed 1.42× cuDNN's NHWC plans) and the owner's three capped tuning rounds ("option 1", 2026-11-25; `docs/perf/2026-11-25-conv-routes.md`, records 195a944 / 14300de / bb7ff1f): no faster kernel; the rounds established that the no-load kernel runs at cuDNN's speed, that two CTAs per SM are required, and that compute capability 12.0's 128 KB of shared memory per SM caps the ring at the base kernel's three stages, so the 35-40 points the loads cost are issue time and address work in the computing warps, not latency

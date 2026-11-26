@@ -527,3 +527,37 @@ an M tile that follows the output volume so no served shape pads a tile.
 The plan now picks the TMA kernel wherever the geometry allows (sm_90+,
 C % 64 == 0, strides 1 or 2) and the base kernel elsewhere; `auto` is
 still cuDNN until the decode gates (`convgate`) pass.
+
+### The convgate gate (7ef3231): 1.05× cuDNN NHWC on the LTX-2.5 1080p20s decode
+
+`fv-lab pod up --family convgate` on an RTX PRO 6000, record
+`artifacts/runpod/convgate/7ef3231-1126034555-8fe8/`: the LTX-2.5 fast
+decoder at 1080p 20 s (481 frames), cuDNN bf16 NHWC plans against
+`FASTVIDEO_CONV3D=igemm`, which now runs the TMA kernel on every eligible
+layer and the base kernel on the rest.
+
+| | cuDNN bf16 (NHWC plans) | igemm (TMA) | igemm at 6dea13e (base kernel) |
+|---|---|---|---|
+| decode wall time (481 frames) | 13.33 s | **14.01 s (1.051×)** | 18.74 s (1.42×) |
+| peak device memory | 8 612 MiB | 7 618 MiB | 7 042 MiB |
+| first tile vs the streaming decoder, rel_l2 | 7.2e-3 | 6.8e-3 | 6.8e-3 |
+| frames, igemm vs cuDNN: PSNR mean / min | | 55.87 dB / 54.96 dB | 55.8 / 54.9 |
+| LPIPS mean / max (44 pairs) | | 1.37e-4 / 1.88e-4 | 1.4e-4 / 1.9e-4 |
+| sharpness ratio, temporal jitter ratio | | 1.0000, 1.0000 | 1.0000, 1.0000 |
+| max abs pixel difference (uint8) | | 6 | 6 |
+
+The owner's proposed margin (≤ 1.10× cuDNN on the decode) is met: 1.05×,
+from 1.42× with the base kernel, at unchanged quality (the two decoders
+still differ by bf16 summation order only) and a gigabyte less device
+memory than cuDNN's plans and workspace. The micro-benchmark
+(`conv_routes`, run 3) has the TMA kernel below cuDNN's NCDHW plans on
+every wide shape; the remaining 5 points on the decode are the stages
+the TMA kernel does not run (C < 64: the 12-channel input conv and the
+3-channel output conv on the base kernel or cuDNN-free fallbacks) and the
+24 × 24-class latent stages at 1.12-1.16×.
+
+WO-3b-iii's acceptance is met on LTX. Open before `auto` flips: a Wan
+2.2 decode gate (the convgate tier has only the LTX cell today), the
+`det-short` determinism check with the TMA kernel in the plan, and the
+owner's call on flipping `auto` for sm_90+ (the base kernel stays the
+cuDNN-free path for sm_80-sm_89 at 1.2-1.3×).

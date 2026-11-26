@@ -1,0 +1,14 @@
+[03:46:27] [convgate] lpips weights: /workspace/weights/auxiliary/lpips
+[03:46:27] [convgate] matrix start image=b4eab0192db76c12
+GPU 0: NVIDIA RTX PRO 6000 Blackwell Server Edition (UUID: GPU-47cb8db2-db8e-16a6-6772-1efbfedf1496)
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.112.07
+[03:46:27] [convgate] pod memory: cgroup v2 /sys/fs/cgroup, limit 89645 MiB, oom_kills 0
+[03:46:29] [convgate] ▶ convgate-ltx-1080p20s-cudnn  env FASTVIDEO_CONV3D=cudnn-bf16 FASTVIDEO_LTX_VAE_CHECK=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 1080p20s --decoder fast --warm --clip /fvscratch/runs/convgate/7ef3231-1126034555-8fe8/convgate-ltx-1080p20s-cudnn/frames  (wall cap 2365s; 0=none)
+[03:47:01] [convgate] ok convgate-ltx-1080p20s-cudnn  32s  /fvscratch/runs/convgate/7ef3231-1126034555-8fe8/convgate-ltx-1080p20s-cudnn/stderr.log:ltx2 vae-bench fast: decode 13.33s (vae 13.30s, rgb 0.74s, push 0.00s, wait 1.29s, mp4 tail 0.00s), png frames after 0.88s, peak Some(8612) MiB
+[03:47:01] [convgate] ram convgate-ltx-1080p20s-cudnn: ram 3300 MiB of 89645 MiB, oom_kills 0
+[03:47:04] [convgate] ▶ convgate-ltx-1080p20s-igemm  env FASTVIDEO_CONV3D=igemm FASTVIDEO_LTX_VAE_CHECK=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 vae-bench --weights /workspace/weights/ltx25 --workload 1080p20s --decoder fast --warm --clip /fvscratch/runs/convgate/7ef3231-1126034555-8fe8/convgate-ltx-1080p20s-igemm/frames  (wall cap 2330s; 0=none)
+[03:47:34] [convgate] ok convgate-ltx-1080p20s-igemm  30s  /fvscratch/runs/convgate/7ef3231-1126034555-8fe8/convgate-ltx-1080p20s-igemm/stderr.log:ltx2 vae-bench fast: decode 14.01s (vae 13.99s, rgb 0.74s, push 0.00s, wait 1.41s, mp4 tail 0.00s), png frames after 0.85s, peak Some(7618) MiB
+[03:47:34] [convgate] ram convgate-ltx-1080p20s-igemm: ram 3278 MiB of 89645 MiB, oom_kills 0
+[03:47:46] [convgate] compare convgate-ltx-1080p20s-cudnn--convgate-ltx-1080p20s-igemm exit=0 "psnr_mean":55.86960460032294 "max":0.00018750450165933873 "mean":0.00013663184458264618 
+[03:47:46] [convgate] matrix done
+matrix_exit=0
