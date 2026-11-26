@@ -1031,8 +1031,24 @@ pub fn igemm_tma_eligible(g: &ConvGeom, sm_major: i32) -> bool {
     sm_major >= 9
         && g.c % 64 == 0
         && g.sw == 1
+        && g.sh == 1
         && g.w <= (1 << 30)
         && (g.b * g.d * g.h * g.w * g.c) < (1u64 << 40) as usize
+}
+
+/// The TMA tile's width in output pixels (a power of two, 16..128): the
+/// smallest covering W when W fits a tile, else 64 or 128, whichever wastes
+/// less of the last tile. The tile's height is 128 / width.
+pub fn igemm_tma_bw(ow: usize) -> usize {
+    if ow > 128 {
+        if ow.div_ceil(64) * 64 < ow.div_ceil(128) * 128 {
+            64
+        } else {
+            128
+        }
+    } else {
+        ow.max(16).next_power_of_two()
+    }
 }
 
 impl IgemmPlan {
@@ -1041,11 +1057,13 @@ impl IgemmPlan {
         Self::with(g, sms, sm_major, IGEMM_VARIANTS[0])
     }
 
-    /// The M tiles of a variant: the TMA kernel tiles each output row in
-    /// 128-pixel runs; the others tile the flattened M.
+    /// The M tiles of a variant: the TMA kernel tiles the output plane in
+    /// BH x BW patches ([`igemm_tma_bw`]); the others tile the flattened M.
     pub fn m_tiles(g: &ConvGeom, v: IgemmVariant) -> usize {
         if v.tma {
-            g.b * g.od * g.oh * g.ow.div_ceil(v.bm)
+            let bw = igemm_tma_bw(g.ow);
+            let bh = v.bm / bw;
+            g.b * g.od * g.oh.div_ceil(bh) * g.ow.div_ceil(bw)
         } else {
             g.m().div_ceil(v.bm)
         }
@@ -1237,8 +1255,10 @@ fn igemm_tma_maps(
     let (b, d, h, w_, c) = (g.b as u64, g.d as u64, g.h as u64, g.w as u64, g.c as u64);
     let xdims = [c, w_, h, d, b];
     let xstrides = [c * 2, w_ * c * 2, h * w_ * c * 2, d * h * w_ * c * 2];
-    let xbox = [64u32, 128 * g.sw as u32, 1, 1, 1];
-    let xes = [1u32, g.sw as u32, 1, 1, 1];
+    let bw = igemm_tma_bw(g.ow);
+    let bh = 128 / bw;
+    let xbox = [64u32, (bw * g.sw) as u32, (bh * g.sh) as u32, 1, 1];
+    let xes = [1u32, g.sw as u32, g.sh as u32, 1, 1];
     let tmx = encode(x, 5, &xdims, &xstrides, &xbox, &xes)?;
     let k = g.k() as u64;
     let wdims = [k, g.n as u64];
@@ -1288,9 +1308,10 @@ fn igemm_tma_launch(
         i(g.pw),
     );
     let splits_i = plan.splits as i32;
+    let bwl2 = igemm_tma_bw(g.ow).trailing_zeros() as i32;
     super::kernels::launch!(dev.stream, func, cfg;
         &tmx, &tmw, &mut *yf, &mut *y16, &out16, &b, &d, &h, &wd, &c, &od, &oh, &ow, &nn,
-        &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &splits_i)?;
+        &kd, &kh, &kw, &sd, &sh, &sw, &pd, &ph, &pw, &splits_i, &bwl2)?;
     Ok(())
 }
 

@@ -589,9 +589,11 @@ __device__ __forceinline__ void ig_ws_body(
 // never issue a global load and never share a barrier: the three rounds and
 // WO-3b-ii put the base kernel's loss in the memory pipeline's issue work,
 // which TMA removes from the SM's instruction stream.
-//   M is tiled per output row: blockIdx.y = (b, od, oh) * wtiles + wt, 128
-//   consecutive ow per tile (the last tile of a row ragged: zero-filled in,
-//   predicated out). C % 64 == 0, so a k-tile never straddles a tap.
+//   M is tiled as a BH x BW patch of output pixels (BH * BW = 128, BW = 1 <<
+//   bwl2 chosen per geometry so a narrow W wastes little of the tile):
+//   blockIdx.y = ((b, od) * htiles + ht) * wtiles + wt; the A box is [64 c,
+//   BW w, BH h, 1, 1], ragged edges zero-filled in and predicated out. C % 64
+//   == 0, so a k-tile never straddles a tap.
 __device__ __forceinline__ void ig_mbar_arrive(unsigned int mbar) {
     asm volatile("mbarrier.arrive.release.cta.shared::cta.b64 _, [%0];\n" :: "r"(mbar) : "memory");
 }
@@ -612,7 +614,7 @@ __device__ __forceinline__ void ig_tma_body(
     unsigned short* __restrict__ y16, int out16,
     int B, int D, int H, int W, int C, int OD, int OH, int OW, int N,
     int KD, int KH, int KW, int SD, int SH, int SW, int PD, int PH, int PW,
-    int splits, unsigned char* smem_raw
+    int splits, int bwl2, unsigned char* smem_raw
 ) {
     constexpr int BM = 128, BN = 128, BK = 64, WM = 64, WN = 32;
     constexpr int WARPS_N = BN / WN, CONSUMER_WARPS = (BM / WM) * WARPS_N;   // 8
@@ -626,10 +628,13 @@ __device__ __forceinline__ void ig_tma_body(
     const unsigned int bar_full = sbase + STAGES * STAGE_B, bar_empty = bar_full + 8 * STAGES;
 
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
-    const int wtiles = (OW + BM - 1) / BM;
-    const int row = blockIdx.y / wtiles, wt = blockIdx.y - row * wtiles;
-    const int oh = row % OH, od = (row / OH) % OD, b = row / (OH * OD);
-    const int ow0 = wt * BM;
+    const int BW = 1 << bwl2, BH = BM >> bwl2;
+    const int wtiles = (OW + BW - 1) / BW, htiles = (OH + BH - 1) / BH;
+    int yb = blockIdx.y;
+    const int wt = yb % wtiles; yb /= wtiles;
+    const int ht = yb % htiles; yb /= htiles;
+    const int od = yb % OD, b = yb / OD;
+    const int ow0 = wt * BW, oh0 = ht * BH;
     const int n0 = blockIdx.x * BN;
     const long M = (long)B * OD * OH * OW;
     const int taps = KD * KH * KW;
@@ -665,7 +670,7 @@ __device__ __forceinline__ void ig_tma_body(
             const unsigned int sA = sbase + s * STAGE_B, sB = sA + TILE_A;
             mma_mbar_expect(bar_full + 8 * s, STAGE_B);
             ig_tma_5d(sA, tmx, bar_full + 8 * s,
-                      c0, ow0 * SW - PW + kw, oh * SH - PH + kh, od * SD - PD + kd, b);
+                      c0, ow0 * SW - PW + kw, oh0 * SH - PH + kh, od * SD - PD + kd, b);
             mma_tma_2d(sB, tmw, bar_full + 8 * s, kg * BK, n0);
         }
         return;
@@ -725,7 +730,7 @@ __device__ __forceinline__ void ig_tma_body(
         return;
     }
     const int g = lane >> 2, t = lane & 3;
-    const long mrow = (long)row * OW;
+    const long mrow = ((long)b * OD + od) * OH;
     #pragma unroll
     for (int mt = 0; mt < MT; mt++) {
         #pragma unroll
@@ -733,9 +738,10 @@ __device__ __forceinline__ void ig_tma_body(
             const int n = n0 + wn * WN + nt * 8 + 2 * t;
             #pragma unroll
             for (int hh = 0; hh < 2; hh++) {
-                const int owl = ow0 + wm * WM + mt * 16 + g + hh * 8;
-                if (owl < OW) {
-                    const long m = mrow + owl;
+                const int r = wm * WM + mt * 16 + g + hh * 8;
+                const int owl = ow0 + (r & (BW - 1)), ohl = oh0 + (r >> bwl2);
+                if (owl < OW && ohl < OH) {
+                    const long m = (mrow + ohl) * OW + owl;
                     if (out16) {
                         unsigned short* yr = y16 + m * N;
                         if (n < N) yr[n] = fv_bf16_rne(acc[mt][nt][hh * 2]);
@@ -812,8 +818,8 @@ extern "C" __global__ void __launch_bounds__(160, 2) conv_igemm_bf16_ws_probe_no
     const __grid_constant__ FvTensorMap tmx, const __grid_constant__ FvTensorMap tmw, \
     float* __restrict__ y, unsigned short* __restrict__ y16, int out16, \
     int B, int D, int H, int W, int C, int OD, int OH, int OW, int N, \
-    int KD, int KH, int KW, int SD, int SH, int SW, int PD, int PH, int PW, int splits
-#define IG_TMA_PASS &tmx, &tmw, y, y16, out16, B, D, H, W, C, OD, OH, OW, N, KD, KH, KW, SD, SH, SW, PD, PH, PW, splits
+    int KD, int KH, int KW, int SD, int SH, int SW, int PD, int PH, int PW, int splits, int bwl2
+#define IG_TMA_PASS &tmx, &tmw, y, y16, out16, B, D, H, W, C, OD, OH, OW, N, KD, KH, KW, SD, SH, SW, PD, PH, PW, splits, bwl2
 extern "C" __global__ void __launch_bounds__(288, 1) conv_igemm_bf16_tma(IG_TMA_ARGS) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
     extern __shared__ __align__(1024) unsigned char ig_tma_smem[];
