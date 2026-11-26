@@ -197,7 +197,7 @@ cells = ["ltxvae-4k5s", "ltxvae-4k5s-untraced", "ltxvae-1080p20s", "ltxvae-1080p
 # on the in-tree implicit GEMM against cuDNN (docs/plan/2026-11-25-adr24-step3-wo.md, WO-3b).
 [[tier]]
 name = "convgate"
-description = "ADR-0024 step 3 conv gate: the LTX-2.5 fast VAE decode on cuDNN bf16 convs vs the implicit GEMM (igemm), frames compared"
+description = "ADR-0024 step 3 conv gate: the LTX-2.5 fast VAE decode and the FastWan2.2 TI2V-5B generation with the full Wan 2.2 VAE, cuDNN bf16 convs vs the implicit GEMM (igemm), frames compared"
 provider = "runpod-pod"
 gpu = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
 gpu_count = 1
@@ -208,10 +208,10 @@ max_usd_per_hr = 3.0
 wall_cap_s = 7200
 cell_timeout_s = 3600
 container_disk_gb = 120
-weights = "volume"
+weights = "volume+r2"
 preflight = ["fasth3-8step", "fasth3-4step-vsa", "fasth3-4step-dense", "sol-h3", "sol-h3-spark", "ltx25-two-stage"]
 tae = true
-cells = ["convgate-ltx-1080p20s"]
+cells = ["convgate-ltx-1080p20s", "convgate-wan22-704p"]
 
 # Was runpod-matrix.sh `precision`, its default mode (retired, ADR-0019 §10). Its FV_PRECISION_ARM=ltx-nvfp4 mode is the `precision-nvfp4` tier (§12).
 [[tier]]
