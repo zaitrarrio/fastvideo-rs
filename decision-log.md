@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-11-27 · FVID-2026-11-27-conv-past-parity-wo
+- Trigger: both ADR-0024 step 3 decode gates passed on the TMA conv kernel (LTX-2.5 1080p20s 1.05×, Wan 2.2 704p 0.97× cuDNN; PRs #259, #260) and the owner asked whether more is possible; the assessment (2026-11-26): the mainloop is within about 10 % of the mma.sync ceiling on CC 12.0, the remaining decode time is in the Wan path's layout traffic around the kernel, the elementwise passes after each conv (bias, per-pixel RMS, SiLU), and the narrow-latent shapes still at 1.12-1.16×
+- Options: write a work order for the three (the owner's "1, 2 and 3"); flip `auto` and stop at parity; proceed to 3c / 3d first
+- Decision: **(owner) a work order for the three** ("put a work order together for 1, 2 and 3", 2026-11-27): WO-3b-iv in `docs/plan/2026-11-25-adr24-step3-wo.md`, four increments: A attributes the decode time by kernel class with the GPU trace (kill criterion: convs ≥ 85 %), B the Wan VAE's traffic around the kernel (weight cache + bias epilogue, then a channels-last bf16 Wan 2.2 decoder pass, a decision point on residency against the oracle), C the conv epilogue doing the next layer's work (bias, residual; a 128 × 256 two-stage tile so the per-pixel RMS + SiLU fuses where the tile holds all channels, the LTX 256-channel full-resolution stages), D the narrow latents (a wave-aware split-K rule, a persistent tile scheduler). Objective: both decoders ≤ 0.90× cuDNN at unchanged quality. Execution awaits the owner's go-ahead; the `auto` flip stays the owner's call
+- Reason: the measurements point at the layers around the kernel, not the kernel; each increment removes a measured kernel class and is gated on the same convgate cells
+- Reversibility: high (new variants and entries beside the existing ones; flags default off until the gates)
+- Executed by: pending
+- ADR: docs/adr/0024-driver-only-runtime.md (step 3, D6)
+- Verification: pending (A's table first)
+
 ### FVID · 2026-11-26 · FVID-2026-11-26-conv-igemm-tma-wo
 - Trigger: WO-3b-ii ended on its kill criterion (the warp-specialised `cp.async` kernel is producer-issue-bound); the owner asked for deep research on cuDNN, NVIDIA's kernel techniques and NVIDIA's Rust kernel work (`reports/cuDNN and Rust GPU kernel optimization.md`, 2026-11-25), which found: compute capability 12.0 has TMA, mbarrier and setmaxnreg (PTX ISA 9.5 target notes), CUTLASS's SM120 kernels are TMA-fed with one elected producer thread, eight consumer warps and one CTA per SM, and open implicit-GEMM conv3d kernels reach 0.7-1.1× cuDNN on Ada-class parts
 - Options: (1) the TMA-fed mainloop as a new work order (3b-iii); (2) accept the 1.42× decode on the static image only; (3) park step 3; (4) a Rust-native kernel path (NVIDIA's CUDA Rust): the report advises against it for this kernel (early-stage, no mma / smem control in cuTile, cuda-oxide alpha)
